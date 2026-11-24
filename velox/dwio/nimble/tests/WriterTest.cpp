@@ -1257,6 +1257,8 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
     EXPECT_FALSE(encodingOptions.sortDictionaryAlphabet);
     EXPECT_DOUBLE_EQ(encodingOptions.reversedMinDescendingRatio, 1.0);
+    EXPECT_FALSE(encodingOptions.fixedBitWidthTypedLanes);
+    EXPECT_EQ(encodingOptions.fixedBitWidthTypedLanesMinValues, 256);
 
     // The delta pre-transform ships disabled. Assert the flag's own default
     // too, so lowering the bar to enabling it fails here rather than silently
@@ -1289,6 +1291,17 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     options.reversedMinDescendingRatio = 2.5;
     EXPECT_DOUBLE_EQ(
         options.buildEncodingOptions().reversedMinDescendingRatio, 2.5);
+  }
+
+  {
+    nimble::WriterOptions options;
+    options.fixedBitWidthTypedLanes = true;
+    options.fixedBitWidthTypedLanesMinValues = 4'096;
+
+    const auto encodingOptions = options.buildEncodingOptions();
+
+    EXPECT_TRUE(encodingOptions.fixedBitWidthTypedLanes);
+    EXPECT_EQ(encodingOptions.fixedBitWidthTypedLanesMinValues, 4'096);
   }
 }
 
@@ -8215,7 +8228,7 @@ class WriterIndexTest : public WriterTest,
         velox::serializer::EncodedKeyBounds bounds{
             .lowerKey = std::string(encodedKeyView), .upperKey = std::nullopt};
         auto lookupResult = index->lookup(
-            nimble::index::IndexLookup::LookupRequest::rangeScan({bounds}));
+            *nimble::index::IndexLookup::LookupRequest::rangeScan({bounds}));
         const auto rowRanges = lookupResult[0];
         ASSERT_EQ(rowRanges.size(), 1)
             << "Key at row " << currentRowId << " should be found in index";
@@ -8535,18 +8548,18 @@ TEST_P(WriterIndexTest, singleGroup) {
     return nimble::index::IndexLookup::LookupRequest::rangeScan({bounds});
   };
   {
-    auto r = index->lookup(makeLookup(partitionKeys.front()));
+    auto r = index->lookup(*makeLookup(partitionKeys.front()));
     EXPECT_FALSE(r[0].empty());
   }
   {
-    auto r = index->lookup(makeLookup(partitionKeys.back()));
+    auto r = index->lookup(*makeLookup(partitionKeys.back()));
     EXPECT_FALSE(r[0].empty());
   }
 
   // Empty key with range scan (no upper bound) matches all rows since
   // "" is less than any encoded key.
   {
-    auto r = index->lookup(makeLookup(""));
+    auto r = index->lookup(*makeLookup(""));
     EXPECT_FALSE(r[0].empty());
   }
 
@@ -8637,13 +8650,13 @@ TEST_P(WriterIndexTest, multipleGroups) {
         .lowerKey = std::string(key), .upperKey = std::nullopt};
     return nimble::index::IndexLookup::LookupRequest::rangeScan({bounds});
   };
-  auto firstResult = index->lookup(makeLookup2(index->minKey()));
+  auto firstResult = index->lookup(*makeLookup2(index->minKey()));
   auto firstRanges = firstResult[0];
   ASSERT_EQ(firstRanges.size(), 1);
   EXPECT_EQ(firstRanges[0].startRow, 0);
 
   // Get the last key and verify lookup returns a valid location
-  auto lastResult = index->lookup(makeLookup2(index->maxKey()));
+  auto lastResult = index->lookup(*makeLookup2(index->maxKey()));
   auto lastRanges = lastResult[0];
   ASSERT_EQ(lastRanges.size(), 1);
   EXPECT_GT(lastRanges[0].endRow, 0);
@@ -8753,8 +8766,8 @@ TEST_P(WriterIndexTest, keyStreamLayout) {
       ASSERT_TRUE(cursor->hasNext());
       EXPECT_EQ(cursor->next(), keys[row]);
       EXPECT_EQ(index->keyAtRow(row), keys[row]);
-      const auto result = index->lookup(
-          nimble::index::IndexLookup::LookupRequest::rangeScan(
+      const auto result =
+          index->lookup(*nimble::index::IndexLookup::LookupRequest::rangeScan(
               {{.lowerKey = keys[row], .upperKey = keys[row] + '\0'}}));
       ASSERT_EQ(result[0].size(), 1);
       EXPECT_EQ(result[0][0].startRow, firstRows.at(keys[row]));
@@ -8764,9 +8777,9 @@ TEST_P(WriterIndexTest, keyStreamLayout) {
   }
 }
 
-// A hierarchical cluster index reads the same keys and finds the same rows
+// A trie cluster index reads the same keys and finds the same rows
 // whether it stores its key chunks in stripes or after them.
-TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
+TEST_F(WriterTest, trieClusterIndexStripeKeyStreams) {
   constexpr int kNumBatches = 4;
   constexpr int kBatchSize = 100;
   const auto type = velox::ROW(
@@ -8795,7 +8808,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
     options.metadataFlushThreshold = 1;
     options.clusterIndexConfig =
         nimble::index::ClusterIndexConfigBuilder{
-            nimble::index::kHierarchicalClusterIndexName}
+            nimble::index::kTrieClusterIndexName}
             .withKeyColumns({"key_col"})
             .withEnforceKeyOrder(true)
             .withMaxRowsPerKeyChunk(64)
@@ -8814,7 +8827,7 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
   };
   const auto openTablet = [&](const std::string& file) {
     auto options = makeTestTabletOptions(leafPool_.get());
-    options.clusterIndexName = nimble::index::kHierarchicalClusterIndexName;
+    options.clusterIndexName = nimble::index::kTrieClusterIndexName;
     return nimble::TabletReader::create(
         std::make_shared<velox::InMemoryReadFile>(file),
         leafPool_.get(),
@@ -8835,12 +8848,12 @@ TEST_F(WriterTest, hierarchicalClusterIndexStripeKeyStreams) {
     SCOPED_TRACE(fmt::format("row {}", row));
     const auto key = expectedIndex->keyAtRow(row);
     EXPECT_EQ(index->keyAtRow(row), key);
-    // Hierarchical keys must be complete, so a key's successor cannot bound a
+    // Trie keys must be complete, so a key's successor cannot bound a
     // range scan; a point lookup finds the rows of the key.
     const auto request =
         nimble::index::IndexLookup::LookupRequest::pointLookup({key});
-    const auto expected = expectedIndex->lookup(request);
-    const auto actual = index->lookup(request);
+    const auto expected = expectedIndex->lookup(*request);
+    const auto actual = index->lookup(*request);
     ASSERT_EQ(actual[0].size(), 1);
     ASSERT_EQ(expected[0].size(), 1);
     EXPECT_EQ(actual[0][0], expected[0][0]);
@@ -9404,12 +9417,12 @@ TEST_P(WriterIndexTest, duplicateKeys) {
         .lowerKey = std::string(key), .upperKey = std::nullopt};
     return nimble::index::IndexLookup::LookupRequest::rangeScan({bounds});
   };
-  auto firstResult = index->lookup(makeLookup3(index->minKey()));
+  auto firstResult = index->lookup(*makeLookup3(index->minKey()));
   auto firstRanges = firstResult[0];
   ASSERT_EQ(firstRanges.size(), 1);
   EXPECT_EQ(firstRanges[0].startRow, 0);
 
-  auto lastResult = index->lookup(makeLookup3(index->maxKey()));
+  auto lastResult = index->lookup(*makeLookup3(index->maxKey()));
   auto lastRanges = lastResult[0];
   ASSERT_EQ(lastRanges.size(), 1);
   EXPECT_GT(lastRanges[0].endRow, 0);
@@ -9589,12 +9602,12 @@ TEST_P(WriterIndexTest, streamDeduplication) {
         .lowerKey = std::string(key), .upperKey = std::nullopt};
     return nimble::index::IndexLookup::LookupRequest::rangeScan({bounds});
   };
-  auto firstResult = index->lookup(makeLookup4(index->minKey()));
+  auto firstResult = index->lookup(*makeLookup4(index->minKey()));
   auto firstRanges = firstResult[0];
   ASSERT_EQ(firstRanges.size(), 1);
   EXPECT_EQ(firstRanges[0].startRow, 0);
 
-  auto lastResult = index->lookup(makeLookup4(index->maxKey()));
+  auto lastResult = index->lookup(*makeLookup4(index->maxKey()));
   auto lastRanges = lastResult[0];
   ASSERT_EQ(lastRanges.size(), 1);
   EXPECT_GT(lastRanges[0].endRow, 0);

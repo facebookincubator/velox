@@ -50,6 +50,8 @@ SerializedPageFile::SerializedPageFile(
 void SerializedPageFile::finish() {
   VELOX_CHECK_NOT_NULL(file_);
   size_ = file_->size();
+  common::testutil::TestValue::adjust(
+      "facebook::velox::serializer::SerializedPageFile::finish", this);
   file_->close();
   file_ = nullptr;
 }
@@ -306,6 +308,7 @@ SerializedPageFileReader::SerializedPageFileReader(
     VectorSerde* serde,
     std::unique_ptr<VectorSerde::Options> readOptions,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     IoStats* ioStats)
     : readOptions_(std::move(readOptions)),
       pool_(pool),
@@ -315,7 +318,7 @@ SerializedPageFileReader::SerializedPageFileReader(
   auto file =
       fs->openFileForRead(path, filesystems::FileOptions{.stats = ioStats});
   input_ = std::make_unique<common::FileInputStream>(
-      std::move(file), bufferSize, pool_);
+      std::move(file), bufferSize, pool_, readAheadExecutor);
 }
 
 bool SerializedPageFileReader::nextBatch(RowVectorPtr& rowVector) {

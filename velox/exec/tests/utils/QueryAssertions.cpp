@@ -86,24 +86,6 @@ TestScopedAbortInjection::~TestScopedAbortInjection() {
   testingAbortHook() = nullptr;
 }
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
-    const CursorParameters& params,
-    std::function<void(TaskCursor*)> addSplits,
-    uint64_t maxWaitMicros) {
-  auto cursor = TaskCursor::create(params);
-  // Declared after 'cursor' so that it is destroyed first, also on exception.
-  std::vector<RowVectorPtr> result;
-  readCursorAsync(
-      *cursor,
-      [addSplitsVoid = std::move(addSplits)](TaskCursor* cursor) {
-        addSplitsVoid(cursor);
-        return ContinueFuture::makeEmpty();
-      },
-      maxWaitMicros,
-      [&](const RowVectorPtr& vector) { result.push_back(vector); });
-  return {std::move(cursor), std::move(result)};
-}
-
 void readCursorAsync(
     TaskCursor& cursor,
     std::function<ContinueFuture(TaskCursor*)> addSplits,

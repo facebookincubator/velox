@@ -348,7 +348,7 @@ void FileSplitReader::createRowReader(
       rowSizeTrackingEnabled.has_value()
           ? *rowSizeTrackingEnabled
           : connectorQueryCtx_->rowSizeTrackingMode() !=
-              core::QueryConfig::RowSizeTrackingMode::DISABLED);
+              core::QueryConfig::RowSizeTrackingMode::kDisabled);
   baseRowReader_ = baseReader_->createRowReader(baseRowReaderOpts_);
 }
 

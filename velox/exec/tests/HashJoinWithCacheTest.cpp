@@ -75,33 +75,36 @@ TEST_F(HashJoinWithCacheTest, sequential) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Build the plan using HashJoinNode::Builder to set useHashTableCache.
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
 
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   // Create HashJoinNode with useHashTableCache = true.
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   const int numDrivers = 3;
@@ -200,33 +203,36 @@ TEST_F(HashJoinWithCacheTest, concurrent) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
 
   // Build the plan using HashJoinNode::Builder to set useHashTableCache.
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
 
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   // Create HashJoinNode with useHashTableCache = true.
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   const int numDrivers = 3;
@@ -351,29 +357,32 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeCannotSpillWithCachedTable) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  PlanBuilder builder;
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   auto queryCtx = core::QueryCtx::create(
@@ -477,29 +486,32 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  PlanBuilder builder;
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
 
   // Create QueryCtx with sufficient memory for build but we'll exhaust it
   // during probe via TestValue injection.
@@ -597,29 +609,32 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
   createDuckDbTable("t", probeVectors);
   createDuckDbTable("u", buildVectors);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto buildPlanNode =
-      PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  PlanBuilder builder;
+  auto buildPlanNode = builder.newPlan().values(buildVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   auto queryCtx = core::QueryCtx::create(
@@ -727,32 +742,36 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, nonLastDriverSpinLoop) {
         });
   });
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   // The build ValuesNode must be parallelizable so the build pipeline gets
   // multiple drivers.
-  auto buildPlanNode = PlanBuilder(planNodeIdGenerator)
+  auto buildPlanNode = builder.newPlan()
                            .values(buildVectors, /*parallelizable=*/true)
                            .planNode();
-  auto probePlanNode =
-      PlanBuilder(planNodeIdGenerator).values(probeVectors).planNode();
+  auto probePlanNode = builder.newPlan().values(probeVectors).planNode();
 
   auto outputType = ROW(
       {"t_k", "t_v", "u_k", "u_v"}, {INTEGER(), BIGINT(), INTEGER(), BIGINT()});
 
   auto joinNode =
-      core::HashJoinNode::Builder()
-          .id(planNodeIdGenerator->next())
-          .joinType(core::JoinType::kInner)
-          .nullAware(false)
-          .leftKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "t_k")})
-          .rightKeys(
-              {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "u_k")})
-          .left(probePlanNode)
-          .right(buildPlanNode)
-          .outputType(outputType)
-          .useHashTableCache(true)
-          .build();
+      builder.newPlan()
+          .addNode([&](const core::PlanNodeId& id,
+                       const core::PlanNodePtr& /*source*/) {
+            return core::HashJoinNode::Builder()
+                .id(id)
+                .joinType(core::JoinType::kInner)
+                .nullAware(false)
+                .leftKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "t_k")})
+                .rightKeys({std::make_shared<core::FieldAccessTypedExpr>(
+                    INTEGER(), "u_k")})
+                .left(probePlanNode)
+                .right(buildPlanNode)
+                .outputType(outputType)
+                .useHashTableCache(true)
+                .build();
+          })
+          .planNode();
   const auto joinNodeId = joinNode->id();
 
   const int numDrivers = 4;

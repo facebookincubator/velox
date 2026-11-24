@@ -22,11 +22,13 @@ Generic Configuration
      - 1024
      - Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
        average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.
+       Must be at least 1.
    * - max_output_batch_rows
      - integer
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+       Must be at least 1.
    * - merge_join_output_batch_start_size
      - integer
      - 0
@@ -122,11 +124,11 @@ Generic Configuration
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
    * - max_local_exchange_partition_count
      - integer
-     - 2^32
+     - 2^32 - 1
      - Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
        This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
        Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
-       pipeline drivers configured for the task.
+       pipeline drivers configured for the task. Must be at least 1.
    * - exchange.max_buffer_size
      - integer
      - 32MB
@@ -166,6 +168,7 @@ Generic Configuration
      - integer
      - 2
      - Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.
+       Must be at least 1.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
@@ -197,10 +200,15 @@ Generic Configuration
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0
-     - The maximum byte size of Bloom filter that can be generated from hash
-       probe.  When set to 0, no Bloom filter will be generated.  To achieve
-       optimal performance, this should not be too larger than the CPU cache
-       size on the host.
+     - Maximum size in bytes of the Bloom filter that a hash join build
+       pushes down to the probe-side scan. 0 disables Bloom filters. A
+       build uses a Bloom filter when its keys have too many distinct
+       values for an exact filter. The filter takes about 1.2 bytes per
+       build-side row, so 16 MB covers builds of up to about 14 million
+       rows. Larger builds produce no Bloom filter. The scan tests every
+       row against the filter, so the filter should fit in the L3 cache
+       with room to spare. Half the L3 size works well, for example
+       16 MB on hosts with a 32 MB L3.
    * - bypass_hash_probe_bloom_filter_min_rows
      - integer
      - 0
@@ -490,6 +498,11 @@ Spilling
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
+   * - local_merge_max_num_merge_sources
+     - integer
+     - 2^32 - 1
+     - When `local_merge_spill_enabled` is true, the maximum number of sources a LocalMerge operator merges at a time.
+       Must be at least 1.
    * - mixed_grouped_mode_hash_join_spill_enabled
      - boolean
      - false
@@ -734,13 +747,13 @@ Table Writer
      - Description
    * - task_writer_count
      - integer
-     - 1
-     - The number of parallel table writer threads per task.
+     - 4
+     - The number of parallel table writer threads per task. Must be at least 1.
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
      - The number of parallel table writer threads per task for partitioned
-       table writes. If not set, use 'task_writer_count' as default.
+       table writes. If not set, use 'task_writer_count' as default. Must be at least 1.
    * - scaled_writer_rebalance_max_memory_usage_ratio
      - double
      - 0.7

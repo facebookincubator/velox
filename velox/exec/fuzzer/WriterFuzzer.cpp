@@ -603,7 +603,7 @@ void WriterFuzzer::verifyWriter(
       1,
       "Query returned unexpected result in the reference DB");
   VELOX_CHECK(
-      assertEqualResults(*expectedResult, plan->outputType(), {result}),
+      assertEqualResults(*expectedResult, result->type(), {result}),
       "Velox and reference DB results don't match");
 
   // 2. Verifies directory layout for partitioned (bucketed) table.
@@ -801,7 +801,7 @@ void WriterFuzzer::verifyFileRotation(
   }
 
   VELOX_CHECK(
-      assertEqualResults(*prestoResult.first, plan->outputType(), {result}),
+      assertEqualResults(*prestoResult.first, result->type(), {result}),
       "File rotation: Velox and Presto row counts don't match");
 
   try {

@@ -71,7 +71,9 @@ ClusterIndexWriter::ClusterIndexWriter(
               .maxRowsPerKeyChunk = config.maxRowsPerKeyChunk,
               .keyChunkCompressionType = config.keyChunkCompressionType,
               .keyStreamLayout = options.keyStreamLayout,
-              .keyStreamId = options.keyStreamId,
+              .keyStreamId = stripeKeyStreamId(
+                  options.keyStreamLayout,
+                  options.indexStreamIds),
           },
           createFlatKeyChunkBuilder(
               clusterIndexFactory(config.name)

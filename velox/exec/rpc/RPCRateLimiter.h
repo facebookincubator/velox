@@ -134,8 +134,22 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Hard upper bound on the adaptive congestion window.
     int64_t hardLimit{0};
 
+    /// Floor the adaptive window cannot back off below, in thousandths of an
+    /// admission unit: the configured floor, raised to the probe floor and
+    /// capped at the ceiling. Zero when no floor applies: the limiter does not
+    /// adapt, or its floor reaches the ceiling and holds the window there.
+    int64_t floorMilli{0};
+
     /// In-flight requests right now.
     int64_t pending{0};
+
+    /// Callers parked in admitOrWait(). A positive count means work is ready
+    /// that the backend's window does not admit: the window is full, or, when
+    /// pacing a window below one unit, the next admission is not yet due, which
+    /// can hold callers with nothing in flight. A caller that abandons its wait
+    /// stays counted until the next wake-up, a release that frees a slot or
+    /// the pacing timer, which wakes every waiter.
+    int64_t waiting{0};
 
     /// High-water in-flight count over this limiter's lifetime.
     int64_t peakPending{0};

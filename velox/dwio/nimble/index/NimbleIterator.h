@@ -130,9 +130,17 @@ class NimbleIterator {
   /// file can have any number of entries.
   /// With Options::forGet, the iterator keeps the stripe of its last
   /// lookup for the next lookups.
-  /// After a prefetched decode failure, reset or seek before reading entries
-  /// again. valid() only reports whether the iterator is positioned on an
-  /// entry.
+  /// When 'projector' co-loads key streams (see
+  /// NimbleIndexProjector::create()), a seek reads the key streams that resolve
+  /// its bounds in the same load as the first stripe it selects, and each later
+  /// stripe load also reads the stripe's key stream. The keys of the rows then
+  /// decode from those bytes instead of from reads of the index. A seek of a
+  /// get iterator into the stripe that the iterator keeps loads no stripe and
+  /// resolves its bounds through the index, and the keys of the stripe's rows
+  /// decode from the key chunk that the iterator keeps with the stripe.
+  /// Otherwise a seek reads the key chunks before the stripe. After a
+  /// prefetched decode failure, reset or seek before reading entries again.
+  /// valid() only reports whether the iterator is positioned on an entry.
   /// Requires a thread-safe pool when prefetch or parallel decoding is enabled.
   static std::unique_ptr<NimbleIterator> createRowIterator(
       std::unique_ptr<NimbleIndexProjector> projector,
@@ -156,6 +164,12 @@ class NimbleIterator {
     uint64_t numOutputBytes{0};
     /// Total projected stream bytes planned by NimbleIndexProjector.
     uint64_t numPlannedBytes{0};
+    /// Number of loads that read cluster index key streams with stripe
+    /// streams.
+    uint32_t numKeyStreamCoLoads{0};
+    /// Number of stripes that seeks read with key streams and then skipped,
+    /// because no selected row came from them, as when a key is missing.
+    uint32_t numSkippedStripes{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming{};
@@ -185,13 +199,6 @@ class NimbleIterator {
   /// block must not run on a thread of `Options::prefetchExecutor`, which the
   /// prefetch needs to stop.
   virtual void seek(const velox::serializer::EncodedKeyBounds& bounds) = 0;
-
-  /// Positions the iterator at the rows whose key equals the encoded key, and
-  /// leaves it invalid when there are none. The rows of a key can span chunks
-  /// and stripes, so this selects the range from the key to its successor, the
-  /// key followed by a zero byte. Blocks until the prefetch of the previous
-  /// scan stops.
-  virtual void seek(std::string encodedKey) = 0;
 
   /// Positions the iterator at the first indexed row. Blocks until the
   /// prefetch of the previous scan stops.

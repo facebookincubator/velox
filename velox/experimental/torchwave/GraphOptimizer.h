@@ -36,6 +36,12 @@ class Optimizer {
   /// Visits outputs of a subgraph root, reusing already-visited state.
   void optimizeNode(const nativert::Node* node);
 
+  /// Gives a rank to each tensor value still without one, in 'graph' and in
+  /// the kernel variants' graphs: from the producer's Metadata over its
+  /// inputs' ranks, else from the export's TensorMeta. Changes nothing else.
+  /// Returns how many values still have none.
+  int32_t fillMissingRanks();
+
  private:
   void visitValue(const nativert::Value* value);
   void ensureConstraint(int32_t id);

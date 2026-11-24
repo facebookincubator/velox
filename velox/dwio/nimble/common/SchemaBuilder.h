@@ -24,6 +24,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 
 // SchemaBuilder is used to construct a tablet compatible schema.
 // The table schema translates logical type tree to its underlying Nimble
@@ -60,6 +61,7 @@ class FlatMapTypeBuilder;
 class HybridFlatMapTypeBuilder;
 class ArrayWithOffsetsTypeBuilder;
 class SlidingWindowMapTypeBuilder;
+class SlidingWindowArrayTypeBuilder;
 
 class StreamContext {
  public:
@@ -147,6 +149,7 @@ class TypeBuilder {
   FlatMapTypeBuilder& asFlatMap();
   HybridFlatMapTypeBuilder& asHybridFlatMap();
   ArrayWithOffsetsTypeBuilder& asArrayWithOffsets();
+  SlidingWindowArrayTypeBuilder& asSlidingWindowArray();
   const ScalarTypeBuilder& asScalar() const;
   const TimestampMicroNanoTypeBuilder& asTimestampMicroNano() const;
   const ArrayTypeBuilder& asArray() const;
@@ -156,6 +159,7 @@ class TypeBuilder {
   const FlatMapTypeBuilder& asFlatMap() const;
   const HybridFlatMapTypeBuilder& asHybridFlatMap() const;
   const ArrayWithOffsetsTypeBuilder& asArrayWithOffsets() const;
+  const SlidingWindowArrayTypeBuilder& asSlidingWindowArray() const;
 
  protected:
   TypeBuilder(SchemaBuilder& schemaBuilder, Kind kind);
@@ -334,6 +338,9 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
     const StreamDescriptorBuilder& inMapDescriptor;
     /// Complete value subtree of the group.
     const TypeBuilder& valueType;
+    /// The recorded `encoded_group_keys` stream of the keys, which
+    /// schemaNodes() copies instead of encoding them, or empty.
+    std::string_view encodedKeys{};
   };
 
   /// Returns the map-level null stream descriptor.
@@ -348,6 +355,11 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   /// Returns whether group `groupId` lists its keys in its key-presence
   /// stream. See HybridFlatMap::hasKeyPresenceList().
   bool useKeyPresentList(uint32_t groupId) const;
+
+  /// Returns the encoding of the keys that schemaNodes() writes
+  /// (SchemaBuilder::createHybridFlatMapTypeBuilder()), or null when it
+  /// writes them as strings or copies their recorded streams.
+  const EncodingLayout* groupKeysLayout() const;
 
   /// Registers one group and its complete value subtree, and returns the
   /// group, as groupAt() does. Views `groupKeys`, which the caller keeps alive,
@@ -369,11 +381,22 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   ///   projection that selects no group, lends an empty vector.
   ///
   /// Group IDs are unique, with at most one Default group. schemaNodes()
-  /// checks the keys: explicit groups non-empty and strictly ascending, no key
-  /// empty, every key unique.
+  /// checks the keys: explicit groups non-empty, no key empty, every key
+  /// unique. Keys keep the given order, their key-presence bitmap order, e.g.
+  /// the order a projection's source schema recorded.
   Group addGroup(
       uint32_t groupId,
       const std::vector<std::string>& groupKeys,
+      std::shared_ptr<TypeBuilder> valueType);
+
+  /// Registers a group as the other addGroup() does, and views
+  /// `encodedKeys`, the recorded stream of `groupKeys`
+  /// (HybridFlatMap::Group::encodedKeys), e.g. from a projection's source,
+  /// which the caller keeps alive as it does the keys.
+  Group addGroup(
+      uint32_t groupId,
+      const std::vector<std::string>& groupKeys,
+      std::string_view encodedKeys,
       std::shared_ptr<TypeBuilder> valueType);
 
   /// Returns the number of groups present in this schema.
@@ -396,17 +419,22 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
     std::unique_ptr<StreamDescriptorBuilder> keyPresenceDescriptor;
     std::unique_ptr<StreamDescriptorBuilder> inMapDescriptor;
     std::shared_ptr<const TypeBuilder> valueType;
+    // See Group::encodedKeys.
+    std::string_view encodedKeys{};
   };
 
   HybridFlatMapTypeBuilder(
       SchemaBuilder& schemaBuilder,
       ScalarKind keyScalarKind,
       HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
-      bool requiresDefaultGroup);
+      bool requiresDefaultGroup,
+      std::optional<EncodingLayout> groupKeysLayout);
 
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
   const HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode_;
+  // See groupKeysLayout().
+  const std::optional<EncodingLayout> groupKeysLayout_;
   StreamDescriptorBuilder nullsDescriptor_;
   // See groupAt().
   std::vector<StoredGroup> groups_;
@@ -433,8 +461,44 @@ class ArrayWithOffsetsTypeBuilder : public TypeBuilder {
   friend class SchemaBuilder;
 };
 
+/// Builds an array whose rows are windows over one shared elements stream.
+/// Row i holds elements [offset(i), offset(i) + length(i)). Windows of
+/// consecutive rows may overlap, so a row that slides the previous row by k
+/// values stores only its new values. For example, rows [1, 2, 3], [2, 3, 4]
+/// and [2, 3, 4] store elements [1, 2, 3, 4], offsets [0, 1, 1] and lengths
+/// [3, 3, 3].
+class SlidingWindowArrayTypeBuilder : public TypeBuilder {
+ public:
+  /// Holds the window start of each row, with nulls.
+  const StreamDescriptorBuilder& offsetsDescriptor() const;
+
+  /// Holds the window length of each non-null row.
+  const StreamDescriptorBuilder& lengthsDescriptor() const;
+
+  const TypeBuilder& elements() const;
+
+  void setChildren(std::shared_ptr<TypeBuilder> elements);
+
+ private:
+  explicit SlidingWindowArrayTypeBuilder(SchemaBuilder& schemaBuilder);
+
+  StreamDescriptorBuilder offsetsDescriptor_;
+  StreamDescriptorBuilder lengthsDescriptor_;
+  std::shared_ptr<const TypeBuilder> elements_;
+
+  friend class SchemaBuilder;
+};
+
 class SchemaBuilder {
  public:
+  /// Builds schemas whose Hybrid FlatMap nodes serialize their groups with
+  /// `pool` (HybridFlatMap::serialize()), e.g. to encode
+  /// keys for type builders that name a layout
+  /// (createHybridFlatMapTypeBuilder()). The pool outlives this builder's
+  /// schemaNodes() calls, and must not be null when the schema holds a Hybrid
+  /// FlatMap.
+  explicit SchemaBuilder(velox::memory::MemoryPool* pool = nullptr);
+
   // Create a builder representing a scalar type with kind |scalarKind|.
   std::shared_ptr<ScalarTypeBuilder> createScalarTypeBuilder(
       ScalarKind scalarKind);
@@ -462,6 +526,10 @@ class SchemaBuilder {
   std::shared_ptr<SlidingWindowMapTypeBuilder>
   createSlidingWindowMapTypeBuilder();
 
+  /// Creates a sliding window array builder.
+  std::shared_ptr<SlidingWindowArrayTypeBuilder>
+  createSlidingWindowArrayTypeBuilder();
+
   // Create a flat map builder. |keyScalarKind| captures the type of the map
   // key.
   std::shared_ptr<FlatMapTypeBuilder> createFlatMapTypeBuilder(
@@ -472,10 +540,17 @@ class SchemaBuilder {
   /// requires the reserved Default group, which may be its only group. A
   /// projection may omit Default but keeps at least one group.
   /// `defaultGroupKeyPresenceMode` selects how batches record Default keys.
+  /// schemaNodes() encodes keys with `groupKeysLayout`, e.g.
+  /// EliasFano, allocating from this builder's pool, which the layout
+  /// requires. Without one, it copies the streams of groups added with their
+  /// recorded keys (addGroup() with `encodedKeys`), and writes the keys as
+  /// strings when no group carries one (HybridFlatMap::serialize()). See
+  /// SerializerOptions::hybridFlatMapGroupKeysLayout.
   std::shared_ptr<HybridFlatMapTypeBuilder> createHybridFlatMapTypeBuilder(
       ScalarKind keyScalarKind,
       HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
-      bool projection = false);
+      bool projection = false,
+      std::optional<EncodingLayout> groupKeysLayout = std::nullopt);
 
   // Retrieves all the nodes CURRENTLY known to the schema builder.
   // If more nodes are added to the schema builder later on, following calls to
@@ -496,15 +571,16 @@ class SchemaBuilder {
   std::optional<offset_size> sharedDictionaryStreamOffset(
       offset_size valueStreamOffset) const;
 
-  /// Allocates the stream that holds the cluster index key chunk of each
-  /// stripe. No schema node references it. Must be the first allocation, so
-  /// the stream is id 0 whatever streams the schema adds later.
-  offset_size createClusterIndexKeyStream();
+  /// Allocates 'count' streams that hold index data of each stripe, such as
+  /// the cluster index key chunk of the stripe, and returns their ids. No
+  /// schema node references them. Must be the first allocation, so the streams
+  /// are ids [0, count) whatever streams the schema adds later.
+  std::vector<offset_size> createStripeIndexStreams(uint32_t count);
 
-  /// Returns the stream allocated by createClusterIndexKeyStream(), or nullopt
-  /// when there is none.
-  std::optional<offset_size> clusterIndexKeyStreamOffset() const {
-    return clusterIndexKeyStreamOffset_;
+  /// Returns the number of streams that createStripeIndexStreams() allocated,
+  /// ids [0, count), or 0 when there are none.
+  uint32_t stripeIndexStreamCount() const {
+    return stripeIndexStreamCount_;
   }
 
   const std::shared_ptr<const TypeBuilder>& root() const;
@@ -513,6 +589,8 @@ class SchemaBuilder {
   void registerChild(const std::shared_ptr<TypeBuilder>& type);
   offset_size allocateStreamOffset();
 
+  // See SchemaBuilder().
+  velox::memory::MemoryPool* const pool_{nullptr};
   // Schema builder is building a tree of types. As a tree, it should have a
   // single root. We use |roots_| to track that the callers don't forget to
   // attach every created type to a parent (and thus constructing a valid tree).
@@ -528,9 +606,9 @@ class SchemaBuilder {
   // Used by the physical layout planner to colocate stripe dictionaries with
   // their value streams. File and external dictionaries have no stream here.
   folly::F14FastMap<offset_size, offset_size> sharedDictionaryStreamOffsets_;
-  // Used by the physical layout planner to put the cluster index key stream
-  // first in each stripe.
-  std::optional<offset_size> clusterIndexKeyStreamOffset_;
+  // Used by the physical layout planner to put the stripe index streams first
+  // in each stripe.
+  uint32_t stripeIndexStreamCount_{0};
   offset_size currentOffset_{0};
 
   friend class ScalarTypeBuilder;
@@ -543,6 +621,7 @@ class SchemaBuilder {
   friend class FlatMapTypeBuilder;
   friend class HybridFlatMapTypeBuilder;
   friend class SlidingWindowMapTypeBuilder;
+  friend class SlidingWindowArrayTypeBuilder;
   friend std::ostream& operator<<(
       std::ostream& out,
       const SchemaBuilder& schema);
@@ -551,7 +630,11 @@ class SchemaBuilder {
 std::ostream& operator<<(std::ostream& out, const SchemaBuilder& schema);
 
 /// Converts a deserialized type tree into the same DFS schema node layout
-/// produced by SchemaBuilder::schemaNodes().
-std::vector<SchemaNode> schemaNodes(const Type& type);
+/// produced by SchemaBuilder::schemaNodes(). Hybrid FlatMap nodes serialize
+/// their groups with `pool` (HybridFlatMap::serialize()), which must not be
+/// null when `type` holds one.
+std::vector<SchemaNode> schemaNodes(
+    const Type& type,
+    velox::memory::MemoryPool* pool = nullptr);
 
 } // namespace facebook::nimble

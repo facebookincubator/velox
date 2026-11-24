@@ -57,7 +57,13 @@ velox_add_library(
   RPCFlowControlPolicy.h
 )
 
-velox_link_libraries(velox_rpc_flow_control_policy velox_exception)
+velox_link_libraries(
+  velox_rpc_flow_control_policy
+  velox_enum_declare
+  velox_enum_define
+  velox_exception
+  fmt::fmt
+)
 
 velox_add_library(velox_rpc_rate_limiter RPCRateLimiter.cpp HEADERS RPCRateLimiter.h)
 
@@ -86,7 +92,7 @@ velox_link_libraries(
   Folly::folly
 )
 
-velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h)
+velox_add_library(velox_rpc_operator RPCOperator.cpp HEADERS RPCOperator.h RPCOperatorStatNames.h)
 
 velox_link_libraries(
   velox_rpc_operator

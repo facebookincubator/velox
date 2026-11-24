@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <gtest/gtest.h>
 #include <deque>
 
@@ -161,7 +162,7 @@ class HashIndexTestBase {
       int32_t idValue) {
     auto key = encodeLookupKey(columns, idValue);
     return index->lookup(
-        IndexLookup::LookupRequest::pointLookup({std::move(key)}));
+        *IndexLookup::LookupRequest::pointLookup({std::move(key)}));
   }
 
   std::string tempFilePath(const std::string& name) {
@@ -409,9 +410,8 @@ TEST_P(HashIndexParamTest, rangeScanThrows) {
 
   auto key = encodeLookupKey(columns(), 5);
   NIMBLE_ASSERT_THROW(
-      hashIndex->lookup(
-          IndexLookup::LookupRequest::rangeScan(
-              {velox::serializer::EncodedKeyBounds{key, key}})),
+      hashIndex->lookup(*IndexLookup::LookupRequest::rangeScan(
+          {velox::serializer::EncodedKeyBounds{key, key}})),
       "Hash index only supports point lookups");
 }
 

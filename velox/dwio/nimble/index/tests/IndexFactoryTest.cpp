@@ -53,6 +53,10 @@ namespace {
 constexpr std::string_view kCustomClusterIndexName{"test.cluster.v1"};
 constexpr std::string_view kReverseOrderClusterIndexName{
     "test.cluster.reverse_order.v1"};
+constexpr std::string_view kMissingIndexStreamClusterIndexName{
+    "test.cluster.missing_index_stream.v1"};
+constexpr std::string_view kInvalidIndexStreamsClusterIndexName{
+    "test.cluster.invalid_index_streams.v1"};
 constexpr std::string_view kCustomDenseIndexName{"test.dense.v1"};
 constexpr std::string_view kValidationDenseIndexName{
     "test.dense.validation.v1"};
@@ -100,7 +104,7 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         10'000,
         CompressionType::Uncompressed,
-        /*hierarchicalKeyEncodingReadFactors=*/{}};
+        /*trieKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(
         builtInConfig, inputType, pool, writerOptions);
   }
@@ -155,7 +159,7 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
         EncodingLayout{EncodingType::Prefix, {}, CompressionType::Uncompressed},
         /*maxRowsPerKeyChunk=*/4,
         CompressionType::Uncompressed,
-        /*hierarchicalKeyEncodingReadFactors=*/{}};
+        /*trieKeyEncodingReadFactors=*/{}};
     return ClusterIndexWriter::create(
         builtInConfig, inputType, pool, writerOptions);
   }
@@ -186,6 +190,93 @@ class ReverseOrderClusterIndexFactory final : public ClusterIndexFactory {
   const ReverseKeyComparator comparator_;
 };
 
+// Asks for two index streams of each stripe in the Stripe key stream layout,
+// but writes the cluster index of TestClusterIndexFactory, which stores data
+// only in the first: its key stream.
+class MissingIndexStreamClusterIndexFactory final : public ClusterIndexFactory {
+ public:
+  std::string_view name() const override {
+    return kMissingIndexStreamClusterIndexName;
+  }
+
+  uint32_t numIndexStreams(KeyStreamLayout keyStreamLayout) const override {
+    return keyStreamLayout == KeyStreamLayout::kStripe ? 2 : 0;
+  }
+
+  std::unique_ptr<IndexWriter> createWriter(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
+    NIMBLE_CHECK_EQ(writerOptions.indexStreamIds.size(), 2);
+    return clusterIndexFactory(kCustomClusterIndexName)
+        .createWriter(
+            config,
+            inputType,
+            pool,
+            {.keyStreamLayout = writerOptions.keyStreamLayout,
+             .indexStreamIds = {writerOptions.indexStreamIds.front()}});
+  }
+
+  std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
+      const std::vector<std::string>& columns,
+      const velox::RowTypePtr& inputType,
+      const std::vector<SortOrder>& sortOrders,
+      velox::memory::MemoryPool* pool) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createKeyEncoder(columns, inputType, sortOrders, pool);
+  }
+
+  std::unique_ptr<ClusterIndexBase> createReader(
+      Section rootSection,
+      velox::memory::MemoryPool* pool,
+      const IndexLookup::Options& options) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createReader(std::move(rootSection), pool, options);
+  }
+};
+
+// Asks for no index stream of each stripe in the Stripe key stream layout, and
+// for one in the Partition layout, which the Writer rejects before it creates
+// the index writer.
+class InvalidIndexStreamsClusterIndexFactory final
+    : public ClusterIndexFactory {
+ public:
+  std::string_view name() const override {
+    return kInvalidIndexStreamsClusterIndexName;
+  }
+
+  uint32_t numIndexStreams(KeyStreamLayout keyStreamLayout) const override {
+    return keyStreamLayout == KeyStreamLayout::kPartition ? 1 : 0;
+  }
+
+  std::unique_ptr<IndexWriter> createWriter(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
+      velox::memory::MemoryPool* pool,
+      const Options& writerOptions) const override {
+    return clusterIndexFactory(kCustomClusterIndexName)
+        .createWriter(config, inputType, pool, writerOptions);
+  }
+
+  std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
+      const std::vector<std::string>& columns,
+      const velox::RowTypePtr& inputType,
+      const std::vector<SortOrder>& sortOrders,
+      velox::memory::MemoryPool* pool) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createKeyEncoder(columns, inputType, sortOrders, pool);
+  }
+
+  std::unique_ptr<ClusterIndexBase> createReader(
+      Section rootSection,
+      velox::memory::MemoryPool* pool,
+      const IndexLookup::Options& options) const override {
+    return clusterIndexFactory(kClusterIndexName)
+        .createReader(std::move(rootSection), pool, options);
+  }
+};
+
 class NamedIndexWriter final : public IndexWriter {
  public:
   NamedIndexWriter(std::string name, std::unique_ptr<IndexWriter> writer)
@@ -195,7 +286,7 @@ class NamedIndexWriter final : public IndexWriter {
     writer_->write(input);
   }
 
-  std::vector<Chunk> finishStripe(Buffer& buffer) override {
+  std::vector<std::vector<Chunk>> finishStripe(Buffer& buffer) override {
     return writer_->finishStripe(buffer);
   }
 
@@ -424,6 +515,10 @@ class IndexFactoryTest : public testing::Test {
         std::make_shared<const TestClusterIndexFactory>());
     registerClusterIndexFactory(
         std::make_shared<const ReverseOrderClusterIndexFactory>());
+    registerClusterIndexFactory(
+        std::make_shared<const MissingIndexStreamClusterIndexFactory>());
+    registerClusterIndexFactory(
+        std::make_shared<const InvalidIndexStreamsClusterIndexFactory>());
     registerDenseIndexFactory(
         std::make_shared<const HashDelegatingDenseIndexFactory>());
     registerDenseIndexFactory(
@@ -540,6 +635,32 @@ class IndexFactoryTest : public testing::Test {
         fileSystem->openFileForRead(path), leafPool_.get(), options);
   }
 
+  // Opens a real index of each lookup implementation for request validation.
+  std::shared_ptr<TabletReader> openLookupIndexFile(IndexType type) {
+    WriterOptions options;
+    switch (type) {
+      case IndexType::Cluster:
+        options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+            IndexFamily::Cluster, std::string{kCustomClusterIndexName});
+        break;
+      case IndexType::Hash:
+        options.denseIndexConfigs.emplace_back(
+            HashIndexConfigBuilder{}.withKeyColumns({"id"}).build());
+        break;
+      case IndexType::Sorted:
+        options.denseIndexConfigs.emplace_back(
+            SortedIndexConfigBuilder{}.withKeyColumns({"id"}).build());
+        break;
+    }
+    const auto name = toString(type);
+    auto writer = makeWriter(name, std::move(options));
+    writer->write(makeBatch());
+    writer->close();
+    return openFile(
+        tempDirectory_->getPath() + "/" + name,
+        std::string{kCustomClusterIndexName});
+  }
+
   std::string encodeKey(int32_t value) {
     auto keyVector =
         velox::BaseVector::create(velox::INTEGER(), 1, leafPool_.get());
@@ -574,20 +695,91 @@ TEST_F(IndexFactoryTest, customFactoriesEndToEnd) {
   ASSERT_NE(tablet->clusterIndex(), nullptr);
   const auto key = encodeKey(7);
   auto clusterResult = tablet->clusterIndex()->lookup(
-      IndexLookup::LookupRequest::pointLookup({key}));
+      *IndexLookup::LookupRequest::pointLookup({key}));
   ASSERT_EQ(clusterResult.size(), 1);
   EXPECT_FALSE(clusterResult[0].empty());
 
   const auto* denseIndex = tablet->denseIndex({"id"});
   ASSERT_NE(denseIndex, nullptr);
   auto denseResult =
-      denseIndex->lookup(IndexLookup::LookupRequest::pointLookup({key}));
+      denseIndex->lookup(*IndexLookup::LookupRequest::pointLookup({key}));
   ASSERT_EQ(denseResult.size(), 1);
   ASSERT_EQ(denseResult[0].size(), 1);
   EXPECT_EQ(denseResult[0][0], RowRange(7, 8));
 
   auto wrongClusterName = openFile(path, std::string{kClusterIndexName});
   EXPECT_EQ(wrongClusterName->clusterIndex(), nullptr);
+}
+
+TEST_F(IndexFactoryTest, lookupAcceptsDerivedRequests) {
+  // Keeps the base request's semantics while exercising a derived C++ type.
+  class PlainLookupRequest final : public IndexLookup::LookupRequest {
+   public:
+    // Creates a point request without additional constraints.
+    explicit PlainLookupRequest(std::string key)
+        : LookupRequest{std::vector<std::string>{std::move(key)}, nullptr} {}
+  };
+
+  for (const auto type :
+       {IndexType::Cluster, IndexType::Hash, IndexType::Sorted}) {
+    SCOPED_TRACE(toString(type));
+    auto tablet = openLookupIndexFile(type);
+    const IndexLookup* index = type == IndexType::Cluster
+        ? tablet->clusterIndex()
+        : tablet->denseIndex({"id"});
+    ASSERT_NE(index, nullptr);
+    const PlainLookupRequest request{encodeKey(7)};
+    const auto result = index->lookup(request);
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0], (RowRange{7, 8}));
+  }
+}
+
+TEST_F(IndexFactoryTest, lookupUsesRequestValidator) {
+  // Restricts a request to an index implementation through the request hook.
+  class IndexTypeLookupRequest final : public IndexLookup::LookupRequest {
+   public:
+    // Creates a point request that requires the selected index type.
+    IndexTypeLookupRequest(std::string key, IndexType indexType)
+        : LookupRequest{std::vector<std::string>{std::move(key)}, nullptr},
+          indexType_{indexType} {}
+
+    // Rejects indexes that do not meet the request's requirement.
+    void validateFor(const IndexLookup& index) const override {
+      NIMBLE_USER_CHECK_EQ(
+          index.type(),
+          indexType_,
+          "Lookup request requires a different index type");
+    }
+
+   private:
+    // Index type required by this request.
+    const IndexType indexType_;
+  };
+
+  for (const auto type :
+       {IndexType::Cluster, IndexType::Hash, IndexType::Sorted}) {
+    SCOPED_TRACE(toString(type));
+    auto tablet = openLookupIndexFile(type);
+    const IndexLookup* index = type == IndexType::Cluster
+        ? tablet->clusterIndex()
+        : tablet->denseIndex({"id"});
+    ASSERT_NE(index, nullptr);
+
+    const IndexTypeLookupRequest request{encodeKey(7), type};
+    const auto result = index->lookup(request);
+    ASSERT_EQ(result.size(), 1);
+    ASSERT_EQ(result[0].size(), 1);
+    EXPECT_EQ(result[0][0], (RowRange{7, 8}));
+
+    const auto incompatibleType =
+        type == IndexType::Cluster ? IndexType::Hash : IndexType::Cluster;
+    const IndexTypeLookupRequest incompatible{encodeKey(7), incompatibleType};
+    NIMBLE_ASSERT_USER_THROW(
+        index->lookup(incompatible),
+        "Lookup request requires a different index type");
+  }
 }
 
 TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
@@ -602,9 +794,8 @@ TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
   ASSERT_NE(index, nullptr);
 
   {
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::pointLookup(
-            {encodeKey(19), encodeKey(7), encodeKey(0)}));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::pointLookup(
+        {encodeKey(19), encodeKey(7), encodeKey(0)}));
     ASSERT_EQ(result.size(), 3);
     const std::vector<RowRange> expected{
         RowRange(0, 1), RowRange(12, 13), RowRange(19, 20)};
@@ -617,11 +808,10 @@ TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
   {
     // Ids 15 down to 6, then an empty range whose upper bound sorts before
     // its lower bound in the reverse order.
-    const auto result = index->lookup(
-        IndexLookup::LookupRequest::rangeScan({
-            {.lowerKey = encodeKey(15), .upperKey = encodeKey(5)},
-            {.lowerKey = encodeKey(5), .upperKey = encodeKey(15)},
-        }));
+    const auto result = index->lookup(*IndexLookup::LookupRequest::rangeScan({
+        {.lowerKey = encodeKey(15), .upperKey = encodeKey(5)},
+        {.lowerKey = encodeKey(5), .upperKey = encodeKey(15)},
+    }));
     ASSERT_EQ(result.size(), 2);
     ASSERT_EQ(result[0].size(), 1);
     EXPECT_EQ(result[0][0], RowRange(4, 14));
@@ -639,8 +829,57 @@ TEST_F(IndexFactoryTest, customKeyOrderEndToEnd) {
 TEST_F(IndexFactoryTest, builtInClusterFactoryIsRegistered) {
   EXPECT_EQ(clusterIndexFactory(kClusterIndexName).name(), kClusterIndexName);
   EXPECT_EQ(
-      clusterIndexFactory(kHierarchicalClusterIndexName).name(),
-      kHierarchicalClusterIndexName);
+      clusterIndexFactory(kTrieClusterIndexName).name(), kTrieClusterIndexName);
+}
+
+// The built-in cluster indexes store their keys in one index stream of each
+// stripe in the Stripe key stream layout, and nothing in stripes in the
+// Partition layout.
+TEST_F(IndexFactoryTest, builtInClusterFactoryIndexStreams) {
+  for (const auto name : {kClusterIndexName, kTrieClusterIndexName}) {
+    SCOPED_TRACE(name);
+    const auto& factory = clusterIndexFactory(name);
+    EXPECT_EQ(factory.numIndexStreams(KeyStreamLayout::kStripe), 1);
+    EXPECT_EQ(factory.numIndexStreams(KeyStreamLayout::kPartition), 0);
+  }
+}
+
+// The Writer allocates the index streams of each stripe that the factory asks
+// for, and checks that the index writer stores data in each of them.
+TEST_F(IndexFactoryTest, rejectMissingIndexStream) {
+  WriterOptions options;
+  options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+      IndexFamily::Cluster, std::string{kMissingIndexStreamClusterIndexName});
+  options.clusterIndexKeyStreamLayout = KeyStreamLayout::kStripe;
+  auto writer = makeWriter("missing_index_stream", std::move(options));
+  writer->write(makeBatch());
+  NIMBLE_ASSERT_THROW(
+      writer->close(),
+      "A cluster index must return the chunks of each of its index streams");
+}
+
+// The Writer checks that the factory asks for index streams of each stripe in
+// the Stripe key stream layout only.
+TEST_F(IndexFactoryTest, rejectInvalidIndexStreams) {
+  {
+    WriterOptions options;
+    options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+        IndexFamily::Cluster,
+        std::string{kInvalidIndexStreamsClusterIndexName});
+    options.clusterIndexKeyStreamLayout = KeyStreamLayout::kStripe;
+    NIMBLE_ASSERT_THROW(
+        makeWriter("stripe_without_index_streams", std::move(options)),
+        "A Stripe layout cluster index must store its keys in a stream of each stripe");
+  }
+  {
+    WriterOptions options;
+    options.clusterIndexConfig = std::make_shared<const TestIndexConfig>(
+        IndexFamily::Cluster,
+        std::string{kInvalidIndexStreamsClusterIndexName});
+    NIMBLE_ASSERT_THROW(
+        makeWriter("partition_with_index_streams", std::move(options)),
+        "A Partition layout cluster index must store no stream in stripes");
+  }
 }
 
 TEST_F(IndexFactoryTest, builtInDenseFactoriesAreRegistered) {

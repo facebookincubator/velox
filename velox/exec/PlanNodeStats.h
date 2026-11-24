@@ -123,6 +123,12 @@ struct PlanNodeStats {
   /// Returns the operator-specific counter 'name'. Throws if there is none.
   const RuntimeMetric& customStat(std::string_view name) const;
 
+  /// Returns the sum of the operator-specific counter 'name'. Throws if there
+  /// is none.
+  int64_t customSum(std::string_view name) const {
+    return customStat(name).sum;
+  }
+
   /// Returns true if there is an operator-specific counter 'name'.
   bool hasCustomStat(std::string_view name) const;
 

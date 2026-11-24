@@ -472,8 +472,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
   }
 
   // Build spatial join plan with geometry conversion as part of the plan.
-  const auto planNodeIdGenerator =
-      std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
 
   std::string joinCondition;
   std::optional<std::string> radiusColumn;
@@ -495,7 +494,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
 
   // Create SpatialJoin plan with geometry conversion projections.
   auto spatialJoinPlan =
-      test::PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(probeInput)
           // Convert probe WKT strings to Geometry
           .project(
@@ -503,7 +502,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
                "ST_GeometryFromText(probe_geom_wkt) AS probe_geom",
                "probe_geom_wkt"})
           .spatialJoin(
-              test::PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(buildInput)
                   // Convert build WKT strings to Geometry
                   .project(
@@ -525,7 +524,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
 
   // Create equivalent NestedLoopJoin plan for comparison.
   auto nestedLoopJoinPlan =
-      test::PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(probeInput)
           // Convert probe WKT strings to Geometry
           .project(
@@ -533,7 +532,7 @@ void SpatialJoinFuzzer::verify(core::JoinType joinType) {
                "ST_GeometryFromText(probe_geom_wkt) AS probe_geom",
                "probe_geom_wkt"})
           .nestedLoopJoin(
-              test::PlanBuilder(planNodeIdGenerator)
+              builder.newPlan()
                   .values(buildInput)
                   // Convert build WKT strings to Geometry
                   .project(

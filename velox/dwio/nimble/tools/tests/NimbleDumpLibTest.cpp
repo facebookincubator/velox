@@ -22,6 +22,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
+#include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/tools/NimbleDumpLib.h"
 #include "velox/vector/FlatVector.h"
 
@@ -310,4 +311,48 @@ TEST_F(NimbleDumpLibTest, emitIndexShowsPartitionKeyStreams) {
               "Key Stream: {} bytes", partitions[0][3] + partitions[1][3])),
       std::string::npos)
       << line;
+}
+
+TEST_F(NimbleDumpLibTest, emitIndexShowsKeyStreamLayout) {
+  // Two stripes of ten rows with keys 0 to 19.
+  constexpr int kRowsPerStripe{10};
+  const auto batches = makeKeyBatches(/*numBatches=*/2, kRowsPerStripe);
+
+  for (const auto layout :
+       {index::KeyStreamLayout::kPartition, index::KeyStreamLayout::kStripe}) {
+    SCOPED_TRACE(index::toString(layout));
+    WriterOptions writerOptions;
+    writerOptions.clusterIndexConfig =
+        index::ClusterIndexConfigBuilder{}
+            .withKeyColumns({"key"})
+            .withSortOrders({SortOrder{.ascending = true}})
+            .withEnforceKeyOrder(true)
+            .withNoDuplicateKey(true)
+            .build();
+    writerOptions.clusterIndexKeyStreamLayout = layout;
+    // Flushes after each batch, so each batch is a stripe of its own.
+    auto fileContent =
+        test::createNimbleFile(*leafPool_, batches, writerOptions);
+
+    std::ostringstream output;
+    tools::NimbleDumpLib dumpLib{makeReadFile(fileContent), false, output};
+    dumpLib.emitIndex();
+
+    const auto result = output.str();
+    EXPECT_NE(
+        result.find(
+            "Key Stream Layout: " + std::string(index::toString(layout))),
+        std::string::npos);
+    const auto stripeKeyStreams = result.find("Stripe Key Streams:");
+    if (layout == index::KeyStreamLayout::kPartition) {
+      EXPECT_EQ(stripeKeyStreams, std::string::npos);
+      continue;
+    }
+    // The stripe key stream table ends the output, with a row per stripe.
+    ASSERT_NE(stripeKeyStreams, std::string::npos);
+    const auto table = result.substr(stripeKeyStreams);
+    EXPECT_EQ(
+        std::count(table.begin(), table.end(), '\n'),
+        /*title=*/1 + /*header=*/1 + /*stripes=*/2);
+  }
 }

@@ -33,9 +33,6 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include <fcntl.h>
-#include <sys/types.h>
-
 using namespace facebook::velox;
 using namespace facebook::velox::cache;
 using namespace facebook::velox::common::testutil;
@@ -43,7 +40,6 @@ using namespace facebook::velox::common::testutil;
 using facebook::velox::memory::MemoryAllocator;
 
 DECLARE_bool(velox_ssd_odirect);
-DECLARE_bool(velox_ssd_verify_write);
 
 // Represents a planned load from a file. Many of these constitute a load plan.
 struct Request {
@@ -185,8 +181,8 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
   }
 
   // Finds one entry from RAM, SSD or storage. Throws if the data
-  // cannot be read or 'injectError' is true. Checks the data with
-  // verifyHook and discards the pin.
+  // cannot be read or 'injectError' is true. Checks the data of an entry
+  // already in RAM and discards the pin.
   void loadOne(uint64_t fileNum, Request& request, bool injectError);
 
   // Brings the data for the ranges in 'requests' into cache. The individual
@@ -199,8 +195,7 @@ class AsyncDataCacheTest : public ::testing::TestWithParam<TestParam> {
       bool injectError,
       Semaphore* semaphore = nullptr);
 
-  // Gets a pin on each of 'requests' individually. This checks the contents via
-  // cache_'s verifyHook.
+  // Gets a pin on each of 'requests' individually.
   void checkBatch(
       uint64_t fileNum,
       std::vector<Request>& requests,
@@ -1047,92 +1042,6 @@ TEST_P(AsyncDataCacheTest, outOfCapacity) {
   EXPECT_EQ(0, cache_->incrementPrefetchPages(0));
   EXPECT_EQ(16384, allocator_->numAllocated());
   clearAllocations(allocations);
-}
-
-namespace {
-// Cuts off the last 1/10th of file at 'path'.
-void corruptFile(const std::string& path) {
-  const auto fd = ::open(path.c_str(), O_WRONLY);
-  const auto size = ::lseek(fd, 0, SEEK_END);
-  const auto rc = ftruncate(fd, size / 10 * 9);
-  ASSERT_EQ(rc, 0);
-}
-} // namespace
-
-TEST_P(AsyncDataCacheTest, DISABLED_ssd) {
-#ifdef TSAN_BUILD
-  // NOTE: scale down the test data set to prevent tsan tester from running out
-  // of memory.
-  constexpr uint64_t kRamBytes = 16 << 20;
-  constexpr uint64_t kSsdBytes = 256UL << 20;
-#else
-  constexpr uint64_t kRamBytes = 32 << 20;
-  constexpr uint64_t kSsdBytes = 512UL << 20;
-#endif
-  FLAGS_velox_exception_user_stacktrace_enabled = false;
-  initializeCache(kRamBytes, kSsdBytes);
-  cache_->setVerifyHook(
-      [&](const AsyncDataCacheEntry& entry) { checkContents(entry); });
-
-  // Read back all writes. This increases the chance of writes falling behind
-  // new entry creation.
-  FLAGS_velox_ssd_verify_write = true;
-
-  // We read kSsdBytes worth of data on 16 threads. The same data will be hit by
-  // all threads. The expectation is that most of the data ends up on SSD. All
-  // data may not get written if reading is faster than writing. Error out once
-  // every 11 load batches.
-  //
-  // NOTE: loadExecutor() must have more threads so that background write does
-  // not wait for the workload.
-  runThreads(16, [&](int32_t /*i*/) { loadLoop(0, kSsdBytes, 11); });
-  LOG(INFO) << "Stats after first pass: " << cache_->toString();
-  auto ssdStats = cache_->ssdCache()->stats();
-  ASSERT_LE(kRamBytes, ssdStats.bytesWritten);
-
-  // We allow writes to proceed faster.
-  FLAGS_velox_ssd_verify_write = false;
-
-  // We read the data back. The verify hook checks correct values. Error every
-  // 13 batch loads.
-  runThreads(16, [&](int32_t /*i*/) { loadLoop(0, kSsdBytes, 13); });
-  LOG(INFO) << "Stats after second pass:" << cache_->toString();
-  ssdStats = cache_->ssdCache()->stats();
-  ASSERT_LE(kRamBytes, ssdStats.bytesRead);
-
-  // We re-read the second half and add another half capacity of new entries. We
-  // expect some of the oldest entries to get evicted. Error every 17 batch
-  // loads.
-  runThreads(
-      16, [&](int32_t /*i*/) { loadLoop(kSsdBytes / 2, kSsdBytes * 1.5, 17); });
-  LOG(INFO) << "Stats after third pass:" << cache_->toString();
-
-  // Wait for writes to finish and make a checkpoint.
-  cache_->ssdCache()->shutdown();
-  auto ssdStatsAfterShutdown = cache_->ssdCache()->stats();
-  ASSERT_GT(ssdStatsAfterShutdown.bytesWritten, ssdStats.bytesWritten);
-  ASSERT_GT(ssdStatsAfterShutdown.bytesRead, ssdStats.bytesRead);
-
-  // Check that no pins are leaked.
-  ASSERT_EQ(ssdStatsAfterShutdown.numPins, 0);
-
-  auto ramStats = cache_->refreshStats();
-  ASSERT_EQ(ramStats.numShared, 0);
-  ASSERT_EQ(ramStats.numExclusive, 0);
-
-  cache_->ssdCache()->clear();
-  // We cut the tail off one of the cache shards.
-  corruptFile(fmt::format("{}/cache0.cpt", tempDirectory_->getPath()));
-  // We open the cache from checkpoint. Reading checks the data integrity, here
-  // we check that more data was read than written.
-  initializeCache(kRamBytes, kSsdBytes);
-  runThreads(16, [&](int32_t /*i*/) {
-    loadLoop(kSsdBytes / 2, kSsdBytes * 1.5, 113);
-  });
-  LOG(INFO) << "State after starting 3/4 shards from checkpoint: "
-            << cache_->toString();
-  const auto ssdStatsFromCP = cache_->ssdCache()->stats();
-  ASSERT_EQ(ssdStatsFromCP.readCheckpointErrors, 1);
 }
 
 TEST_P(AsyncDataCacheTest, invalidSsdPath) {

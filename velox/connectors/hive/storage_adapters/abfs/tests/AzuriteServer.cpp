@@ -17,6 +17,8 @@
 #include "velox/connectors/hive/storage_adapters/abfs/tests/AzuriteServer.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsPath.h"
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
+#include "velox/connectors/hive/storage_adapters/test_common/ServerStartup.h"
+#include "velox/exec/tests/utils/Ports.h"
 
 namespace facebook::velox::filesystems {
 
@@ -50,15 +52,13 @@ void AzuriteServer::start() {
   try {
     serverProcess_ = std::make_unique<boost::process::child>(
         env_, exePath_, commandOptions_);
-    serverProcess_->wait_for(std::chrono::duration<int, std::milli>(5000));
-    VELOX_CHECK_EQ(
-        serverProcess_->exit_code(),
-        383,
-        "AzuriteServer process exited, code: ",
-        serverProcess_->exit_code());
   } catch (const std::exception& e) {
     VELOX_FAIL("Failed to launch Azurite server: {}", e.what());
   }
+  velox::test::ServerStartup::wait(
+      fmt::format("AzuriteServer on port {}", port_),
+      [this] { return exec::test::Ports::isListening(port_); },
+      [this] { return serverProcess_->running(); });
 }
 
 void AzuriteServer::stop() {
@@ -77,7 +77,7 @@ bool AzuriteServer::isRunning() {
 }
 
 // requires azurite executable to be on the PATH
-AzuriteServer::AzuriteServer(int64_t port) : port_(port) {
+AzuriteServer::AzuriteServer(uint16_t port) : port_(port) {
   std::string dataLocation = fmt::format("/tmp/azurite_{}", port);
   std::string logFilePath = fmt::format("/tmp/azurite/azurite_{}.log", port);
   std::printf(

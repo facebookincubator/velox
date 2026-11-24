@@ -57,6 +57,9 @@ namespace facebook::velox::exec::rpc {
 ///      Our factory returns shared_ptr<AsyncRPCFunction> with no args;
 ///      initialization happens separately via initialize().
 ///
+/// Function names are case-insensitive, as for scalar functions: the registry
+/// lowercases them on registration and lookup.
+///
 /// Usage (in function's .cpp file):
 ///   // For a complete example, see velox/exec/rpc/tests/DemoRPCFunction*.
 ///

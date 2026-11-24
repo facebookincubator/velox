@@ -17,6 +17,7 @@
 #include "velox/experimental/torchwave/Executor.h"
 
 #include "velox/experimental/torchwave/AllocGroup.h"
+#include "velox/experimental/torchwave/DeviceGrid.h"
 #include "velox/experimental/torchwave/DeviceSymbols.h"
 #include "velox/experimental/torchwave/GroupAlloc.h"
 #include "velox/experimental/torchwave/StepProgram.h"
@@ -68,6 +69,10 @@ c10::DeviceIndex current_device();
 } // namespace c10::cuda
 
 namespace torch::wave {
+
+std::atomic<int64_t> gDemandChecks{0};
+std::atomic<int64_t> gDemandMismatches{0};
+std::atomic<int64_t> gDeviceAllocStepRuns{0};
 
 namespace {
 
@@ -1797,6 +1802,11 @@ void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
   }
   if (deviceSymbols != nullptr) {
     deviceSymbols->resolveSources(state);
+    if (WaveConfig::get().checkSizeExprs) {
+      LOG(INFO) << "Size expressions: "
+                << deviceSymbols->inferReserveShapes(state)
+                << " shapes from symbolic reserves";
+    }
   }
   for (auto& steps : state.stepVectors) {
     for (auto& sv : steps) {
@@ -1813,11 +1823,320 @@ void bindGraph(ExecutionState& state, WaveGraph& waveGraph) {
       }
     }
   }
+  if (WaveConfig::get().deviceSizeCheck &&
+      waveGraph.deviceSymbols() != nullptr) {
+    waveGraph.deviceSymbols()->bindSizeChecks(state);
+  }
   if (deviceSymbols != nullptr &&
       std::getenv("TW_DEVICE_SYMBOLS_TRACE") != nullptr) {
     deviceSymbols->traceWaits(state, returned);
   }
   state.bound = true;
+}
+
+// Compares the bytes each group's setup computed it needs with the buffer the
+// host gave it, for the groups carved in this execution. With host sizing the
+// two must be equal.
+void checkDemands(ExecutionState& state) {
+  if (!state.demandTable.defined() || state.groupHostBytes.empty()) {
+    return;
+  }
+  state.stream->wait();
+  const auto demands = state.demandTable.cpu();
+  const auto* demand = demands.data_ptr<int64_t>();
+  int64_t numChecked = 0;
+  int64_t numDiffering = 0;
+  for (size_t slot = 0; slot < state.groupHostBytes.size(); ++slot) {
+    const auto hostBytes = state.groupHostBytes[slot];
+    if (hostBytes < 0 || state.groupHasDemand[slot] == 0) {
+      continue;
+    }
+    ++numChecked;
+    if (state.groupHasDemand[slot] == 2 ? demand[slot] > hostBytes
+                                        : demand[slot] != hostBytes) {
+      if (++numDiffering <= 10) {
+        LOG(ERROR) << "Group slot " << slot << " demand " << demand[slot]
+                   << " host bytes " << hostBytes;
+      }
+    }
+  }
+  gDemandChecks += numChecked;
+  gDemandMismatches += numDiffering;
+  std::fill(state.groupHostBytes.begin(), state.groupHostBytes.end(), -1);
+}
+
+// Gives the graph outputs steps on the device path made frame tensors over
+// their groups' buffers, from the descriptors their setups wrote.
+void fetchGraphOutputs(ExecutionState& state) {
+  if (state.outputFetches.empty()) {
+    return;
+  }
+  waitForFetches(state, state.outputFetches);
+  auto& table = state.valueTable;
+  for (const auto& fetch : state.outputFetches) {
+    if (!table.valid(fetch.id)) {
+      const auto& from = state.stepVectors.at(fetch.node).at(fetch.step);
+      auto& entry = state.valueEntries.at(fetch.id);
+      std::memcpy(
+          &entry.t, from.pinnedBase + fetch.offset, sizeof(TableTensor));
+      entry.kind = ValueEntry::kTensor;
+      entry.flags = 0;
+      entry.generation = state.tableGeneration;
+    }
+    // A view the setup placed: its owner is its storage's.
+    if (fetch.base >= 0 && state.valueCold.at(fetch.id).owner < 0) {
+      takeOwner(state, fetch.id, fetch.base);
+    }
+    materializeEntry(state, fetch.id, fetch.id);
+  }
+}
+
+// Keeps each group's largest demand so far, which sizes it on the device
+// path.
+void recordDemands(ExecutionState& state) {
+  if (!state.demandTable.defined() || state.recordedDemand.empty()) {
+    return;
+  }
+  state.stream->wait();
+  if (state.deviceAllocActive) {
+    LOG(INFO) << "Device alloc: " << state.numFetchWaits << " fetch waits, "
+              << state.numDemandProbes << " demand probes, "
+              << state.numPathParamUploads << " of " << state.numPathLaunches
+              << " path steps uploaded parameters in the execution";
+  }
+  // The device grids' counts bound the next launches.
+  for (auto& steps : state.stepVectors) {
+    for (auto& sv : steps) {
+      if (!sv.gridCountsPending) {
+        continue;
+      }
+      sv.gridCountsPending = false;
+      const auto* counts = sv.gridCountsPinned.data_ptr<int64_t>();
+      for (size_t i = 0; i < sv.kernels.size() &&
+           i < static_cast<size_t>(sv.gridCountsPinned.numel());
+           ++i) {
+        sv.kernels[i].numElements = std::max<int64_t>(counts[i], 1);
+      }
+    }
+  }
+  const auto demands = state.demandTable.cpu();
+  const auto* demand = demands.data_ptr<int64_t>();
+  for (size_t slot = 0; slot < state.recordedDemand.size(); ++slot) {
+    if (state.groupHasDemand[slot] != 0) {
+      state.recordedDemand[slot] =
+          std::max(state.recordedDemand[slot], demand[slot]);
+    }
+  }
+}
+
+// Whether the steps on the device path skip host sizing in this execution:
+// each needs its device grid, made without host counts if it has none yet.
+// A group with no recorded demand gets one from a probe of its setup.
+void beginDeviceAlloc(ExecutionState& state, WaveGraph& waveGraph) {
+  const auto& config = WaveConfig::get();
+  state.deviceAllocActive = false;
+  state.numFetchWaits = 0;
+  state.numDemandProbes = 0;
+  state.numPathLaunches = 0;
+  state.numPathParamUploads = 0;
+  // Reference checking reads values from the frame and table, which the
+  // path does not fill (spec C22 to come).
+  if (!config.deviceAlloc || !state.tableOnlyActive || config.debugSingleOps ||
+      config.launchPerOp || config.referenceFrame != nullptr) {
+    return;
+  }
+  int32_t numOnPath = 0;
+  for (const auto& node : waveGraph.nodes()) {
+    auto* invocation = node->kernels();
+    if (invocation == nullptr) {
+      continue;
+    }
+    const auto seq = invocation->sequenceNumber();
+    if (seq >= static_cast<int32_t>(state.stepVectors.size())) {
+      continue;
+    }
+    for (size_t step = 0; step < state.stepVectors[seq].size(); ++step) {
+      auto& sv = state.stepVectors[seq][step];
+      if (!sv.deviceAllocStep) {
+        continue;
+      }
+      ++numOnPath;
+      if (!invocation->prepareCountFreeGrid(sv)) {
+        // The selection keeps steps that cannot get a device grid off the
+        // path; one that still has none here is a bug.
+        DCHECK(false) << "Device alloc step " << seq << "." << step
+                      << " has no device grid";
+        LOG_EVERY_N(ERROR, 100)
+            << "Device alloc: step " << seq << "." << step
+            << " on the path has no device grid ("
+            << (sv.segments.size() > 1         ? "segments"
+                    : sv.deviceGrid == nullptr ? "not packed"
+                                               : "stale")
+            << ", " << sv.kernels.size() << " launches, descriptor "
+            << sv.program->grid.launches.size() << " with "
+            << std::count_if(
+                   sv.program->grid.launches.begin(),
+                   sv.program->grid.launches.end(),
+                   [](const auto& launch) {
+                     return launch.count == GridLaunchDesc::Count::kHost;
+                   })
+            << " host counts, target blocks " << sv.program->grid.targetBlocks
+            << " of " << sv.blockCapacity
+            << "); the execution runs on the host path";
+        return;
+      }
+    }
+  }
+  state.deviceAllocActive = numOnPath > 0;
+}
+
+// The text of the launch of node 'sequenceNumber' whose op code is 'opCode'.
+std::string kernelOpText(
+    const WaveGraph& waveGraph,
+    int32_t sequenceNumber,
+    int32_t opCode) {
+  for (const auto& node : waveGraph.nodes()) {
+    const auto* composite = node->kernels();
+    if (composite == nullptr || composite->sequenceNumber() != sequenceNumber) {
+      continue;
+    }
+    for (const auto& op : composite->ops()) {
+      auto* projectOp = op.projectOp();
+      for (const auto* grid :
+           {&projectOp->grid(),
+            &projectOp->singleBlockGrid(),
+            &projectOp->cgGrid()}) {
+        for (const auto& step : *grid) {
+          for (const auto& launch : step) {
+            if (launch.op != nullptr && launch.op->opCode() == opCode) {
+              return launch.toString();
+            }
+          }
+        }
+      }
+    }
+  }
+  return "unknown op";
+}
+
+// Reads the failure words at the end of the execution. Returns the error of a
+// kernel that hit a bad operand, naming its step, op and line (spec S6, C20),
+// or an empty string. The words are reset, so the compiled graph stays usable
+// for the next execution.
+std::string checkFailureWords(
+    ExecutionState& state,
+    const WaveGraph& waveGraph) {
+  if (!state.failureWords.defined() || state.nextStepOrdinal == 0) {
+    return {};
+  }
+  if (!state.failurePinned.defined()) {
+    state.failurePinned = at::empty(
+        {kNumFailureWords},
+        at::TensorOptions().dtype(at::kInt).pinned_memory(true));
+  }
+  auto* words = state.failurePinned.data_ptr<int32_t>();
+  state.stream->deviceToHostAsync(
+      words,
+      state.failureWords.data_ptr<int32_t>(),
+      kNumFailureWords * sizeof(int32_t));
+  state.stream->wait();
+  if (words[0] == kNoFailedStep ||
+      (state.failureWordsPreset && words[1] == 0)) {
+    return {};
+  }
+  const std::vector<int32_t> seen(words, words + kNumFailureWords);
+  int32_t clean[kNumFailureWords] = {};
+  clean[0] = kNoFailedStep;
+  state.stream->hostToDeviceAsync(
+      state.failureWords.data_ptr<int32_t>(), clean, sizeof(clean));
+  state.stream->wait();
+  if (seen[1] != 0) {
+    const auto ordinal = seen[2];
+    const auto [sequenceNumber, stepIdx] =
+        ordinal >= 0 && static_cast<size_t>(ordinal) < state.ordinalSteps.size()
+        ? state.ordinalSteps[ordinal]
+        : std::pair<int32_t, int32_t>{-1, -1};
+    return c10::str(
+        "Wave kernel error in node ",
+        sequenceNumber,
+        " step ",
+        stepIdx,
+        " (step ",
+        ordinal,
+        " of the execution), op code ",
+        seen[3],
+        ", line ",
+        seen[4],
+        ": ",
+        kernelOpText(waveGraph, sequenceNumber, seen[3]),
+        ". A bad operand, such as an index out of range; the later steps did "
+        "not run. Run with stats for the values.");
+  }
+  // The groups whose demand exceeds their capacity.
+  std::string groups;
+  if (state.demandTable.defined()) {
+    const auto demands = state.demandTable.cpu();
+    const auto* demand = demands.data_ptr<int64_t>();
+    const auto* addresses = state.addressPinned.data_ptr<int64_t>();
+    for (size_t slot = 0; slot < state.groupHasDemand.size(); ++slot) {
+      const auto capacity = addresses[state.groupCapacityBase + slot];
+      if (state.groupHasDemand[slot] != 0 && demand[slot] > capacity) {
+        groups += fmt::format(
+            " group slot {}: demand {}, capacity {}, recorded {}; members by "
+            "the setup's dims:{};",
+            slot,
+            demand[slot],
+            capacity,
+            slot < state.recordedDemand.size() ? state.recordedDemand[slot]
+                                               : -1,
+            slot < state.groupSlotText.size() ? state.groupSlotText[slot] : "");
+      }
+    }
+  }
+  const auto failed = seen[0];
+  const auto [failedNode, failedStep] =
+      failed >= 0 && static_cast<size_t>(failed) < state.ordinalSteps.size()
+      ? state.ordinalSteps[failed]
+      : std::pair<int32_t, int32_t>{-1, -1};
+  TORCH_CHECK(
+      false,
+      "Step ",
+      failed,
+      " of the execution (node ",
+      failedNode,
+      " step ",
+      failedStep,
+      failedNode >= 0 &&
+              state.stepVectors[failedNode][failedStep].deviceAllocStep &&
+              state.deviceAllocActive
+          ? ", on the device path"
+          : "",
+      ") needs more memory than its allocation group was given; restarting "
+      "from the failed step is not implemented yet.",
+      groups);
+}
+
+// Starts the execution's step numbering. The failure words are written only
+// when they are created or a test presets them: no step fails otherwise.
+void beginFailureWords(ExecutionState& state) {
+  state.nextStepOrdinal = 0;
+  state.stepOrdinal = 0;
+  state.ordinalSteps.clear();
+  const int32_t preset = WaveConfig::get().testFailedStep;
+  if (state.failureWords.defined() && preset < 0 && !state.failureWordsPreset) {
+    return;
+  }
+  int32_t words[kNumFailureWords] = {};
+  words[0] = preset >= 0 ? preset : kNoFailedStep;
+  if (!state.failureWords.defined()) {
+    state.failureWords = at::empty(
+        {kNumFailureWords},
+        at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+  }
+  state.stream->hostToDeviceAsync(
+      state.failureWords.data_ptr<int32_t>(), words, sizeof(words));
+  state.stream->wait();
+  state.failureWordsPreset = preset >= 0;
 }
 
 } // namespace
@@ -1890,6 +2209,9 @@ bool WaveGraphExecutor::executeWave(
     if (statePtr->stream) {
       statePtr->streamPool->put(std::move(statePtr->stream));
     }
+    if (statePtr->setupStream) {
+      statePtr->streamPool->put(std::move(statePtr->setupStream));
+    }
     waveGraph.returnState(std::move(statePtr));
   };
 
@@ -1960,14 +2282,29 @@ bool WaveGraphExecutor::executeWave(
   for (auto id : state.tableRoots) {
     publishFromFrame(frame, id);
   }
+  if (WaveConfig::get().checkSizeExprs &&
+      waveGraph.deviceSymbols() != nullptr) {
+    waveGraph.deviceSymbols()->reportSizeExprs(state.sizeExprSymbols);
+  }
+  if (WaveConfig::get().deviceSizeCheck &&
+      waveGraph.deviceSymbols() != nullptr) {
+    waveGraph.deviceSymbols()->reportSizeChecks(state);
+  }
   if (!state.bound) {
     bindGraph(state, waveGraph);
+  }
+  if (WaveConfig::get().deviceSizeCheck &&
+      waveGraph.deviceSymbols() != nullptr) {
+    waveGraph.deviceSymbols()->writeInputSymbols(frame, state);
   }
   state.tableOnlyActive = !WaveConfig::get().debugSingleOps;
   if (state.deviceSymbolsMode) {
     deviceSymbols->beginExecution(state);
   }
+  state.sizeExprSymbols.clear();
   beginGroupArena(state);
+  beginFailureWords(state);
+  beginDeviceAlloc(state, waveGraph);
   SCOPE_EXIT {
     // Values never released -- nothing read them last in a node -- still hold
     // their allocations. Every stream has been drained by now on the normal
@@ -2065,6 +2402,16 @@ bool WaveGraphExecutor::executeWave(
   // The last steps' transfers may still be outstanding under
   // WaveConfig::deferD2h. Everything below reads the frame, so parse them now.
   resolveAllPendingReturns(state);
+  if (state.deviceAllocActive) {
+    fetchGraphOutputs(state);
+  }
+  const auto kernelError = checkFailureWords(state, waveGraph);
+  if (WaveConfig::get().checkDemands) {
+    checkDemands(state);
+  }
+  if (WaveConfig::get().deviceAlloc && kernelError.empty()) {
+    recordDemands(state);
+  }
   bool symbolsFit = true;
   if (deviceSymbols != nullptr) {
     symbolsFit = deviceSymbols->endExecution(state);
@@ -2208,10 +2555,15 @@ bool WaveGraphExecutor::executeWave(
                  << threadInfo.runAheadSamples
                  << " peakBytes=" << threadInfo.peakBytes;
     }
+    if (!kernelError.empty()) {
+      threadInfo.errors = kernelError + "\n" + threadInfo.errors;
+    }
     if (WaveConfig::get().throwOnError && !threadInfo.errors.empty()) {
       TORCH_CHECK(false, "Wave kernel error:\n", threadInfo.errors);
     }
   }
+  TORCH_CHECK(
+      kernelError.empty() || !WaveConfig::get().throwOnError, kernelError);
   // Both streams have been waited on and collectDebugInfo has read the elapsed
   // times, so the events can go back to their pools for the next run.
   releaseStepEvents(state);
@@ -2703,7 +3055,8 @@ void WaveGraphExecutor::adjustCosts(ExecutionState& state) {
       continue;
     }
     auto& sv = state.stepVectors[seq][step];
-    if (sv.kernels.empty() || mi >= info.launches.size() ||
+    // The device updates its own multipliers.
+    if (sv.onDeviceGrid || sv.kernels.empty() || mi >= info.launches.size() ||
         info.launches[mi].numBlocks <= 0) {
       continue;
     }
@@ -2846,6 +3199,50 @@ std::string WaveGraphExecutor::makePerfReport(
   }
 
   ss << "=== Performance Report ===\n";
+  if (WaveConfig::get().deviceAlloc) {
+    // Host interpretation time on and off the device path, and the steps off
+    // it that take the most, with why each is off.
+    int64_t pathUs = 0;
+    int64_t offUs = 0;
+    int32_t numPath = 0;
+    std::vector<std::tuple<int64_t, int32_t, int32_t>> off;
+    for (const auto& m : info.launchMeta) {
+      const auto us = m.gatherUs + m.gridUs + m.allocUs + m.fillUs;
+      if (m.sequenceNumber < 0 ||
+          static_cast<size_t>(m.sequenceNumber) >= state.stepVectors.size() ||
+          static_cast<size_t>(m.stepIdx) >=
+              state.stepVectors[m.sequenceNumber].size()) {
+        continue;
+      }
+      if (state.deviceAllocActive &&
+          state.stepVectors.at(m.sequenceNumber)
+              .at(m.stepIdx)
+              .deviceAllocStep) {
+        pathUs += us;
+        ++numPath;
+      } else {
+        offUs += us;
+        off.emplace_back(us, m.sequenceNumber, m.stepIdx);
+      }
+    }
+    std::sort(off.rbegin(), off.rend());
+    ss << fmt::format(
+        "Device alloc: host interpretation {} us on the path ({} steps), {} us off it ({} steps); costliest off the path:",
+        pathUs,
+        numPath,
+        offUs,
+        off.size());
+    for (size_t i = 0; i < off.size() && i < 12; ++i) {
+      const auto& [us, node, step] = off.at(i);
+      ss << fmt::format(
+          " {}.{} {} us ({});",
+          node,
+          step,
+          us,
+          state.stepVectors.at(node).at(step).offPathReason);
+    }
+    ss << "\n";
+  }
   if (refChecking) {
     ss << "WARNING reference frame checking is on.\n";
   }

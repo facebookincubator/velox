@@ -116,6 +116,22 @@ class ArithmeticTest : public functions::test::FunctionBaseTest {
   }
 
   template <typename T>
+  void testIntervalNegate(const TypePtr& intervalType) {
+    T max = std::numeric_limits<T>::max();
+    auto input =
+        makeNullableFlatVector<T>({1, -2, 0, std::nullopt, max}, intervalType);
+    auto expected =
+        makeNullableFlatVector<T>({-1, 2, 0, std::nullopt, -max}, intervalType);
+    test::assertEqualVectors(expected, evaluate("-c0", makeRowVector({input})));
+
+    auto minInput =
+        makeFlatVector<T>({std::numeric_limits<T>::min()}, intervalType);
+    VELOX_ASSERT_THROW(
+        evaluate("-c0", makeRowVector({minInput})),
+        "Cannot negate minimum value");
+  }
+
+  template <typename T>
   void testIntervalDivide(const TypePtr& intervalType) {
     auto op1 = makeNullableFlatVector<T>(
         {3, 6, 9, std::nullopt, 12, 15, 18, 21, 0, 0, 1}, intervalType);
@@ -197,6 +213,11 @@ TEST_F(ArithmeticTest, plus) {
 TEST_F(ArithmeticTest, minus) {
   testIntervalMinus<int64_t>(INTERVAL_DAY_TIME());
   testIntervalMinus<int32_t>(INTERVAL_YEAR_MONTH());
+}
+
+TEST_F(ArithmeticTest, negate) {
+  testIntervalNegate<int64_t>(INTERVAL_DAY_TIME());
+  testIntervalNegate<int32_t>(INTERVAL_YEAR_MONTH());
 }
 
 TEST_F(ArithmeticTest, divide)

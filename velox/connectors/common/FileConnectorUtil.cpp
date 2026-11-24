@@ -224,8 +224,11 @@ void configureRowReaderOptions(
   if (fileSplit->splitRowRange.has_value()) {
     VELOX_CHECK(
         fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
-            fileSplit->fileFormat == dwio::common::FileFormat::DWRF,
-        "Split row ranges are only supported for Nimble and DWRF files: {}",
+            fileSplit->fileFormat == dwio::common::FileFormat::DWRF ||
+            fileSplit->fileFormat == dwio::common::FileFormat::ORC ||
+            fileSplit->fileFormat == dwio::common::FileFormat::PARQUET ||
+            fileSplit->fileFormat == dwio::common::FileFormat::TEXT,
+        "Split row ranges are only supported for Nimble, DWRF, ORC, Parquet and text files: {}",
         fileSplit->toString());
     rowReaderOptions.setSplitRowRange(fileSplit->splitRowRange);
   }

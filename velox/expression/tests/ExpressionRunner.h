@@ -47,7 +47,7 @@ class ExpressionRunner {
   /// @param numRows Maximum number of rows to process. 0 means 'all' rows.
   ///         Applies to "common" and "simplified" modes only.
   /// @param storeResultPath The path to a directory on disk where the results
-  /// of expression or query evaluation will be stored. If empty, the results
+  /// of expression evaluation will be stored. If empty, the results
   /// will not be stored.
   /// @param inputRowMetadataPath The path to on-disk serialized struct that
   ///        contains metadata about the input row vector like the columns

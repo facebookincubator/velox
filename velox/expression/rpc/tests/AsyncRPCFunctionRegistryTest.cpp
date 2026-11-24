@@ -62,6 +62,21 @@ TEST_F(AsyncRPCFunctionRegistryTest, find) {
   EXPECT_FALSE(AsyncRPCFunctionRegistry::find("missing").has_value());
 }
 
+// Function names are case-insensitive.
+TEST_F(AsyncRPCFunctionRegistryTest, caseInsensitiveNames) {
+  ASSERT_TRUE(
+      AsyncRPCFunctionRegistry::registerFunction(
+          "Echo", factory(), signatures()));
+  EXPECT_FALSE(
+      AsyncRPCFunctionRegistry::registerFunction(
+          "ECHO", factory(), signatures()));
+
+  const auto entry = AsyncRPCFunctionRegistry::find("eCHo");
+  ASSERT_TRUE(entry.has_value());
+  EXPECT_EQ(entry->name, "echo");
+  EXPECT_TRUE(AsyncRPCFunctionRegistry::isRegistered("ECHO"));
+}
+
 // A function nothing can resolve a call to is not registrable.
 TEST_F(AsyncRPCFunctionRegistryTest, registerWithoutSignatures) {
   VELOX_ASSERT_THROW(
