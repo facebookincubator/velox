@@ -228,6 +228,19 @@ HiveDataSink::HiveDataSink(
       "Unsupported commit strategy: {}",
       CommitStrategyName::toName(commitStrategy_));
 
+  const uint32_t numUniqueKeyColumns =
+      hiveConfig_->sortWriterNumUniqueKeyColumns(
+          connectorQueryCtx->sessionProperties());
+  if (numUniqueKeyColumns > 0) {
+    VELOX_USER_CHECK(
+        isBucketed(),
+        "Unique key columns require a bucketed table with sort columns");
+    VELOX_USER_CHECK_LE(
+        numUniqueKeyColumns,
+        insertTableHandle_->bucketProperty()->sortedBy().size(),
+        "The number of unique key columns is above the number of sort columns");
+  }
+
   if (insertTableHandle_->writeEmptyFile()) {
     VELOX_CHECK(
         !isPartitioned() && !isBucketed(),
@@ -238,7 +251,8 @@ HiveDataSink::HiveDataSink(
   if (!isBucketed()) {
     return;
   }
-  const auto& sortedProperty = insertTableHandle_->bucketProperty()->sortedBy();
+  const auto& bucketProperty = *insertTableHandle_->bucketProperty();
+  const auto& sortedProperty = bucketProperty.sortedBy();
   if (!sortedProperty.empty()) {
     sortColumnIndices_.reserve(sortedProperty.size());
     sortCompareFlags_.reserve(sortedProperty.size());
@@ -246,8 +260,17 @@ HiveDataSink::HiveDataSink(
       auto columnIndex =
           getNonPartitionTypes(dataChannels_, inputType_)
               ->getChildIdxIfExists(sortedProperty.at(i)->sortColumn());
+      if (i < numUniqueKeyColumns) {
+        VELOX_USER_CHECK(
+            columnIndex.has_value(),
+            "Unique key column is not among the written columns: {}",
+            sortedProperty.at(i)->sortColumn());
+      }
       if (columnIndex.has_value()) {
         sortColumnIndices_.push_back(columnIndex.value());
+        if (i < numUniqueKeyColumns) {
+          dedupeKeyChannels_.push_back(columnIndex.value());
+        }
         sortCompareFlags_.push_back(
             {sortedProperty.at(i)->sortOrder().isNullsFirst(),
              sortedProperty.at(i)->sortOrder().isAscending(),
@@ -470,6 +493,7 @@ HiveDataSink::maybeCreateBucketSortWriter(
   return std::make_unique<SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
+      dedupeKeyChannels_,
       hiveConfig_->sortWriterMaxOutputRows(
           connectorQueryCtx_->sessionProperties()),
       hiveConfig_->sortWriterMaxOutputBytes(

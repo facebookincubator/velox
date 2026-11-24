@@ -425,6 +425,11 @@ void FileDataSink::closeInternal() {
       }
       WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
       writers_[i]->close();
+      const auto duplicateRows = writers_[i]->numDuplicateRows();
+      VELOX_CHECK_LE(duplicateRows, writerInfo_[i]->currentFileWrittenRows);
+      writerInfo_[i]->numWrittenRows -= duplicateRows;
+      writerInfo_[i]->currentFileWrittenRows -= duplicateRows;
+      numDuplicateRows_ += duplicateRows;
       finalizeWriterFile(i);
     }
   } else {
