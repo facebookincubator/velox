@@ -1597,10 +1597,6 @@ Spark-specific Configuration
      - bool
      - true
      - If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.
-   * - spark.collect_list.ignore_nulls
-     - bool
-     - true
-     - If true, Spark ``collect_list`` aggregate function ignores nulls in the input.
    * - spark.decimal_to_float_high_precision_cast_enabled
      - bool
      - false

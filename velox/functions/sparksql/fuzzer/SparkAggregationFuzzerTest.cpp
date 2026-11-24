@@ -94,9 +94,10 @@ int main(int argc, char** argv) {
   // following names.
   std::unordered_set<std::string> skipFunctions = {
       "bloom_filter_agg",
-      // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
-      // doesn't support. The fuzzer may pick this signature and fail.
+      // The fuzzer may pick the 2-arg (T, boolean) signature, which needs a
+      // constant boolean that the fuzzer cannot generate.
       "collect_set",
+      "collect_list",
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",

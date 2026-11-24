@@ -162,15 +162,6 @@ class SparkQueryConfig {
       true,
       "Ignore null fields when generating JSON string in Spark.")
 
-  /// If true, collect_list aggregate function will ignore nulls in the input.
-  VELOX_SPARK_CONFIG(
-      kCollectListIgnoreNulls,
-      collectListIgnoreNulls,
-      "collect_list.ignore_nulls",
-      bool,
-      true,
-      "If true, Spark collect_list() ignores nulls in the input.")
-
   VELOX_SPARK_CONFIG(
       kDecimalToFloatHighPrecisionCastEnabled,
       decimalToFloatHighPrecisionCastEnabled,
