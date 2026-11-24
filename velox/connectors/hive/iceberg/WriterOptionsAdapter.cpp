@@ -56,8 +56,9 @@ class ParquetWriterOptionsAdapter : public WriterOptionsAdapter {
     options.serdeParameters[std::string(
         parquet::ParquetConfig::kWriterSerdeTimestampUnit)] = "6";
 
-    // Preserve any caller-specified timestamp timezone (e.g. "UTC" for timestamptz).
-    // If not specified, default to empty string for timestamp_ntz.
+    // Preserve any caller-specified timestamp timezone (e.g. "UTC" for
+    // timestamptz). If not specified, default to empty string for
+    // timestamp_ntz.
     const auto tzKey =
         std::string(parquet::ParquetConfig::kWriterSerdeTimestampTimezone);
     if (options.serdeParameters.find(tzKey) == options.serdeParameters.end()) {

@@ -136,8 +136,7 @@ TEST(WriterOptionsAdapterTest, parquetPreConfigsSetsTimestampSerdeParameters) {
 TEST(
     WriterOptionsAdapterTest,
     parquetPreConfigsPreservesCallerTimestampTimezone) {
-  auto adapter =
-      createWriterOptionsAdapter(dwio::common::FileFormat::PARQUET);
+  auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::PARQUET);
   ASSERT_NE(adapter, nullptr);
 
   dwio::common::WriterOptions options;
