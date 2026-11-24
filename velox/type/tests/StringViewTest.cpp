@@ -414,9 +414,8 @@ TEST(StringView, linearSearchBodiesAtEndOfMapping) {
   common::testutil::PageBeforeGuard keyPage;
   common::testutil::PageBeforeGuard matchPage;
   auto atEnd = [&](const common::testutil::PageBeforeGuard& page) {
-    char* body = reinterpret_cast<char*>(page.end()) - text.size();
-    std::memcpy(body, text.data(), text.size());
-    return StringView(body, text.size());
+    const auto body = page.copyToEnd(text);
+    return StringView(body.data(), body.size());
   };
   // String 2 holds the key's text at another address, so its header matches
   // and the search compares the bodies. String 1 has the same header and a
