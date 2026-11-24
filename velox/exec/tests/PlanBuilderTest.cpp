@@ -69,7 +69,7 @@ TEST_F(PlanBuilderTest, complexConstants) {
   const auto input = makeRowVector({makeFlatVector<int64_t>({1, 2})});
   const auto constants =
       makeNamedRowVector("constant_value", makeFlatVector<int64_t>({7}));
-  auto builder = PlanBuilder(pool_.get());
+  auto builder = PlanBuilder(pool());
   builder.setComplexConstants(constants);
   {
     auto plan =

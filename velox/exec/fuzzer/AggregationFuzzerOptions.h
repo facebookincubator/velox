@@ -48,6 +48,10 @@ struct AggregationFuzzerOptions {
   std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>
       customVerificationFunctions;
 
+  /// Set of functions to exclude from aggregation-fuzzer reference comparison.
+  /// Leaves native equivalent-plan verification unchanged.
+  std::unordered_set<std::string> skipReferenceFunctions;
+
   std::unordered_map<std::string, std::shared_ptr<InputGenerator>>
       customInputGenerators;
 

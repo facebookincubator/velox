@@ -58,6 +58,7 @@ class AggregationFuzzer : public AggregationFuzzerBase {
       const std::unordered_set<std::string>& functionsRequireSortedInput,
       const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>&
           customVerificationFunctions,
+      const std::unordered_set<std::string>& skipReferenceFunctions,
       const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
           customInputGenerators,
       const std::unordered_map<std::string, DataSpec>& functionDataSpec,
@@ -199,7 +200,11 @@ class AggregationFuzzer : public AggregationFuzzerBase {
 
   bool mustSortInput(const CallableSignature& signature) const;
 
+  // Returns true if any aggregation is excluded from reference comparison.
+  bool isReferenceVerificationSkipped(const core::PlanNodePtr& plan) const;
+
   Stats stats_;
+  const std::unordered_set<std::string> skipReferenceFunctions_;
   const std::unordered_map<std::string, DataSpec> functionDataSpec_;
   const std::unordered_set<std::string> functionsRequireSortedInput_;
 };
@@ -211,6 +216,7 @@ void aggregateFuzzer(
     const std::unordered_set<std::string>& functionsRequireSortedInput,
     const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>&
         customVerificationFunctions,
+    const std::unordered_set<std::string>& skipReferenceFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
     const std::unordered_map<std::string, DataSpec>& functionDataSpec,
@@ -225,6 +231,7 @@ void aggregateFuzzer(
       seed,
       functionsRequireSortedInput,
       customVerificationFunctions,
+      skipReferenceFunctions,
       customInputGenerators,
       functionDataSpec,
       timestampPrecision,
@@ -244,6 +251,7 @@ AggregationFuzzer::AggregationFuzzer(
     const std::unordered_set<std::string>& functionsRequireSortedInput,
     const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>&
         customVerificationFunctions,
+    const std::unordered_set<std::string>& skipReferenceFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
     const std::unordered_map<std::string, DataSpec>& functionDataSpec,
@@ -253,6 +261,7 @@ AggregationFuzzer::AggregationFuzzer(
     bool orderableGroupKeys,
     std::unique_ptr<ReferenceQueryRunner> referenceQueryRunner)
     : AggregationFuzzerBase{seed, customVerificationFunctions, customInputGenerators, timestampPrecision, queryConfigs, hiveConfigs, orderableGroupKeys, std::move(referenceQueryRunner)},
+      skipReferenceFunctions_{skipReferenceFunctions},
       functionDataSpec_{functionDataSpec},
       functionsRequireSortedInput_{functionsRequireSortedInput} {
   VELOX_CHECK(!signatureMap.empty(), "No function signatures available.");
@@ -404,15 +413,18 @@ void AggregationFuzzer::go() {
           supportsDistinctInputs(signature, orderableGroupKeys_) &&
           vectorFuzzer_.coinToss(0.2);
 
-      std::vector<TypePtr> argTypes = signature.args;
-      std::vector<std::string> argNames = makeNames(argTypes.size());
+      const auto constantInputs = generateConstantInputs(signature);
+      std::vector<TypePtr> argTypes;
+      std::vector<std::string> argNames;
       std::vector<std::string> sortingKeys;
-      auto arguments = argNames;
-      for (auto i = 0; i < arguments.size(); ++i) {
+      auto arguments = makeNames(signature.args.size());
+      for (auto i = 0; i < signature.args.size(); ++i) {
         if (signature.constantArgs[i]) {
           arguments[i] = fmt::format("__complex_constant({})", arguments[i]);
         } else {
-          sortingKeys.push_back(argNames[i]);
+          argTypes.push_back(signature.args[i]);
+          argNames.push_back(arguments[i]);
+          sortingKeys.push_back(arguments[i]);
         }
       }
       auto call = makeFunctionCall(
@@ -444,7 +456,6 @@ void AggregationFuzzer::go() {
 
       auto input =
           generateInputData(argNames, argTypes, signature, groupingKeys);
-      const auto constantInputs = generateConstantInputs(signature, input);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 
@@ -1076,7 +1087,9 @@ void AggregationFuzzer::verifyAggregation(
   }
 
   std::optional<MaterializedRowMultiset> expectedResult;
-  if (!customVerification) {
+  if (isReferenceVerificationSkipped(plan)) {
+    ++stats_.numVerificationSkipped;
+  } else if (!customVerification) {
     auto referenceResult =
         computeReferenceResults(plan, referenceQueryRunner_.get());
     stats_.updateReferenceQueryStats(referenceResult.second);
@@ -1110,6 +1123,33 @@ void AggregationFuzzer::Stats::print(size_t numIterations) const {
   AggregationFuzzerBase::Stats::print(numIterations);
 }
 
+bool AggregationFuzzer::isReferenceVerificationSkipped(
+    const core::PlanNodePtr& plan) const {
+  if (skipReferenceFunctions_.empty()) {
+    return false;
+  }
+
+  const auto* excluded = core::PlanNode::findFirstNode(
+      plan.get(), [&](const core::PlanNode* node) {
+        const auto* aggregation =
+            dynamic_cast<const core::AggregationNode*>(node);
+        if (aggregation == nullptr) {
+          return false;
+        }
+        for (const auto& aggregate : aggregation->aggregates()) {
+          if (skipReferenceFunctions_.count(aggregate.call->name()) > 0) {
+            return true;
+          }
+        }
+        return false;
+      });
+  if (excluded != nullptr) {
+    LOG(INFO) << "Skipping reference verification by fuzzer configuration";
+    return true;
+  }
+  return false;
+}
+
 bool AggregationFuzzer::compareEquivalentPlanResults(
     const std::vector<PlanWithSplits>& plans,
     bool customVerification,
@@ -1135,7 +1175,9 @@ bool AggregationFuzzer::compareEquivalentPlanResults(
     //    results.
 
     if (resultOrError.result != nullptr) {
-      if (!customVerification) {
+      if (isReferenceVerificationSkipped(firstPlan)) {
+        ++stats_.numVerificationSkipped;
+      } else if (!customVerification) {
         auto referenceResult =
             computeReferenceResults(firstPlan, referenceQueryRunner_.get());
         stats_.updateReferenceQueryStats(referenceResult.second);

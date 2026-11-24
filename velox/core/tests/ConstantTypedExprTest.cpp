@@ -239,7 +239,7 @@ TEST_F(ConstantTypedExprTest, toVariant) {
     for (const auto& value : values.nonNullValues) {
       SCOPED_TRACE(type->toString());
       EXPECT_EQ(createVariantExpr(type, value)->toVariant(), value);
-      auto vector = BaseVector::createConstant(type, value, 1, pool_.get());
+      auto vector = BaseVector::createConstant(type, value, 1, pool());
       EXPECT_EQ(createVectorExpr(vector)->toVariant(), value);
     }
   }

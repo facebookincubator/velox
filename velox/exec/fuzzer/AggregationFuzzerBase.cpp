@@ -17,6 +17,7 @@
 
 #include <boost/random/uniform_int_distribution.hpp>
 #include <folly/Conv.h>
+#include <folly/ScopeGuard.h>
 #include <limits>
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/VeloxException.h"
@@ -296,8 +297,16 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
     const std::optional<CallableSignature>& signature,
     const std::vector<std::string>& groupingKeys) {
   std::shared_ptr<InputGenerator> generator;
+  std::vector<TypePtr> inputArgumentTypes;
   if (signature.has_value()) {
     generator = findInputGenerator(signature.value());
+    if (generator != nullptr) {
+      for (auto i = 0; i < signature->args.size(); ++i) {
+        if (!signature->constantArgs[i]) {
+          inputArgumentTypes.push_back(signature->args[i]);
+        }
+      }
+    }
   }
 
   VELOX_CHECK_EQ(names.size(), types.size());
@@ -341,7 +350,8 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
 
     if (generator != nullptr) {
       children = generator->generate(
-          signature->args, vectorFuzzer_, rng_, pool_.get());
+          inputArgumentTypes, vectorFuzzer_, rng_, pool_.get());
+      VELOX_CHECK_LE(children.size(), inputArgumentTypes.size());
     }
 
     // All key columns share one index buffer so that the composite key keeps
@@ -375,48 +385,52 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
 }
 
 RowVectorPtr AggregationFuzzerBase::generateConstantInputs(
-    const CallableSignature& signature,
-    std::vector<RowVectorPtr>& input) {
+    const CallableSignature& signature) {
   VELOX_CHECK_EQ(signature.constantArgs.size(), signature.args.size());
   std::vector<std::string> names;
   std::vector<TypePtr> types;
-  std::vector<VectorPtr> constants;
   for (auto i = 0; i < signature.args.size(); ++i) {
     if (!signature.constantArgs[i]) {
       continue;
     }
 
-    // Keep custom generators' valid-domain values when a batch has rows.
-    auto constant = !input.empty() && input.front()->size() > 0
-        ? BaseVector::wrapInConstant(1, 0, input.front()->childAt(i))
-        : vectorFuzzer_.fuzzConstant(signature.args[i], 1);
     names.push_back(fmt::format("c{}", i));
     types.push_back(signature.args[i]);
-    constants.push_back(std::move(constant));
   }
-  if (constants.empty()) {
+  if (types.empty()) {
     return nullptr;
   }
-  for (auto& batch : input) {
-    std::vector<std::string> inputNames;
-    std::vector<TypePtr> inputTypes;
-    std::vector<VectorPtr> children;
-    const auto& rowType = batch->type()->asRow();
-    for (auto i = 0; i < rowType.size(); ++i) {
-      if (i < signature.constantArgs.size() && signature.constantArgs[i]) {
-        continue;
-      }
-      inputNames.push_back(rowType.nameOf(i));
-      inputTypes.push_back(rowType.childAt(i));
-      children.push_back(batch->childAt(i));
-    }
-    batch = std::make_shared<RowVector>(
-        batch->pool(),
-        ROW(std::move(inputNames), std::move(inputTypes)),
-        batch->nulls(),
-        batch->size(),
-        std::move(children));
+
+  // Limit constant backing vectors independently of the input batch size.
+  const auto originalOptions = vectorFuzzer_.getOptions();
+  SCOPE_EXIT {
+    vectorFuzzer_.setOptions(originalOptions);
+  };
+  auto options = originalOptions;
+  options.vectorSize = 1;
+  vectorFuzzer_.setOptions(options);
+
+  std::vector<VectorPtr> constants;
+  if (auto generator = findInputGenerator(signature)) {
+    constants =
+        generator->generateConstants(types, vectorFuzzer_, rng_, pool_.get());
   }
+  if (constants.empty()) {
+    for (const auto& type : types) {
+      constants.push_back(vectorFuzzer_.fuzzConstant(type, 1));
+    }
+  }
+  VELOX_CHECK_EQ(constants.size(), types.size());
+  for (auto i = 0; i < constants.size(); ++i) {
+    VELOX_CHECK_NOT_NULL(constants[i]);
+    VELOX_CHECK_EQ(constants[i]->size(), 1);
+    VELOX_CHECK(
+        constants[i]->type()->equivalent(*types[i]),
+        "Unexpected constant argument type: {}, expected: {}",
+        constants[i]->type()->toString(),
+        types[i]->toString());
+  }
+
   return std::make_shared<RowVector>(
       pool_.get(),
       ROW(std::move(names), std::move(types)),
@@ -568,6 +582,10 @@ void AggregationFuzzerBase::printSignatureStats() {
   for (auto i = 0; i < signatureStats_.size(); ++i) {
     const auto& stats = signatureStats_[i];
     if (stats.numRuns == 0) {
+      continue;
+    }
+
+    if (stats.numFailed * 1.0 / stats.numRuns < 0.5) {
       continue;
     }
 

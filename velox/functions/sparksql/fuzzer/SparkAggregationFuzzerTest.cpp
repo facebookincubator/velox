@@ -17,7 +17,6 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
-#include <optional>
 #include <unordered_set>
 
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
@@ -28,6 +27,7 @@
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/fuzzer/BloomFilterInputGenerator.h"
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -52,52 +52,6 @@ DEFINE_string(
 DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
 DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
-
-namespace {
-
-// Keeps bloom filter allocations bounded and supplies valid size literals.
-class BloomFilterInputGenerator
-    : public facebook::velox::exec::test::InputGenerator {
- public:
-  std::vector<facebook::velox::VectorPtr> generate(
-      const std::vector<facebook::velox::TypePtr>& types,
-      facebook::velox::VectorFuzzer& fuzzer,
-      facebook::velox::FuzzerGenerator& rng,
-      facebook::velox::memory::MemoryPool* pool) override {
-    using namespace facebook::velox;
-    VELOX_CHECK_GE(types.size(), 1);
-    VELOX_CHECK_LE(types.size(), 3);
-    const auto size = fuzzer.getOptions().vectorSize;
-    std::vector<VectorPtr> inputs{fuzzer.fuzzNotNull(BIGINT(), size)};
-    if (types.size() > 1) {
-      if (!expectedNumItems_) {
-        expectedNumItems_ = 1 + rng() % 128;
-      }
-      inputs.push_back(
-          BaseVector::createConstant(BIGINT(), *expectedNumItems_, size, pool));
-    }
-    if (types.size() > 2) {
-      if (!numBits_) {
-        numBits_ = int64_t{64} << (rng() % 6);
-      }
-      inputs.push_back(
-          BaseVector::createConstant(BIGINT(), *numBits_, size, pool));
-    }
-    return inputs;
-  }
-
-  void reset() override {
-    expectedNumItems_.reset();
-    numBits_.reset();
-  }
-
- private:
-  // Reuse each size for all batches of an iteration.
-  std::optional<int64_t> expectedNumItems_;
-  std::optional<int64_t> numBits_;
-};
-
-} // namespace
 
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
@@ -200,8 +154,12 @@ int main(int argc, char** argv) {
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;
+  // Bloom filters use different binary formats and hash schemes in Spark.
+  options.skipReferenceFunctions = {"bloom_filter_agg"};
   options.customInputGenerators = {
-      {"bloom_filter_agg", std::make_shared<BloomFilterInputGenerator>()}};
+      {"bloom_filter_agg",
+       std::make_shared<
+           facebook::velox::exec::test::BloomFilterInputGenerator>()}};
   using facebook::velox::functions::sparksql::SparkQueryConfig;
   options.queryConfigs = {
       {SparkQueryConfig::qualify(

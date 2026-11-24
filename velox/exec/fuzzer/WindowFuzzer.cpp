@@ -443,8 +443,8 @@ void WindowFuzzer::go() {
 
     const bool ignoreNulls =
         supportIgnoreNulls(signature.name) && vectorFuzzer_.coinToss(0.5);
-    const auto call =
-        makeFunctionCall(signature.name, argNames, false, false, ignoreNulls);
+    const auto call = makeFunctionCall(
+        signature.name, argNames, false, false, ignoreNulls, {});
 
     // Columns used as k-PRECEDING/FOLLOWING frame bounds have fixed names: k0
     // and k1, for when a column is used as frame start and frame end bound

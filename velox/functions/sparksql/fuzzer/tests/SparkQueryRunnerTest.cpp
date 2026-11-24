@@ -173,6 +173,12 @@ TEST_F(SparkQueryRunnerTest, toSql) {
              .planNode();
   EXPECT_EQ(
       queryRunner->toSql(plan), "SELECT sum(distinct c0) as a0 FROM (t_0)");
+}
+
+TEST_F(SparkQueryRunnerTest, toSqlConstantArguments) {
+  auto aggregatePool = rootPool_->addAggregateChild("toSqlConstantArguments");
+  auto queryRunner = std::make_unique<fuzzer::SparkQueryRunner>(
+      aggregatePool.get(), "unused", "unused", "unused");
 
   const std::vector<std::pair<VectorPtr, std::string>> cases{
       {makeFlatVector<bool>({true}), "true"},
@@ -255,10 +261,10 @@ TEST_F(SparkQueryRunnerTest, toSql) {
             literalSql));
   }
 
-  plan = exec::test::PlanBuilder()
-             .tableScan("tmp", ROW("c0", BIGINT()))
-             .singleAggregation({}, {"first(true)", "first('abc')"})
-             .planNode();
+  auto plan = exec::test::PlanBuilder()
+                  .tableScan("tmp", ROW("c0", BIGINT()))
+                  .singleAggregation({}, {"first(true)", "first('abc')"})
+                  .planNode();
   EXPECT_EQ(
       queryRunner->toSql(plan),
       "SELECT first(true) as a0, first(cast(X'616263' as STRING)) as a1 FROM (tmp)");
@@ -299,6 +305,22 @@ TEST_F(SparkQueryRunnerTest, toSql) {
   EXPECT_EQ(
       queryRunner->toSql(plan),
       "SELECT approx_percentile(c0, 0.125D) as a0 FROM (tmp)");
+
+  constants = makeRowVector({
+      makeFlatVector<int64_t>({128}),
+      makeFlatVector<int64_t>({1'024}),
+  });
+  plan =
+      exec::test::PlanBuilder(pool())
+          .setComplexConstants(constants)
+          .tableScan("tmp", ROW("c0", BIGINT()))
+          .singleAggregation(
+              {},
+              {"bloom_filter_agg(c0, __complex_constant(c0), __complex_constant(c1))"})
+          .planNode();
+  EXPECT_EQ(
+      queryRunner->toSql(plan),
+      "SELECT bloom_filter_agg(c0, 128L, 1024L) as a0 FROM (tmp)");
 }
 
 TEST_F(SparkQueryRunnerTest, unsupportedConstantArguments) {
@@ -327,16 +349,6 @@ TEST_F(SparkQueryRunnerTest, unsupportedConstantArguments) {
         result.second,
         exec::test::ReferenceQueryErrorCode::kReferenceQueryUnsupported);
   }
-
-  auto bloomPlan =
-      exec::test::PlanBuilder(pool())
-          .tableScan("tmp", ROW("c0", BIGINT()))
-          .singleAggregation({}, {"bloom_filter_agg(c0, 128, 1024)"})
-          .planNode();
-  EXPECT_FALSE(queryRunner->toSql(bloomPlan).has_value());
-  EXPECT_EQ(
-      queryRunner->executeAndReturnVector(bloomPlan).second,
-      exec::test::ReferenceQueryErrorCode::kReferenceQueryUnsupported);
 }
 
 // This test requires a Spark coordinator running at localhost, so disable it

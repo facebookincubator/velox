@@ -86,6 +86,16 @@ near zero chance to fall into this range.
 To enable effective testing of these functions, Aggregation Fuzzer allows
 registering custom input generators for individual functions.
 
+For arguments declared constant in a function signature, the Aggregation Fuzzer
+generates typed literals directly, including nulls, binary values, and complex
+types. It chooses one value per iteration and reuses it across batches and
+equivalent plans. Only non-constant arguments have input columns.
+
+Custom input generators can supply constrained literals through
+``InputGenerator::generateConstants``. Their ``generate`` method receives only
+the types of non-constant arguments. If no custom literals are supplied, the
+fuzzer generates random constants of the declared types.
+
 When testing aggregate functions whose results depend on the order of inputs
 (e.g. map_agg, map_union, arbitrary, etc.), the Fuzzer verifies that all plans
 succeed or fail with compatible user exceptions. When plans succeed, the Fuzzer
@@ -112,6 +122,10 @@ of a Velox plan. For example, approx_distinct verifies the results by
 computing count(distinct) on input data and checking whether the results
 of approx_distinct are within expected error bound. Verifier for approx_percentile
 works similarly.
+
+Functions whose results cannot be compared with the reference can be listed in
+``AggregationFuzzerOptions::skipReferenceFunctions``. This skips only reference
+comparison and leaves verification across equivalent Velox plans unchanged.
 
 At the end of the run, Fuzzer prints out statistics that show what has been
 tested:
@@ -150,37 +164,6 @@ that require custom result verifiers are left unverified.
 
 Limitations
 -----------
-
-The Aggregation Fuzzer generates typed literals for arguments that a signature
-declares constant. It selects one value per iteration, using custom input
-generators when available, and reuses it across batches and equivalent plans.
-This includes nulls, binary values, and complex types. Functions with additional
-constraints on literal values may still need a custom input generator.
-
-The Spark aggregation fuzzer includes ``bloom_filter_agg`` with one, two and
-three arguments. Its input generator supplies non-null values and bounded
-positive size literals, reused across batches. Native plans are compared to
-each other; Spark reference comparison is unsupported because the binary
-formats and hash schemes differ. This exercises constant argument binding
-through single and partial/intermediate/final aggregation, masks, and the
-equivalent Values, scan, streaming and exchange plans selected by the fuzzer.
-
-After building the Spark aggregation fuzzer, run a focused campaign against
-an available Spark Connect coordinator:
-
-.. code-block:: bash
-
-    spark_aggregation_fuzzer_test --only=bloom_filter_agg \
-      --seed=123 --steps=0 --duration_sec=1800 \
-      --enable_oom_injection=false --log_signature_stats=true
-
-Record the seed, revision, duration and per-signature statistics from the
-output. With ``--log_signature_stats=true``, statistics include successful
-signatures as well as failures. A successful campaign must complete native
-result comparisons for both signatures with literal size arguments, not only
-choose them or test the one-argument signature. Also run the normal mixed
-function campaign. These commands describe the validation procedure, not
-results from a completed run.
 
 The Window Fuzzer still passes every argument as a column, including arguments
 that a signature declares constant. Functions that require literal arguments

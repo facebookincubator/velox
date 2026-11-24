@@ -142,8 +142,8 @@ class AggregationFuzzerBase {
     // Number of iterations where results were verified against reference DB,
     size_t numVerified{0};
 
-    // Number of iterations where results verification was skipped because
-    // function results are non-determinisic.
+    // Number of iterations where reference verification was skipped because
+    // results are non-deterministic or excluded by fuzzer configuration.
     size_t numVerificationSkipped{0};
 
     // Number of iterations where results verification was skipped because
@@ -219,12 +219,10 @@ class AggregationFuzzerBase {
       const std::optional<CallableSignature>& signature,
       const std::vector<std::string>& groupingKeys);
 
-  // Selects one value per constant argument and removes its input column.
-  // Returns named bindings for __complex_constant expressions, or null if the
-  // signature has no constant arguments.
-  RowVectorPtr generateConstantInputs(
-      const CallableSignature& signature,
-      std::vector<RowVectorPtr>& input);
+  // Generates one-row bindings for __complex_constant expressions using the
+  // custom input generator or random constants. Returns null if the signature
+  // has no constant arguments.
+  RowVectorPtr generateConstantInputs(const CallableSignature& signature);
 
   /// Generate a RowVector of the given types of children with an additional
   /// child named "row_number" of INTEGER row numbers that differentiates every
@@ -343,10 +341,10 @@ std::string printPercentageStat(size_t n, size_t total);
 std::string makeFunctionCall(
     const std::string& name,
     const std::vector<std::string>& argNames,
-    bool sortedInputs = false,
-    bool distinctInputs = false,
-    bool ignoreNulls = false,
-    const std::vector<std::string>& sortingKeys = {});
+    bool sortedInputs,
+    bool distinctInputs,
+    bool ignoreNulls,
+    const std::vector<std::string>& sortingKeys);
 
 // Returns a list of column names from c0 to cn.
 std::vector<std::string> makeNames(size_t n);
