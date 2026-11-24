@@ -598,6 +598,27 @@ String Functions
         SELECT substring_index('aaaaa', 'aa', 5); -- "aaaaa"
         SELECT substring_index('aaaaa', 'aa', -5); -- "aaaaa"
 
+.. spark:function:: to_binary_base64(expr) -> varbinary
+
+    Same as :spark:func:`unbase64`, except that an error is raised if ``expr`` is not a
+    well-formed base64 string: groups of four symbols from ``A-Z``, ``a-z``, ``0-9``, ``+``
+    and ``/``, a last group of two to four symbols, optional ``=`` padding that completes
+    the last group to four symbols, and nothing after the padding. Whitespace before the
+    padding is ignored. The error is raised regardless of ``spark.ansi_enabled``.
+    Corresponds to Spark's ``to_binary(expr, 'base64')``. ::
+
+        SELECT cast(to_binary_base64('U3BhcmsgU1FM') AS STRING); -- 'Spark SQL'
+        SELECT to_binary_base64('cd@'); -- error
+
+.. spark:function:: to_binary_hex(x) -> varbinary
+
+    Same as :spark:func:`unhex`, except that an error is raised if ``x`` contains a
+    non-hexadecimal character. The error is raised regardless of ``spark.ansi_enabled``.
+    Corresponds to Spark's ``to_binary(x, 'hex')``. ::
+
+        SELECT to_binary_hex('23'); -- #
+        SELECT to_binary_hex('G'); -- error
+
 .. spark:function:: to_pretty_string(x) -> varchar
 
     Returns pretty string for ``x``. All scalar types are supported.
