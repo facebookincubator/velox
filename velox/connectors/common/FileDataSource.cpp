@@ -152,9 +152,7 @@ FileDataSource::FileDataSource(
 
   if (fileConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx->sessionProperties())) {
-    checkColumnNameLowerCase(outputType_);
-    checkColumnNameLowerCase(tableHandle_->subfieldFilters(), infoColumns_);
-    checkColumnNameLowerCase(tableHandle_->remainingFilter());
+    tableHandle_->checkColumnNamesLowerCase(*outputType_);
   }
 
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {

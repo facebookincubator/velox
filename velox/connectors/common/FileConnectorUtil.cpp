@@ -595,62 +595,6 @@ bool isSpecialColumn(
 
 } // namespace
 
-void checkColumnNameLowerCase(const TypePtr& type) {
-  switch (type->kind()) {
-    case TypeKind::ARRAY:
-      checkColumnNameLowerCase(type->asArray().elementType());
-      break;
-    case TypeKind::MAP: {
-      checkColumnNameLowerCase(type->asMap().keyType());
-      checkColumnNameLowerCase(type->asMap().valueType());
-
-    } break;
-    case TypeKind::ROW: {
-      for (const auto& outputName : type->asRow().names()) {
-        VELOX_CHECK(
-            !std::any_of(outputName.begin(), outputName.end(), isupper));
-      }
-      for (auto& childType : type->asRow().children()) {
-        checkColumnNameLowerCase(childType);
-      }
-    } break;
-    default:
-      VLOG(1) << "No need to check type lowercase mode" << type->toString();
-  }
-}
-
-void checkColumnNameLowerCase(
-    const common::SubfieldFilters& filters,
-    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns) {
-  for (const auto& filterIt : filters) {
-    const auto name = filterIt.first.toString();
-    if (isSynthesizedColumn(name, infoColumns)) {
-      continue;
-    }
-    const auto& path = filterIt.first.path();
-
-    for (int i = 0; i < path.size(); ++i) {
-      auto* nestedField =
-          dynamic_cast<const common::Subfield::NestedField*>(path[i].get());
-      if (nestedField == nullptr) {
-        continue;
-      }
-      VELOX_CHECK(!std::any_of(
-          nestedField->name().begin(), nestedField->name().end(), isupper));
-    }
-  }
-}
-
-void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
-  if (typeExpr == nullptr) {
-    return;
-  }
-  checkColumnNameLowerCase(typeExpr->type());
-  for (auto& type : typeExpr->inputs()) {
-    checkColumnNameLowerCase(type);
-  }
-}
-
 namespace {
 
 void processFieldSpec(
