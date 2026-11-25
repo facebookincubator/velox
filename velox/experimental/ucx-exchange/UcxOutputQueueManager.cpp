@@ -123,12 +123,14 @@ void UcxOutputQueueManager::getData(
     std::string_view taskId,
     int destination,
     ReaderCallback notify) {
-  bindReader(taskId, destination)->getData(destination, std::move(notify));
+  bindReader(taskId, destination, /*onReleased=*/nullptr)
+      ->getData(destination, std::move(notify));
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::bindReader(
     std::string_view taskId,
-    int destination) {
+    int destination,
+    std::function<void()> onReleased) {
   return entries_.withLock([&](auto& entries) {
     auto& entry = entries[std::string{taskId}];
     if (entry == nullptr) {
@@ -137,8 +139,28 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::bindReader(
       entry = std::make_shared<UcxOutputQueue>(std::string{taskId});
     }
     entry->addBoundReader();
+    if (onReleased != nullptr) {
+      entry->setOnReleased(destination, std::move(onReleased));
+    }
     return entry;
   });
+}
+
+void UcxOutputQueueManager::consumerGone(
+    std::string_view taskId,
+    int destination) {
+  auto entry =
+      entries_.withLock([&](auto& entries) -> std::shared_ptr<UcxOutputQueue> {
+        auto it = entries.find(std::string{taskId});
+        return it != entries.end() ? it->second : nullptr;
+      });
+  if (entry == nullptr) {
+    VLOG(1) << "Dropping a close for unknown UCX producer task " << taskId
+            << ", destination " << destination;
+    return;
+  }
+  // Outside the manager's lock: the entry calls its release callback.
+  entry->consumerGone(destination);
 }
 
 void UcxOutputQueueManager::releaseReader(
@@ -147,7 +169,7 @@ void UcxOutputQueueManager::releaseReader(
   // Destroyed after the manager's lock is released.
   std::shared_ptr<UcxOutputQueue> erasedEntry;
   entries_.withLock([&](auto& entries) {
-    if (!entry->removeBoundReader()) {
+    if (!entry->removeBoundReader(destination)) {
       return;
     }
     auto it = entries.find(entry->taskId());
@@ -182,6 +204,26 @@ void UcxOutputQueueManager::failTask(
   task->setError(std::string(error));
 }
 
+namespace {
+// The producer task's error without its stack trace and context, which the
+// producer's own failure reports.
+std::string taskErrorMessage(const exec::Task& task) {
+  const auto error = task.error();
+  if (error == nullptr) {
+    return "";
+  }
+  try {
+    std::rethrow_exception(error);
+  } catch (const VeloxException& e) {
+    return e.message();
+  } catch (const std::exception& e) {
+    return e.what();
+  } catch (...) {
+    return "<Unknown exception type>";
+  }
+}
+} // namespace
+
 void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   // Destroyed after the manager's lock is released.
   std::vector<std::shared_ptr<UcxOutputQueue>> droppedEntries;
@@ -203,8 +245,16 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   });
   VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
           << " droppedEntries=" << droppedEntries.size();
-  entry->terminate();
-  entry->markRemoved();
+  // Read with no entry lock held, since no Task method may run under one.
+  // Task::terminate() sets the final state before it removes the task, so the
+  // facts are final.
+  RemovalFacts facts;
+  facts.taskId = taskId;
+  if (auto task = entry->task()) {
+    facts.state = task->state();
+    facts.error = taskErrorMessage(*task);
+  }
+  entry->remove(facts);
   // Notify the intra-node registry so that any sources polling for this
   // task get an atEnd result instead of spinning forever.
   IntraNodeTransferRegistry::getInstance()->cancelTask(taskId);

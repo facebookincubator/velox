@@ -102,7 +102,14 @@ std::shared_ptr<UcxExchangeServer> UcxExchangeServer::create(
     bool isIntraNodeTransfer) {
   auto ptr = std::shared_ptr<UcxExchangeServer>(new UcxExchangeServer(
       communicator, endpointRef, key, isIntraNodeTransfer));
-  ptr->entry_ = ptr->queueMgr_->bindReader(key.taskId, key.destination);
+  std::weak_ptr<UcxExchangeServer> weakServer = ptr;
+  // Requeues the server, whose next step reads the destination's state.
+  ptr->entry_ =
+      ptr->queueMgr_->bindReader(key.taskId, key.destination, [weakServer]() {
+        if (auto self = weakServer.lock()) {
+          self->communicator_->addToWorkQueue(self);
+        }
+      });
   return ptr;
 }
 
@@ -153,6 +160,7 @@ void UcxExchangeServer::process() {
           case ReaderStep::Kind::kEnd:
             // A null dataPtr_ is the end of the channel.
             self->dataNumRows_ = 0;
+            self->endOutcome_ = std::move(step.outcome);
             self->setState(ServerState::DataReady);
             break;
           case ReaderStep::Kind::kStop:
@@ -334,7 +342,7 @@ void UcxExchangeServer::sendData() {
     } else {
       VLOG(3) << "@" << partitionKey_.taskId << " Final exchange for "
               << partitionKey_.toString();
-      serialized = serializeEndMessage(ChannelOutcome::clean());
+      serialized = serializeEndMessage(endOutcome_);
     }
 
     auto [serializedMetadata, serMetaSize] = std::move(serialized);

@@ -520,7 +520,20 @@ void UcxExchangeSource::onMetadata(
     }
 
     if (std::holds_alternative<ChannelOutcome>(message)) {
-      // The producer ended the stream. All data has been transferred.
+      const auto& outcome = std::get<ChannelOutcome>(message);
+      if (outcome.kind == OutcomeKind::kProducerError) {
+        // The producer ended early and its output is lost: fail the query
+        // rather than end the stream as complete.
+        std::string errorMsg = fmt::format(
+            "Producer failed before sending all its data, host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            outcome.error);
+        VLOG(0) << errorMsg;
+        queue_->setError(errorMsg);
+      }
+      // The producer ended the stream.
       atEnd_ = true;
       // enqueue a nullpointer to mark the end for this source.
       VLOG(3) << "There is no more data to transfer for " << toString();

@@ -121,6 +121,9 @@ class UcxExchangeServer
   /// Logical rows in 'dataPtr_', taken from the output queue rather than from
   /// the packed table, which reports zero rows when it has no columns.
   vector_size_t dataNumRows_{0};
+  /// How the output queue ended the channel. Sent in the end message once
+  /// 'dataPtr_' is null. Protected by dataMutex_.
+  ChannelOutcome endOutcome_;
   /// Protects dataPtr_. Must be recursive because sendData() holds the lock
   /// when calling tagSend(), and for small messages UCX completes inline via
   /// its fast-completion path, firing the sendComplete() callback on the same

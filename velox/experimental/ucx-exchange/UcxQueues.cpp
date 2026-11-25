@@ -16,6 +16,7 @@
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
 
 #include <atomic>
+#include <utility>
 
 namespace facebook::velox::ucx_exchange {
 
@@ -90,11 +91,11 @@ void UcxDestinationQueue::enqueueFront(
   queue_.push_front(QueuedPage{std::move(data), numRows});
 }
 
-UcxDestinationQueue::Data UcxDestinationQueue::getData(ReaderCallback notify) {
+std::optional<ReaderStep> UcxDestinationQueue::getData(ReaderCallback notify) {
   if (queue_.empty()) {
     // delay notification.
     notify_ = std::move(notify);
-    return {};
+    return std::nullopt;
   }
 
   // queue is not empty.
@@ -102,6 +103,10 @@ UcxDestinationQueue::Data UcxDestinationQueue::getData(ReaderCallback notify) {
   queue_.pop_front();
   stats_.recordDequeue(page.data.get());
 
+  if (page.data == nullptr) {
+    VELOX_CHECK(queue_.empty(), "null marker found in the middle");
+    return ReaderStep::end(ChannelOutcome::clean());
+  }
   std::vector<int64_t> remainingBytes;
   remainingBytes.reserve(queue_.size());
   // fill in the remainingbytes vector.
@@ -112,23 +117,8 @@ UcxDestinationQueue::Data UcxDestinationQueue::getData(ReaderCallback notify) {
     }
     remainingBytes.push_back(queue_[i].data->gpu_data->size());
   }
-  if (page.data == nullptr) {
-    return {ReaderStep::end(ChannelOutcome::clean()), true};
-  }
-  return {
-      ReaderStep::chunk(
-          std::move(page.data), page.numRows, std::move(remainingBytes)),
-      true};
-}
-
-void UcxDestinationQueue::deleteResults() {
-  for (auto i = 0; i < queue_.size(); ++i) {
-    if (queue_[i].data == nullptr) {
-      VELOX_CHECK_EQ(i, queue_.size() - 1, "null marker found in the middle");
-      break;
-    }
-  }
-  queue_.clear();
+  return ReaderStep::chunk(
+      std::move(page.data), page.numRows, std::move(remainingBytes));
 }
 
 std::vector<std::shared_ptr<cudf::packed_columns>>
@@ -142,33 +132,22 @@ UcxDestinationQueue::takeQueuedData() {
       data.push_back(std::move(page.data));
     }
   }
-  const bool atEnd = !queue_.empty() && queue_.back().data == nullptr;
   queue_.clear();
-  if (atEnd) {
-    queue_.push_back(QueuedPage{nullptr, 0});
-  }
   return data;
 }
 
-UcxDataAvailable UcxDestinationQueue::getAndClearNotify() {
-  if (notify_ == nullptr) {
+UcxDataAvailable UcxDestinationQueue::takeReadyReader() {
+  if (notify_ == nullptr || queue_.empty()) {
     return UcxDataAvailable();
   }
   UcxDataAvailable result;
-  result.callback = notify_;
-  auto data = getData(nullptr);
-  result.step = std::move(data.step);
-  clearNotify();
+  result.callback = takeReader();
+  result.step = getData(nullptr);
   return result;
 }
 
-void UcxDestinationQueue::clearNotify() {
-  notify_ = nullptr;
-}
-
-void UcxDestinationQueue::finish() {
-  VELOX_CHECK_NULL(notify_, "notify must be cleared before finish");
-  VELOX_CHECK(queue_.empty(), "data must be fetched before finish");
+ReaderCallback UcxDestinationQueue::takeReader() {
+  return std::exchange(notify_, nullptr);
 }
 
 UcxDestinationQueue::Stats UcxDestinationQueue::stats() const {
@@ -182,7 +161,42 @@ std::string UcxDestinationQueue::toString() {
   return out.str();
 }
 
+void UcxDataAvailable::notify() {
+  if (callback) {
+    VELOX_DCHECK(step.has_value());
+    callback(std::move(*step));
+  }
+}
+
 // ---------- UcxOutputQueue ----------
+
+namespace {
+const std::shared_ptr<const ChannelOutcome>& cleanOutcome() {
+  static const auto kClean =
+      std::make_shared<const ChannelOutcome>(ChannelOutcome::clean());
+  return kClean;
+}
+
+bool hasEnded(DestinationState state) {
+  return state == DestinationState::kEnded ||
+      state == DestinationState::kReleased;
+}
+} // namespace
+
+void UcxOutputQueue::Deferred::run() {
+  for (auto& notification : notifications) {
+    notification.notify();
+  }
+  for (auto& callback : onReleased) {
+    callback();
+  }
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
+  if (finishedTask != nullptr) {
+    finishedTask->setAllOutputConsumed();
+  }
+}
 
 UcxOutputQueue::UcxOutputQueue(std::string taskId)
     : taskId_(std::move(taskId)) {}
@@ -201,24 +215,35 @@ bool UcxOutputQueue::initialize(
   // Read before taking mutex_, which no Task method may run under.
   const uint64_t maxSize =
       task->queryCtx()->queryConfig().maxOutputBufferSize();
-  std::lock_guard<std::mutex> l(mutex_);
-  if (state_ != TaskEntryState::kPending) {
-    return false;
+  Deferred deferred;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (state_ != TaskEntryState::kPending) {
+      return false;
+    }
+    kind_ = kind;
+    numDrivers_ = numDrivers;
+    task_ = std::move(task);
+    removedTask_.reset();
+    maxSize_ = maxSize;
+    continueSize_ = (maxSize_ * kContinuePct) / 100;
+    state_.store(TaskEntryState::kActive, std::memory_order_release);
+    // Publish task metadata before destination queue expansion. Acceptor only
+    // needs task/kind to choose the intra-node path; getData() takes mutex_
+    // and waits for any queue expansion in this function to finish.
+    initialized_.store(true, std::memory_order_release);
+    addDestinationQueuesLocked(numDestinations, deferred);
+    if (kind_ == core::PartitionedOutputNode::Kind::kPartitioned) {
+      clearPendingReadersLocked(deferred);
+    }
   }
-  kind_ = kind;
-  numDrivers_ = numDrivers;
-  task_ = std::move(task);
-  removedTask_.reset();
-  maxSize_ = maxSize;
-  continueSize_ = (maxSize_ * kContinuePct) / 100;
-  state_.store(TaskEntryState::kActive, std::memory_order_release);
-  // Publish task metadata before destination queue expansion. Acceptor only
-  // needs task/kind to choose the intra-node path; getData() takes mutex_ and
-  // waits for any queue expansion in this function to finish.
-  initialized_.store(true, std::memory_order_release);
-  addDestinationQueuesLocked(numDestinations, notifications);
-  if (kind_ == core::PartitionedOutputNode::Kind::kPartitioned) {
-    clearPendingReadersLocked(notifications);
+  // The manager notifies outside its own lock. Publication releases no
+  // destination and frees no chunk, so there is nothing else to defer.
+  VELOX_DCHECK(deferred.onReleased.empty());
+  VELOX_DCHECK(deferred.promises.empty());
+  VELOX_DCHECK(deferred.freedChunks.empty());
+  for (auto& notification : deferred.notifications) {
+    notifications.push_back(std::move(notification));
   }
   return true;
 }
@@ -234,7 +259,9 @@ void UcxOutputQueue::addBoundReader() {
   ++numBoundReaders_;
 }
 
-bool UcxOutputQueue::removeBoundReader() {
+bool UcxOutputQueue::removeBoundReader(int destination) {
+  // Destroyed after the lock is released.
+  std::function<void()> onReleased;
   std::lock_guard<std::mutex> l(mutex_);
   // A server's close() may run inside a UCX callback, which must not throw.
   if (numBoundReaders_ == 0) {
@@ -243,13 +270,17 @@ bool UcxOutputQueue::removeBoundReader() {
     return false;
   }
   --numBoundReaders_;
+  if (auto it = onReleased_.find(destination); it != onReleased_.end()) {
+    onReleased = std::move(it->second);
+    onReleased_.erase(it);
+  }
   return state_ == TaskEntryState::kPending && numBoundReaders_ == 0 &&
       !failedInitialization_ && !hasReleasedDestinationLocked();
 }
 
 bool UcxOutputQueue::hasReleasedDestinationLocked() const {
-  for (const auto& [destination, queue] : pendingQueues_) {
-    if (queue == nullptr) {
+  for (const auto& [index, destination] : pendingQueues_) {
+    if (destination.state == DestinationState::kReleased) {
       return true;
     }
   }
@@ -263,27 +294,276 @@ void UcxOutputQueue::recordFailedInitialization(
   failedInitialization_ = true;
 }
 
-void UcxOutputQueue::markRemoved() {
+bool UcxOutputQueue::isDroppable() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return state_ == TaskEntryState::kRemoved && removedTask_.expired() &&
+      numBoundReaders_ == 0;
+}
+
+DestinationDecision UcxOutputQueue::applyLocked(
+    Destination& destination,
+    int index,
+    DestinationEvent event,
+    const std::shared_ptr<const ChannelOutcome>& candidate,
+    Deferred& deferred) {
+  auto decision = decideDestination(destination.state, event, *candidate);
+  if (decision.outcome.has_value()) {
+    destination.outcome = *decision.outcome == *candidate
+        ? candidate
+        : std::make_shared<const ChannelOutcome>(*decision.outcome);
+  }
+  if (decision.freeChunks && destination.queue != nullptr) {
+    auto chunks = destination.queue->takeQueuedData();
+    int64_t bytes{0};
+    for (const auto& chunk : chunks) {
+      bytes += chunk->gpu_data->size();
+    }
+    updateStatsWithFreedLocked(
+        bytes, static_cast<int64_t>(chunks.size()), deferred.promises);
+    for (auto& chunk : chunks) {
+      deferred.freedChunks.push_back(std::move(chunk));
+    }
+  }
+  const bool released = decision.next == DestinationState::kReleased &&
+      destination.state != DestinationState::kReleased;
+  destination.state = decision.next;
+  if (hasEnded(destination.state) && destination.queue != nullptr) {
+    if (auto reader = destination.queue->takeReader()) {
+      deferred.notifications.push_back(
+          UcxDataAvailable{std::move(reader), endedStep(destination)});
+    }
+    destination.queue.reset();
+  }
+  if (released) {
+    if (auto it = onReleased_.find(index); it != onReleased_.end()) {
+      deferred.onReleased.push_back(std::move(it->second));
+      onReleased_.erase(it);
+    }
+  }
+  return decision;
+}
+
+ReaderStep UcxOutputQueue::endedStep(const Destination& destination) {
+  VELOX_DCHECK(hasEnded(destination.state));
+  if (destination.outcome != nullptr &&
+      (destination.state == DestinationState::kEnded ||
+       !destination.outcome->isClean())) {
+    return ReaderStep::end(*destination.outcome);
+  }
+  // Released without an error: the reader stops, rather than get a clean end
+  // that no event decided for it.
+  VELOX_DCHECK_EQ(destination.state, DestinationState::kReleased);
+  return ReaderStep::stop();
+}
+
+void UcxOutputQueue::notifyReadyReaderLocked(
+    Destination& destination,
+    int index,
+    Deferred& deferred) {
+  auto ready = destination.queue->takeReadyReader();
+  if (ready.callback == nullptr) {
+    return;
+  }
+  const bool endMarkerTaken = ready.step->kind == ReaderStep::Kind::kEnd;
+  deferred.notifications.push_back(std::move(ready));
+  if (endMarkerTaken) {
+    applyLocked(
+        destination,
+        index,
+        DestinationEvent::kEndMarkerTaken,
+        cleanOutcome(),
+        deferred);
+  }
+}
+
+UcxOutputQueue::Destination* UcxOutputQueue::findDestinationLocked(int index) {
+  if (index < 0) {
+    return nullptr;
+  }
+  if (static_cast<size_t>(index) < queues_.size()) {
+    return &queues_[index];
+  }
+  auto it = pendingQueues_.find(index);
+  return it != pendingQueues_.end() ? &it->second : nullptr;
+}
+
+std::shared_ptr<const ChannelOutcome> UcxOutputQueue::discardOutcomeLocked(
+    const Destination& destination) const {
+  // Servers delete a destination's results after it ended. A deletion before
+  // that drops the destination's output, as UcxPartitionedOutput does when it
+  // runs out of GPU memory, unless every driver finished and nothing that the
+  // destination would get is left.
+  const bool holdsChunks = destination.state == DestinationState::kUnpublished
+      ? !dataToBroadcast_.empty()
+      : destination.queue != nullptr &&
+          destination.queue->stats().packedColumnsQueued > 0;
+  if (atEnd_ && !holdsChunks) {
+    return cleanOutcome();
+  }
+  auto error = fmt::format(
+      "Producer task discarded its output before sending all of it. Task: {}",
+      taskId_);
+  return std::make_shared<const ChannelOutcome>(
+      ChannelOutcome::producerError(truncateProducerError(std::move(error))));
+}
+
+ChannelOutcome UcxOutputQueue::removalOutcomeLocked(
+    const RemovalFacts& facts) const {
+  if (state_ == TaskEntryState::kPending) {
+    return ChannelOutcome::producerError(
+        truncateProducerError(std::string{kProducerNotInitializedError}));
+  }
+  if (!atEnd_) {
+    return ChannelOutcome::producerError(truncateProducerError(
+        fmt::format(
+            "Producer task ended before sending all its output. Task: {}, state: {}, error: {}",
+            facts.taskId,
+            facts.state,
+            facts.error)));
+  }
+  // A chunk counts as delivered once a server took it from its queue: the
+  // send keeps it alive until it completes.
+  int64_t numUndelivered{0};
+  for (const auto& destination : queues_) {
+    if (destination.queue != nullptr) {
+      numUndelivered += destination.queue->stats().packedColumnsQueued;
+    }
+  }
+  if (kind_ == core::PartitionedOutputNode::Kind::kBroadcast &&
+      !noMoreQueues_) {
+    numUndelivered += dataToBroadcast_.size();
+  }
+  if (numUndelivered == 0) {
+    return ChannelOutcome::clean();
+  }
+  return ChannelOutcome::producerError(truncateProducerError(
+      fmt::format(
+          "Producer task ended before its consumers received all its output. Task: {}, state: {}, undelivered packed tables: {}, error: {}",
+          facts.taskId,
+          facts.state,
+          numUndelivered,
+          facts.error)));
+}
+
+void UcxOutputQueue::remove(const RemovalFacts& facts) {
+  // Released after the deferred work, outside the lock, so that ~Task never
+  // runs under mutex_.
   std::shared_ptr<exec::Task> task;
+  Deferred deferred;
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (state_ == TaskEntryState::kRemoved) {
       return;
     }
+    removedOutcome_ =
+        std::make_shared<const ChannelOutcome>(removalOutcomeLocked(facts));
+    for (size_t index = 0; index < queues_.size(); ++index) {
+      applyLocked(
+          queues_[index],
+          index,
+          DestinationEvent::kRemoved,
+          removedOutcome_,
+          deferred);
+    }
+    for (auto& [index, destination] : pendingQueues_) {
+      applyLocked(
+          destination,
+          index,
+          DestinationEvent::kRemoved,
+          removedOutcome_,
+          deferred);
+    }
+    // Kept for destinations not added yet; none will be. Not counted in
+    // queuedBytes_.
+    for (auto& [data, numRows] : dataToBroadcast_) {
+      deferred.freedChunks.push_back(std::move(data));
+    }
+    dataToBroadcast_.clear();
+    for (auto& promise : promises_) {
+      deferred.promises.push_back(std::move(promise));
+    }
+    promises_.clear();
     if (task_ != nullptr) {
       removedTask_ = task_;
     }
-    // Moved out and released after unlocking, so that ~Task never runs under
-    // mutex_.
     task = std::move(task_);
     state_.store(TaskEntryState::kRemoved, std::memory_order_release);
   }
+  deferred.run();
 }
 
-bool UcxOutputQueue::isDroppable() {
+void UcxOutputQueue::consumerGone(int destination) {
+  Deferred deferred;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (destination < 0) {
+      return;
+    }
+    auto* entry = findDestinationLocked(destination);
+    if (entry == nullptr) {
+      // Once the count is final, the reader of a destination beyond it already
+      // ended.
+      if (state_ == TaskEntryState::kRemoved ||
+          isDestinationCountFinalLocked()) {
+        return;
+      }
+      entry = &pendingQueues_[destination];
+    }
+    const auto previous = entry->state;
+    const auto decision = applyLocked(
+        *entry,
+        destination,
+        DestinationEvent::kConsumerGone,
+        cleanOutcome(),
+        deferred);
+    if (decision.next != previous && isFinishedLocked()) {
+      deferred.finishedTask = task_;
+    }
+  }
+  deferred.run();
+}
+
+std::optional<std::string> UcxOutputQueue::sendFailed(
+    int destination,
+    std::string_view status) {
+  Deferred deferred;
+  bool failTask{false};
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    auto* entry = findDestinationLocked(destination);
+    if (entry == nullptr) {
+      return std::nullopt;
+    }
+    // No setAllOutputConsumed(): the caller fails the task, and a finished
+    // task would drop that error.
+    failTask = applyLocked(
+                   *entry,
+                   destination,
+                   DestinationEvent::kSendFailed,
+                   cleanOutcome(),
+                   deferred)
+                   .failTask;
+  }
+  deferred.run();
+  if (!failTask) {
+    return std::nullopt;
+  }
+  return fmt::format(
+      "Failed to send to consumer over UCX, task {}: {}", taskId_, status);
+}
+
+void UcxOutputQueue::setOnReleased(
+    int destination,
+    std::function<void()> onReleased) {
+  // The callback replaced, if any, is destroyed after the lock is released.
   std::lock_guard<std::mutex> l(mutex_);
-  return state_ == TaskEntryState::kRemoved && removedTask_.expired() &&
-      numBoundReaders_ == 0;
+  std::swap(onReleased_[destination], onReleased);
+}
+
+DestinationState UcxOutputQueue::destinationState(int destination) {
+  std::lock_guard<std::mutex> l(mutex_);
+  const auto* entry = findDestinationLocked(destination);
+  return entry != nullptr ? entry->state : DestinationState::kUnpublished;
 }
 
 void UcxOutputQueue::updateNumDrivers(uint32_t newNumDrivers) {
@@ -306,52 +586,61 @@ void UcxOutputQueue::enqueue(
     std::unique_ptr<cudf::packed_columns> data,
     vector_size_t numRows) {
   VELOX_CHECK_NOT_NULL(data);
-  std::vector<UcxDataAvailable> dataAvailableCallbacks;
+  Deferred deferred;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    // removeTask() terminates the output of a task that failed or was aborted.
     // The entry's state tells, since no Task method may run under mutex_.
     VELOX_CHECK(
-        state_ == TaskEntryState::kActive,
-        "Cannot add data to output that is not initialized or was removed.");
-    VELOX_CHECK(!terminated_, "Task is terminated, cannot add data to output.");
+        state_ != TaskEntryState::kPending,
+        "Cannot add data to output that is not initialized.");
+    // removeTask() ends the output of a task that failed or was aborted.
+    VELOX_CHECK(
+        state_ != TaskEntryState::kRemoved,
+        "Task is terminated, cannot add data to output.");
     auto numBytes = data->gpu_data->size();
     auto sharedData = std::shared_ptr<cudf::packed_columns>(std::move(data));
 
-    bool success = false;
     if (kind_ == core::PartitionedOutputNode::Kind::kBroadcast) {
       VELOX_CHECK_EQ(destination, 0, "Broadcast uses destination 0");
-      enqueueBroadcastOutputLocked(
-          std::move(sharedData), numRows, dataAvailableCallbacks);
-      // For broadcast, count queuedBytes_ once per active destination so
-      // that each destination's dequeue symmetrically decrements it. The
-      // total sent stats count the logical data once.
-      int numActive = 0;
-      for (auto& q : queues_) {
-        if (q != nullptr) {
-          numActive++;
+      // Count queuedBytes_ once per open destination, so that each
+      // destination's dequeue symmetrically decrements it. The total sent
+      // stats count the logical data once.
+      int numOpen{0};
+      for (size_t index = 0; index < queues_.size(); ++index) {
+        auto& entry = queues_[index];
+        if (entry.state == DestinationState::kOpen) {
+          entry.queue->enqueueBack(sharedData, numRows);
+          notifyReadyReaderLocked(entry, index, deferred);
+          ++numOpen;
         }
       }
       updateTotalQueuedBytesMsLocked();
-      queuedBytes_ += numBytes * numActive;
-      queuedPackedColumns_ += numActive;
+      queuedBytes_ += numBytes * numOpen;
+      queuedPackedColumns_ += numOpen;
       totalBytesSent_ += numBytes;
       totalRowsSent_ += numRows;
       totalPackedColumnsSent_++;
-      success = true;
+      // Stored for late-arriving destinations (backfill).
+      if (!noMoreQueues_) {
+        dataToBroadcast_.emplace_back(std::move(sharedData), numRows);
+      } else {
+        deferred.freedChunks.push_back(std::move(sharedData));
+      }
     } else {
       VELOX_CHECK_LT(destination, queues_.size());
-      success = enqueuePartitionedOutputLocked(
-          destination, std::move(sharedData), numRows, dataAvailableCallbacks);
-      if (success) {
+      auto& entry = queues_[destination];
+      if (entry.state == DestinationState::kOpen) {
+        entry.queue->enqueueBack(std::move(sharedData), numRows);
+        notifyReadyReaderLocked(entry, destination, deferred);
         updateStatsWithEnqueuedLocked(numBytes, numRows);
+      } else {
+        // The destination ended or was released; nobody reads the chunk.
+        deferred.freedChunks.push_back(std::move(sharedData));
       }
     }
   }
   // Now that data is enqueued, notify blocked readers (outside of mutex.)
-  for (auto& callback : dataAvailableCallbacks) {
-    callback.notify();
-  }
+  deferred.run();
 }
 
 bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
@@ -369,94 +658,93 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
 }
 
 bool UcxOutputQueue::isDestinationCountFinalLocked() const {
-  return terminated_ || noMoreQueues_ ||
+  return state_ == TaskEntryState::kRemoved || noMoreQueues_ ||
       (state_ == TaskEntryState::kActive &&
        kind_ == core::PartitionedOutputNode::Kind::kPartitioned);
 }
 
 void UcxOutputQueue::getData(int destination, ReaderCallback notify) {
-  UcxDestinationQueue::Data data;
-  std::vector<ContinuePromise> promises;
+  std::optional<ReaderStep> step;
+  Deferred deferred;
   {
     std::unique_lock<std::mutex> l(mutex_);
-    if (terminated_) {
-      l.unlock();
-      notify(ReaderStep::end(ChannelOutcome::clean()));
-      return;
-    }
-    if (destination < 0 ||
+    if (state_ == TaskEntryState::kRemoved && destination >= 0) {
+      const auto* entry = findDestinationLocked(destination);
+      step = entry != nullptr && hasEnded(entry->state)
+          ? endedStep(*entry)
+          : ReaderStep::end(*removedOutcome_);
+    } else if (
+        destination < 0 ||
         (static_cast<size_t>(destination) >= queues_.size() &&
          isDestinationCountFinalLocked())) {
-      const auto numQueues = queues_.size();
-      const auto kind = kind_;
-      const bool noMoreQueues = noMoreQueues_;
-      l.unlock();
+      // No rows are ever produced for such a destination.
       VLOG(1) << "UCX reader outside published destinations: task=" << taskId_
-              << " destination=" << destination << " queues=" << numQueues
-              << " kind=" << kind << " noMoreQueues=" << noMoreQueues;
-      notify(ReaderStep::end(ChannelOutcome::clean()));
-      return;
-    }
-    UcxDestinationQueue* queue;
-    if (static_cast<size_t>(destination) < queues_.size()) {
-      queue = queues_[destination].get();
+              << " destination=" << destination << " queues=" << queues_.size()
+              << " kind=" << kind_ << " noMoreQueues=" << noMoreQueues_;
+      step = ReaderStep::end(ChannelOutcome::clean());
     } else {
-      // A reader's ID is not authority to allocate or backfill intermediate
-      // destinations. Wait for initialize() or updateOutputBuffers().
-      auto [it, inserted] = pendingQueues_.try_emplace(destination);
-      if (inserted) {
-        it->second = std::make_unique<UcxDestinationQueue>();
+      Destination* entry;
+      if (static_cast<size_t>(destination) < queues_.size()) {
+        entry = &queues_[destination];
+      } else {
+        // A reader's ID is not authority to allocate or backfill intermediate
+        // destinations. Wait for initialize() or updateOutputBuffers().
+        entry = &pendingQueues_[destination];
+        if (entry->state == DestinationState::kUnpublished &&
+            entry->queue == nullptr) {
+          entry->queue = std::make_unique<UcxDestinationQueue>();
+        }
       }
-      queue = it->second.get();
-    }
-    // A null queue means deleteResults() has already removed this destination.
-    if (queue) {
-      // Capture weak_ptr instead of raw `this` to prevent use-after-free.
-      // The callback fires outside the lock (from enqueue() or terminate()),
-      // and concurrent removeTask() can destroy the UcxOutputQueue while
-      // the callback is still executing.
-      std::weak_ptr<UcxOutputQueue> weakSelf = shared_from_this();
-      data = queue->getData([notify, weakSelf](ReaderStep step) {
-        std::vector<ContinuePromise> promises;
-        int64_t bytes = step.data ? step.data->gpu_data->size() : -1L;
-        notify(std::move(step));
-        if (bytes >= 0L) {
-          auto self = weakSelf.lock();
-          if (!self) {
-            // Queue was destroyed by removeTask(), safe to skip stats update.
-            return;
+      if (hasEnded(entry->state)) {
+        step = endedStep(*entry);
+      } else {
+        // Capture weak_ptr instead of raw `this` to prevent use-after-free.
+        // The callback fires outside the lock, and the last reference to the
+        // UcxOutputQueue can go while the callback is still executing.
+        std::weak_ptr<UcxOutputQueue> weakSelf = shared_from_this();
+        step = entry->queue->getData([notify, weakSelf](ReaderStep received) {
+          std::vector<ContinuePromise> promises;
+          int64_t bytes = received.data ? received.data->gpu_data->size() : -1L;
+          notify(std::move(received));
+          if (bytes >= 0L) {
+            auto self = weakSelf.lock();
+            if (!self) {
+              // The entry is gone, safe to skip the stats update.
+              return;
+            }
+            std::lock_guard<std::mutex> l(self->mutex_);
+            self->updateStatsWithFreedLocked(bytes, 1L, promises);
           }
-          std::lock_guard<std::mutex> l(self->mutex_);
-          self->updateStatsWithFreedLocked(bytes, 1L, promises);
+          // outside of lock:
+          // wake up any producers that are waiting for queue to become less
+          // full.
+          for (auto& promise : promises) {
+            promise.setValue();
+          }
+        });
+        if (!step.has_value()) {
+          VLOG(2) << "[QUEUE] task=" << taskId_ << " dest=" << destination
+                  << " server waiting for data (callback installed)";
+        } else if (step->kind == ReaderStep::Kind::kChunk) {
+          // No notify upcall will be done. Need to update the stats here.
+          updateStatsWithFreedLocked(
+              step->data->gpu_data->size(), 1L, deferred.promises);
+        } else {
+          applyLocked(
+              *entry,
+              destination,
+              DestinationEvent::kEndMarkerTaken,
+              cleanOutcome(),
+              deferred);
         }
-        // outside of lock:
-        // wake up any producers that are waiting for queue to become less full.
-        for (auto& promise : promises) {
-          promise.setValue();
-        }
-      });
-      if (data.step.data) {
-        // This implies data.immediate and no notify upcall will be done.
-        // Need to update the stats here.
-        updateStatsWithFreedLocked(
-            data.step.data->gpu_data->size(), 1L, promises);
       }
-    } else {
-      data = UcxDestinationQueue::Data{
-          ReaderStep::end(ChannelOutcome::clean()), true};
     }
   }
   // outside lock: If we have data, then return it immediately.
-  if (data.immediate) {
-    notify(std::move(data.step));
-  } else {
-    VLOG(2) << "[QUEUE] task=" << taskId_ << " dest=" << destination
-            << " server waiting for data (callback installed)";
+  if (step.has_value()) {
+    notify(std::move(*step));
   }
-  // wake up any producers that are waiting for queue to become less full.
-  for (auto& promise : promises) {
-    promise.setValue();
-  }
+  deferred.run();
 }
 
 void UcxOutputQueue::noMoreData() {
@@ -470,7 +758,7 @@ void UcxOutputQueue::noMoreDrivers() {
 }
 
 void UcxOutputQueue::checkIfDone(bool oneDriverFinished) {
-  std::vector<UcxDataAvailable> finished;
+  Deferred deferred;
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (oneDriverFinished) {
@@ -494,53 +782,23 @@ void UcxOutputQueue::checkIfDone(bool oneDriverFinished) {
               << " avgRowsPerChunk=" << avgRows
               << " totalBytes=" << totalBytesSent_;
     }
-    for (auto& queue : queues_) {
-      if (queue != nullptr) {
-        queue->enqueueBack(nullptr, /*numRows=*/0);
-        finished.push_back(queue->getAndClearNotify());
+    for (size_t index = 0; index < queues_.size(); ++index) {
+      auto& entry = queues_[index];
+      if (entry.state == DestinationState::kOpen) {
+        entry.queue->enqueueBack(nullptr, /*numRows=*/0);
+        notifyReadyReaderLocked(entry, index, deferred);
       }
+    }
+    // Every destination may have been released before the last driver
+    // finished, for instance before the task initialized. A driver calls
+    // noMoreData() without holding the task's lock; updateNumDrivers() runs
+    // under it, so its path must not report the output consumed.
+    if (oneDriverFinished && isFinishedLocked()) {
+      deferred.finishedTask = task_;
     }
   }
   // Notify outside of mutex.
-  for (auto& notification : finished) {
-    notification.notify();
-  }
-}
-
-bool UcxOutputQueue::enqueuePartitionedOutputLocked(
-    int destination,
-    std::shared_ptr<cudf::packed_columns> data,
-    vector_size_t numRows,
-    std::vector<UcxDataAvailable>& dataAvailableCbs) {
-  VELOX_DCHECK(dataAvailableCbs.empty());
-  VELOX_CHECK_LT(destination, queues_.size());
-  bool success = false;
-  auto* queue = queues_[destination].get();
-  if (queue != nullptr) {
-    queue->enqueueBack(std::move(data), numRows);
-    dataAvailableCbs.emplace_back(queue->getAndClearNotify());
-    success = true;
-  }
-  return success;
-}
-
-void UcxOutputQueue::enqueueBroadcastOutputLocked(
-    std::shared_ptr<cudf::packed_columns> data,
-    vector_size_t numRows,
-    std::vector<UcxDataAvailable>& dataAvailableCbs) {
-  VELOX_DCHECK(dataAvailableCbs.empty());
-
-  for (auto& queue : queues_) {
-    if (queue != nullptr) {
-      queue->enqueueBack(data, numRows);
-      dataAvailableCbs.emplace_back(queue->getAndClearNotify());
-    }
-  }
-
-  // Store for late-arriving destinations (backfill).
-  if (!noMoreQueues_) {
-    dataToBroadcast_.emplace_back(std::move(data), numRows);
-  }
+  deferred.run();
 }
 
 bool UcxOutputQueue::isFinished() {
@@ -549,8 +807,13 @@ bool UcxOutputQueue::isFinished() {
 }
 
 bool UcxOutputQueue::isFinishedLocked() {
-  if (state_ != TaskEntryState::kActive || !pendingQueues_.empty()) {
+  if (state_ != TaskEntryState::kActive) {
     return false;
+  }
+  for (const auto& [index, destination] : pendingQueues_) {
+    if (destination.state == DestinationState::kUnpublished) {
+      return false;
+    }
   }
   // For broadcast, we can only be finished after receiving the no more
   // (destination) buffers signal, matching OutputBuffer::isFinishedLocked().
@@ -558,8 +821,8 @@ bool UcxOutputQueue::isFinishedLocked() {
       !noMoreQueues_) {
     return false;
   }
-  for (auto& queue : queues_) {
-    if (queue != nullptr) {
+  for (const auto& destination : queues_) {
+    if (destination.state != DestinationState::kReleased) {
       return false;
     }
   }
@@ -568,7 +831,7 @@ bool UcxOutputQueue::isFinishedLocked() {
 
 void UcxOutputQueue::addDestinationQueuesLocked(
     int32_t numDestinations,
-    std::vector<UcxDataAvailable>& notifications) {
+    Deferred& deferred) {
   VELOX_CHECK_GE(
       numDestinations, 0, "Number of destinations must be non-negative");
   if (static_cast<size_t>(numDestinations) <= queues_.size()) {
@@ -586,37 +849,54 @@ void UcxOutputQueue::addDestinationQueuesLocked(
   }
   queues_.reserve(numDestinations);
   while (queues_.size() < static_cast<size_t>(numDestinations)) {
-    std::unique_ptr<UcxDestinationQueue> queue;
-    auto it = pendingQueues_.find(queues_.size());
+    const int index = queues_.size();
+    Destination destination;
+    auto it = pendingQueues_.find(index);
     if (it != pendingQueues_.end()) {
-      queue = std::move(it->second);
+      destination = std::move(it->second);
       pendingQueues_.erase(it);
-    } else {
-      queue = std::make_unique<UcxDestinationQueue>();
     }
-    if (queue && isBroadcast) {
+    if (destination.state == DestinationState::kUnpublished &&
+        destination.queue == nullptr) {
+      destination.queue = std::make_unique<UcxDestinationQueue>();
+    }
+    // A destination released before publication stays Released.
+    applyLocked(
+        destination,
+        index,
+        DestinationEvent::kPublished,
+        cleanOutcome(),
+        deferred);
+    if (destination.state == DestinationState::kOpen && isBroadcast) {
       for (const auto& [data, numRows] : dataToBroadcast_) {
-        queue->enqueueBack(data, numRows);
+        destination.queue->enqueueBack(data, numRows);
         // Each destination's dequeue must free the bytes counted by backfill.
         queuedBytes_ += data->gpu_data->size();
         ++queuedPackedColumns_;
       }
       if (atEnd_) {
-        queue->enqueueBack(nullptr, /*numRows=*/0);
+        destination.queue->enqueueBack(nullptr, /*numRows=*/0);
       }
-      if (!dataToBroadcast_.empty() || atEnd_) {
-        notifications.push_back(queue->getAndClearNotify());
-      }
+      notifyReadyReaderLocked(destination, index, deferred);
     }
-    queues_.emplace_back(std::move(queue));
+    queues_.emplace_back(std::move(destination));
   }
 }
 
-void UcxOutputQueue::clearPendingReadersLocked(
-    std::vector<UcxDataAvailable>& notifications) {
-  for (auto& [destination, queue] : pendingQueues_) {
-    if (queue) {
-      notifications.push_back(queue->getAndClearNotify());
+void UcxOutputQueue::clearPendingReadersLocked(Deferred& deferred) {
+  for (auto& [index, destination] : pendingQueues_) {
+    if (destination.state != DestinationState::kUnpublished) {
+      continue;
+    }
+    if (destination.queue == nullptr) {
+      continue;
+    }
+    if (auto reader = destination.queue->takeReader()) {
+      // A reader for a destination beyond the final count ends cleanly at
+      // once: no rows are ever produced for it.
+      deferred.notifications.push_back(
+          UcxDataAvailable{
+              std::move(reader), ReaderStep::end(ChannelOutcome::clean())});
     }
   }
   pendingQueues_.clear();
@@ -624,12 +904,11 @@ void UcxOutputQueue::clearPendingReadersLocked(
 
 void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   using Kind = core::PartitionedOutputNode::Kind;
-  std::vector<UcxDataAvailable> notifications;
-  std::shared_ptr<exec::Task> finishedTask;
+  Deferred deferred;
   size_t numRejected{0};
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (terminated_) {
+    if (state_ == TaskEntryState::kRemoved) {
       return;
     }
     if (kind_ == Kind::kPartitioned) {
@@ -640,17 +919,20 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
     }
 
     VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
-    addDestinationQueuesLocked(numBuffers, notifications);
+    addDestinationQueuesLocked(numBuffers, deferred);
 
     if (noMoreBuffers) {
       noMoreQueues_ = true;
+      for (auto& [data, numRows] : dataToBroadcast_) {
+        deferred.freedChunks.push_back(std::move(data));
+      }
       dataToBroadcast_.clear();
-      const auto priorNotifications = notifications.size();
-      clearPendingReadersLocked(notifications);
-      numRejected = notifications.size() - priorNotifications;
+      const auto priorNotifications = deferred.notifications.size();
+      clearPendingReadersLocked(deferred);
+      numRejected = deferred.notifications.size() - priorNotifications;
     }
     if (isFinishedLocked()) {
-      finishedTask = task_;
+      deferred.finishedTask = task_;
     }
   }
   if (numRejected > 0) {
@@ -658,135 +940,43 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
             << taskId_ << " finalBuffers=" << numBuffers
             << " rejected=" << numRejected;
   }
-  for (auto& notification : notifications) {
-    notification.notify();
-  }
-  if (finishedTask) {
-    finishedTask->setAllOutputConsumed();
-  }
+  deferred.run();
 }
 
 void UcxOutputQueue::deleteResults(int destination) {
-  std::shared_ptr<exec::Task> finishedTask;
-  UcxDataAvailable dataAvailable;
-  std::vector<ContinuePromise> promises;
+  Deferred deferred;
   {
-    std::unique_lock<std::mutex> l(mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
     if (destination < 0) {
       return;
     }
-    if (static_cast<size_t>(destination) >= queues_.size()) {
-      // Only tombstone while the destination can still be published; once the
-      // count is final the reader already got EOS and a stray entry would
-      // wedge isFinishedLocked().
-      const bool publishable = !isDestinationCountFinalLocked();
-      auto it = pendingQueues_.find(destination);
-      if (it != pendingQueues_.end()) {
-        if (it->second) {
-          dataAvailable = it->second->getAndClearNotify();
-        }
-        if (publishable) {
-          // Keep a tombstone so publication cannot resurrect deleted results.
-          it->second.reset();
-        } else {
-          pendingQueues_.erase(it);
-        }
-      } else if (publishable) {
-        pendingQueues_.emplace(destination, nullptr);
+    auto* entry = findDestinationLocked(destination);
+    if (entry == nullptr) {
+      // Once the count is final, the reader of a destination beyond it already
+      // ended, and an entry for it would wedge isFinishedLocked().
+      if (state_ == TaskEntryState::kRemoved ||
+          isDestinationCountFinalLocked()) {
+        return;
       }
-      l.unlock();
-      dataAvailable.notify();
-      return;
+      // Kept, so that publication cannot resurrect deleted results.
+      entry = &pendingQueues_[destination];
     }
-    auto* queue = queues_[destination].get();
-    if (queue == nullptr) {
+    const auto previous = entry->state;
+    const auto decision = applyLocked(
+        *entry,
+        destination,
+        DestinationEvent::kResultsDeleted,
+        discardOutcomeLocked(*entry),
+        deferred);
+    if (decision.next == previous) {
       VLOG(1) << "Extra delete received for destination " << destination;
       return;
     }
-    // remember destination queue fill stats
-    int64_t bytes = queue->stats().bytesQueued;
-    int64_t packedCols = queue->stats().packedColumnsQueued;
-    queue->deleteResults();
-    dataAvailable = queue->getAndClearNotify();
-    queue->finish();
-    queues_[destination] = nullptr;
     if (isFinishedLocked()) {
-      finishedTask = task_;
+      deferred.finishedTask = task_;
     }
-    // update UcxOutputQueue stats
-    updateStatsWithFreedLocked(bytes, packedCols, promises);
   }
-
-  // Outside of mutex.
-  dataAvailable.notify();
-  // wake up any producers that are waiting for queue to become less full.
-  for (auto& promise : promises) {
-    promise.setValue();
-  }
-
-  if (finishedTask) {
-    finishedTask->setAllOutputConsumed();
-  }
-}
-
-void UcxOutputQueue::terminate() {
-  std::vector<UcxDataAvailable> pendingCallbacks;
-  std::vector<ContinuePromise> promises;
-  std::shared_ptr<exec::Task> task;
-  // Chunks no reader will fetch once terminated_ is set. Destroyed after
-  // mutex_ is released.
-  std::vector<std::shared_ptr<cudf::packed_columns>> discardedData;
-  std::vector<std::pair<std::shared_ptr<cudf::packed_columns>, vector_size_t>>
-      discardedBroadcastData;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    task = task_;
-    terminated_ = true;
-    // Pending queues hold readers, never data.
-    clearPendingReadersLocked(pendingCallbacks);
-    int64_t discardedBytes{0};
-    int64_t numDiscarded{0};
-    // Fire all pending getData callbacks with a clean end step.
-    // This handles the case where a producer task fails or is cancelled before
-    // noMoreData() is called, preventing consumers from being orphaned.
-    for (auto& queue : queues_) {
-      if (queue != nullptr) {
-        for (auto& data : queue->takeQueuedData()) {
-          discardedBytes += data->gpu_data->size();
-          ++numDiscarded;
-          discardedData.push_back(std::move(data));
-        }
-        queue->enqueueBack(nullptr, /*numRows=*/0);
-        pendingCallbacks.push_back(queue->getAndClearNotify());
-      }
-    }
-    // Broadcast keeps these for destinations not added yet; none will be.
-    // They are not counted in queuedBytes_.
-    discardedBroadcastData = std::move(dataToBroadcast_);
-    dataToBroadcast_.clear();
-    // Subtracts what was discarded rather than resetting the counters: a
-    // chunk that a reader took but whose callback has not run yet is still
-    // counted, and that callback subtracts it.
-    updateStatsWithFreedLocked(discardedBytes, numDiscarded, promises);
-    // Release any outstanding producer-side promises (blocked on queue-full).
-    for (auto& promise : promises_) {
-      promises.push_back(std::move(promise));
-    }
-    promises_.clear();
-  }
-
-  if (task && task->isRunning()) {
-    LOG(WARNING) << "UcxOutputQueue::terminate() called while task " << taskId_
-                 << " is still running";
-  }
-  // Fire callbacks outside of mutex to avoid potential deadlocks.
-  for (auto& callback : pendingCallbacks) {
-    callback.notify();
-  }
-  // Unblock any blocked producers.
-  for (auto& promise : promises) {
-    promise.setValue();
-  }
+  deferred.run();
 }
 
 std::optional<double> UcxOutputQueue::getUtilization() {
@@ -859,7 +1049,10 @@ void UcxOutputQueue::updateStatsWithFreedLocked(
             << promises_.size() << " producers"
             << " queuedBytes=" << queuedBytes_
             << " continueSize=" << continueSize_;
-    promises = std::move(promises_);
+    for (auto& promise : promises_) {
+      promises.push_back(std::move(promise));
+    }
+    promises_.clear();
   }
 }
 

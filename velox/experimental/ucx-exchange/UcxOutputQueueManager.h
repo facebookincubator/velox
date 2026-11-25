@@ -109,10 +109,17 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// Finds or creates the entry for 'taskId' and counts a bound reader. Never
   /// returns null: a Removed entry is returned as is. A server binds once and
   /// sends every later call to the entry, so that it never reaches a task that
-  /// reuses the ID. Does not throw, since it runs inside a UCX callback.
+  /// reuses the ID. Registers 'onReleased', if not null, with
+  /// UcxOutputQueue::setOnReleased(). Does not throw, since it runs inside a
+  /// UCX callback.
   std::shared_ptr<UcxOutputQueue> bindReader(
       std::string_view taskId,
-      int destination);
+      int destination,
+      std::function<void()> onReleased);
+
+  /// Releases 'destination' of task 'taskId' because its consumer sent the
+  /// close message or its endpoint closed. Drops a close for an unknown task.
+  void consumerGone(std::string_view taskId, int destination);
 
   /// Unbinds a reader. Erases a Pending entry that has no bound reader left and
   /// no Released destination. Does not throw.
@@ -134,9 +141,10 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   void failTask(std::string_view taskId, std::string_view error);
 
   /// @brief Makes the task's entry Removed, creating it if absent, so that a
-  /// later reader finds the removal. Calls "terminate" on the queue to awake
-  /// waiting producers and readers. Erases the other Removed entries whose
-  /// Task is gone and that have no bound reader.
+  /// later reader finds the removal. Reads the task's final state and error
+  /// and passes them to UcxOutputQueue::remove(), which decides every
+  /// destination's end. Erases the other Removed entries whose Task is gone and
+  /// that have no bound reader.
   void removeTask(const std::string& taskId) override;
 
   /// @brief Returns the queue statistics of the queue associated with the given

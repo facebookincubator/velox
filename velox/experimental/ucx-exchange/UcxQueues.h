@@ -85,18 +85,30 @@ using ReaderCallback = std::function<void(ReaderStep step)>;
 struct UcxDataAvailable {
   /// The reader to notify. Null if no reader waits.
   ReaderCallback callback{nullptr};
-  /// The step for 'callback'. The default is a clean end, which the empty-queue
-  /// paths of deleteResults() and clearPendingReadersLocked() send today.
-  /// TODO(Task 6): give these paths an explicit outcome.
-  ReaderStep step{ReaderStep::end(ChannelOutcome::clean())};
+  /// The step for 'callback'. Set whenever 'callback' is.
+  std::optional<ReaderStep> step;
 
   /// Invokes 'callback' with 'step', if there is a callback. Call it without
   /// holding any lock.
-  void notify() {
-    if (callback) {
-      callback(std::move(step));
-    }
-  }
+  void notify();
+};
+
+/// The text of the producer error that ends the readers of a task that was
+/// removed without a successful initializeTask().
+inline constexpr std::string_view kProducerNotInitializedError{
+    "Producer task ended before initializing its output"};
+
+/// What UcxOutputQueue::remove() needs to know about the removed task. The
+/// caller reads it from the task before it takes any entry lock: no Task method
+/// may run under one.
+struct RemovalFacts {
+  /// The ID of the removed task.
+  std::string taskId;
+  /// The task's final state.
+  exec::TaskState state{exec::TaskState::kRunning};
+  /// The task's error message, without its context and stack trace. Empty if
+  /// the task has no error.
+  std::string error;
 };
 
 /// @brief The UcxDestinationQueue stores cudf::packed_columns for a single
@@ -136,40 +148,21 @@ class UcxDestinationQueue {
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows);
 
-  struct Data {
-    /// The step for the reader. Meaningful if 'immediate', and for
-    /// getAndClearNotify(), which takes the step of a reader that waited. When
-    /// the queue is empty and nobody is served, the default is a clean end.
-    /// TODO(Task 6): give the empty-queue deleteResults() paths an explicit
-    /// outcome.
-    ReaderStep step{ReaderStep::end(ChannelOutcome::clean())};
-    /// Whether the result is returned immediately without invoking the `notify'
-    /// callback.
-    bool immediate{false};
-  };
+  /// Removes the step at the front of the queue, a chunk or the end marker,
+  /// and returns it. If the queue is empty, installs 'notify' until a step is
+  /// queued and returns nullopt.
+  [[nodiscard]] std::optional<ReaderStep> getData(ReaderCallback notify);
 
-  /// @brief Removes the data from the front of the queue and transfers
-  /// ownership to the caller. If there is no data, 'notify' is installed and it
-  /// will be called when data becomes available. In this case, 'immediate' is
-  /// false and the step is not to be used.
-  [[nodiscard]] Data getData(ReaderCallback notify);
-
-  /// Removes all remaining data from the queue.
-  void deleteResults();
-
-  /// Removes the queued data, which no reader will fetch, from the queue and
-  /// its queued stats, and returns it for the caller to destroy outside its
-  /// locks. Keeps an end marker.
+  /// Removes all queued chunks and the end marker from the queue and its queued
+  /// stats, and returns the chunks for the caller to destroy outside its locks.
   std::vector<std::shared_ptr<cudf::packed_columns>> takeQueuedData();
 
-  /// Returns and clears the notify callback, if any, along with the step for
-  /// it. On an empty queue, which deleteResults() and the pending-reader
-  /// clearing reach, the step is a clean end today.
-  /// TODO(Task 6): give those paths an explicit outcome.
-  UcxDataAvailable getAndClearNotify();
+  /// Returns the waiting reader with the step at the front of the queue, and
+  /// removes both. Returns no reader if none waits or the queue is empty.
+  UcxDataAvailable takeReadyReader();
 
-  /// Finishes this destination buffer, set finished stats.
-  void finish();
+  /// Returns and clears the waiting reader, if any.
+  ReaderCallback takeReader();
 
   /// Returns the stats of this buffer.
   Stats stats() const;
@@ -177,8 +170,6 @@ class UcxDestinationQueue {
   std::string toString();
 
  private:
-  void clearNotify();
-
   // A queued page and the logical row count the producer gave it. Paired here
   // rather than recovered from the page, which reports no rows when it has no
   // columns.
@@ -214,8 +205,14 @@ enum class TaskEntryState : uint8_t {
 ///
 /// The output queue is also the task's entry in UcxOutputQueueManager, from the
 /// first contact for the task ID to its erasure. It starts Pending, becomes
-/// Active at initialize() and Removed at markRemoved(), and stays the same
-/// object throughout, so that a server bound to it reads every change.
+/// Active at initialize() and Removed at remove(), and stays the same object
+/// throughout, so that a server bound to it reads every change.
+///
+/// Each destination has a DestinationState, and every event that can end it
+/// goes through decideDestination() under the entry's lock. The first decision
+/// for a destination wins. A reader of a destination that has ended gets the
+/// decided outcome; a reader of a Released destination gets that outcome if it
+/// is an error, and ReaderStep::stop() otherwise.
 class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
  public:
   /// @brief Creates the Pending entry of task 'taskId'. initialize() supplies
@@ -250,18 +247,44 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// Counts a server bound to this entry. Called under the manager's lock.
   void addBoundReader();
 
-  /// Unbinds a server. Called under the manager's lock. Returns true if the
-  /// entry is Pending, has no bound reader, and no destination is Released, so
-  /// that the manager can erase it.
-  bool removeBoundReader();
+  /// Unbinds the server of 'destination' and drops its release callback.
+  /// Called under the manager's lock. Returns true if the entry is Pending, has
+  /// no bound reader, and no destination is Released, so that the manager can
+  /// erase it.
+  bool removeBoundReader(int destination);
 
   /// Records the task of a failed initializeTask(). The entry stays Pending,
   /// and once Removed lives as long as 'task'.
   void recordFailedInitialization(std::weak_ptr<exec::Task> task);
 
-  /// Makes the entry Removed. Keeps only a weak pointer to the task, which is
-  /// released outside the entry's lock. Call after terminate().
-  void markRemoved();
+  /// Makes the entry Removed and decides every destination at once: clean if
+  /// every driver called noMoreData() and no chunk is undelivered, a producer
+  /// error otherwise. Frees the chunks, wakes blocked producers, and keeps only
+  /// a weak pointer to the task and the outcome, which later readers get. The
+  /// caller reads 'facts' before taking any entry lock. A second call does
+  /// nothing.
+  void remove(const RemovalFacts& facts);
+
+  /// Releases 'destination' because its consumer sent the close message or its
+  /// endpoint closed, and frees its chunks. A destination that is not published
+  /// yet is kept Released, and publishing it later keeps it Released.
+  void consumerGone(int destination);
+
+  /// Releases 'destination' because a send to its consumer failed while the
+  /// endpoint stayed open, and frees its chunks. Returns the error for the
+  /// caller to pass to Task::setError() outside every lock, or nullopt if the
+  /// destination had already ended or was released.
+  std::optional<std::string> sendFailed(
+      int destination,
+      std::string_view status);
+
+  /// Registers the bound reader's release callback for 'destination'. It is
+  /// called once, outside the lock, when the destination becomes Released.
+  void setOnReleased(int destination, std::function<void()> onReleased);
+
+  /// Returns the state of 'destination'. A destination the entry has not seen
+  /// is Unpublished. For tests and the server.
+  DestinationState destinationState(int destination);
 
   /// True once Removed, its Task is gone (the weak pointer expired), and no
   /// reader is bound.
@@ -315,8 +338,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// Unpublished readers wait for initialize() or updateOutputBuffers() to
   /// publish their destination and backfill any broadcast data and end marker.
   /// Invokes 'notify' with a clean kEnd step when the final count excludes the
-  /// reader, results have been deleted, or the queue has terminated. Negative
-  /// destinations also receive a clean kEnd step.
+  /// reader, and for negative destinations. A destination that has ended or
+  /// was released gets its decided outcome, and a destination of a Removed
+  /// entry that was never published gets the removal's outcome.
   void getData(int destination, ReaderCallback notify);
 
   /// @brief Indicates that a driver is done and won't enqueue any more data.
@@ -333,13 +357,12 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// @brief Same as isFinished but must only be called when owning the lock.
   bool isFinishedLocked();
 
-  /// @brief Deletes all queued data and makes all subsequent getData requests
-  /// for 'destination' return empty results.
+  /// @brief Deletes all queued data of 'destination'. While the destination is
+  /// open, as when the producer runs out of GPU memory, the outcome is an error
+  /// that says the producer discarded its output, unless every driver finished
+  /// and nothing was queued. After the destination ended, as when its server
+  /// sent the end, the destination becomes Released.
   void deleteResults(int destination);
-
-  /// Continues any possibly waiting producers. Called when the producer task
-  /// has an error or is cancelled.
-  void terminate();
 
   std::string toString();
 
@@ -375,9 +398,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // Methods that update the statistics.
   void updateStatsWithEnqueuedLocked(int64_t bytes, int64_t rows);
 
-  // updates the counters and returns promises if the queuedBytes_ counter falls
-  // below the continueSize_ low water mark. These promises then need to be
-  // realized outside the lock.
+  // Updates the counters and appends the blocked producers' promises to
+  // 'promises' if queuedBytes_ falls below the continueSize_ low water mark.
+  // The caller fulfills them outside the lock.
   void updateStatsWithFreedLocked(
       int64_t bytes,
       int64_t numPackedCols,
@@ -395,30 +418,80 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // updating the total number of drivers, we don't.
   void checkIfDone(bool oneDriverFinished);
 
-  bool enqueuePartitionedOutputLocked(
-      int destination,
-      std::shared_ptr<cudf::packed_columns> data,
-      vector_size_t numRows,
-      std::vector<UcxDataAvailable>& dataAvailableCbs);
+  // One destination: its state, its queue while it can still take chunks,
+  // and the outcome decided for it.
+  struct Destination {
+    // Moved only by applyLocked().
+    DestinationState state{DestinationState::kUnpublished};
+    // Null once the destination ended or was released.
+    std::unique_ptr<UcxDestinationQueue> queue;
+    // The decided outcome, if any. Shared, since a removal decides one outcome
+    // for every destination.
+    std::shared_ptr<const ChannelOutcome> outcome;
+  };
 
-  void enqueueBroadcastOutputLocked(
-      std::shared_ptr<cudf::packed_columns> data,
-      vector_size_t numRows,
-      std::vector<UcxDataAvailable>& dataAvailableCbs);
+  // The work that decisions leave for after mutex_ is released. Declare it
+  // before taking the lock, so that the chunks it holds are destroyed after the
+  // lock is released.
+  struct Deferred {
+    // Readers to hand a step.
+    std::vector<UcxDataAvailable> notifications;
+    // Release callbacks of destinations that became Released.
+    std::vector<std::function<void()>> onReleased;
+    // Blocked producers to wake.
+    std::vector<ContinuePromise> promises;
+    // Set if the output is finished, for Task::setAllOutputConsumed().
+    std::shared_ptr<exec::Task> finishedTask;
+    // Chunks that no reader will fetch.
+    std::vector<std::shared_ptr<cudf::packed_columns>> freedChunks;
+
+    // Notifies readers, calls release callbacks, wakes producers and reports a
+    // finished output, in this order.
+    void run();
+  };
+
+  // Applies 'event' to 'destination' through decideDestination(). Frees its
+  // chunks if the decision says so, ends its waiting reader once it ended or
+  // was released, and queues its release callback.
+  DestinationDecision applyLocked(
+      Destination& destination,
+      int index,
+      DestinationEvent event,
+      const std::shared_ptr<const ChannelOutcome>& candidate,
+      Deferred& deferred);
+
+  // Returns the step for a reader of a destination that ended or was released.
+  static ReaderStep endedStep(const Destination& destination);
+
+  // Hands the step at the front of 'destination' to its waiting reader, if
+  // both exist. Taking the end marker ends the destination cleanly.
+  void notifyReadyReaderLocked(
+      Destination& destination,
+      int index,
+      Deferred& deferred);
+
+  // Returns the published or Unpublished destination 'index', or null.
+  Destination* findDestinationLocked(int index);
+
+  // The outcome that deleteResults() proposes for 'destination'.
+  std::shared_ptr<const ChannelOutcome> discardOutcomeLocked(
+      const Destination& destination) const;
+
+  // The outcome that a removal decides for every destination.
+  ChannelOutcome removalOutcomeLocked(const RemovalFacts& facts) const;
 
   // Returns true when no more destinations can be published. Requires mutex_.
   bool isDestinationCountFinalLocked() const;
 
   // Adds destination queues and restores broadcast data and end markers.
-  void addDestinationQueuesLocked(
-      int32_t numDestinations,
-      std::vector<UcxDataAvailable>& notifications);
+  void addDestinationQueuesLocked(int32_t numDestinations, Deferred& deferred);
 
-  // Completes unpublished readers with EOS; the caller invokes notifications
-  // outside the locks. Pending queues never contain data.
-  void clearPendingReadersLocked(std::vector<UcxDataAvailable>& notifications);
+  // Ends unpublished readers once the destination count is final: their
+  // destination will never be published, so no rows are lost. Drops the
+  // destinations that are not published.
+  void clearPendingReadersLocked(Deferred& deferred);
 
-  // True if the results of an unpublished destination were deleted. Requires
+  // True if a destination that is not published yet is Released. Requires
   // mutex_.
   bool hasReleasedDestinationLocked() const;
 
@@ -449,8 +522,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   // Set to true once task metadata is available. Lock-free readers
   // (canUseIntraNode) load with memory_order_acquire so that kind_, written
-  // before the store, is visible. They must not read task_, which
-  // markRemoved() resets under mutex_.
+  // before the store, is visible. They must not read task_, which remove()
+  // resets under mutex_.
   std::atomic<bool> initialized_{false};
 
   // For broadcast: stores data for late-arriving destinations that need
@@ -478,18 +551,21 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // For governing multi-threaded access.
   std::mutex mutex_;
 
-  // One buffer per destination.
-  std::vector<std::unique_ptr<UcxDestinationQueue>> queues_;
+  // The published destinations. Only control-plane updates grow it.
+  std::vector<Destination> queues_;
 
-  // Only control-plane updates grow queues_. Early readers keep an empty queue
-  // here for their notification. A null entry remembers deleted results until
-  // the destination is published or the final count discards it.
-  std::unordered_map<int, std::unique_ptr<UcxDestinationQueue>> pendingQueues_;
+  // The destinations that are not published yet: Unpublished ones, whose
+  // early reader waits in their queue, and Released ones, which publication
+  // keeps Released. Cleared once the destination count is final; a removal
+  // ends them instead.
+  std::unordered_map<int, Destination> pendingQueues_;
 
-  // Set by terminate() when this output queue is shut down, including on task
-  // completion, failure, or cancellation. Later getData() reports EOS, and
-  // updateOutputBuffers() ignores further updates.
-  bool terminated_{false};
+  // The outcome remove() decided. Readers of a Removed entry's destinations
+  // that were never published get it.
+  std::shared_ptr<const ChannelOutcome> removedOutcome_;
+
+  // The release callbacks of the bound readers, by destination.
+  std::unordered_map<int, std::function<void()>> onReleased_;
 
   // keep track of the number of drivers that have finished.
   uint32_t numFinished_{0};

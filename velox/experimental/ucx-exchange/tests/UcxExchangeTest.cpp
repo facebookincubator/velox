@@ -25,7 +25,9 @@
 #include <folly/Executor.h>
 #include <folly/ScopeGuard.h>
 #include <folly/synchronization/EventCount.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <chrono>
@@ -822,6 +824,42 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputDataIntegrityTest";
 }
 
+// A consumer that fails in a case that expects success must fail the case.
+// SinkDriverMock drives its exchanges on bare threads and catches what they
+// throw, and the cases that check only dataIsValid() would otherwise pass
+// with rows missing.
+TEST_F(UcxExchangeFocusedTest, sinkDriverMockReportsUnexpectedConsumerError) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "abortedBeforeSink";
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  srcTask->requestAbort().wait();
+  queueManager()->removeTask(srcTaskId);
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "sink",
+      UcxTestData::kTestRowType,
+      /*partitionId=*/0,
+      exchangeNodeId);
+  auto sinkDriver =
+      std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  std::vector<exec::Split> splits;
+  splits.emplace_back(remoteSplit(srcTaskId, /*partitionId=*/0));
+  sinkDriver->addSplits(splits);
+
+  EXPECT_NONFATAL_FAILURE(
+      {
+        sinkDriver->run();
+        sinkDriver->joinThreads();
+      },
+      "Producer failed before sending all its data");
+}
+
 // Focused regression test for shared UcxExchangeClient ownership. This
 // intentionally creates and seeds the client directly, bypassing the normal
 // task-split path, to isolate close behavior after the client is populated.
@@ -933,6 +971,8 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
       sinkTaskId, UcxTestData::kTestRowType, partitionId, exchangeNodeId);
   auto sinkDriver =
       std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  // The removal before all drivers finished may fail the consumer.
+  sinkDriver->expectError();
 
   // Add split pointing to source task. Since we use a single Communicator,
   // the handshake will resolve to intra-node (same listener IP:port).
@@ -968,7 +1008,13 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
            << " — intra-node livelock: source stuck polling "
            << "IntraNodeTransferRegistry for cancelled task";
   }
-  // If we get here, the source correctly detected the cancelled task.
+  // The source detected the cancelled task. No row was produced, so the
+  // consumer either ends cleanly or fails with the producer's error.
+  if (const auto error = sinkDriver->error()) {
+    EXPECT_THAT(
+        *error,
+        testing::HasSubstr("Producer failed before sending all its data"));
+  }
 }
 
 // Regression test for broadcast + intra-node SIGSEGV.
@@ -1463,6 +1509,7 @@ TEST_F(UcxExchangeFocusedTest, sourceTaskAbortDoesNotCrashOrHang) {
       createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
   auto sinkDriver =
       std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  sinkDriver->expectError();
 
   std::vector<exec::Split> splits;
   splits.emplace_back(remoteSplit(srcTaskId, partitionId));
@@ -1494,6 +1541,18 @@ TEST_F(UcxExchangeFocusedTest, sourceTaskAbortDoesNotCrashOrHang) {
     future.wait();
     FAIL() << "Sink driver did not complete within 15s after source abort"
            << " — possible exchange abort hang";
+  }
+
+  // The consumer either received every row before the abort or stops with the
+  // producer's error. It never ends cleanly with rows missing.
+  const uint64_t expectedRows =
+      static_cast<uint64_t>(numChunks) * numRowsPerChunk;
+  if (sinkDriver->numRows() != expectedRows) {
+    EXPECT_THAT(
+        sinkDriver->error(),
+        testing::Optional(
+            testing::HasSubstr("Producer failed before sending all its data")))
+        << "Rows received: " << sinkDriver->numRows() << " of " << expectedRows;
   }
 
   // 7. Allow the Communicator's event loop to run before teardown.

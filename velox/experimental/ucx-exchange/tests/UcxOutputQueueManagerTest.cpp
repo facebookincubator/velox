@@ -20,6 +20,7 @@
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
 #include <folly/synchronization/EventCount.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <array>
@@ -41,6 +42,53 @@ using namespace facebook::velox::ucx_exchange;
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
 using namespace facebook::velox::core;
+
+namespace facebook::velox::ucx_exchange {
+// Prints an outcome in assertion failures.
+void PrintTo(const ChannelOutcome& outcome, std::ostream* os) {
+  *os << fmt::format("{}({})", outcome.kind, outcome.error);
+}
+
+// Prints a step in assertion failures.
+void PrintTo(const ReaderStep& step, std::ostream* os) {
+  switch (step.kind) {
+    case ReaderStep::Kind::kChunk:
+      *os << "chunk of " << step.numRows << " rows";
+      break;
+    case ReaderStep::Kind::kEnd:
+      *os << "end ";
+      PrintTo(step.outcome, os);
+      break;
+    case ReaderStep::Kind::kStop:
+      *os << "stop";
+      break;
+  }
+}
+} // namespace facebook::velox::ucx_exchange
+
+namespace {
+// Matches a kEnd step whose outcome is a producer error that matches 'error'.
+testing::Matcher<const ReaderStep&> isProducerError(
+    testing::Matcher<const std::string&> error) {
+  return testing::AllOf(
+      testing::Field("kind", &ReaderStep::kind, ReaderStep::Kind::kEnd),
+      testing::Field(
+          "outcome",
+          &ReaderStep::outcome,
+          testing::AllOf(
+              testing::Field(
+                  "kind", &ChannelOutcome::kind, OutcomeKind::kProducerError),
+              testing::Field("error", &ChannelOutcome::error, error))));
+}
+
+// Returns a reader that stores its one step in 'step'.
+ReaderCallback storeStep(std::optional<ReaderStep>& step) {
+  return [&step](ReaderStep received) {
+    EXPECT_FALSE(step.has_value()) << "A reader got a second step";
+    step = std::move(received);
+  };
+}
+} // namespace
 
 class UcxOutputQueueManagerTest : public testing::Test {
  protected:
@@ -208,7 +256,9 @@ class UcxOutputQueueManagerTest : public testing::Test {
       ASSERT_TRUE(future.isReady());
       auto& response = future.value();
       ASSERT_EQ(response.remainingBytes.size(), 0);
-      ASSERT_TRUE(isCleanEnd(response));
+      // The destination is Released after a clean end: the reader stops
+      // without a second end.
+      ASSERT_EQ(response.kind, ReaderStep::Kind::kStop);
     }
 
     fetchedPackedColumns = received;
@@ -586,9 +636,9 @@ TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPendingEntry) {
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   bool fired{false};
   auto receive = [&fired](ReaderStep /*step*/) { fired = true; };
-  auto reader0 = queueManager_->bindReader(taskId, 0);
+  auto reader0 = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   reader0->getData(0, receive);
-  auto reader1 = queueManager_->bindReader(taskId, 1);
+  auto reader1 = queueManager_->bindReader(taskId, 1, /*onReleased=*/nullptr);
   reader1->getData(1, receive);
   ASSERT_EQ(reader0, reader1);
   ASSERT_TRUE(queueManager_->stats(taskId).has_value());
@@ -616,9 +666,9 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsPendingEntry) {
   const std::string taskId = "pendingEntryWithBoundReader";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   bool receivedData{false};
-  auto reader0 = queueManager_->bindReader(taskId, 0);
+  auto reader0 = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   reader0->getData(0, receiveData(0, receivedData));
-  auto reader1 = queueManager_->bindReader(taskId, 1);
+  auto reader1 = queueManager_->bindReader(taskId, 1, /*onReleased=*/nullptr);
   queueManager_->releaseReader(reader1, 1);
   ASSERT_TRUE(queueManager_->stats(taskId).has_value());
   EXPECT_EQ(reader0->state(), TaskEntryState::kPending);
@@ -640,31 +690,35 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsPendingEntry) {
 TEST_F(UcxOutputQueueManagerTest, pendingEntryHeldElsewhereIsStillErased) {
   const std::string taskId = "pendingEntryHeldElsewhere";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
-  auto held = queueManager_->bindReader(taskId, 0);
+  auto held = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   ASSERT_TRUE(queueManager_->stats(taskId).has_value());
   queueManager_->releaseReader(held, 0);
   EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
   EXPECT_EQ(held->state(), TaskEntryState::kPending);
 
   // The next reader gets a new entry, not the one still held.
-  auto next = queueManager_->bindReader(taskId, 0);
+  auto next = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_NE(next, held);
   queueManager_->releaseReader(next, 0);
 }
 
 // A reader that arrives after a removal is bound to the Removed entry, which
-// ends it at once, rather than to a new Pending entry that no producer fills.
+// ends it at once with the removal's outcome, rather than to a new Pending
+// entry that no producer fills.
 TEST_F(UcxOutputQueueManagerTest, readerBoundDuringRemovalFindsRemovedEntry) {
   const std::string taskId = "readerAfterRemoval";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   queueManager_->removeTask(taskId);
-  auto entry = queueManager_->bindReader(taskId, 0);
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
   EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
 
-  bool receivedEnd{false};
-  entry->getData(0, receiveEndMarker(0, receivedEnd));
-  EXPECT_TRUE(receivedEnd);
+  std::optional<ReaderStep> step;
+  entry->getData(0, storeStep(step));
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::StrEq(std::string{kProducerNotInitializedError}))));
   queueManager_->releaseReader(entry, 0);
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
 }
@@ -697,7 +751,8 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskIsInvisibleToVelox) {
 TEST_F(UcxOutputQueueManagerTest, queueHandleDoesNotFollowReusedTaskId) {
   const std::string taskId = "reusedTaskId";
   auto oldTask = initializeTask(taskId, 1, 1);
-  auto oldEntry = queueManager_->bindReader(taskId, /*destination=*/0);
+  auto oldEntry = queueManager_->bindReader(
+      taskId, /*destination=*/0, /*onReleased=*/nullptr);
 
   oldTask->requestAbort().wait();
   queueManager_->removeTask(taskId);
@@ -726,7 +781,7 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
 
   // Other removals keep the entry while the Task is alive.
   queueManager_->removeTask("otherRemovedTask");
-  auto entry = queueManager_->bindReader(taskId, 0);
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
   queueManager_->releaseReader(entry, 0);
 
@@ -736,7 +791,7 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
   queueManager_->removeTask("removalAfterTaskDestroyed");
 
   // A consumer that arrives now is treated like one of a task not created yet.
-  auto lateEntry = queueManager_->bindReader(taskId, 0);
+  auto lateEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_NE(lateEntry, entry);
   EXPECT_EQ(lateEntry->state(), TaskEntryState::kPending);
   queueManager_->releaseReader(lateEntry, 0);
@@ -757,7 +812,7 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedEntry) {
   queueManager_->removeTask(taskId);
 
   queueManager_->removeTask("otherRemovedTask");
-  auto entry = queueManager_->bindReader(taskId, 0);
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
 
   std::weak_ptr<Task> weakTask = task;
@@ -765,7 +820,7 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedEntry) {
   ASSERT_TRUE(weakTask.expired());
   queueManager_->removeTask("removalAfterTaskDestroyed");
 
-  auto sameEntry = queueManager_->bindReader(taskId, 0);
+  auto sameEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(sameEntry, entry);
   EXPECT_EQ(sameEntry->state(), TaskEntryState::kRemoved);
   queueManager_->releaseReader(sameEntry, 0);
@@ -787,7 +842,7 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
     SCOPED_TRACE("partitioned");
     const std::string taskId = "removedReleasesPartitionedData";
     auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
-    auto entry = queueManager_->bindReader(taskId, 0);
+    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
     enqueue(taskId, 0, /*size=*/10);
     enqueue(taskId, 1, /*size=*/10);
     const auto before = queueManager_->stats(taskId);
@@ -803,9 +858,14 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
     EXPECT_EQ(after.totalBytesSent, before->totalBytesSent);
     EXPECT_EQ(after.totalPagesSent, 2);
 
-    bool receivedEnd{false};
-    entry->getData(0, receiveEndMarker(0, receivedEnd));
-    EXPECT_TRUE(receivedEnd);
+    // The freed chunks were never delivered.
+    std::optional<ReaderStep> step;
+    entry->getData(0, storeStep(step));
+    EXPECT_THAT(
+        step,
+        testing::Optional(isProducerError(
+            testing::HasSubstr(
+                "Producer task ended before sending all its output"))));
     queueManager_->releaseReader(entry, 0);
   }
   {
@@ -820,7 +880,7 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
         /*numDrivers=*/1,
         /*cleanup=*/true,
         core::PartitionedOutputNode::Kind::kBroadcast);
-    auto entry = queueManager_->bindReader(taskId, 0);
+    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
     enqueue(taskId, 0, /*size=*/10);
     std::weak_ptr<cudf::packed_columns> chunk;
     entry->getData(0, [&chunk](ReaderStep step) { chunk = step.data; });
@@ -860,7 +920,7 @@ TEST_F(
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
   queueManager_->removeTask("removalAfterFailedInitialization");
-  auto entry = queueManager_->bindReader(taskId, 0);
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
   queueManager_->releaseReader(entry, 0);
 
@@ -868,7 +928,7 @@ TEST_F(
   task.reset();
   ASSERT_TRUE(weakTask.expired());
   queueManager_->removeTask("removalAfterTaskDestroyed");
-  auto lateEntry = queueManager_->bindReader(taskId, 0);
+  auto lateEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(lateEntry->state(), TaskEntryState::kPending);
   queueManager_->releaseReader(lateEntry, 0);
   for (const auto& removedTaskId :
@@ -884,7 +944,7 @@ TEST_F(
 TEST_F(UcxOutputQueueManagerTest, releasedReaderKeepsFailedInitialization) {
   const std::string taskId = "failedInitializationWithReader";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
-  auto entry = queueManager_->bindReader(taskId, 0);
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
   VELOX_ASSERT_THROW(
       queueManager_->initializeTask(
@@ -895,7 +955,8 @@ TEST_F(UcxOutputQueueManagerTest, releasedReaderKeepsFailedInitialization) {
       "Number of destinations must be non-negative");
   queueManager_->releaseReader(entry, 0);
 
-  auto pendingEntry = queueManager_->bindReader(taskId, 0);
+  auto pendingEntry =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(pendingEntry, entry);
   EXPECT_EQ(pendingEntry->state(), TaskEntryState::kPending);
   queueManager_->releaseReader(pendingEntry, 0);
@@ -903,7 +964,8 @@ TEST_F(UcxOutputQueueManagerTest, releasedReaderKeepsFailedInitialization) {
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
   queueManager_->removeTask("removalAfterFailedInitialization");
-  auto removedEntry = queueManager_->bindReader(taskId, 0);
+  auto removedEntry =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_EQ(removedEntry, entry);
   EXPECT_EQ(removedEntry->state(), TaskEntryState::kRemoved);
   queueManager_->releaseReader(removedEntry, 0);
@@ -968,70 +1030,641 @@ TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
   }
 }
 
+// A removal of a task that never initialized its output ends a waiting reader
+// with an error: its producer will never send the rows.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
   const std::string taskId = "orphanTest";
   // A manager that has not seen the task, so the reader below waits on a
   // Pending entry. A removal leaves a Removed entry that ends readers at once.
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
 
-  bool receivedEndMarker{false};
-  registerForEndMarker(taskId, 0, receivedEndMarker);
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 0, storeStep(step));
+  EXPECT_FALSE(step.has_value());
 
   queueManager_->removeTask(taskId);
-  EXPECT_TRUE(receivedEndMarker);
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::StrEq(
+              "Producer task ended before initializing its output"))));
 }
 
+// A producer that initialized its output but is removed before every driver
+// called noMoreData() ends each destination with its reason, not with a clean
+// end.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   const std::string taskId = "crashTest";
   constexpr int kNumDestinations = 2;
   auto task = initializeTask(taskId, kNumDestinations, 1);
 
-  std::array<bool, kNumDestinations> receivedEndMarkers{};
+  std::array<std::optional<ReaderStep>, kNumDestinations> steps;
   for (int destination = 0; destination < kNumDestinations; ++destination) {
-    registerForEndMarker(taskId, destination, receivedEndMarkers[destination]);
+    queueManager_->getData(taskId, destination, storeStep(steps[destination]));
+    EXPECT_FALSE(steps[destination].has_value());
   }
 
+  // Abort the task, as Task::terminate() does before it removes the task.
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
 
   for (int destination = 0; destination < kNumDestinations; ++destination) {
-    EXPECT_TRUE(receivedEndMarkers[destination])
+    EXPECT_THAT(
+        steps[destination],
+        testing::Optional(isProducerError(
+            testing::AllOf(
+                testing::HasSubstr(
+                    "Producer task ended before sending all its output"),
+                testing::HasSubstr("Aborted")))))
         << "for destination " << destination;
   }
 }
 
+// The coordinator also aborts producers that already sent all their output,
+// for instance after a downstream LIMIT was satisfied. Once their servers took
+// every chunk, their consumers have everything, so both the end marker queued
+// by noMoreData() and a getData() after removal stay a clean end.
+TEST_F(UcxOutputQueueManagerTest, removeTaskAfterAllOutputKeepsCleanEndMarker) {
+  const std::string taskId = "finishedThenAborted";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+
+  std::optional<ReaderStep> endMarker;
+  queueManager_->getData(taskId, 0, storeStep(endMarker));
+  noMoreData(taskId);
+  ASSERT_TRUE(endMarker.has_value());
+  EXPECT_TRUE(isCleanEnd(*endMarker));
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  std::optional<ReaderStep> late;
+  queueManager_->getData(taskId, 0, storeStep(late));
+  ASSERT_TRUE(late.has_value());
+  EXPECT_TRUE(isCleanEnd(*late));
+}
+
+// Removing a task frees whatever its destinations still hold. A producer that
+// queued all its output but is aborted before its consumers fetched it has
+// therefore not delivered it, and its consumers must fail.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeTaskWithUndeliveredOutputReportsProducerError) {
+  const std::string taskId = "queuedThenAborted";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  enqueue(taskId, /*size=*/100);
+  noMoreData(taskId);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 0, storeStep(step));
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::HasSubstr(
+              "Producer task ended before its consumers received all its output"))));
+}
+
+// A producer that discards its own queued output before it finished, as
+// UcxPartitionedOutput does when it runs out of GPU memory, ends every waiting
+// and later reader with an error. A clean end would book the producer as
+// finished while its rows are gone.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    deleteResultsBeforeAllOutputReportsProducerError) {
+  const std::string taskId = "discardedBeforeEnd";
+  auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
+  enqueue(taskId, /*destination=*/1, /*size=*/100);
+
+  // A reader waits on destination 0, which is empty.
+  std::optional<ReaderStep> waiting;
+  queueManager_->getData(taskId, 0, storeStep(waiting));
+  EXPECT_FALSE(waiting.has_value());
+
+  deleteResults(taskId, 0);
+  deleteResults(taskId, 1);
+
+  const auto discarded = isProducerError(
+      testing::HasSubstr(
+          "Producer task discarded its output before sending all of it"));
+  EXPECT_THAT(waiting, testing::Optional(discarded));
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 0);
+
+  // A reader that arrives after the discard gets the same error.
+  std::optional<ReaderStep> late;
+  queueManager_->getData(taskId, 1, storeStep(late));
+  EXPECT_THAT(late, testing::Optional(discarded));
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+// A broadcast producer keeps its chunks for destinations that have not arrived
+// yet. Removing it before the last destination arrived drops those chunks, so
+// a destination that arrives later must not see a clean, empty stream.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeBroadcastBeforeAllDestinationsReportsProducerError) {
+  const std::string taskId = "broadcastWithBacklog";
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/true,
+      core::PartitionedOutputNode::Kind::kBroadcast);
+  enqueue(taskId, 0, 50);
+  noMoreData(taskId);
+  fetch(taskId, 0);
+  fetchEndMarker(taskId, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, /*destination=*/1, storeStep(step));
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::AllOf(
+              testing::HasSubstr(
+                  "Producer task ended before its consumers received all its output"),
+              testing::HasSubstr("undelivered packed tables: 1")))));
+}
+
+// A consumer that connects only after its failed producer was removed learns
+// the reason too, rather than read an empty, complete stream.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    lateGetDataAfterFailedRemovalReportsProducerError) {
+  const std::string taskId = "abortedThenFetched";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 0, storeStep(step));
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::HasSubstr(
+              "Producer task ended before sending all its output"))));
+}
+
+// A task whose output initialization failed is removed with no initialized
+// entry. A consumer that arrives after the removal learns that the producer
+// never initialized its output, rather than wait on an entry that no task
+// will initialize or remove.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    consumerAfterRemoveTaskWithoutQueueReportsProducerError) {
+  const std::string taskId = "consumerAfterRemovalWithoutQueue";
+  // A manager that has not seen the task, as after an initializeTask() that
+  // threw before it created an entry.
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+
+  queueManager_->removeTask(taskId);
+
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 0, storeStep(step));
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::StrEq(
+              "Producer task ended before initializing its output"))));
+  IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+}
+
+// A task error can quote user data in any language. The producer error keeps
+// at most 4'096 bytes of it, and the cut must not split a character, which
+// would leave invalid UTF-8 in the consumer's error message.
+TEST_F(UcxOutputQueueManagerTest, truncatedProducerErrorKeepsWholeCharacters) {
+  // Returns whether 'text' consists of whole UTF-8 characters.
+  const auto isWholeUtf8 = [](std::string_view text) {
+    size_t i = 0;
+    while (i < text.size()) {
+      const auto lead = static_cast<unsigned char>(text[i]);
+      const size_t length = lead < 0x80 ? 1
+          : (lead >> 5) == 0x06         ? 2
+          : (lead >> 4) == 0x0E         ? 3
+          : (lead >> 3) == 0x1E         ? 4
+                                        : 0;
+      if (length == 0 || i + length > text.size()) {
+        return false;
+      }
+      for (size_t j = 1; j < length; ++j) {
+        if ((static_cast<unsigned char>(text[i + j]) & 0xC0) != 0x80) {
+          return false;
+        }
+      }
+      i += length;
+    }
+    return true;
+  };
+
+  // A run of two-byte characters, once at an even and once at an odd offset,
+  // so that one case cuts inside a character whatever the text before it.
+  for (const std::string lead : {"", "a"}) {
+    SCOPED_TRACE(fmt::format("lead of {} bytes", lead.size()));
+    const auto taskId = fmt::format("truncatedUtf8Error{}", lead.size());
+    auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+    std::string message = lead;
+    for (int i = 0; i < 3'000; ++i) {
+      message += "\xC3\xA9";
+    }
+    task->setError(message);
+    queueManager_->removeTask(taskId);
+
+    std::optional<ReaderStep> step;
+    queueManager_->getData(taskId, 0, storeStep(step));
+    ASSERT_THAT(
+        step,
+        testing::Optional(
+            isProducerError(testing::EndsWith("\xC3\xA9...(truncated)"))));
+    const auto& error = step->outcome.error;
+    EXPECT_LE(error.size(), 4'096);
+    EXPECT_TRUE(isWholeUtf8(error))
+        << "Ends with: " << error.substr(error.size() - 20);
+  }
+}
+
+// A Removed entry keeps its outcome for every reader that arrives later, not
+// only for the first.
+TEST_F(UcxOutputQueueManagerTest, removedEntryServesStoredOutcome) {
+  const std::string taskId = "removedServesOutcome";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  task->setError("Injected producer failure");
+  queueManager_->removeTask(taskId);
+
+  std::vector<ReaderStep> steps;
+  for (int reader = 0; reader < 2; ++reader) {
+    SCOPED_TRACE(fmt::format("reader {}", reader));
+    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+    std::optional<ReaderStep> step;
+    entry->getData(0, storeStep(step));
+    ASSERT_THAT(
+        step,
+        testing::Optional(isProducerError(
+            testing::AllOf(
+                testing::HasSubstr(
+                    "Producer task ended before sending all its output"),
+                testing::HasSubstr("Injected producer failure")))));
+    steps.push_back(std::move(*step));
+    queueManager_->releaseReader(entry, 0);
+  }
+  EXPECT_EQ(steps[0].outcome, steps[1].outcome);
+}
+
+// A removal also decides the destinations that are not published yet: their
+// waiting reader gets the error once.
+TEST_F(UcxOutputQueueManagerTest, removalEndsUnpublishedReaderWithError) {
+  const std::string taskId = "removalEndsUnpublishedReader";
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/true,
+      core::PartitionedOutputNode::Kind::kBroadcast);
+  int numSteps{0};
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 5, [&](ReaderStep received) {
+    ++numSteps;
+    step = std::move(received);
+  });
+  EXPECT_EQ(numSteps, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  queueManager_->removeTask(taskId);
+
+  EXPECT_EQ(numSteps, 1);
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::HasSubstr(
+              "Producer task ended before sending all its output"))));
+}
+
+// A removal frees what the entry retains: its queued chunks, the broadcast
+// chunks kept for later destinations, the blocked producers and the Task. A
+// chunk that a reader took stays alive until that reader lets go.
+TEST_F(UcxOutputQueueManagerTest, terminateReleasesRetainedQueueResources) {
+  using Kind = core::PartitionedOutputNode::Kind;
+  for (auto kind : {Kind::kPartitioned, Kind::kBroadcast}) {
+    SCOPED_TRACE(kind);
+    const std::string taskId = "terminateRetainedQueue";
+    auto task = initializeTask(taskId, 2, 1, true, kind, 64);
+    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    enqueue(taskId, 0, 100);
+    enqueue(taskId, 0, 100);
+    ContinueFuture blocked;
+    ASSERT_TRUE(entry->checkBlocked(&blocked));
+    ASSERT_FALSE(blocked.isReady());
+    std::shared_ptr<cudf::packed_columns> inFlightData;
+    entry->getData(
+        0, [&](ReaderStep step) { inFlightData = std::move(step.data); });
+    ASSERT_NE(inFlightData, nullptr);
+    std::weak_ptr<cudf::packed_columns> dataReference = inFlightData;
+
+    // The task is not started, so its termination does not remove its output.
+    task->requestAbort().wait();
+    queueManager_->removeTask(taskId);
+    std::weak_ptr<Task> taskReference = task;
+    task.reset();
+    EXPECT_TRUE(taskReference.expired());
+    EXPECT_TRUE(blocked.isReady());
+    EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+    EXPECT_EQ(entry->stats().bufferedBytes, 0);
+    // The reader may still use the chunk it took. Once it lets go, neither
+    // the destinations nor the broadcast backfill may retain the chunk.
+    EXPECT_FALSE(dataReference.expired());
+    inFlightData.reset();
+    EXPECT_TRUE(dataReference.expired());
+
+    // A removal with chunks left is an error, for published destinations and
+    // for one never published.
+    for (int destination : {0, 1, 2}) {
+      std::optional<ReaderStep> step;
+      entry->getData(destination, storeStep(step));
+      EXPECT_THAT(
+          step,
+          testing::Optional(isProducerError(
+              testing::HasSubstr(
+                  "Producer task ended before sending all its output"))))
+          << "for destination " << destination;
+    }
+    // Repeated removal must not re-create queues or retain callbacks.
+    queueManager_->removeTask(taskId);
+    EXPECT_FALSE(entry->checkBlocked(&blocked));
+    queueManager_->releaseReader(entry, 0);
+  }
+}
+
+// A consumer that is gone releases its destination and deletes its results,
+// as an HTTP consumer that aborts does. Otherwise the producer would keep
+// them, and could not finish, until it is aborted.
+TEST_F(UcxOutputQueueManagerTest, releasingGoneConsumerDeletesItsResults) {
+  const std::string taskId = "resultsOfGoneConsumer";
+  auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
+  enqueue(taskId, /*destination=*/0, /*size=*/10);
+  enqueue(taskId, /*destination=*/1, /*size=*/10);
+
+  queueManager_->consumerGone(taskId, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 1);
+
+  noMoreData(taskId);
+  fetch(taskId, 1);
+  fetchEndMarker(taskId, 1);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+// A consumer that goes away before its destination is published keeps the
+// destination Released: publishing it later does not reopen it, and the
+// producer finishes without it.
+TEST_F(UcxOutputQueueManagerTest, consumerGoneBeforePublicationStaysReleased) {
+  const std::string taskId = "consumerGoneBeforePublication";
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/true,
+      core::PartitionedOutputNode::Kind::kBroadcast);
+  queueManager_->consumerGone(taskId, 1);
+  queueManager_->updateOutputBuffers(taskId, 2, true);
+  noMoreData(taskId);
+  fetchEndMarker(taskId, 0);
+
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  auto entry = queueManager_->bindReader(taskId, 1, /*onReleased=*/nullptr);
+  EXPECT_EQ(entry->destinationState(1), DestinationState::kReleased);
+  queueManager_->releaseReader(entry, 1);
+  queueManager_->removeTask(taskId);
+}
+
+// A consumer that goes away while its producer has not initialized its output
+// leaves its destination Released in the Pending entry, which is kept for the
+// producer. The producer then finishes without waiting for that consumer.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    consumerGoneOnPendingEntryFinishesProducerAtInit) {
+  const std::string taskId = "consumerGoneBeforeInit";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto reader = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  queueManager_->consumerGone(taskId, 0);
+  queueManager_->releaseReader(reader, 0);
+  reader.reset();
+  EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+
+  auto task = initializeTask(
+      taskId, /*numDestinations=*/1, /*numDrivers=*/1, /*cleanup=*/false);
+  noMoreData(taskId);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  EXPECT_EQ(task->state(), TaskState::kFinished);
+  queueManager_->removeTask(taskId);
+}
+
+// The Pending entry that a gone consumer leaves holds neither a reader nor a
+// chunk, only the Released destination, whose next reader stops at once.
+TEST_F(UcxOutputQueueManagerTest, releasedPendingEntryHoldsNoReader) {
+  const std::string taskId = "releasedPendingEntry";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  std::optional<ReaderStep> waiting;
+  entry->getData(0, storeStep(waiting));
+  EXPECT_FALSE(waiting.has_value());
+  queueManager_->consumerGone(taskId, 0);
+  ASSERT_TRUE(waiting.has_value());
+  EXPECT_EQ(waiting->kind, ReaderStep::Kind::kStop);
+  queueManager_->releaseReader(entry, 0);
+
+  // The map and this test hold the entry; no reader callback does.
+  EXPECT_LE(entry.use_count(), 2);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 0);
+  auto again = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(again, entry);
+  std::optional<ReaderStep> step;
+  again->getData(0, storeStep(step));
+  ASSERT_TRUE(step.has_value());
+  EXPECT_EQ(step->kind, ReaderStep::Kind::kStop);
+  queueManager_->releaseReader(again, 0);
+  queueManager_->removeTask(taskId);
+  IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+}
+
+// A failed send releases the destination and returns the error for the caller
+// to fail the task with. The entry calls no Task method itself.
+TEST_F(UcxOutputQueueManagerTest, sendFailedFailsProducerTask) {
+  const std::string taskId = "sendFailed";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  enqueue(taskId, 0, 10);
+
+  auto error = entry->sendFailed(0, "Connection reset");
+  ASSERT_TRUE(error.has_value());
+  EXPECT_THAT(
+      *error,
+      testing::AllOf(
+          testing::HasSubstr("Failed to send to consumer over UCX"),
+          testing::HasSubstr(taskId),
+          testing::HasSubstr("Connection reset")));
+  EXPECT_EQ(task->state(), TaskState::kRunning);
+  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased);
+  EXPECT_EQ(entry->stats().bufferedPages, 0);
+  // The first decision wins.
+  EXPECT_EQ(entry->sendFailed(0, "Connection reset"), std::nullopt);
+
+  task->setError(*error);
+  EXPECT_EQ(task->state(), TaskState::kFailed);
+  queueManager_->releaseReader(entry, 0);
+  queueManager_->removeTask(taskId);
+}
+
+// The release callback runs outside the manager's and the entry's locks, so
+// that it may call back into them.
+TEST_F(UcxOutputQueueManagerTest, onReleasedFiresOutsideLock) {
+  const std::string taskId = "onReleasedOutsideLock";
+  auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
+  int numReleased{0};
+  auto entry = queueManager_->bindReader(taskId, 0, [&]() {
+    EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+    ++numReleased;
+  });
+  queueManager_->consumerGone(taskId, 0);
+  EXPECT_EQ(numReleased, 1);
+  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased);
+  // The callback fires once.
+  queueManager_->consumerGone(taskId, 0);
+  EXPECT_EQ(numReleased, 1);
+  queueManager_->releaseReader(entry, 0);
+  queueManager_->removeTask(taskId);
+}
+
+// A reader that arrives after the producer discarded a destination's output
+// fails, even once that destination is Released, rather than wait for the
+// producer's abort.
+TEST_F(UcxOutputQueueManagerTest, readerAfterDiscardedOutputFails) {
+  const std::string taskId = "readerAfterDiscard";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  enqueue(taskId, 0, 10);
+  deleteResults(taskId, 0);
+
+  const auto discarded = isProducerError(
+      testing::HasSubstr(
+          "Producer task discarded its output before sending all of it"));
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(entry->destinationState(0), DestinationState::kEnded);
+  {
+    std::optional<ReaderStep> step;
+    entry->getData(0, storeStep(step));
+    EXPECT_THAT(step, testing::Optional(discarded));
+  }
+  // The server deletes the results after it sent the end.
+  deleteResults(taskId, 0);
+  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased);
+  queueManager_->releaseReader(entry, 0);
+
+  auto late = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  std::optional<ReaderStep> step;
+  late->getData(0, storeStep(step));
+  EXPECT_THAT(step, testing::Optional(discarded));
+  queueManager_->releaseReader(late, 0);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+// A second removal keeps the Removed entry and the outcome of the first, even
+// though the task's state changed in between. Only initialization replaces
+// the entry.
+TEST_F(UcxOutputQueueManagerTest, removeTaskTombstoneIsIdempotent) {
+  const std::string taskId = "idempotentTombstone";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  queueManager_->removeTask(taskId);
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  auto sameEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(sameEntry, entry);
+  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+
+  std::optional<ReaderStep> stale;
+  entry->getData(0, storeStep(stale));
+  EXPECT_THAT(
+      stale,
+      testing::Optional(isProducerError(
+          testing::AllOf(
+              testing::HasSubstr("state: Running"),
+              testing::Not(testing::HasSubstr("Aborted"))))));
+  queueManager_->releaseReader(sameEntry, 0);
+  queueManager_->releaseReader(entry, 0);
+
+  // Initialization replaces the Removed entry with a new one.
+  auto newTask = initializeTask(taskId, 1, 1, /*cleanup=*/false);
+  auto liveEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_NE(liveEntry, entry);
+  std::optional<ReaderStep> live;
+  liveEntry->getData(0, storeStep(live));
+  EXPECT_FALSE(live.has_value());
+
+  newTask->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  EXPECT_THAT(
+      live, testing::Optional(isProducerError(testing::HasSubstr("Aborted"))));
+  queueManager_->releaseReader(liveEntry, 0);
+}
+
+// A reader waiting on an open destination whose results the producer deletes
+// is ended at once, with the "discarded" error.
+TEST_F(UcxOutputQueueManagerTest, callbackFiredOnDeleteResults) {
+  const std::string taskId = "callbackOnDeleteResults";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 0, storeStep(step));
+  ASSERT_FALSE(step.has_value());
+
+  queueManager_->deleteResults(taskId, 0);
+  ASSERT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::HasSubstr(
+              "Producer task discarded its output before sending all of it"))));
+  EXPECT_TRUE(step->remainingBytes.empty());
+  EXPECT_EQ(step->numRows, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+// A reader waiting for a destination that is not published yet is ended by
+// the removal of its task, with the removal's error. A reader that arrives
+// while the first one is notified ends at once.
 TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
   const std::string taskId = "terminatedPendingReader";
   auto task = initializeTask(
       taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
-  auto queue = std::make_shared<UcxOutputQueue>(taskId);
-  std::vector<UcxDataAvailable> notifications;
-  ASSERT_TRUE(queue->initialize(
-      task,
-      /*numDestinations=*/1,
-      /*numDrivers=*/1,
-      core::PartitionedOutputNode::Kind::kBroadcast,
-      notifications));
-  EXPECT_TRUE(notifications.empty());
+  auto entry = queueManager_->bindReader(taskId, 5, /*onReleased=*/nullptr);
+  const auto removedEarly = isProducerError(
+      testing::HasSubstr("Producer task ended before sending all its output"));
   int endCount{0};
-  queue->getData(5, [&](ReaderStep step) {
-    EXPECT_TRUE(isCleanEnd(step));
+  entry->getData(5, [&](ReaderStep step) {
+    EXPECT_THAT(step, removedEarly);
     // A racing reader must not register another pending callback.
-    bool receivedEnd{false};
-    queue->getData(10, receiveEndMarker(10, receivedEnd));
-    EXPECT_TRUE(receivedEnd);
+    std::optional<ReaderStep> racing;
+    entry->getData(10, storeStep(racing));
+    EXPECT_THAT(racing, testing::Optional(removedEarly));
     ++endCount;
   });
   EXPECT_EQ(endCount, 0);
-  queue->terminate();
-  queue->terminate();
-  EXPECT_EQ(endCount, 1);
-  queue->updateOutputBuffers(3, true);
-  EXPECT_FALSE(queue->stats().noMoreBuffers);
-  bool receivedEnd{false};
-  queue->getData(0, receiveEndMarker(0, receivedEnd));
-  EXPECT_TRUE(receivedEnd);
   queueManager_->removeTask(taskId);
+  queueManager_->removeTask(taskId);
+  EXPECT_EQ(endCount, 1);
+  entry->updateOutputBuffers(3, true);
+  EXPECT_FALSE(entry->stats().noMoreBuffers);
+  std::optional<ReaderStep> step;
+  entry->getData(0, storeStep(step));
+  EXPECT_THAT(step, testing::Optional(removedEarly));
+  queueManager_->releaseReader(entry, 5);
 }
 
 // --- Broadcast tests ---
@@ -1163,7 +1796,8 @@ TEST_F(UcxOutputQueueManagerTest, broadcastReaderArrivesBeforeBufferUpdate) {
       }
       EXPECT_EQ(endCount, 1);
       queueManager_->updateOutputBuffers(taskId, 2, true);
-      queueManager_->deleteResults(taskId, 0);
+      // Nobody read destination 0; its consumer goes away.
+      queueManager_->consumerGone(taskId, 0);
       queueManager_->deleteResults(taskId, 1);
       EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
       EXPECT_TRUE(queueManager_->isFinished(taskId));
@@ -1196,8 +1830,9 @@ TEST_F(UcxOutputQueueManagerTest, broadcastLargeDestinationBothArrivalOrders) {
     }
     EXPECT_TRUE(receivedData);
     fetchEndMarker(taskId, kDestination);
+    // Nobody read the other destinations; their consumers go away.
     for (int destination = 0; destination < kDestination; ++destination) {
-      queueManager_->deleteResults(taskId, destination);
+      queueManager_->consumerGone(taskId, destination);
     }
     EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
     EXPECT_TRUE(queueManager_->isFinished(taskId));
@@ -1205,24 +1840,61 @@ TEST_F(UcxOutputQueueManagerTest, broadcastLargeDestinationBothArrivalOrders) {
   }
 }
 
+// Results of a destination that is not published yet are deleted before every
+// producing driver finished only when the producer discards its own output, as
+// for a published destination. The reader waiting for that destination, and a
+// later one, fail rather than end cleanly.
 TEST_F(UcxOutputQueueManagerTest, deleteUnpublishedReader) {
   const std::string taskId = "deletedPendingReader";
   initializeTask(
       taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
   enqueue(taskId, 0, 10);
-  bool receivedEnd{false};
-  queueManager_->getData(taskId, 1, receiveEndMarker(1, receivedEnd));
-  EXPECT_FALSE(receivedEnd);
+  const auto discarded = isProducerError(
+      testing::HasSubstr(
+          "Producer task discarded its output before sending all of it"));
+  std::optional<ReaderStep> waiting;
+  queueManager_->getData(taskId, 1, storeStep(waiting));
+  EXPECT_FALSE(waiting.has_value());
   queueManager_->deleteResults(taskId, 1);
-  EXPECT_TRUE(receivedEnd);
+  EXPECT_THAT(waiting, testing::Optional(discarded));
   const auto bytes = queueManager_->stats(taskId)->bufferedBytes;
   queueManager_->updateOutputBuffers(taskId, 2, true);
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
-  bool retryEnd{false};
-  queueManager_->getData(taskId, 1, receiveEndMarker(1, retryEnd));
-  EXPECT_TRUE(retryEnd);
+  std::optional<ReaderStep> retry;
+  queueManager_->getData(taskId, 1, storeStep(retry));
+  EXPECT_THAT(retry, testing::Optional(discarded));
   noMoreData(taskId);
-  queueManager_->deleteResults(taskId, 0);
+  fetch(taskId, 0);
+  fetchEndMarker(taskId, 0);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->removeTask(taskId);
+}
+
+// The same for a destination whose results are deleted before any reader
+// asked for it.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    deleteUnpublishedReaderBeforeEndReportsProducerError) {
+  const std::string taskId = "deletedPendingReaderBeforeEnd";
+  initializeTask(
+      taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
+  enqueue(taskId, 0, 10);
+
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 1, storeStep(step));
+  EXPECT_FALSE(step.has_value());
+
+  queueManager_->deleteResults(taskId, 1);
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::HasSubstr(
+              "Producer task discarded its output before sending all of it"))));
+
+  queueManager_->updateOutputBuffers(taskId, 2, true);
+  noMoreData(taskId);
+  fetch(taskId, 0);
+  fetchEndMarker(taskId, 0);
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
 }
@@ -1235,9 +1907,13 @@ TEST_F(UcxOutputQueueManagerTest, deleteUnpublishedDestinationBeforeGetData) {
   const auto pageBytes = queueManager_->stats(taskId)->bufferedBytes;
   queueManager_->deleteResults(taskId, -1);
   queueManager_->deleteResults(taskId, 2);
-  bool receivedEnd{false};
-  queueManager_->getData(taskId, 2, receiveEndMarker(2, receivedEnd));
-  EXPECT_TRUE(receivedEnd);
+  std::optional<ReaderStep> step;
+  queueManager_->getData(taskId, 2, storeStep(step));
+  EXPECT_THAT(
+      step,
+      testing::Optional(isProducerError(
+          testing::HasSubstr(
+              "Producer task discarded its output before sending all of it"))));
   queueManager_->updateOutputBuffers(taskId, 3, true);
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 2 * pageBytes);
   noMoreData(taskId);
