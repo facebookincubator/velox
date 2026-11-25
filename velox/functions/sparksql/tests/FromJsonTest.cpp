@@ -1326,17 +1326,17 @@ TEST_F(FromJsonTest, extendedDateYearsAndWhitespace) {
 TEST_F(FromJsonTest, basicTimestamp) {
   // 2021-07-01T10:20:30Z is 1625134830 seconds since the epoch.
   auto expected = makeNullableFlatVector<Timestamp>(
-      {Timestamp(1625134830, 0),
-       Timestamp(1625134830, 0),
-       Timestamp(1625134830, 123456000),
-       Timestamp(1625134830, 123000000),
-       Timestamp(1625134830, 123456000),
-       Timestamp(1625134830, 0),
-       Timestamp(1625127630, 0),
-       Timestamp(1625127630, 0),
-       Timestamp(1625097600, 0),
-       Timestamp(1625134830, 0),
-       Timestamp(1625134830, 0),
+      {Timestamp(1'625'134'830, 0),
+       Timestamp(1'625'134'830, 0),
+       Timestamp(1'625'134'830, 123'456'000),
+       Timestamp(1'625'134'830, 123'000'000),
+       Timestamp(1'625'134'830, 123'456'000),
+       Timestamp(1'625'134'830, 0),
+       Timestamp(1'625'127'630, 0),
+       Timestamp(1'625'127'630, 0),
+       Timestamp(1'625'097'600, 0),
+       Timestamp(1'625'134'830, 0),
+       Timestamp(1'625'134'830, 0),
        Timestamp(-1, 0),
        std::nullopt,
        std::nullopt,
@@ -1373,11 +1373,11 @@ TEST_F(FromJsonTest, timestampWithSessionTimeZone) {
   // zone (PDT, UTC-07:00 on 2021-07-01). Strings with a time zone and integers
   // are not affected.
   auto expected = makeNullableFlatVector<Timestamp>(
-      {Timestamp(1625160030, 0),
-       Timestamp(1625134830, 0),
-       Timestamp(1625127630, 0),
-       Timestamp(1625122800, 0),
-       Timestamp(1625134830, 0)});
+      {Timestamp(1'625'160'030, 0),
+       Timestamp(1'625'134'830, 0),
+       Timestamp(1'625'127'630, 0),
+       Timestamp(1'625'122'800, 0),
+       Timestamp(1'625'134'830, 0)});
   auto input = makeFlatVector<std::string>(
       {R"({"a": "2021-07-01T10:20:30"})",
        R"({"a": "2021-07-01T10:20:30Z"})",
@@ -1404,16 +1404,16 @@ TEST_F(FromJsonTest, timestampStringCompatibility) {
       makeRowVector(
           {"a"},
           {makeNullableFlatVector<Timestamp>(
-              {Timestamp(3600, 0),
+              {Timestamp(3'600, 0),
                std::nullopt,
                std::nullopt,
                std::nullopt,
                std::nullopt,
                Timestamp(59, 0),
                std::nullopt,
-               Timestamp(28800, 0),
+               Timestamp(28'800, 0),
                std::nullopt,
-               Timestamp(28800, 0)})}));
+               Timestamp(28'800, 0)})}));
   testFromJson(
       makeFlatVector<std::string>(
           {R"({"a":"10:20:30"})",
@@ -1422,7 +1422,7 @@ TEST_F(FromJsonTest, timestampStringCompatibility) {
       makeRowVector(
           {"a"},
           {makeNullableFlatVector<Timestamp>(
-              {std::nullopt, std::nullopt, Timestamp(3600, 0)},
+              {std::nullopt, std::nullopt, Timestamp(3'600, 0)},
               TIMESTAMP_UTC())}));
 
   setQueryTimeZone("America/Los_Angeles");
@@ -1440,7 +1440,7 @@ TEST_F(FromJsonTest, timestampStringCompatibility) {
     ASSERT_FALSE(decoded.isNullAt(0));
     const auto actual = decoded.valueAt<Timestamp>(0);
     const auto expected = [&](int32_t day) {
-      Timestamp timestamp(int64_t{day} * 86400 + secondsOfDay, 0);
+      Timestamp timestamp(int64_t{day} * 86'400 + secondsOfDay, 0);
       timestamp.toGMT(*zone);
       return timestamp;
     };
@@ -1448,15 +1448,58 @@ TEST_F(FromJsonTest, timestampStringCompatibility) {
     EXPECT_TRUE(actual == expected(before) || actual == expected(after))
         << actual.toString();
   };
-  checkTimeOnly(R"({"a":"10:20:30"})", "America/Los_Angeles", 37230);
-  checkTimeOnly(R"({"a":"T01"})", "America/Los_Angeles", 3600);
-  checkTimeOnly(R"({"a":"10:20:30 Asia/Tokyo"})", "Asia/Tokyo", 37230);
+  checkTimeOnly(R"({"a":"10:20:30"})", "America/Los_Angeles", 37'230);
+  checkTimeOnly(R"({"a":"T01"})", "America/Los_Angeles", 3'600);
+  checkTimeOnly(R"({"a":"10:20"})", "America/Los_Angeles", 37'200);
+  checkTimeOnly(R"({"a":"10:20:30 Asia/Tokyo"})", "Asia/Tokyo", 37'230);
+  checkTimeOnly(R"({"a":"10:20:30+14:00"})", "+14:00", 37'230);
+  checkTimeOnly(R"({"a":"10:20:30-12:00"})", "-12:00", 37'230);
+}
+
+TEST_F(FromJsonTest, timestampTimeZoneCaseSensitivity) {
+  setQueryTimeZone("UTC");
+  const std::vector<std::pair<std::string, std::optional<int64_t>>> cases = {
+      {"UTC", 0},
+      {"utc", std::nullopt},
+      {"Z", 0},
+      {"z", std::nullopt},
+      {"GMT", 0},
+      {"gmt", std::nullopt},
+      {"UT", 0},
+      {"ut", std::nullopt},
+      {"UTC+01:00", -3'600},
+      {"utc+01:00", std::nullopt},
+      {"GMT+01:00", -3'600},
+      {"gmt+01:00", std::nullopt},
+      {"UT+01:00", -3'600},
+      {"ut+01:00", std::nullopt},
+      {"Etc/GMT+1", 3'600},
+      {"etc/gmt+1", std::nullopt},
+      {"Etc/gmt+1", std::nullopt},
+      {"Etc/UTC", 0},
+      {"etc/utc", std::nullopt},
+      {"America/Los_Angeles", 28'800},
+      {"america/los_angeles", std::nullopt},
+      {"US/Pacific", 28'800},
+      {"us/pacific", std::nullopt},
+  };
+  std::vector<std::string> input;
+  std::vector<std::optional<Timestamp>> expected;
+  for (const auto& [zone, seconds] : cases) {
+    input.push_back("{\"a\":\"1970-01-01T00:00:00 " + zone + "\"}");
+    expected.push_back(
+        seconds.has_value() ? std::optional<Timestamp>(Timestamp(*seconds, 0))
+                            : std::nullopt);
+  }
+  testFromJson(
+      makeFlatVector<std::string>(input),
+      makeNamedRowVector("a", makeNullableFlatVector<Timestamp>(expected)));
 }
 
 TEST_F(FromJsonTest, timestampUtcJsonRules) {
   setQueryTimeZone("America/Los_Angeles");
   auto expected = makeNullableFlatVector<Timestamp>(
-      {Timestamp(1625134830, 0), std::nullopt, std::nullopt, std::nullopt},
+      {Timestamp(1'625'134'830, 0), std::nullopt, std::nullopt, std::nullopt},
       TIMESTAMP_UTC());
   auto input = makeFlatVector<std::string>(
       {R"({"a": "2021-07-01T10:20:30"})",
@@ -1469,9 +1512,9 @@ TEST_F(FromJsonTest, timestampUtcJsonRules) {
 TEST_F(FromJsonTest, timestampInDaylightSavingGap) {
   setQueryTimeZone("America/Los_Angeles");
   auto expected = makeNullableFlatVector<Timestamp>(
-      {Timestamp(1615717800, 0),
-       Timestamp(1615717800, 0),
-       Timestamp(1615717800, 0)});
+      {Timestamp(1'615'717'800, 0),
+       Timestamp(1'615'717'800, 0),
+       Timestamp(1'615'717'800, 0)});
   auto input = makeFlatVector<std::string>(
       {R"({"a": "2021-03-14T02:30:00"})",
        R"({"a": "2021-03-14T02:30:00 America/Los_Angeles"})",
@@ -1481,10 +1524,10 @@ TEST_F(FromJsonTest, timestampInDaylightSavingGap) {
 
 TEST_F(FromJsonTest, timestampIntegerOverflow) {
   auto expected = makeNullableFlatVector<Timestamp>(
-      {Timestamp(9223372036854, 0),
-       Timestamp(-9223372036855, 448384000),
-       Timestamp(-9223372036854, 0),
-       Timestamp(9223372036854, 551616000),
+      {Timestamp(9'223'372'036'854, 0),
+       Timestamp(-9'223'372'036'855, 448'384'000),
+       Timestamp(-9'223'372'036'854, 0),
+       Timestamp(9'223'372'036'854, 551'616'000),
        Timestamp(-1, 0)});
   auto input = makeFlatVector<std::string>(
       {R"({"a": 9223372036854})",
@@ -1498,11 +1541,13 @@ TEST_F(FromJsonTest, timestampIntegerOverflow) {
 TEST_F(FromJsonTest, nestedTimestamp) {
   // ROW(ARRAY(TIMESTAMP), ROW(TIMESTAMP))
   auto arrayVector = makeNullableArrayVector<Timestamp>(
-      {{Timestamp(1625134830, 0), std::nullopt}, {}, {Timestamp(0, 0)}});
+      {{Timestamp(1'625'134'830, 0), std::nullopt}, {}, {Timestamp(0, 0)}});
   auto rowVector = makeRowVector(
       {"c"},
       {makeNullableFlatVector<Timestamp>(
-          {Timestamp(1625134830, 0), std::nullopt, Timestamp(1625134830, 0)})});
+          {Timestamp(1'625'134'830, 0),
+           std::nullopt,
+           Timestamp(1'625'134'830, 0)})});
   rowVector->setNull(1, true);
   auto expected = makeRowVector({"a", "b"}, {arrayVector, rowVector});
   auto input = makeFlatVector<std::string>(

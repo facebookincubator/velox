@@ -698,6 +698,24 @@ and ``'T'`` date-time separators must be followed immediately by a digit.
 Outer whitespace is trimmed before the parser runs, so a bare trailing
 separator such as ``"2015-03-18 "`` is handled as a date-only value.
 
+Hour-only values such as ``"1970-01-01T01"`` and minute-only values such as
+``"1970-01-01 10:20"`` are accepted, with omitted components set to zero.
+A timezone suffix requires seconds: ``"1970-01-01T01Z"`` and
+``"1970-01-01 10:20Z"`` are invalid. Leap seconds, such as
+``"2016-12-31T23:59:60Z"``, are also invalid.
+
+Timezone names are case-sensitive, including region IDs, UTC aliases, and
+fixed-offset aliases. For example, ``America/Los_Angeles``, ``US/Pacific``,
+``UTC``, ``Z``, ``Etc/UTC``, ``GMT+01:00``, and ``UT+01:00`` are accepted;
+their lowercase variants are rejected. Numeric offsets such as ``+01:00``
+are also accepted.
+
+Time-only strings such as ``"10:20:30"``, ``"T10:20:30"``, and ``"T01"``
+use the current date in the explicit timezone, or in the session timezone
+when no timezone is specified. This also applies to explicit numeric offsets:
+``"10:20:30+01:00"`` uses the current date at UTC+01:00.
+The Spark ``from_json`` function uses the same timestamp parsing rules.
+
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
 an error when ANSI mode is enabled.
 
@@ -710,6 +728,9 @@ Valid examples
   SELECT cast('2000-01-01T12:21:56' as timestamp); -- 2000-01-01 12:21:56
   SELECT cast(' 2000-01-01 12:21:56 ' as timestamp); -- 2000-01-01 12:21:56
   SELECT cast('2015-03-18 12:03:17.123' as timestamp); -- 2015-03-18 12:03:17.123
+  SELECT cast('1970-01-01T01' as timestamp); -- 1970-01-01 01:00:00
+  SELECT cast('1970-01-01 10:20' as timestamp); -- 1970-01-01 10:20:00
+  SELECT cast('10:20:30' as timestamp); -- Current date at 10:20:30 in the session timezone.
 
 Invalid examples
 
@@ -720,6 +741,11 @@ Invalid examples
   SELECT cast('2015-03-18T' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2015-03-18T 12:00:00' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2015-03-18 Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1970-01-01T01Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1970-01-01 10:20Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('2016-12-31T23:59:60Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1970-01-01 00:00:00 utc' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast('1970-01-01 00:00:00 gmt+01:00' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
 From boolean
 ^^^^^^^^^^^^
@@ -776,9 +802,12 @@ From VARCHAR
 
 Casting a string to timestamp_utc parses the input as a local timestamp,
 not subject to session timezone adjustment.
-Any timezone suffix in the string is accepted but ignored — only the
+A valid timezone suffix in the string is accepted but ignored — only the
 parsed timestamp is stored.
 Leading and trailing whitespace is stripped before parsing.
+The syntax and timezone casing rules for TIMESTAMP also apply to TIMESTAMP_UTC.
+Time-only strings such as ``"10:20:30"`` and ``"T01"`` are rejected;
+TIMESTAMP_UTC requires a date component.
 
 Valid examples
 

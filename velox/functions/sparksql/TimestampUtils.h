@@ -15,10 +15,18 @@
  */
 #pragma once
 
-#include "velox/type/Timestamp.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::functions::sparksql {
+
+/// Parses a trimmed Spark timestamp string, retaining any explicit timezone.
+/// When allowed, time-only input uses today's date in the explicit timezone,
+/// or in the session timezone if none is specified.
+Expected<util::ParsedTimestampWithTimeZone> parseSparkTimestamp(
+    const StringView& input,
+    const tz::TimeZone* sessionTimeZone,
+    bool allowTimeOnly);
 
 /// Lenient conversion of local 'time' to the GMT time.
 /// If the 'time' is invalid (DST gap), it will be corrected by

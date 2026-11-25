@@ -1507,25 +1507,8 @@ struct ExtractJsonTypeImpl {
           return simdjson::INCORRECT_TYPE;
         }
         std::string_view str(trimmed.data(), trimmed.size());
-        const auto colon = str.find(':');
-        const bool timeOnly = str.front() == 'T' ||
-            (colon >= 1 && colon <= 2 &&
-             std::all_of(str.begin(), str.begin() + colon, [](char c) {
-               return c >= '0' && c <= '9';
-             }));
-        if (timestampUtc && timeOnly) {
-          return simdjson::INCORRECT_TYPE;
-        }
-        std::string datedInput;
-        if (timeOnly) {
-          // Reuse the timestamp parser, then select today's date after
-          // resolving the explicit or session timezone.
-          datedInput = "1970-01-01T";
-          datedInput.append(str.front() == 'T' ? str.substr(1) : str);
-          str = datedInput;
-        }
-        auto parsed = util::fromTimestampWithTimezoneString(
-            str.data(), str.size(), util::TimestampParseMode::kSparkCast);
+        auto parsed =
+            parseSparkTimestamp(trimmed, sessionTimeZone, !timestampUtc);
         if (!timestampUtc && parsed.hasError() &&
             stringImpl::stringPosition</*isAscii=*/true>(str, kGMT, 1) > 0) {
           // Try again after cleaning up the legacy timestamp string by
@@ -1533,8 +1516,8 @@ struct ExtractJsonTypeImpl {
           std::vector<char> cleaned(str.size());
           auto size = stringCore::replace</*ignoreEmptyReplaced=*/true>(
               cleaned.data(), str, kGMT, std::string_view(), false);
-          parsed = util::fromTimestampWithTimezoneString(
-              cleaned.data(), size, util::TimestampParseMode::kSparkCast);
+          parsed = parseSparkTimestamp(
+              StringView(cleaned.data(), size), sessionTimeZone, true);
         }
         if (parsed.hasError() ||
             (timestampUtc &&
@@ -1548,13 +1531,6 @@ struct ExtractJsonTypeImpl {
           const auto* zone = parsedTimestamp.timeZone
               ? parsedTimestamp.timeZone
               : (parsedTimestamp.offsetMillis ? nullptr : sessionTimeZone);
-          if (timeOnly) {
-            const auto days = util::toDate(Timestamp::now(), zone);
-            parsedTimestamp.timestamp = Timestamp(
-                static_cast<int64_t>(days) * util::kSecsPerDay +
-                    parsedTimestamp.timestamp.getSeconds(),
-                parsedTimestamp.timestamp.getNanos());
-          }
           if (zone) {
             toGMTWithGapCorrection(parsedTimestamp.timestamp, *zone);
             writer.castTo<Timestamp>() = parsedTimestamp.timestamp;

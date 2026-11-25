@@ -923,6 +923,43 @@ Status parserError(const char* str, size_t len) {
       std::string(str, len));
 }
 
+bool hasSparkTimeZoneCase(std::string_view name, const tz::TimeZone& timeZone) {
+  if (name == timeZone.name() || name.front() == '+' || name.front() == '-') {
+    return true;
+  }
+  if (timeZone.name() == "UTC") {
+    for (const std::string_view alias :
+         {"Z",
+          "UT",
+          "UTC",
+          "UCT",
+          "GMT",
+          "GMT0",
+          "Greenwich",
+          "Universal",
+          "Zulu",
+          "Etc/UTC",
+          "Etc/UCT",
+          "Etc/GMT",
+          "Etc/GMT0",
+          "Etc/Greenwich",
+          "Etc/Universal",
+          "Etc/Zulu"}) {
+      if (name == alias) {
+        return true;
+      }
+    }
+  }
+  for (const std::string_view prefix : {"UTC", "GMT", "UT", "Etc/GMT"}) {
+    if (name.size() > prefix.size() &&
+        name.substr(0, prefix.size()) == prefix &&
+        (name[prefix.size()] == '+' || name[prefix.size()] == '-')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 Expected<Timestamp>
@@ -979,7 +1016,13 @@ Expected<ParsedTimestampWithTimeZone> fromTimestampWithTimezoneString(
 
     std::string_view timeZoneName(str + pos, timezonePos - pos);
 
-    if ((timeZone = tz::locateZone(timeZoneName, false)) == nullptr) {
+    // Spark accepts the Java ZoneId alias UT, which is not an IANA zone ID.
+    timeZone = tz::locateZone(
+        parseMode == TimestampParseMode::kSparkCast && timeZoneName == "UT"
+            ? "UTC"
+            : timeZoneName,
+        false);
+    if (timeZone == nullptr) {
       int64_t offsetMillis = 0;
       size_t offsetPos = 0;
       if (parseMode == TimestampParseMode::kPrestoCast &&
@@ -992,11 +1035,11 @@ Expected<ParsedTimestampWithTimeZone> fromTimestampWithTimezoneString(
       }
     }
 
-    // Spark's region IDs are case-sensitive. UTC and fixed-offset aliases
-    // are normalized by the timezone lookup.
+    // Spark's region IDs and aliases are case-sensitive. UTC and fixed-offset
+    // aliases are normalized by the timezone lookup, so check their original
+    // spelling as well.
     if (parseMode == TimestampParseMode::kSparkCast && timeZone &&
-        timeZone->name() != "UTC" && !timeZone->offset().has_value() &&
-        timeZoneName != timeZone->name()) {
+        !hasSparkTimeZoneCase(timeZoneName, *timeZone)) {
       return folly::makeUnexpected(
           Status::UserError("Unknown timezone value: \"{}\"", timeZoneName));
     }

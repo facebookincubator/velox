@@ -23,6 +23,7 @@
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox;
 using facebook::velox::functions::sparksql::SparkQueryConfig;
@@ -2105,6 +2106,144 @@ TEST_F(SparkCastExprTest, stringToTimestampAdditionalValidForms) {
     ASSERT_FALSE(result->isNullAt(2));
     EXPECT_EQ(result->valueAt(0), result->valueAt(1));
     EXPECT_EQ(result->valueAt(0), result->valueAt(2));
+  }
+}
+
+TEST_F(SparkCastExprTest, stringToTimestampParsingCompatibility) {
+  const auto valid = makeRowVector({makeFlatVector<std::string>({
+      "1970-01-01T01",
+      "1970-01-01 10:20",
+      "1970-01-01T00:00:00 UTC",
+      "1970-01-01T00:00:00Z",
+      "1970-01-01T00:00:00 GMT",
+      "1970-01-01T00:00:00 UT",
+      "1970-01-01T00:00:00 UTC+01:00",
+      "1970-01-01T00:00:00 GMT+01:00",
+      "1970-01-01T00:00:00 UT+01:00",
+      "1970-01-01T00:00:00 Etc/GMT+1",
+      "1970-01-01T00:00:00 Etc/UTC",
+      "1970-01-01T00:00:00 America/Los_Angeles",
+      "1970-01-01T00:00:00 US/Pacific",
+  })});
+  const auto expected = makeFlatVector<Timestamp>({
+      Timestamp(3'600, 0),
+      Timestamp(37'200, 0),
+      Timestamp(0, 0),
+      Timestamp(0, 0),
+      Timestamp(0, 0),
+      Timestamp(0, 0),
+      Timestamp(-3'600, 0),
+      Timestamp(-3'600, 0),
+      Timestamp(-3'600, 0),
+      Timestamp(3'600, 0),
+      Timestamp(0, 0),
+      Timestamp(28'800, 0),
+      Timestamp(28'800, 0),
+  });
+  const std::vector<std::string> invalid = {
+      "1970-01-01T01Z",
+      "1970-01-01T01+01:00",
+      "1970-01-01T10:20Z",
+      "1970-01-01T10:20 UTC",
+      "T01Z",
+      "10:20Z",
+      "10:20:300",
+      "2016-12-31T23:59:60Z",
+      "1970-01-01T00:00:000Z",
+      "1970-01-01T00:00:00 utc",
+      "1970-01-01T00:00:00 Utc",
+      "1970-01-01T00:00:00z",
+      "1970-01-01T00:00:00 gmt",
+      "1970-01-01T00:00:00 ut",
+      "1970-01-01T00:00:00 utc+01:00",
+      "1970-01-01T00:00:00 gmt+01:00",
+      "1970-01-01T00:00:00 GmT+01:00",
+      "1970-01-01T00:00:00 ut+01:00",
+      "1970-01-01T00:00:00 etc/gmt+1",
+      "1970-01-01T00:00:00 Etc/gmt+1",
+      "1970-01-01T00:00:00 etc/utc",
+      "1970-01-01T00:00:00 Etc/Utc",
+      "1970-01-01T00:00:00 america/los_angeles",
+      "1970-01-01T00:00:00 us/pacific",
+  };
+  for (const auto ansiEnabled : {false, true}) {
+    SCOPED_TRACE(ansiEnabled);
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+         std::to_string(ansiEnabled)},
+        {core::QueryConfig::kSessionTimezone, "UTC"},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+    for (const auto isTryCast : {false, true}) {
+      assertEqualVectors(
+          expected, evaluateCast(VARCHAR(), TIMESTAMP(), valid, isTryCast));
+    }
+    for (const auto& value : invalid) {
+      SCOPED_TRACE(value);
+      const auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      EXPECT_TRUE(
+          evaluateCast(VARCHAR(), TIMESTAMP(), input, true)->isNullAt(0));
+      if (ansiEnabled) {
+        VELOX_ASSERT_THROW(evaluateCast(VARCHAR(), TIMESTAMP(), input), "");
+      } else {
+        EXPECT_TRUE(evaluateCast(VARCHAR(), TIMESTAMP(), input)->isNullAt(0));
+      }
+    }
+  }
+}
+
+TEST_F(SparkCastExprTest, stringToTimestampTimeOnly) {
+  struct TestCase {
+    std::string input;
+    std::string effectiveZone;
+    int64_t secondsOfDay;
+  };
+  const std::vector<TestCase> cases = {
+      {"10:20:30", "America/Los_Angeles", 37'230},
+      {"T01", "America/Los_Angeles", 3'600},
+      {"10:20", "America/Los_Angeles", 37'200},
+      {"10:20:30 Asia/Tokyo", "Asia/Tokyo", 37'230},
+      {"10:20:30+14:00", "+14:00", 37'230},
+      {"10:20:30-12:00", "-12:00", 37'230},
+  };
+  for (const auto ansiEnabled : {false, true}) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+         std::to_string(ansiEnabled)},
+        {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+    for (const auto& testCase : cases) {
+      SCOPED_TRACE(testCase.input);
+      const auto input =
+          makeRowVector({makeFlatVector<std::string>({testCase.input})});
+      const auto* zone = tz::locateZone(testCase.effectiveZone);
+      for (const auto isTryCast : {false, true}) {
+        const auto before = util::toDate(Timestamp::now(), zone);
+        const auto result =
+            evaluateCast(VARCHAR(), TIMESTAMP(), input, isTryCast);
+        const auto after = util::toDate(Timestamp::now(), zone);
+        DecodedVector decoded(*result);
+        ASSERT_FALSE(decoded.isNullAt(0));
+        const auto actual = decoded.valueAt<Timestamp>(0);
+        const auto expected = [&](int32_t day) {
+          Timestamp timestamp(int64_t{day} * 86'400 + testCase.secondsOfDay, 0);
+          timestamp.toGMT(*zone);
+          return timestamp;
+        };
+        // Permit evaluation to cross midnight in the effective timezone.
+        EXPECT_TRUE(actual == expected(before) || actual == expected(after))
+            << actual.toString();
+      }
+      EXPECT_TRUE(
+          evaluateCast(VARCHAR(), TIMESTAMP_UTC(), input, true)->isNullAt(0));
+      if (ansiEnabled) {
+        VELOX_ASSERT_THROW(evaluateCast(VARCHAR(), TIMESTAMP_UTC(), input), "");
+      } else {
+        EXPECT_TRUE(
+            evaluateCast(VARCHAR(), TIMESTAMP_UTC(), input)->isNullAt(0));
+      }
+    }
   }
 }
 

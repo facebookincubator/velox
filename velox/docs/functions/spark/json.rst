@@ -25,13 +25,33 @@ JSON Functions
     determined by the expression. An unparsable ARRAY or MAP input returns NULL.
     In permissive mode, a nonempty unparsable ROW input returns a non-null row
     whose fields are all NULL, matching Spark. Supported element types include
-    BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP,
-    VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY or MAP, the element type
-    of the array or the value type of the map must be one of these supported
-    types, and for maps, the key type must be VARCHAR. Casting to ROW supports
-    only JSON objects and matches field names exactly.
+    BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, DECIMAL, DATE,
+    TIMESTAMP, TIMESTAMP_UTC, VARCHAR, ARRAY, MAP and ROW. When casting to ARRAY
+    or MAP, the element type of the array or the value type of the map must be
+    one of these supported types, and for maps, the key type must be VARCHAR.
+    Casting to ROW supports only JSON objects and matches field names exactly.
     A TIMESTAMP string without an explicit time zone uses the session time zone;
     an integer represents seconds since the epoch.
+
+    TIMESTAMP strings share the Spark-compatible parser used by
+    ``CAST(... AS TIMESTAMP)``. Hour-only and minute-only forms such as
+    ``"1970-01-01T01"`` and ``"1970-01-01 10:20"`` are accepted. A time zone
+    suffix requires seconds, so ``"1970-01-01T01Z"`` and
+    ``"1970-01-01 10:20Z"`` are invalid. Leap seconds are rejected.
+    Time zone names are case-sensitive, including ``UTC``, ``Z``, ``Etc/UTC``,
+    region IDs such as ``America/Los_Angeles``, and fixed-offset aliases such as
+    ``GMT+01:00`` and ``UT+01:00``. Lowercase variants are rejected.
+
+    Time-only strings such as ``"10:20:30"``, ``"T10:20:30"``, and ``"T01"``
+    use the current date in the explicit time zone, or in the session time zone
+    when no time zone is specified. Numeric offsets follow the same rule:
+    ``"10:20:30+01:00"`` uses the current date at UTC+01:00.
+
+    TIMESTAMP_UTC strings require a date component and must not contain a time
+    zone. Time-only strings and integer values are rejected for this type.
+    Unlike ``CAST(... AS TIMESTAMP_UTC)``, ``from_json`` rejects a time zone
+    suffix instead of ignoring it.
+
     Note that since the result type can be inferred from the expression, in Velox we
     do not need to provide the ``schema`` parameter as required by Spark's from_json
     function. ::
@@ -44,6 +64,10 @@ JSON Functions
         SELECT from_json('{"a":"1"}', 'a DATE'); -- {'a'="1970-01-02"}
         SELECT from_json('{"a":"2021-07-01T10:20:30"}', 'a TIMESTAMP'); -- {'a'=2021-07-01 10:20:30}
         SELECT from_json('{"a":1625134830}', 'a TIMESTAMP'); -- {'a'=2021-07-01 10:20:30}
+        SELECT from_json('{"a":"1970-01-01T01"}', 'a TIMESTAMP'); -- {'a'=1970-01-01 01:00:00}
+        SELECT from_json('{"a":"10:20:30"}', 'a TIMESTAMP'); -- Current date at 10:20:30 in the session time zone.
+        SELECT from_json('{"a":"2016-12-31T23:59:60Z"}', 'a TIMESTAMP'); -- {'a'=NULL}
+        SELECT from_json('{"a":"1970-01-01T00:00:00 utc"}', 'a TIMESTAMP'); -- {'a'=NULL}
         SELECT from_json('["name", "age", "id"]', 'ARRAY<STRING>'); -- ['name', 'age', 'id']
         SELECT from_json('{"a": 1, "b": 2}', 'MAP<STRING, INT>'); -- {'a'=1, 'b'=2}
         SELECT from_json('{"a": {"b": 1}}', 'a STRUCT<b INT>'); -- {'a'={b=1}}
