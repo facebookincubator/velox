@@ -71,8 +71,12 @@ void registerArrayAccessFunction(
       /*overwrite=*/true,
       /*canEvaluate=*/nullptr,
       // An index of 0 where indices start at 1, or a negative or out-of-bounds
-      // index the policy does not map to NULL.
-      [policy](const core::TypedExprPtr& /*expr*/) {
+      // index the policy does not map to NULL. A constant index is checked
+      // once, so only past the end of a row's array can it fail per row.
+      [policy](const core::TypedExprPtr& expr) {
+        if (expr->inputs()[1]->isConstantKind()) {
+          return !policy.allowOutOfBound;
+        }
         return policy.indexStartsAtOne ||
             (!policy.allowNegativeIndices && !policy.nullOnNegativeIndices) ||
             !policy.allowOutOfBound;

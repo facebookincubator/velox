@@ -3146,6 +3146,38 @@ TEST_F(CudfPrestoFunctionTest, arrayJoinMatchesCpu) {
   }
 }
 
+// A kernel whose only argument that can fail is a constant checks it once, not
+// per row, so narrowing an and/or operand to the undecided rows cannot change
+// the result and the conjunct stays with AST. subscript still fails per row on
+// a constant index, past the end of a row's array.
+TEST_F(CudfPrestoFunctionTest, constantArgumentNeedsNoOperandNarrowing) {
+  const auto rowType = ROW(
+      {{"guard", BOOLEAN()},
+       {"a", ARRAY(BIGINT())},
+       {"i", BIGINT()},
+       {"d", DATE()},
+       {"n", BIGINT()},
+       {"iv", INTERVAL_DAY_TIME()}});
+  const auto needsNarrowing = [&](const std::string& operand) {
+    SCOPED_TRACE(operand);
+    return cudf_velox::needsOperandNarrowing(
+        cudf_velox::test_utils::optimizeTypedExpr(
+            fmt::format("guard AND {}", operand),
+            rowType,
+            queryCtx_.get(),
+            &execCtx_));
+  };
+
+  EXPECT_FALSE(needsNarrowing("element_at(a, 2) > 0"));
+  EXPECT_FALSE(needsNarrowing("date_add('day', CAST(30 AS BIGINT), d) > d"));
+  EXPECT_FALSE(needsNarrowing("plus(d, INTERVAL 30 DAYS) > d"));
+
+  EXPECT_TRUE(needsNarrowing("element_at(a, i) > 0"));
+  EXPECT_TRUE(needsNarrowing("a[3] > 0"));
+  EXPECT_TRUE(needsNarrowing("date_add('day', n, d) > d"));
+  EXPECT_TRUE(needsNarrowing("plus(d, iv) > d"));
+}
+
 TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);
   EXPECT_EQ(castValue, 12);

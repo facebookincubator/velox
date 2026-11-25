@@ -204,8 +204,11 @@ void registerPrestoFunctions(const std::string& prefix) {
            .build()},
       /*overwrite=*/true,
       /*canEvaluate=*/nullptr,
-      // An interval that is not a whole number of days.
-      alwaysFailsOnInvalidRow);
+      // An interval that is not a whole number of days. The constructor checks
+      // a constant interval.
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[1]->isConstantKind();
+      });
 
   registerCudfFunction(
       prefix + "date_add",
@@ -225,8 +228,11 @@ void registerPrestoFunctions(const std::string& prefix) {
       [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return prestosql::DateAddFunction::canEvaluate(expr);
       },
-      // A value outside INTEGER.
-      alwaysFailsOnInvalidRow);
+      // A value outside INTEGER. A constant value is checked once per batch,
+      // whatever its rows.
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[1]->isConstantKind();
+      });
 
   registerCudfFunction(
       prefix + "date_trunc",
