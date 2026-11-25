@@ -2930,6 +2930,9 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   bool parentDirectoryCreated = false;
   bool spillDirectoryCreated = false;
   tests::utils::FileSystemFaultInjectionHook hook = [&](auto* op) {
+    if (op->type != tests::utils::FaultFileSystemOperation::Type::kMkdir) {
+      return;
+    }
     auto mkdirOp =
         static_cast<tests::utils::FaultFileSystemMkdirOperation*>(op);
     if (mkdirOp->path ==
