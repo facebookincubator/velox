@@ -313,6 +313,43 @@ TEST_F(ReaderBaseCacheLifetimeTest, evictionDoesNotRetireEntryUnderLiveReader) {
   EXPECT_TRUE(released);
 }
 
+// Readers built from one cached tablet share its preloaded metadata, so only
+// building the tablet reads metadata from the file.
+class ReaderBaseSharedTabletTest : public ReaderBaseTest {};
+
+TEST_F(ReaderBaseSharedTabletTest, laterReadersReadNoMetadata) {
+  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/true);
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData);
+  ensureCache();
+  for (const bool lazyFileStats : {false, true}) {
+    SCOPED_TRACE(fmt::format("lazyFileStats {}", lazyFileStats));
+    auto readerOpts = makeReaderOptions();
+    readerOpts.setNimbleLazyFileStats(lazyFileStats);
+    const auto cached =
+        cache_->get(readFile, TabletReader::configureOptions(readerOpts));
+    const auto createReader = [&]() {
+      return ReaderBase::create(
+          std::make_unique<velox::dwio::common::BufferedInput>(
+              readFile, *pool_),
+          cached,
+          readerOpts);
+    };
+
+    const auto first = createReader();
+    const auto metadataBytes = cached->metadataIoStats().rawBytesRead();
+    const auto second = createReader();
+    EXPECT_EQ(cached->metadataIoStats().rawBytesRead(), metadataBytes);
+    ASSERT_TRUE(second->hasFileColumnStatistics());
+    const uint32_t numNodes = first->fileSchemaWithId()->maxId() + 1;
+    for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+      SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
+      EXPECT_EQ(
+          second->fileColumnLogicalSize(nodeId),
+          first->fileColumnLogicalSize(nodeId));
+    }
+  }
+}
+
 TEST_P(ReaderBaseTest, basic) {
   auto reader = createReaderBase();
 
