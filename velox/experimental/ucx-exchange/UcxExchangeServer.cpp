@@ -125,37 +125,42 @@ void UcxExchangeServer::process() {
       // Use weak_ptr to prevent use-after-free if close() is called during
       // callback
       std::weak_ptr<UcxExchangeServer> weakQueue = weak_from_this();
-      entry_->getData(
-          partitionKey_.destination,
-          [weakQueue](
-              std::shared_ptr<cudf::packed_columns> data,
-              vector_size_t numRows,
-              std::vector<int64_t> remainingBytes) {
-            auto self = weakQueue.lock();
-            if (!self) {
-              return; // Object was destroyed, safe to ignore
-            }
-            // Check if close() was called - avoid processing if we're shutting
-            // down
-            if (self->closed_.load(std::memory_order_acquire)) {
-              VLOG(3) << "@" << self->partitionKey_.taskId
-                      << " getData callback called after close, ignoring";
-              return;
-            }
-            // This upcall may be called from another thread than the
-            // communicator thread. It is called
-            // when data on the queue becomes available.
-            VLOG(3) << "@" << self->partitionKey_.taskId
-                    << " Found data for client: "
-                    << self->partitionKey_.toString();
-            std::lock_guard<std::recursive_mutex> lock(self->dataMutex_);
-            VELOX_CHECK_NULL(
-                self->dataPtr_, "Data pointer exists: Illegal state!");
-            self->dataPtr_ = std::move(data);
-            self->dataNumRows_ = numRows;
+      entry_->getData(partitionKey_.destination, [weakQueue](ReaderStep step) {
+        auto self = weakQueue.lock();
+        if (!self) {
+          return; // Object was destroyed, safe to ignore
+        }
+        // Check if close() was called - avoid processing if we're shutting
+        // down
+        if (self->closed_.load(std::memory_order_acquire)) {
+          VLOG(3) << "@" << self->partitionKey_.taskId
+                  << " getData callback called after close, ignoring";
+          return;
+        }
+        // This upcall may be called from another thread than the
+        // communicator thread. It is called
+        // when data on the queue becomes available.
+        VLOG(3) << "@" << self->partitionKey_.taskId
+                << " Found data for client: " << self->partitionKey_.toString();
+        std::lock_guard<std::recursive_mutex> lock(self->dataMutex_);
+        VELOX_CHECK_NULL(self->dataPtr_, "Data pointer exists: Illegal state!");
+        switch (step.kind) {
+          case ReaderStep::Kind::kChunk:
+            self->dataPtr_ = std::move(step.data);
+            self->dataNumRows_ = step.numRows;
             self->setState(ServerState::DataReady);
-            self->communicator_->addToWorkQueue(self);
-          });
+            break;
+          case ReaderStep::Kind::kEnd:
+            // A null dataPtr_ is the end of the channel.
+            self->dataNumRows_ = 0;
+            self->setState(ServerState::DataReady);
+            break;
+          case ReaderStep::Kind::kStop:
+            self->setState(ServerState::Done);
+            break;
+        }
+        self->communicator_->addToWorkQueue(self);
+      });
       this->communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ServerState::WaitingForDataFromQueue:

@@ -105,27 +105,23 @@ class UcxOutputQueueManagerTest : public testing::Test {
     queueManager_->getData(
         taskId,
         destination,
-        [destination, expectedEndMarker, &receivedData](
-            std::shared_ptr<cudf::packed_columns> data,
-            vector_size_t /*numRows*/,
-            std::vector<int64_t> remainingBytes) {
-          ASSERT_EQ(expectedEndMarker, data == nullptr)
+        [destination, expectedEndMarker, &receivedData](ReaderStep step) {
+          ASSERT_EQ(expectedEndMarker, isCleanEnd(step))
               << "for destination " << destination;
           receivedData = true;
         });
     ASSERT_TRUE(receivedData) << "for destination " << destination;
   }
 
-  UcxDataAvailableCallback receiveEndMarker(
-      int destination,
-      bool& receivedEndMarker) {
-    return [destination, &receivedEndMarker](
-               std::shared_ptr<cudf::packed_columns> data,
-               vector_size_t /*numRows*/,
-               std::vector<int64_t> remainingBytes) {
+  static bool isCleanEnd(const ReaderStep& step) {
+    return step.kind == ReaderStep::Kind::kEnd && step.outcome.isClean();
+  }
+
+  ReaderCallback receiveEndMarker(int destination, bool& receivedEndMarker) {
+    return [destination, &receivedEndMarker](ReaderStep step) {
       EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
-      EXPECT_TRUE(data == nullptr) << "for destination " << destination;
-      EXPECT_TRUE(remainingBytes.empty());
+      EXPECT_TRUE(isCleanEnd(step)) << "for destination " << destination;
+      EXPECT_TRUE(step.remainingBytes.empty());
       receivedEndMarker = true;
     };
   }
@@ -152,14 +148,13 @@ class UcxOutputQueueManagerTest : public testing::Test {
     EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
   }
 
-  UcxDataAvailableCallback receiveData(int destination, bool& receivedData) {
+  ReaderCallback receiveData(int destination, bool& receivedData) {
     receivedData = false;
-    return [destination, &receivedData](
-               std::shared_ptr<cudf::packed_columns> data,
-               vector_size_t /*numRows*/,
-               std::vector<int64_t> /*remainingBytes*/) {
+    return [destination, &receivedData](ReaderStep step) {
       EXPECT_FALSE(receivedData) << "for destination " << destination;
-      EXPECT_TRUE(data != nullptr) << "for destination " << destination;
+      EXPECT_EQ(step.kind, ReaderStep::Kind::kChunk)
+          << "for destination " << destination;
+      EXPECT_NE(step.data, nullptr) << "for destination " << destination;
       receivedData = true;
     };
   }
@@ -188,19 +183,14 @@ class UcxOutputQueueManagerTest : public testing::Test {
       bool atEnd{false};
       folly::EventCount dataWait;
       auto dataWaitKey = dataWait.prepareWait();
-      queueManager_->getData(
-          taskId,
-          destination,
-          [&](std::shared_ptr<cudf::packed_columns> data,
-              vector_size_t /*numRows*/,
-              std::vector<int64_t> /*remainingBytes*/) {
-            if (data == nullptr) {
-              atEnd = true;
-            } else {
-              received++;
-            }
-            dataWait.notify();
-          });
+      queueManager_->getData(taskId, destination, [&](ReaderStep step) {
+        if (step.kind == ReaderStep::Kind::kEnd) {
+          atEnd = true;
+        } else {
+          received++;
+        }
+        dataWait.notify();
+      });
       dataWait.wait(dataWaitKey);
       if (atEnd) {
         break;
@@ -209,27 +199,16 @@ class UcxOutputQueueManagerTest : public testing::Test {
     queueManager_->deleteResults(taskId, destination);
     // out of order requests are allowed (fetch after delete)
     {
-      struct Response {
-        std::shared_ptr<cudf::packed_columns> data;
-        std::vector<int64_t> remainingBytes;
-      };
-      folly::Promise<Response> promise;
+      folly::Promise<ReaderStep> promise;
       auto future = promise.getSemiFuture();
-      queueManager_->getData(
-          taskId,
-          destination,
-          [&promise](
-              std::shared_ptr<cudf::packed_columns> data,
-              vector_size_t /*numRows*/,
-              std::vector<int64_t> remainingBytes) {
-            promise.setValue(
-                Response{std::move(data), std::move(remainingBytes)});
-          });
+      queueManager_->getData(taskId, destination, [&promise](ReaderStep step) {
+        promise.setValue(std::move(step));
+      });
       future.wait();
       ASSERT_TRUE(future.isReady());
       auto& response = future.value();
       ASSERT_EQ(response.remainingBytes.size(), 0);
-      ASSERT_EQ(response.data, nullptr);
+      ASSERT_TRUE(isCleanEnd(response));
     }
 
     fetchedPackedColumns = received;
@@ -482,6 +461,31 @@ TEST_F(UcxOutputQueueManagerTest, basicAsyncFetch) {
   queueManager_->removeTask(taskId);
 }
 
+TEST_F(UcxOutputQueueManagerTest, endStepIsClean) {
+  const std::string taskId = "endStep";
+  initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  enqueue(taskId, 0, 10);
+  noMoreData(taskId);
+
+  std::vector<ReaderStep> steps;
+  while (steps.empty() || steps.back().kind == ReaderStep::Kind::kChunk) {
+    queueManager_->getData(taskId, 0, [&steps](ReaderStep step) {
+      steps.push_back(std::move(step));
+    });
+  }
+  ASSERT_EQ(steps.size(), 2);
+  EXPECT_EQ(steps[0].kind, ReaderStep::Kind::kChunk);
+  EXPECT_NE(steps[0].data, nullptr);
+  EXPECT_EQ(steps[0].numRows, 10);
+  EXPECT_EQ(steps[1].kind, ReaderStep::Kind::kEnd);
+  EXPECT_EQ(steps[1].outcome, ChannelOutcome::clean());
+  EXPECT_EQ(steps[1].data, nullptr);
+  EXPECT_EQ(steps[1].numRows, 0);
+  EXPECT_TRUE(steps[1].remainingBytes.empty());
+  queueManager_->deleteResults(taskId, 0);
+  queueManager_->removeTask(taskId);
+}
+
 TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
   const vector_size_t size = 10;
   const std::string taskId = "t0";
@@ -493,21 +497,11 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
 
   // Fetch data from a non-existing task.
-  struct Response {
-    std::shared_ptr<cudf::packed_columns> data;
-    std::vector<int64_t> remainingBytes;
-  };
-  folly::Promise<Response> promise;
+  folly::Promise<ReaderStep> promise;
   auto future = promise.getSemiFuture();
-  queueManager_->getData(
-      taskId,
-      destination,
-      [&promise](
-          std::shared_ptr<cudf::packed_columns> data,
-          vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
-        promise.setValue(Response{std::move(data), std::move(remainingBytes)});
-      });
+  queueManager_->getData(taskId, destination, [&promise](ReaderStep step) {
+    promise.setValue(std::move(step));
+  });
 
   // A placeholder has no configured capacity until initializeTask().
   std::shared_ptr<exec::OutputBufferManager> mgr = queueManager_;
@@ -524,23 +518,17 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
     ++i;
     future.wait();
     ASSERT_TRUE(future.isReady());
-    Response& response = future.value();
-    if (!response.data) {
-      // nullptr -> end of transmission.
+    ReaderStep& response = future.value();
+    if (response.kind == ReaderStep::Kind::kEnd) {
+      // End of transmission.
+      EXPECT_TRUE(response.outcome.isClean());
       break;
     }
-    folly::Promise<Response> promise;
+    folly::Promise<ReaderStep> promise;
     future = promise.getSemiFuture();
-    queueManager_->getData(
-        taskId,
-        destination,
-        [&promise](
-            std::shared_ptr<cudf::packed_columns> data,
-            vector_size_t /*numRows*/,
-            std::vector<int64_t> remainingBytes) {
-          promise.setValue(
-              Response{std::move(data), std::move(remainingBytes)});
-        });
+    queueManager_->getData(taskId, destination, [&promise](ReaderStep step) {
+      promise.setValue(std::move(step));
+    });
   }
   ASSERT_EQ(i, 2);
 
@@ -565,12 +553,8 @@ TEST_F(UcxOutputQueueManagerTest, pendingReadersBeforeInitialization) {
     queueManager_->getData(taskId, 0, receiveData(0, receivedData));
     int endCount{0};
     queueManager_->getData(
-        taskId,
-        std::numeric_limits<int>::max(),
-        [&](std::shared_ptr<cudf::packed_columns> data,
-            vector_size_t,
-            std::vector<int64_t>) {
-          EXPECT_EQ(data, nullptr);
+        taskId, std::numeric_limits<int>::max(), [&](ReaderStep step) {
+          EXPECT_TRUE(isCleanEnd(step));
           EXPECT_TRUE(queueManager_->stats(taskId).has_value());
           ++endCount;
         });
@@ -598,10 +582,7 @@ TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPendingEntry) {
   const std::string taskId = "pendingEntryWithClosedReaders";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   bool fired{false};
-  auto receive = [&fired](
-                     std::shared_ptr<cudf::packed_columns> /*data*/,
-                     vector_size_t /*numRows*/,
-                     std::vector<int64_t> /*remainingBytes*/) { fired = true; };
+  auto receive = [&fired](ReaderStep /*step*/) { fired = true; };
   auto reader0 = queueManager_->bindReader(taskId, 0);
   reader0->getData(0, receive);
   auto reader1 = queueManager_->bindReader(taskId, 1);
@@ -839,12 +820,7 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
     auto entry = queueManager_->bindReader(taskId, 0);
     enqueue(taskId, 0, /*size=*/10);
     std::weak_ptr<cudf::packed_columns> chunk;
-    entry->getData(
-        0,
-        [&chunk](
-            std::shared_ptr<cudf::packed_columns> data,
-            vector_size_t /*numRows*/,
-            std::vector<int64_t> /*remainingBytes*/) { chunk = data; });
+    entry->getData(0, [&chunk](ReaderStep step) { chunk = step.data; });
     ASSERT_FALSE(chunk.expired());
 
     task->requestAbort().wait();
@@ -1035,18 +1011,14 @@ TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
       notifications));
   EXPECT_TRUE(notifications.empty());
   int endCount{0};
-  queue->getData(
-      5,
-      [&](std::shared_ptr<cudf::packed_columns> data,
-          vector_size_t,
-          std::vector<int64_t>) {
-        EXPECT_EQ(data, nullptr);
-        // A racing reader must not register another pending callback.
-        bool receivedEnd{false};
-        queue->getData(10, receiveEndMarker(10, receivedEnd));
-        EXPECT_TRUE(receivedEnd);
-        ++endCount;
-      });
+  queue->getData(5, [&](ReaderStep step) {
+    EXPECT_TRUE(isCleanEnd(step));
+    // A racing reader must not register another pending callback.
+    bool receivedEnd{false};
+    queue->getData(10, receiveEndMarker(10, receivedEnd));
+    EXPECT_TRUE(receivedEnd);
+    ++endCount;
+  });
   EXPECT_EQ(endCount, 0);
   queue->terminate();
   queue->terminate();
@@ -1158,17 +1130,16 @@ TEST_F(UcxOutputQueueManagerTest, broadcastReaderArrivesBeforeBufferUpdate) {
       }
       int dataCount{0};
       int endCount{0};
-      auto receive = [&](std::shared_ptr<cudf::packed_columns> data,
-                         vector_size_t rows,
-                         std::vector<int64_t>) {
+      auto receive = [&](ReaderStep step) {
         // Re-enter the manager and queue to detect notifications under locks.
         EXPECT_TRUE(queueManager_->stats(taskId).has_value());
-        if (data) {
+        if (step.kind == ReaderStep::Kind::kChunk) {
           ++dataCount;
-          EXPECT_EQ(rows, 10);
+          EXPECT_EQ(step.numRows, 10);
         } else {
+          EXPECT_TRUE(isCleanEnd(step));
           ++endCount;
-          EXPECT_EQ(rows, 0);
+          EXPECT_EQ(step.numRows, 0);
         }
       };
       const auto bytes = queueManager_->stats(taskId)->bufferedBytes;
@@ -1337,18 +1308,13 @@ TEST_F(UcxOutputQueueManagerTest, unpublishedReadersDoNotAmplifyBackpressure) {
       pageBytes * 2);
   int endCount{0};
   for (int destination : {5, 4095, std::numeric_limits<int>::max()}) {
-    queueManager_->getData(
-        taskId,
-        destination,
-        [&](std::shared_ptr<cudf::packed_columns> data,
-            vector_size_t rows,
-            std::vector<int64_t> remaining) {
-          EXPECT_EQ(data, nullptr);
-          EXPECT_EQ(rows, 0);
-          EXPECT_TRUE(remaining.empty());
-          EXPECT_TRUE(queueManager_->stats(taskId).has_value());
-          ++endCount;
-        });
+    queueManager_->getData(taskId, destination, [&](ReaderStep step) {
+      EXPECT_TRUE(isCleanEnd(step));
+      EXPECT_EQ(step.numRows, 0);
+      EXPECT_TRUE(step.remainingBytes.empty());
+      EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+      ++endCount;
+    });
   }
   EXPECT_EQ(endCount, 0);
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);

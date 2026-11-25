@@ -19,6 +19,27 @@
 
 namespace facebook::velox::ucx_exchange {
 
+ReaderStep ReaderStep::chunk(
+    std::shared_ptr<cudf::packed_columns> chunk,
+    vector_size_t numRows,
+    std::vector<int64_t> remainingBytes) {
+  ReaderStep step{Kind::kChunk};
+  step.data = std::move(chunk);
+  step.numRows = numRows;
+  step.remainingBytes = std::move(remainingBytes);
+  return step;
+}
+
+ReaderStep ReaderStep::end(ChannelOutcome outcome) {
+  ReaderStep step{Kind::kEnd};
+  step.outcome = std::move(outcome);
+  return step;
+}
+
+ReaderStep ReaderStep::stop() {
+  return ReaderStep{Kind::kStop};
+}
+
 void UcxDestinationQueue::Stats::recordEnqueue(
     const cudf::packed_columns* data) {
   if (data != nullptr) {
@@ -69,8 +90,7 @@ void UcxDestinationQueue::enqueueFront(
   queue_.push_front(QueuedPage{std::move(data), numRows});
 }
 
-UcxDestinationQueue::Data UcxDestinationQueue::getData(
-    UcxDataAvailableCallback notify) {
+UcxDestinationQueue::Data UcxDestinationQueue::getData(ReaderCallback notify) {
   if (queue_.empty()) {
     // delay notification.
     notify_ = std::move(notify);
@@ -92,7 +112,13 @@ UcxDestinationQueue::Data UcxDestinationQueue::getData(
     }
     remainingBytes.push_back(queue_[i].data->gpu_data->size());
   }
-  return {std::move(page.data), page.numRows, std::move(remainingBytes), true};
+  if (page.data == nullptr) {
+    return {ReaderStep::end(ChannelOutcome::clean()), true};
+  }
+  return {
+      ReaderStep::chunk(
+          std::move(page.data), page.numRows, std::move(remainingBytes)),
+      true};
 }
 
 void UcxDestinationQueue::deleteResults() {
@@ -131,9 +157,7 @@ UcxDataAvailable UcxDestinationQueue::getAndClearNotify() {
   UcxDataAvailable result;
   result.callback = notify_;
   auto data = getData(nullptr);
-  result.data = std::move(data.data);
-  result.numRows = data.numRows;
-  result.remainingBytes = std::move(data.remainingBytes);
+  result.step = std::move(data.step);
   clearNotify();
   return result;
 }
@@ -350,14 +374,14 @@ bool UcxOutputQueue::isDestinationCountFinalLocked() const {
        kind_ == core::PartitionedOutputNode::Kind::kPartitioned);
 }
 
-void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
+void UcxOutputQueue::getData(int destination, ReaderCallback notify) {
   UcxDestinationQueue::Data data;
   std::vector<ContinuePromise> promises;
   {
     std::unique_lock<std::mutex> l(mutex_);
     if (terminated_) {
       l.unlock();
-      notify(nullptr, /*numRows=*/0, {});
+      notify(ReaderStep::end(ChannelOutcome::clean()));
       return;
     }
     if (destination < 0 ||
@@ -370,7 +394,7 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
       VLOG(1) << "UCX reader outside published destinations: task=" << taskId_
               << " destination=" << destination << " queues=" << numQueues
               << " kind=" << kind << " noMoreQueues=" << noMoreQueues;
-      notify(nullptr, /*numRows=*/0, {});
+      notify(ReaderStep::end(ChannelOutcome::clean()));
       return;
     }
     UcxDestinationQueue* queue;
@@ -392,13 +416,10 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
       // and concurrent removeTask() can destroy the UcxOutputQueue while
       // the callback is still executing.
       std::weak_ptr<UcxOutputQueue> weakSelf = shared_from_this();
-      data = queue->getData([notify, weakSelf](
-                                std::shared_ptr<cudf::packed_columns> data,
-                                vector_size_t numRows,
-                                std::vector<int64_t> remainingBytes) {
+      data = queue->getData([notify, weakSelf](ReaderStep step) {
         std::vector<ContinuePromise> promises;
-        int64_t bytes = data ? data->gpu_data->size() : -1L;
-        notify(std::move(data), numRows, std::move(remainingBytes));
+        int64_t bytes = step.data ? step.data->gpu_data->size() : -1L;
+        notify(std::move(step));
         if (bytes >= 0L) {
           auto self = weakSelf.lock();
           if (!self) {
@@ -414,18 +435,20 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
           promise.setValue();
         }
       });
-      if (data.data) {
+      if (data.step.data) {
         // This implies data.immediate and no notify upcall will be done.
         // Need to update the stats here.
-        updateStatsWithFreedLocked(data.data->gpu_data->size(), 1L, promises);
+        updateStatsWithFreedLocked(
+            data.step.data->gpu_data->size(), 1L, promises);
       }
     } else {
-      data = UcxDestinationQueue::Data{nullptr, 0, {}, true};
+      data = UcxDestinationQueue::Data{
+          ReaderStep::end(ChannelOutcome::clean()), true};
     }
   }
   // outside lock: If we have data, then return it immediately.
   if (data.immediate) {
-    notify(std::move(data.data), data.numRows, std::move(data.remainingBytes));
+    notify(std::move(data.step));
   } else {
     VLOG(2) << "[QUEUE] task=" << taskId_ << " dest=" << destination
             << " server waiting for data (callback installed)";

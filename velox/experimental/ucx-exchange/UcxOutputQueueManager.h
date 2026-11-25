@@ -104,10 +104,7 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @param taskId The unique taskId.
   /// @param destination The destination.
   /// @param notify The callback function.
-  void getData(
-      std::string_view taskId,
-      int destination,
-      UcxDataAvailableCallback notify);
+  void getData(std::string_view taskId, int destination, ReaderCallback notify);
 
   /// Finds or creates the entry for 'taskId' and counts a bound reader. Never
   /// returns null: a Removed entry is returned as is. A server binds once and

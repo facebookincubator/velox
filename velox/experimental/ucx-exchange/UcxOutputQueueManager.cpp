@@ -122,7 +122,7 @@ void UcxOutputQueueManager::deleteResults(
 void UcxOutputQueueManager::getData(
     std::string_view taskId,
     int destination,
-    UcxDataAvailableCallback notify) {
+    ReaderCallback notify) {
   bindReader(taskId, destination)->getData(destination, std::move(notify));
 }
 

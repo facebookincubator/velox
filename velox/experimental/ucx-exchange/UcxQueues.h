@@ -28,32 +28,57 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBuffer.h" // for the Stats structure
 #include "velox/exec/Task.h"
+#include "velox/experimental/ucx-exchange/UcxChannelState.h"
 
 namespace facebook::velox::ucx_exchange {
 
-/// @brief  Callback function for getting data from the queues.
-/// A nullptr indicates that there is no more data.
-/// 'numRows' is the logical row count of 'data', supplied by the producer
-/// because a packed table with no columns cannot report one: cuDF derives
-/// num_rows() from the columns. It is 0 for the end-of-stream marker.
-/// The remainingBytes vector contains the sizes for the
-/// packed_columns elements remaining in the queue.
-/// Uses shared_ptr to support broadcast mode where the same GPU data
+/// @brief One step that a reader takes from the queues: a chunk, the end of the
+/// channel, or a stop.
+/// The chunk is a shared_ptr to support broadcast mode, where the same GPU data
 /// is shared across multiple destination queues without copying.
-using UcxDataAvailableCallback = std::function<void(
-    std::shared_ptr<cudf::packed_columns> data,
-    vector_size_t numRows,
-    std::vector<int64_t> remainingBytes)>;
+struct ReaderStep {
+  enum class Kind : uint8_t {
+    /// 'data', 'numRows' and 'remainingBytes' are set.
+    kChunk,
+    /// No more chunks follow. 'outcome' says how the channel ended.
+    kEnd,
+    /// The reader must finish without sending anything.
+    kStop,
+  };
+
+  /// No default: build steps through the factories.
+  Kind kind;
+  /// The chunk. kChunk only. It is not named 'chunk', which the factory takes.
+  std::shared_ptr<cudf::packed_columns> data;
+  /// The logical row count of 'data', supplied by the producer because a
+  /// packed table with no columns cannot report one: cuDF derives num_rows()
+  /// from the columns. kChunk only.
+  vector_size_t numRows{0};
+  /// The sizes of the chunks remaining in the queue. kChunk only.
+  std::vector<int64_t> remainingBytes;
+  /// How the channel ended. kEnd only.
+  ChannelOutcome outcome;
+
+  static ReaderStep chunk(
+      std::shared_ptr<cudf::packed_columns> chunk,
+      vector_size_t numRows,
+      std::vector<int64_t> remainingBytes);
+
+  static ReaderStep end(ChannelOutcome outcome);
+
+  static ReaderStep stop();
+};
+
+/// @brief Callback function for getting data from the queues.
+using ReaderCallback = std::function<void(ReaderStep step)>;
 
 struct UcxDataAvailable {
-  UcxDataAvailableCallback callback{nullptr};
-  std::shared_ptr<cudf::packed_columns> data;
-  vector_size_t numRows{0};
-  std::vector<int64_t> remainingBytes;
+  ReaderCallback callback{nullptr};
+  ReaderStep step{ReaderStep::end(ChannelOutcome::clean())};
 
   void notify() {
     if (callback) {
-      callback(std::move(data), numRows, remainingBytes);
+      callback(std::move(step));
     }
   }
 };
@@ -96,9 +121,7 @@ class UcxDestinationQueue {
       vector_size_t numRows);
 
   struct Data {
-    std::shared_ptr<cudf::packed_columns> data;
-    vector_size_t numRows{0};
-    std::vector<int64_t> remainingBytes;
+    ReaderStep step{ReaderStep::end(ChannelOutcome::clean())};
     /// Whether the result is returned immediately without invoking the `notify'
     /// callback.
     bool immediate{false};
@@ -106,9 +129,9 @@ class UcxDestinationQueue {
 
   /// @brief Removes the data from the front of the queue and transfers
   /// ownership to the caller. If there is no data, 'notify' is installed and it
-  /// will be called when data becomes available. In this case, a nullptr is
-  /// returned.
-  [[nodiscard]] Data getData(UcxDataAvailableCallback notify);
+  /// will be called when data becomes available. In this case, 'immediate' is
+  /// false and the step is meaningless.
+  [[nodiscard]] Data getData(ReaderCallback notify);
 
   /// Removes all remaining data from the queue.
   void deleteResults();
@@ -142,7 +165,7 @@ class UcxDestinationQueue {
   };
 
   std::deque<QueuedPage> queue_;
-  UcxDataAvailableCallback notify_{nullptr};
+  ReaderCallback notify_{nullptr};
   Stats stats_;
 };
 
@@ -271,7 +294,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// Invokes 'notify' with nullptr when the final count excludes the reader,
   /// results have been deleted, or the queue has terminated. Negative
   /// destinations also receive nullptr.
-  void getData(int destination, UcxDataAvailableCallback notify);
+  void getData(int destination, ReaderCallback notify);
 
   /// @brief Indicates that a driver is done and won't enqueue any more data.
   void noMoreData();
