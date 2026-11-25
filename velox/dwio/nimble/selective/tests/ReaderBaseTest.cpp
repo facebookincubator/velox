@@ -31,6 +31,8 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
+#include "velox/dwio/nimble/tests/HybridFlatMapGroupings.h"
+#include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -91,8 +93,11 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     return file;
   }
 
-  // Writes a file with each statistics kind, nulls and nested types.
-  std::string writeStatsTestFile(bool enableVectorizedStats) {
+  // Writes a file with each statistics kind, nulls and nested types. With
+  // 'hybridFlatMap', the 'maps' column is written as a Hybrid FlatMap.
+  std::string writeStatsTestFile(
+      bool enableVectorizedStats,
+      bool hybridFlatMap) {
     std::string file;
     velox::test::VectorMaker vectorMaker(pool_.get());
     constexpr velox::vector_size_t kSize{100};
@@ -125,6 +130,17 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
 
     WriterOptions writerOptions;
     writerOptions.enableVectorizedStats = enableVectorizedStats;
+    if (hybridFlatMap) {
+      writerOptions.hybridFlatMapColumns.emplace(
+          "maps",
+          nimble::test::makeHybridFlatMap(
+              ScalarKind::Int64,
+              /*explicitGroups=*/{{"0", "1"}},
+              HybridFlatMap::KeyPresenceMode::kBitmap));
+      writerOptions.bufferPolicyFactory = [] {
+        return std::make_unique<StripeRawSizeBufferPolicy>(1 << 20);
+      };
+    }
     auto writer = std::make_unique<Writer>(
         vector->type(),
         std::make_unique<velox::InMemoryWriteFile>(&file),
@@ -133,6 +149,43 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     writer->write(vector);
     writer->close();
     return file;
+  }
+
+  // Expects the lazy file stats of 'fileData' to match its eager ones on
+  // every node of the file schema.
+  void verifyLazyFileStatsMatchEager(const std::string& fileData) {
+    auto eagerOpts = makeReaderOptions();
+    eagerOpts.setNimbleLazyFileStats(false);
+    const auto eager = createReaderBase(fileData, eagerOpts);
+    auto lazyOpts = makeReaderOptions();
+    lazyOpts.setNimbleLazyFileStats(true);
+    const auto lazy = createReaderBase(fileData, lazyOpts);
+
+    EXPECT_TRUE(eager->hasFileColumnStatistics());
+    EXPECT_TRUE(lazy->hasFileColumnStatistics());
+    const uint32_t numNodes = eager->fileSchemaWithId()->maxId() + 1;
+    for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+      SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
+      const auto* expected = eager->fileColumnStatistics(nodeId);
+      const auto* actual = lazy->fileColumnStatistics(nodeId);
+      ASSERT_NE(expected, nullptr);
+      ASSERT_NE(actual, nullptr);
+      EXPECT_EQ(actual->getType(), expected->getType());
+      EXPECT_EQ(actual->getValueCount(), expected->getValueCount());
+      EXPECT_EQ(actual->getNullCount(), expected->getNullCount());
+      EXPECT_EQ(actual->getLogicalSize(), expected->getLogicalSize());
+      EXPECT_EQ(actual->getPhysicalSize(), expected->getPhysicalSize());
+      EXPECT_EQ(
+          actual->toCommonStatistics()->toString(),
+          expected->toCommonStatistics()->toString());
+      EXPECT_EQ(
+          lazy->fileColumnLogicalSize(nodeId),
+          eager->fileColumnLogicalSize(nodeId));
+    }
+    EXPECT_EQ(eager->fileColumnStatistics(numNodes), nullptr);
+    EXPECT_EQ(lazy->fileColumnStatistics(numNodes), nullptr);
+    EXPECT_EQ(eager->fileColumnLogicalSize(numNodes), std::nullopt);
+    EXPECT_EQ(lazy->fileColumnLogicalSize(numNodes), std::nullopt);
   }
 
   velox::dwio::common::ReaderOptions makeReaderOptions() {
@@ -362,8 +415,8 @@ TEST_P(ReaderBaseTest, equivalentAcrossModes) {
 }
 
 TEST_P(ReaderBaseTest, fileColumnStatistics) {
-  const auto reader =
-      createReaderBase(writeStatsTestFile(/*enableVectorizedStats=*/true));
+  const auto reader = createReaderBase(writeStatsTestFile(
+      /*enableVectorizedStats=*/true, /*hybridFlatMap=*/false));
   EXPECT_TRUE(reader->hasFileColumnStatistics());
 
   // Node IDs index the file schema: 'ints' has a null every 7 rows and
@@ -390,41 +443,27 @@ TEST_P(ReaderBaseTest, fileColumnStatistics) {
 }
 
 TEST_P(ReaderBaseTest, lazyFileStatsMatchEager) {
-  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/true);
-  const auto eager = createReaderBase(fileData, makeReaderOptions());
-  auto lazyOpts = makeReaderOptions();
-  lazyOpts.setNimbleLazyFileStats(true);
-  const auto lazy = createReaderBase(fileData, lazyOpts);
+  verifyLazyFileStatsMatchEager(writeStatsTestFile(
+      /*enableVectorizedStats=*/true, /*hybridFlatMap=*/false));
+}
 
-  EXPECT_TRUE(eager->hasFileColumnStatistics());
-  EXPECT_TRUE(lazy->hasFileColumnStatistics());
-  const uint32_t numNodes = eager->fileSchemaWithId()->maxId() + 1;
-  for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
-    SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
-    const auto* expected = eager->fileColumnStatistics(nodeId);
-    const auto* actual = lazy->fileColumnStatistics(nodeId);
-    ASSERT_NE(expected, nullptr);
-    ASSERT_NE(actual, nullptr);
-    EXPECT_EQ(actual->getType(), expected->getType());
-    EXPECT_EQ(actual->getValueCount(), expected->getValueCount());
-    EXPECT_EQ(actual->getNullCount(), expected->getNullCount());
-    EXPECT_EQ(actual->getLogicalSize(), expected->getLogicalSize());
-    EXPECT_EQ(actual->getPhysicalSize(), expected->getPhysicalSize());
-    EXPECT_EQ(
-        actual->toCommonStatistics()->toString(),
-        expected->toCommonStatistics()->toString());
-    EXPECT_EQ(
-        lazy->fileColumnLogicalSize(nodeId),
-        eager->fileColumnLogicalSize(nodeId));
-  }
-  EXPECT_EQ(eager->fileColumnStatistics(numNodes), nullptr);
-  EXPECT_EQ(lazy->fileColumnStatistics(numNodes), nullptr);
-  EXPECT_EQ(eager->fileColumnLogicalSize(numNodes), std::nullopt);
-  EXPECT_EQ(lazy->fileColumnLogicalSize(numNodes), std::nullopt);
+// A Hybrid FlatMap column's nimble type differs from its Velox MAP type, and
+// eager stats are built when the file is opened.
+TEST_P(ReaderBaseTest, hybridFlatMapFileStats) {
+  const auto fileData = writeStatsTestFile(
+      /*enableVectorizedStats=*/true, /*hybridFlatMap=*/true);
+  const auto reader = createReaderBase(fileData);
+  ASSERT_TRUE(reader->nimbleSchema()
+                  ->asRow()
+                  .childAt(reader->fileSchema()->getChildIdx("maps"))
+                  ->isHybridFlatMap());
+
+  verifyLazyFileStatsMatchEager(fileData);
 }
 
 TEST_P(ReaderBaseTest, fileStatsAbsent) {
-  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/false);
+  const auto fileData = writeStatsTestFile(
+      /*enableVectorizedStats=*/false, /*hybridFlatMap=*/false);
   for (const bool lazyFileStats : {false, true}) {
     SCOPED_TRACE(fmt::format("lazyFileStats {}", lazyFileStats));
     auto readerOpts = makeReaderOptions();
