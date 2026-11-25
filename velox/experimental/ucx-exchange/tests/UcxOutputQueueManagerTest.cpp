@@ -1419,6 +1419,21 @@ TEST_F(UcxOutputQueueManagerTest, releasingGoneConsumerDeletesItsResults) {
   queueManager_->removeTask(taskId);
 }
 
+// A close for a task this worker has not seen is dropped: it creates no entry
+// that nothing would erase.
+TEST_F(UcxOutputQueueManagerTest, consumerGoneForUnknownTaskIsDropped) {
+  const std::string taskId = "unknownTaskOfGoneConsumer";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  queueManager_->consumerGone(taskId, 0);
+  EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+  // A later reader gets a new Pending entry, with destination 0 Unpublished.
+  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(entry->state(), TaskEntryState::kPending);
+  EXPECT_EQ(entry->destinationState(0), DestinationState::kUnpublished);
+  queueManager_->releaseReader(entry, 0);
+  EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+}
+
 // A consumer that goes away before its destination is published keeps the
 // destination Released: publishing it later does not reopen it, and the
 // producer finishes without it.

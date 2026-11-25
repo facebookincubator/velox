@@ -358,10 +358,11 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   bool isFinishedLocked();
 
   /// @brief Deletes all queued data of 'destination'. While the destination is
-  /// open, as when the producer runs out of GPU memory, the outcome is an error
-  /// that says the producer discarded its output, unless every driver finished
-  /// and nothing was queued. After the destination ended, as when its server
-  /// sent the end, the destination becomes Released.
+  /// open or not published yet, as when the producer runs out of GPU memory,
+  /// the outcome is an error that says the producer discarded its output.
+  /// After the destination ended, as when its server sent the end, the
+  /// destination becomes Released. A consumer that is done calls
+  /// consumerGone() instead.
   void deleteResults(int destination);
 
   std::string toString();
@@ -473,9 +474,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // Returns the published or Unpublished destination 'index', or null.
   Destination* findDestinationLocked(int index);
 
-  // The outcome that deleteResults() proposes for 'destination'.
-  std::shared_ptr<const ChannelOutcome> discardOutcomeLocked(
-      const Destination& destination) const;
+  // The outcome that deleteResults() proposes: the producer discarded its
+  // output.
+  std::shared_ptr<const ChannelOutcome> discardedOutcome() const;
 
   // The outcome that a removal decides for every destination.
   ChannelOutcome removalOutcomeLocked(const RemovalFacts& facts) const;

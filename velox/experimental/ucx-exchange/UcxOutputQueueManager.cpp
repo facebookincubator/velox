@@ -247,7 +247,8 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
           << " droppedEntries=" << droppedEntries.size();
   // Read with no entry lock held, since no Task method may run under one.
   // Task::terminate() sets the final state before it removes the task, so the
-  // facts are final.
+  // facts are final. They could race with an initialize() of a Pending entry,
+  // but Velox never initializes a task's output while it terminates the task.
   RemovalFacts facts;
   facts.taskId = taskId;
   if (auto task = entry->task()) {

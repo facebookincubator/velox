@@ -971,11 +971,11 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
       sinkTaskId, UcxTestData::kTestRowType, partitionId, exchangeNodeId);
   auto sinkDriver =
       std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
-  // The removal before all drivers finished may fail the consumer.
+  // The removal before all drivers finished fails the consumer.
   sinkDriver->expectError();
 
-  // Add split pointing to source task. Since we use a single Communicator,
-  // the handshake will resolve to intra-node (same listener IP:port).
+  // Add split pointing to source task. CudfConfig::intraNodeExchange is off by
+  // default, so the handshake takes the remote path.
   std::vector<exec::Split> splits;
   splits.emplace_back(remoteSplit(srcTaskId, partitionId));
   sinkDriver->addSplits(splits);
@@ -1008,13 +1008,12 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
            << " — intra-node livelock: source stuck polling "
            << "IntraNodeTransferRegistry for cancelled task";
   }
-  // The source detected the cancelled task. No row was produced, so the
-  // consumer either ends cleanly or fails with the producer's error.
-  if (const auto error = sinkDriver->error()) {
-    EXPECT_THAT(
-        *error,
-        testing::HasSubstr("Producer failed before sending all its data"));
-  }
+  // The source detected the removed task, which ended before its only driver
+  // finished, and fails with the producer's error.
+  EXPECT_THAT(
+      sinkDriver->error(),
+      testing::Optional(
+          testing::HasSubstr("Producer failed before sending all its data")));
 }
 
 // Regression test for broadcast + intra-node SIGSEGV.
