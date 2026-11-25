@@ -11756,6 +11756,178 @@ TEST_F(WriterTest, hybridFlatMapRejectsTopLevelNullRows) {
   }
 }
 
+TEST_F(WriterTest, hybridFlatMapMetadataStreamsStayInOneChunk) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  // A key-presence stream holds one bool per group key, and an in-map stream
+  // one bool per present key per row. The single row holds keys 1 to 144:
+  // group 0 owns the first 72 and the rest land in Default. Every key-presence
+  // and in-map stream then holds 72 bools. The 64-byte cap would split it if
+  // it were chunked, while one chunk stays within the 20% tolerance of
+  // validateChunkSize(). Each group's 72 BIGINT values take 576 bytes and
+  // split. Both stripes write the same row so that Default keeps 72 keys.
+  constexpr velox::vector_size_t kNumKeysPerGroup{72};
+  constexpr uint64_t kMaxStreamChunkRawSize{64};
+  std::vector<std::string> groupKeys;
+  for (int32_t key = 1; key <= kNumKeysPerGroup; ++key) {
+    groupKeys.push_back(std::to_string(key));
+  }
+  const auto batch = vectorMaker.rowVector(
+      {"m"},
+      {vectorMaker.mapVector<int32_t, int64_t>(
+          /*size=*/1,
+          /*sizeAt=*/[](auto /*row*/) { return 2 * kNumKeysPerGroup; },
+          /*keyAt=*/[](auto /*row*/, auto mapIndex) { return mapIndex + 1; },
+          /*valueAt=*/[](auto /*row*/, auto mapIndex) { return mapIndex; })});
+  const std::vector<velox::VectorPtr> batches{batch, batch};
+
+  nimble::WriterOptions options;
+  options.hybridFlatMapColumns.emplace(
+      "m",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {groupKeys},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  options.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  options.minStreamChunkRawSize = 0;
+  options.maxStreamChunkRawSize = kMaxStreamChunkRawSize;
+  const auto file =
+      nimble::test::createNimbleFile(*rootPool_, batches, std::move(options));
+
+  velox::InMemoryReadFile readFile(file);
+  nimble::BatchReader reader(&readFile, *leafPool_);
+  std::vector<folly::F14FastMap<uint32_t, uint32_t>> chunkCountsPerStripe;
+  validateChunkSize(
+      reader,
+      /*minStreamChunkRawSize=*/0,
+      kMaxStreamChunkRawSize,
+      &chunkCountsPerStripe);
+  ASSERT_EQ(chunkCountsPerStripe.size(), batches.size());
+
+  const auto& hybridMap =
+      reader.schema()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(hybridMap.groupCount(), 2);
+  for (size_t stripe = 0; stripe < chunkCountsPerStripe.size(); ++stripe) {
+    for (size_t groupIndex = 0; groupIndex < hybridMap.groupCount();
+         ++groupIndex) {
+      SCOPED_TRACE(fmt::format("stripe {}, group {}", stripe, groupIndex));
+      const auto& group = hybridMap.groupAt(groupIndex);
+      const auto& chunkCounts = chunkCountsPerStripe[stripe];
+      EXPECT_THAT(
+          chunkCounts,
+          testing::Contains(
+              testing::Pair(group.keyPresenceDescriptor.offset(), 1u)));
+      EXPECT_THAT(
+          chunkCounts,
+          testing::Contains(testing::Pair(group.inMapDescriptor.offset(), 1u)));
+      EXPECT_THAT(
+          chunkCounts,
+          testing::Contains(
+              testing::Pair(
+                  group.valueType->asScalar().scalarDescriptor().offset(),
+                  testing::Gt(1u))));
+    }
+  }
+}
+
+// A Hybrid FlatMap column reports the same file stats as the plain map it
+// stores, except that its writer collects no key min or max. String keys take
+// a separate stats path, so "s" holds the same maps as "m" with VARCHAR keys.
+TEST_F(WriterTest, hybridFlatMapStatsMatchMap) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const std::vector<std::vector<std::string>> batchMaps{
+      {"{1: 10, 7: 70}", "null", "{}", "{2: null, 9: 90}"},
+      {"{11: -5}", "{1: 11, 2: 22, 7: 77}", "null"},
+  };
+  std::vector<velox::VectorPtr> batches;
+  for (const auto& maps : batchMaps) {
+    batches.push_back(vectorMaker.rowVector(
+        {"m", "s"},
+        {
+            vectorMaker.mapVectorFromJson<int32_t, int64_t>(maps),
+            vectorMaker.mapVectorFromJson<std::string, int64_t>(maps),
+        }));
+  }
+  const auto type = batches[0]->type();
+  const auto writeAndReadStats = [&](nimble::WriterOptions options) {
+    const auto file =
+        nimble::test::createNimbleFile(*rootPool_, batches, std::move(options));
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto readerOptions = makeTestTabletOptions(leafPool_.get());
+    readerOptions.preloadOptionalSections = {
+        std::string(nimble::kVectorizedStatsSection)};
+    auto tablet =
+        nimble::TabletReader::create(readFile, leafPool_.get(), readerOptions);
+    const auto statsSection =
+        tablet->loadOptionalSection(readerOptions.preloadOptionalSections[0]);
+    NIMBLE_CHECK(statsSection.has_value(), "Missing vectorized stats.");
+    nimble::BatchReader reader(readFile.get(), *leafPool_);
+    return nimble::VectorizedFileStats::deserialize(
+               statsSection->content(), *leafPool_)
+        ->toColumnStatistics(type, reader.schema());
+  };
+
+  const auto mapStats = writeAndReadStats(nimble::WriterOptions{});
+  nimble::WriterOptions hybridOptions;
+  hybridOptions.hybridFlatMapColumns.emplace(
+      "m",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1", "2"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  hybridOptions.hybridFlatMapColumns.emplace(
+      "s",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::String,
+          {{"1", "2"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  hybridOptions.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  const auto hybridStats = writeAndReadStats(std::move(hybridOptions));
+
+  // Schema order: row, then map, key and value of "m", then of "s".
+  ASSERT_EQ(mapStats.size(), 7);
+  ASSERT_EQ(hybridStats.size(), mapStats.size());
+  for (size_t column = 0; column < mapStats.size(); ++column) {
+    SCOPED_TRACE(fmt::format("column {}", column));
+    EXPECT_EQ(
+        hybridStats[column]->getValueCount(),
+        mapStats[column]->getValueCount());
+    EXPECT_EQ(
+        hybridStats[column]->getNullCount(), mapStats[column]->getNullCount());
+    EXPECT_EQ(
+        hybridStats[column]->getLogicalSize(),
+        mapStats[column]->getLogicalSize());
+  }
+
+  const auto* mapKeyStats = mapStats[2]->as<nimble::IntegralStatistics>();
+  ASSERT_NE(mapKeyStats, nullptr);
+  EXPECT_EQ(mapKeyStats->getMin(), 1);
+  EXPECT_EQ(mapKeyStats->getMax(), 11);
+  const auto* hybridKeyStats = hybridStats[2]->as<nimble::IntegralStatistics>();
+  ASSERT_NE(hybridKeyStats, nullptr);
+  EXPECT_EQ(hybridKeyStats->getMin(), std::nullopt);
+  EXPECT_EQ(hybridKeyStats->getMax(), std::nullopt);
+
+  const auto* mapStringKeyStats = mapStats[5]->as<nimble::StringStatistics>();
+  ASSERT_NE(mapStringKeyStats, nullptr);
+  EXPECT_EQ(mapStringKeyStats->getMin(), "1");
+  EXPECT_EQ(mapStringKeyStats->getMax(), "9");
+  const auto* hybridStringKeyStats =
+      hybridStats[5]->as<nimble::StringStatistics>();
+  ASSERT_NE(hybridStringKeyStats, nullptr);
+  EXPECT_EQ(hybridStringKeyStats->getMin(), std::nullopt);
+  EXPECT_EQ(hybridStringKeyStats->getMax(), std::nullopt);
+
+  const auto* mapValueStats = mapStats[3]->as<nimble::IntegralStatistics>();
+  ASSERT_NE(mapValueStats, nullptr);
+  const auto* hybridValueStats =
+      hybridStats[3]->as<nimble::IntegralStatistics>();
+  ASSERT_NE(hybridValueStats, nullptr);
+  EXPECT_EQ(hybridValueStats->getMin(), mapValueStats->getMin());
+  EXPECT_EQ(hybridValueStats->getMax(), mapValueStats->getMax());
+}
+
 struct ParallelEncodeParam {
   uint32_t maxEncodeParallelism;
   uint32_t minStreamsPerEncodingTask;

@@ -6347,9 +6347,14 @@ class TestNimbleReaderFactory {
   velox::memory::MemoryPool* const pool_;
 };
 
+// With `withMap`, appends a MAP(INTEGER, BIGINT) column "m" whose rows cycle
+// through null, empty and non-empty maps, and some of whose values are null.
+// Its values are drawn from the rng only when it is appended, so a seed yields
+// the same vectors for callers without it.
 std::vector<velox::VectorPtr> createSkipSeekVectors(
     velox::memory::MemoryPool& pool,
-    const std::vector<int>& rowsPerStripe) {
+    const std::vector<int>& rowsPerStripe,
+    bool withMap = false) {
   uint32_t seed = FLAGS_reader_tests_seed > 0 ? FLAGS_reader_tests_seed
                                               : folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
@@ -6360,30 +6365,44 @@ std::vector<velox::VectorPtr> createSkipSeekVectors(
 
   for (auto i = 0; i < rowsPerStripe.size(); ++i) {
     std::string s;
-    vectors[i] = vectorMaker.rowVector(
-        {"a", "b", "dictionaryArray"},
-        {vectorMaker.flatVector<int32_t>(
-             rowsPerStripe[i],
-             /* valueAt */
-             [&rng](auto /* row */) { return folly::Random::rand32(rng); },
-             /* isNullAt */ [](auto row) { return row % 2 == 1; }),
-         vectorMaker.flatVector<velox::StringView>(
-             rowsPerStripe[i],
-             /* valueAt */
-             [&s, &rng](auto /* row */) {
-               s = "arf_" + folly::to<std::string>(folly::Random::rand32(rng));
-               return velox::StringView(s.data(), s.size());
-             },
-             /* isNullAt */ [](auto row) { return row % 2 == 1; }),
-         vectorMaker.arrayVector<int32_t>(
-             rowsPerStripe[i],
-             /* sizeAt */
-             [](auto /* row */) { return 1; },
-             /* valueAt */
-             [](auto row) {
-               /* duplicated values to check cache usage */
-               return row / 4;
-             })});
+    std::vector<std::string> names{"a", "b", "dictionaryArray"};
+    std::vector<velox::VectorPtr> children{
+        vectorMaker.flatVector<int32_t>(
+            rowsPerStripe[i],
+            /* valueAt */
+            [&rng](auto /* row */) { return folly::Random::rand32(rng); },
+            /* isNullAt */ [](auto row) { return row % 2 == 1; }),
+        vectorMaker.flatVector<velox::StringView>(
+            rowsPerStripe[i],
+            /* valueAt */
+            [&s, &rng](auto /* row */) {
+              s = "arf_" + folly::to<std::string>(folly::Random::rand32(rng));
+              return velox::StringView(s.data(), s.size());
+            },
+            /* isNullAt */ [](auto row) { return row % 2 == 1; }),
+        vectorMaker.arrayVector<int32_t>(
+            rowsPerStripe[i],
+            /* sizeAt */
+            [](auto /* row */) { return 1; },
+            /* valueAt */
+            [](auto row) {
+              /* duplicated values to check cache usage */
+              return row / 4;
+            })};
+    if (withMap) {
+      names.push_back("m");
+      // A map holds at most three consecutive elements, so keying elements by
+      // index modulo 5 keeps each map's keys distinct.
+      children.push_back(vectorMaker.mapVector<int32_t, int64_t>(
+          rowsPerStripe[i],
+          /* sizeAt */ [](auto row) { return row % 4; },
+          /* keyAt */ [](auto index) { return index % 5 + 1; },
+          /* valueAt */
+          [&rng](auto /* index */) { return folly::Random::rand32(rng); },
+          /* isNullAt */ [](auto row) { return row % 3 == 2; },
+          /* valueIsNullAt */ [](auto index) { return index % 7 == 3; }));
+    }
+    vectors[i] = vectorMaker.rowVector(names, children);
   }
 
   return vectors;
@@ -6857,6 +6876,82 @@ TEST_P(BatchReaderTest, readerSkipUnevenStripesTest) {
     velox::VectorPtr result;
     EXPECT_FALSE(reader.next(1, result));
   }
+}
+
+TEST_P(BatchReaderTest, hybridFlatMapSkipsAndSeeksAcrossStripes) {
+  auto vectors =
+      createSkipSeekVectors(*leafPool_, {12, 15, 25, 18}, /*withMap=*/true);
+  nimble::WriterOptions writerOptions;
+  writerOptions.dictionaryArrayColumns.insert("dictionaryArray");
+  writerOptions.hybridFlatMapColumns.emplace(
+      "m",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1", "2"}, {"4"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  writerOptions.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  // Splits the group value streams into several chunks, so skips cross chunk
+  // boundaries. Key-presence and in-map streams are never chunked.
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.maxStreamChunkRawSize = 32;
+
+  TestNimbleReaderFactory readerFactory(
+      *leafPool_, *rootPool_, vectors, writerOptions);
+  auto reader = readerFactory.createReader();
+
+  // [Stripe# 0, Current Pos: 0], After skip [Stripe# 0, Current Pos: 5]
+  EXPECT_EQ(reader.skipRows(5), 5);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 4,
+      /* expectedNumberOfRows */ 4,
+      /* expectedStripe */ 0,
+      /* expectedRowInStripe */ 5);
+
+  // [Stripe# 0, Current Pos: 9], After skip [Stripe# 2, Current Pos: 7]
+  EXPECT_EQ(reader.skipRows(25), 25);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 10,
+      /* expectedNumberOfRows */ 10,
+      /* expectedStripe */ 2,
+      /* expectedRowInStripe */ 7);
+
+  // [Stripe# 2, Current Pos: 17], After skip [Stripe# 2, Current Pos: 20]
+  EXPECT_EQ(reader.skipRows(3), 3);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 10,
+      /* expectedNumberOfRows */ 5,
+      /* expectedStripe */ 2,
+      /* expectedRowInStripe */ 20);
+
+  // [Stripe# 3, Current Pos: 0], After seek [Stripe# 1, Current Pos: 8]
+  EXPECT_EQ(reader.seekToRow(20), 20);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 10,
+      /* expectedNumberOfRows */ 7,
+      /* expectedStripe */ 1,
+      /* expectedRowInStripe */ 8);
+
+  // [Stripe# 2, Current Pos: 0], After seek [Stripe# 3, Current Pos: 8]
+  EXPECT_EQ(reader.seekToRow(60), 60);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 20,
+      /* expectedNumberOfRows */ 10,
+      /* expectedStripe */ 3,
+      /* expectedRowInStripe */ 8);
+
+  velox::VectorPtr result;
+  EXPECT_FALSE(reader.next(1, result));
 }
 
 // this test is created to keep an eye on the default value for T() for
