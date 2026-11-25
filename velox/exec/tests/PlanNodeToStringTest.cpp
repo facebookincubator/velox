@@ -340,13 +340,11 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
                   .values(data_)
                   .project({"c0 as t_c0", "c1 as t_c1"})
                   .hashJoin(
-                      {"t_c0"},
-                      {"u_c0"},
+                      "t_c0 = u_c0",
                       PlanBuilder()
                           .values(data_)
                           .project({"c0 as u_c0", "c1 as u_c1"})
                           .planNode(),
-                      "",
                       {"t_c0", "t_c1", "u_c1"})
                   .planNode();
 
@@ -359,13 +357,11 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
              .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
-                 {"t_c0"},
-                 {"u_c0"},
+                 "t_c0 = u_c0 AND t_c1 > u_c1",
                  PlanBuilder()
                      .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
-                 "t_c1 > u_c1",
                  {"t_c0", "t_c1", "u_c1"},
                  core::JoinType::kLeft)
              .planNode();
@@ -379,13 +375,11 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
              .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
-                 {"t_c0"},
-                 {"u_c0"},
+                 "t_c0 = u_c0",
                  PlanBuilder()
                      .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
-                 "",
                  {"t_c0", "t_c1"},
                  core::JoinType::kAnti,
                  true /*nullAware*/)
@@ -400,13 +394,11 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
              .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
-                 {"t_c0"},
-                 {"u_c0"},
+                 "t_c0 = u_c0",
                  PlanBuilder()
                      .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
-                 "",
                  {"t_c0", "t_c1"},
                  core::JoinType::kAnti,
                  false /*nullAware*/)
@@ -421,13 +413,11 @@ TEST_F(PlanNodeToStringTest, hashJoin) {
              .values(data_)
              .project({"c0 as t_c0", "c1 as t_c1"})
              .hashJoin(
-                 {"t_c0"},
-                 {"u_c0"},
+                 "t_c0 = u_c0",
                  PlanBuilder()
                      .values(data_)
                      .project({"c0 as u_c0", "c1 as u_c1"})
                      .planNode(),
-                 "",
                  {"t_c0", "t_c1"},
                  core::JoinType::kAnti,
                  false /*nullAware*/,
@@ -1225,10 +1215,8 @@ TEST_F(PlanNodeToStringTest, countingJoin) {
     return builder.newPlan()
         .values(data_)
         .hashJoin(
-            {"c0"},
-            {"u_c0"},
+            "c0 = u_c0",
             builder.newPlan().values(data_).project({"c0 as u_c0"}).planNode(),
-            "",
             {"c0", "c1"},
             joinType)
         .planNode();

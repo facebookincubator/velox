@@ -50,6 +50,7 @@ class MapType;
 class FlatMapType;
 class HybridFlatMapType;
 class SlidingWindowMapType;
+class SlidingWindowArrayType;
 
 class Type {
  public:
@@ -64,6 +65,7 @@ class Type {
   bool isFlatMap() const;
   bool isHybridFlatMap() const;
   bool isSlidingWindowMap() const;
+  bool isSlidingWindowArray() const;
 
   const ScalarType& asScalar() const;
   const TimestampMicroNanoType& asTimestampMicroNano() const;
@@ -74,6 +76,7 @@ class Type {
   const FlatMapType& asFlatMap() const;
   const HybridFlatMapType& asHybridFlatMap() const;
   const SlidingWindowMapType& asSlidingWindowMap() const;
+  const SlidingWindowArrayType& asSlidingWindowArray() const;
 
   /// Returns the per-type string-keyed attribute bag. Insertion order
   /// matches the writer-side `TypeBuilder::attributes()` it was sourced
@@ -265,6 +268,9 @@ class HybridFlatMapType : public Type {
     StreamDescriptor inMapDescriptor;
     /// Complete value subtree owned by this group.
     std::shared_ptr<const Type> valueType;
+    /// The `encoded_group_keys` stream the schema recorded for the keys
+    /// (HybridFlatMap::Group::encodedKeys), or empty.
+    std::string_view encodedKeys{};
   };
 
   /// Reserved schema attribute holding the groups, as
@@ -368,12 +374,41 @@ class ArrayWithOffsetsType : public Type {
   std::shared_ptr<const Type> elements_;
 };
 
+/// Reads an array whose rows are windows over one shared elements stream.
+/// Row i holds elements [offset(i), offset(i) + length(i)). Windows of
+/// consecutive rows may overlap. Within a stripe, offsets never decrease.
+class SlidingWindowArrayType : public Type {
+ public:
+  SlidingWindowArrayType(
+      StreamDescriptor offsetsDescriptor,
+      StreamDescriptor lengthsDescriptor,
+      std::shared_ptr<const Type> elements,
+      std::vector<std::pair<std::string, std::string>> attributes = {});
+
+  /// Holds the window start of each row, with nulls.
+  const StreamDescriptor& offsetsDescriptor() const;
+
+  /// Holds the window length of each non-null row.
+  const StreamDescriptor& lengthsDescriptor() const;
+
+  const std::shared_ptr<const Type>& elements() const;
+
+ protected:
+  StreamDescriptor offsetsDescriptor_;
+  StreamDescriptor lengthsDescriptor_;
+  std::shared_ptr<const Type> elements_;
+};
+
 class SchemaReader {
  public:
   // Construct type tree from an ordered list of schema nodes.
   // If the schema nodes are ordered incorrectly the behavior is undefined.
+  // Reads Hybrid FlatMap nodes with `pool`, which decodes their encoded group
+  // keys, e.g. the pool of the reader the schema is for. Throws a user error
+  // for a Hybrid FlatMap node when `pool` is null.
   static std::shared_ptr<const Type> getSchema(
-      const std::vector<SchemaNode>& nodes);
+      const std::vector<SchemaNode>& nodes,
+      velox::memory::MemoryPool* pool = nullptr);
 
   struct NodeInfo {
     std::string_view name;
@@ -459,6 +494,8 @@ bool visitValueStreamLeaves(const TypeT& type, Visitor& visit) {
       return visit(type.asArray().lengthsDescriptor().offset());
     case Kind::ArrayWithOffsets:
       return visit(type.asArrayWithOffsets().offsetsDescriptor().offset());
+    case Kind::SlidingWindowArray:
+      return visit(type.asSlidingWindowArray().offsetsDescriptor().offset());
     case Kind::Map:
       return visit(type.asMap().lengthsDescriptor().offset());
     case Kind::SlidingWindowMap:
@@ -539,6 +576,13 @@ bool visitPresenceStreamOffsets(
     }
     case Kind::ArrayWithOffsets: {
       const auto& array = type.asArrayWithOffsets();
+      return visitStream(array.offsetsDescriptor().offset()) ||
+          visitStream(array.lengthsDescriptor().offset()) ||
+          visitPresenceStreamOffsets(
+                 *array.elements(), level + 1, visitType, visitStream);
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = type.asSlidingWindowArray();
       return visitStream(array.offsetsDescriptor().offset()) ||
           visitStream(array.lengthsDescriptor().offset()) ||
           visitPresenceStreamOffsets(

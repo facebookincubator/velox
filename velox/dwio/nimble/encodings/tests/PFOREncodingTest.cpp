@@ -280,22 +280,23 @@ TEST(PFOREncodingBufferPoolTest, sliceReturnsScratchBufferToPool) {
                     : static_cast<Value>(50 + (i % 64)));
   }
 
-  // Force the exception-positions child to Varint so both
-  // findSortedPositionSlots' materialize-and-search branch and
-  // EncodingFactory::slice's sliceByMaterializing branch acquire scratch
-  // ScopedVectors from |bufferPool|. Trivial / FixedBitWidth positions are
-  // sliced through zero-copy header rewrites that never touch the pool.
+  // Force a non-viewable positions encoding to exercise pooled scratch storage.
   ManualEncodingSelectionPolicyFactory manualFactory;
   EncodingSelectionPolicyCreator creator = [&manualFactory](DataType dataType) {
     return manualFactory.createPolicy(dataType);
   };
-  EncodingLayout varintLayout{
-      nimble::EncodingType::Varint, {}, CompressionType::Uncompressed};
+  EncodingLayout deltaLayout{
+      nimble::EncodingType::Delta,
+      {},
+      CompressionType::Uncompressed,
+      {std::nullopt, std::nullopt, std::nullopt},
+  };
   EncodingLayout layout{
       nimble::EncodingType::PFOR,
       {},
       CompressionType::Uncompressed,
-      {varintLayout, std::nullopt}};
+      {deltaLayout, std::nullopt},
+  };
   auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<Value>>(
       std::move(layout), CompressionOptions{}, creator);
   const auto encoded = EncodingFactory::encode<Value>(

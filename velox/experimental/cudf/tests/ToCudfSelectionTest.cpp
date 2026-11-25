@@ -370,14 +370,12 @@ DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesBuildSideTypeForJoin) {
       builder.newPlan()
           .values(probe)
           .hashJoin(
-              {"p_key"},
-              {"b_key"},
+              "p_key = b_key",
               builder.newPlan()
                   .values(build)
                   // Falls back to the CPU, so CudfFromVelox feeds HashBuild.
                   .project({"date_add(unit, amount, event_date) AS d", "b_key"})
                   .planNode(),
-              "",
               {"p_name", "d"})
           .planNode();
 
@@ -665,6 +663,60 @@ TEST_F(ToCudfSelectionTest, replaceNullSearchUsesCudf) {
 
   ASSERT_TRUE(wasCudfFilterProjectUsed(task));
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, strposColumnStringConstantSubstringUsesCudf) {
+  auto input = makeRowVector(
+      {"s"},
+      {makeFlatVector<std::string>(
+          {"aws managed database", "no match here", "database services"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, 'database') AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, strposColumnStringColumnSubstringUsesCudf) {
+  auto input = makeRowVector(
+      {"s", "sub"},
+      {makeFlatVector<std::string>({"alpha beta", "gamma", "delta epsilon"}),
+       makeFlatVector<std::string>({"beta", "x", "epsilon"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, sub) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+TEST_F(ToCudfSelectionTest, strposWithInstanceFallsBack) {
+  // Only the 2-argument strpos is registered for the GPU, so the 3-argument
+  // strpos(string, substring, instance) runs on the CPU.
+  auto input = makeRowVector(
+      {"s"}, {makeFlatVector<std::string>({"banana", "abc", "xyz"})});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"strpos(s, 'a', 2) AS result"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_FALSE(wasCudfFilterProjectUsed(task));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
 }
 
 // Test supported aggregation should use CUDF

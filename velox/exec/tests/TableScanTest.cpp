@@ -52,9 +52,9 @@
 #include "velox/exec/Cursor.h"
 #include "velox/exec/DriverStats.h"
 #include "velox/exec/Exchange.h"
-#include "velox/exec/HashProbe.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/TableScan.h"
+#include "velox/exec/TableScanStatNames.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -173,7 +173,7 @@ TEST_F(TableScanTest, allColumns) {
   // A quick sanity check of the scan's stats.
   const auto scanStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_GT(scanStats.peakMemoryBytes, 0);
-  ASSERT_GT(scanStats.customStat(io::kIoWaitWallNanos).sum, 0);
+  ASSERT_GT(scanStats.customSum(io::kIoWaitWallNanos), 0);
   ASSERT_TRUE(scanStats.dynamicFilterStats.empty());
 }
 
@@ -267,15 +267,14 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   // memory usage for the project node is > 0.
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   const auto rawInputBytes = stats.rawInputBytes;
-  const auto overreadBytes = stats.customStat(io::kOverreadBytes).sum;
+  const auto overreadBytes = stats.customSum(io::kOverreadBytes);
   ASSERT_GE(rawInputBytes, 500);
   ASSERT_EQ(overreadBytes, 13);
   // Without preloading, storageReadBytes is the sum of individual stream reads.
   ASSERT_LE(
-      stats.customStat(io::kStorageReadBytes).sum,
-      rawInputBytes + overreadBytes);
-  ASSERT_GT(stats.customStat(io::kTotalScanTime).sum, 0);
-  ASSERT_GT(stats.customStat(io::kIoWaitWallNanos).sum, 0);
+      stats.customSum(io::kStorageReadBytes), rawInputBytes + overreadBytes);
+  ASSERT_GT(stats.customSum(io::kTotalScanTime), 0);
+  ASSERT_GT(stats.customSum(io::kIoWaitWallNanos), 0);
 }
 
 TEST_F(TableScanTest, directBufferInputInlineCoalescedLoadIoWait) {
@@ -347,14 +346,14 @@ TEST_F(TableScanTest, directBufferInputInlineCoalescedLoadIoWait) {
   // Nothing prefetched, so the query thread read every coalesced load itself.
   ASSERT_FALSE(scanStats.hasCustomStat(io::kNumPrefetch));
   // Both timers ran, so the comparisons below are not vacuous.
-  ASSERT_GT(scanStats.customStat(io::kCoalescedStorageLoadWallNanos).sum, 0);
-  ASSERT_GT(scanStats.customStat(io::kStorageReadWallNanos).sum, 0);
+  ASSERT_GT(scanStats.customSum(io::kCoalescedStorageLoadWallNanos), 0);
+  ASSERT_GT(scanStats.customSum(io::kStorageReadWallNanos), 0);
 
   // Every read happened on the driver thread inside getOutput(), so the thread
   // cannot have been blocked for longer than the operator ran. Timing an
   // inline coalesced load twice pushes the reported wait past that.
   EXPECT_LE(
-      scanStats.customStat(io::kIoWaitWallNanos).sum,
+      scanStats.customSum(io::kIoWaitWallNanos),
       scanStats.getOutputTiming.wallNanos);
 
   // An inline coalesced load is timed into coalescedStorageLoadWallNanos by
@@ -362,9 +361,9 @@ TEST_F(TableScanTest, directBufferInputInlineCoalescedLoadIoWait) {
   // thread waited out one of those intervals, not both, so its wait has to
   // come in strictly under their sum.
   EXPECT_LT(
-      scanStats.customStat(io::kIoWaitWallNanos).sum,
-      scanStats.customStat(io::kCoalescedStorageLoadWallNanos).sum +
-          scanStats.customStat(io::kStorageReadWallNanos).sum);
+      scanStats.customSum(io::kIoWaitWallNanos),
+      scanStats.customSum(io::kCoalescedStorageLoadWallNanos) +
+          scanStats.customSum(io::kStorageReadWallNanos));
 }
 
 DEBUG_ONLY_TEST_F(TableScanTest, pendingCoalescedIoWhenTaskFailed) {
@@ -632,7 +631,7 @@ TEST_F(TableScanTest, timestampPrecisionDefaultMillisecond) {
   });
   auto schema = vector->rowType();
   auto file = writeToFile(vector);
-  auto split = makeHiveConnectorSplit(file->getPath());
+  auto split = makeHiveConnectorSplit(file);
 
   auto plan = PlanBuilder(pool()).tableScan(schema).planNode();
   auto expected = makeRowVector({
@@ -648,7 +647,7 @@ TEST_F(TableScanTest, timestampPrecisionDefaultMillisecond) {
       makeFlatVector<Timestamp>(
           1, [](auto) { return Timestamp(1, 1'000'000); }),
   });
-  split = makeHiveConnectorSplit(file->getPath());
+  split = makeHiveConnectorSplit(file);
   AssertQueryBuilder(plan).split(split).assertResults(expected);
 }
 
@@ -774,7 +773,7 @@ TEST_F(TableScanTest, subfieldPruningRowType) {
                 .assignments(assignments)
                 .endTableScan()
                 .planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
   ASSERT_EQ(result->size(), 10'000);
   auto rows = result->as<RowVector>();
@@ -831,7 +830,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterSubfieldsMissing) {
                 .assignments(assignments)
                 .endTableScan()
                 .planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
 
   auto rows = result->as<RowVector>();
@@ -852,7 +851,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterSubfieldsMissing) {
            .assignments(assignments)
            .endTableScan()
            .planNode();
-  split = makeHiveConnectorSplit(filePath->getPath());
+  split = makeHiveConnectorSplit(filePath);
   result = AssertQueryBuilder(op).split(split).copyResults(pool());
   rows = result->as<RowVector>();
   e = rows->childAt(0)->as<RowVector>();
@@ -885,7 +884,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterRootFieldMissing) {
                 .assignments(assignments)
                 .endTableScan()
                 .planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
   auto rows = result->as<RowVector>();
   ASSERT_TRUE(rows);
@@ -950,7 +949,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterStruct) {
               .assignments(assignments)
               .endTableScan()
               .planNode();
-      auto split = makeHiveConnectorSplit(filePath->getPath());
+      auto split = makeHiveConnectorSplit(filePath);
       auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
       int expectedSize = 0;
       std::vector<std::vector<BaseVector::CopyRange>> ranges;
@@ -1036,7 +1035,7 @@ TEST_F(TableScanTest, subfieldPruningRemainingFilterMap) {
               .assignments(assignments)
               .endTableScan()
               .planNode();
-      auto split = makeHiveConnectorSplit(filePath->getPath());
+      auto split = makeHiveConnectorSplit(filePath);
       auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
       auto expected = vector;
       auto a = vector->as<RowVector>()->childAt(0);
@@ -1115,7 +1114,7 @@ TEST_F(TableScanTest, subfieldPruningMapType) {
                 .assignments(assignments)
                 .endTableScan()
                 .planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
   ASSERT_EQ(result->size(), vectors.size() * kSize);
   auto rows = result->as<RowVector>();
@@ -1197,7 +1196,7 @@ TEST_F(TableScanTest, subfieldPruningArrayType) {
                 .assignments(assignments)
                 .endTableScan()
                 .planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
   ASSERT_EQ(result->size(), vectors.size() * kSize);
   auto rows = result->as<RowVector>();
@@ -1241,7 +1240,7 @@ TEST_F(TableScanTest, skipNullMapKeys) {
   auto rowType = vector->rowType();
   auto filePath = writeToFile(vector);
   auto plan = PlanBuilder().tableScan(rowType).planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto expected = makeRowVector({makeMapVector(
       {0, 1},
       makeNullableFlatVector(std::vector<std::optional<int64_t>>(1, 2)),
@@ -1427,9 +1426,7 @@ TEST_F(TableScanTest, missingColumnsInRepeatedColumns) {
           wrapInDictionary(indices, makeMapVector(offsets, bigints, structs2)),
       });
   AssertQueryBuilder(plan)
-      .splits(
-          {makeHiveConnectorSplit(file->getPath()),
-           makeHiveConnectorSplit(file->getPath())})
+      .splits({makeHiveConnectorSplit(file), makeHiveConnectorSplit(file)})
       .assertResults(expected);
 }
 
@@ -1549,7 +1546,7 @@ TEST_F(TableScanTest, structMatchByName) {
                           .dataColumns(rowType)
                           .endTableScan()
                           .planNode();
-      const auto split = makeHiveConnectorSplit(file->getPath());
+      const auto split = makeHiveConnectorSplit(file);
       const auto result = AssertQueryBuilder(op)
                               .connectorSessionProperty(
                                   kHiveConnectorId,
@@ -1592,7 +1589,7 @@ TEST_F(TableScanTest, structMatchByName) {
             kHiveConnectorId,
             connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
             "true")
-        .split(makeHiveConnectorSplit(file->getPath()))
+        .split(makeHiveConnectorSplit(file))
         .assertResults("SELECT id, name, address FROM tmp");
   }
 
@@ -1945,9 +1942,9 @@ TEST_F(TableScanTest, multipleSplits) {
         assertQuery(plan, filePaths, "SELECT * FROM tmp", numPrefetchSplit);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     if (numPrefetchSplit != 0) {
-      ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 10);
+      ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 10);
     } else {
-      ASSERT_FALSE(stats.hasCustomStat(TableScan::kPreloadedSplits));
+      ASSERT_FALSE(stats.hasCustomStat(TableScanStatNames::kPreloadedSplits));
     }
   }
 }
@@ -1961,7 +1958,7 @@ TEST_F(TableScanTest, preloadSplits) {
   auto task = assertQuery(
       plan, filePaths, "SELECT * FROM tmp", /*numPrefetchSplit=*/10);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_EQ(stats.customStat(TableScan::kPreloadedSplits).sum, 10);
+  ASSERT_EQ(stats.customSum(TableScanStatNames::kPreloadedSplits), 10);
 }
 
 TEST_F(TableScanTest, preloadingSplitClose) {
@@ -1985,7 +1982,7 @@ TEST_F(TableScanTest, preloadingSplitClose) {
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
 
   // Verify that split preloading is enabled.
-  ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 1);
+  ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 1);
 
   task.reset();
   // Once all task references are cleared, all the tasks should be destroyed.
@@ -2088,14 +2085,12 @@ DEBUG_ONLY_TEST_F(TableScanTest, tableScanSplitsAndWeights) {
                       .capturePlanNodeId(scanNodeId)
                       .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                       .hashJoin(
-                          {"t0"},
-                          {"u0"},
+                          "t0 = u0",
                           builder.newPlan()
                               .exchange(leafPlan->outputType(), "Presto")
                               .capturePlanNodeId(exchangeNodeId)
                               .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                               .planNode(),
-                          "",
                           {"t1"},
                           core::JoinType::kAnti)
                       .planNode();
@@ -2225,8 +2220,7 @@ TEST_F(TableScanTest, validFileNoData) {
 // An invalid (size = 0) file.
 TEST_F(TableScanTest, emptyFile) {
   auto filePath = TempFilePath::create();
-  assertQuery(
-      tableScanNode(), {makeHiveConnectorSplit(filePath->getPath())}, "");
+  assertQuery(tableScanNode(), {makeHiveConnectorSplit(filePath)}, "");
 }
 
 TEST_F(TableScanTest, preloadEmptySplit) {
@@ -2262,7 +2256,7 @@ TEST_F(TableScanTest, readAsLowerCase) {
           kHiveConnectorId,
           connector::hive::HiveConfig::kFileColumnNamesReadAsLowerCaseSession,
           "true")
-      .split(makeHiveConnectorSplit(filePath->getPath()))
+      .split(makeHiveConnectorSplit(filePath))
       .assertResults("SELECT * FROM tmp");
 }
 
@@ -2462,13 +2456,13 @@ TEST_F(TableScanTest, statsBasedSkippingBool) {
   };
   auto stats = runScan("c1 = true");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
   EXPECT_EQ(1, stats.numSplits);
   EXPECT_EQ(1, stats.numDrivers);
 
   stats = runScan("c1 = false");
   EXPECT_EQ(size - 20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 TEST_F(TableScanTest, statsBasedSkippingDouble) {
@@ -2491,23 +2485,23 @@ TEST_F(TableScanTest, statsBasedSkippingDouble) {
 
   auto stats = runScan("c0 <= -1.05");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
   stats = runScan("c0 >= 11111.06");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
   stats = runScan("c0 between 10100.06 AND 10500.08");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
   stats = runScan("c0 <= 1234.005");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 TEST_F(TableScanTest, statsBasedSkippingFloat) {
@@ -2531,23 +2525,23 @@ TEST_F(TableScanTest, statsBasedSkippingFloat) {
 
   auto stats = runScan("c0 <= '-1.05'::REAL");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c0 >= 11,111.06 - first stride should be skipped based on stats
   stats = runScan("c0 >= 11111.06::REAL");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 between 10'100.06 and 10'500.08 - all strides but second should be
   // skipped based on stats
   stats = runScan("c0 between 10100.06::REAL AND 10500.08::REAL");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 <= 1,234.005 - all strides but first should be skipped
   stats = runScan("c0 <= 1234.005::REAL");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 // Test skipping whole file based on statistics
@@ -2613,39 +2607,39 @@ TEST_F(TableScanTest, statsBasedSkipping) {
   subfieldFilters = singleSubfieldFilter("c2", equal("tomato"));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 = 'tomato'");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c2 in ("x", "y") -> whole file should be skipped based on stats
   subfieldFilters =
       singleSubfieldFilter("c2", orFilter(equal("x"), equal("y")));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 IN ('x', 'y')");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // c0 >= 11,111 - first stride should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c0", greaterThanOrEqual(11'111));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 >= 11111");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 = "banana" - odd stripes should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c2", equal("banana"));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 = 'banana'");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 in ("banana", "y") -> same as previous
   subfieldFilters =
       singleSubfieldFilter("c2", orFilter(equal("banana"), equal("y")));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 IN ('banana', 'y')");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 = "squash" - even stripes should be skipped based on stats
   subfieldFilters = singleSubfieldFilter("c2", equal("squash"));
   stats = runScan("SELECT c1 FROM tmp WHERE c2 = 'squash'");
   EXPECT_EQ(size - 20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 
   // c2 in ("banana", "squash") -> no skipping
   subfieldFilters =
@@ -2659,20 +2653,20 @@ TEST_F(TableScanTest, statsBasedSkipping) {
       "c0", bigintOr(lessThanOrEqual(100), greaterThanOrEqual(20'100)));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 <= 100 OR c0 >= 20100");
   EXPECT_EQ(size - 10'000, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 between 10'100 and 10'500 - all strides but second should be skipped
   // based on stats
   subfieldFilters = singleSubfieldFilter("c0", between(10'100, 10'500));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 between 10100 AND 10500");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 <= 1,234 - all strides but first should be skipped
   subfieldFilters = singleSubfieldFilter("c0", lessThanOrEqual(1'234));
   stats = runScan("SELECT c1 FROM tmp WHERE c0 <= 1234");
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // c0 >= 10234 AND c1 <= 20345 - first and last strides should be skipped
   subfieldFilters = SubfieldFiltersBuilder()
@@ -2681,7 +2675,7 @@ TEST_F(TableScanTest, statsBasedSkipping) {
                         .build();
   stats = runScan("SELECT c1 FROM tmp WHERE c0 >= 10234 AND c1 <= 20345");
   EXPECT_EQ(20'000, stats.rawInputRows);
-  EXPECT_EQ(2, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(2, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 // Test skipping files and row groups containing constant values based on
@@ -2722,25 +2716,25 @@ TEST_F(TableScanTest, statsBasedSkippingConstants) {
   // skip whole file
   auto stats = runScan("c0 in (0, 10, 100, 1000)");
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // skip all but first rowgroup
   stats = runScan("c1 in (0, 10, 100, 1000)");
 
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 
   // skip whole file
   stats = runScan("c2 in ('apple', 'cherry')");
 
   EXPECT_EQ(0, stats.rawInputRows);
-  EXPECT_EQ(1, stats.customStat(dwio::common::kSkippedSplits).sum);
+  EXPECT_EQ(1, stats.customSum(dwio::common::kSkippedSplits));
 
   // skip all but second rowgroup
   stats = runScan("c3 in ('banana', 'grapefruit')");
 
   EXPECT_EQ(10'000, stats.rawInputRows);
-  EXPECT_EQ(3, stats.customStat(dwio::common::kSkippedStrides).sum);
+  EXPECT_EQ(3, stats.customSum(dwio::common::kSkippedStrides));
 }
 
 // Test stats-based skipping for the IS NULL filter.
@@ -2783,7 +2777,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(0, stats.rawInputRows);
   EXPECT_EQ(0, stats.inputRows);
   EXPECT_EQ(0, stats.outputRows);
-  ASSERT_EQ(stats.customStat(dwio::common::kSkippedSplits).sum, 1);
+  ASSERT_EQ(stats.customSum(dwio::common::kSkippedSplits), 1);
   ASSERT_FALSE(stats.hasCustomStat(dwio::common::kSkippedStrides));
 
   // c1 IS NULL - first stride should be skipped based on stats
@@ -2792,7 +2786,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(size - 11'111, stats.inputRows);
   EXPECT_EQ(size - 11'111, stats.outputRows);
   ASSERT_FALSE(stats.hasCustomStat(dwio::common::kSkippedSplits));
-  ASSERT_EQ(stats.customStat(dwio::common::kSkippedStrides).sum, 1);
+  ASSERT_EQ(stats.customSum(dwio::common::kSkippedStrides), 1);
 
   // c1 IS NOT NULL - 3rd and 4th strides should be skipped based on stats
   stats = runScan("c1 IS NOT NULL");
@@ -2800,7 +2794,7 @@ TEST_F(TableScanTest, statsBasedSkippingNulls) {
   EXPECT_EQ(11'111, stats.inputRows);
   EXPECT_EQ(11'111, stats.outputRows);
   ASSERT_FALSE(stats.hasCustomStat(dwio::common::kSkippedSplits));
-  ASSERT_EQ(stats.customStat(dwio::common::kSkippedStrides).sum, 2);
+  ASSERT_EQ(stats.customSum(dwio::common::kSkippedStrides), 2);
 }
 
 // Test skipping whole compression blocks without decompressing these.
@@ -3310,7 +3304,7 @@ TEST_F(TableScanTest, synthesizedColumnFilterValidation) {
                 .endTableScan()
                 .planNode();
 
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
 
   // The query should throw an exception because the filter doesn't match.
   VELOX_ASSERT_THROW(
@@ -3499,7 +3493,7 @@ TEST_F(TableScanTest, bucketPruning) {
                            const core::PlanNodeId& scanId) {
     const auto stats = PlanNodeStats::extract(task->taskStats(), scanId);
     return stats.hasCustomStat(dwio::common::kSkippedSplits)
-        ? stats.customStat(dwio::common::kSkippedSplits).sum
+        ? stats.customSum(dwio::common::kSkippedSplits)
         : 0;
   };
 
@@ -3522,8 +3516,7 @@ TEST_F(TableScanTest, bucketPruning) {
     if (numPreloadSplits > 0) {
       EXPECT_GT(
           PlanNodeStats::extract(task->taskStats(), plan->id())
-              .customStat(TableScan::kPreloadedSplits)
-              .sum,
+              .customSum(TableScanStatNames::kPreloadedSplits),
           0);
     }
   }
@@ -3564,13 +3557,11 @@ TEST_F(TableScanTest, bucketPruning) {
     auto plan = makeScan(builder, {}, HiveBucketProperty::Kind::kHiveCompatible)
                     .capturePlanNodeId(scanId)
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan()
                             .values({makeRowVector(
                                 {"u0"}, {makeFlatVector<int32_t>({2, 6})})})
                             .planNode(),
-                        /*filter=*/"",
                         {"c0", "c1"})
                     .planNode();
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
@@ -3595,7 +3586,7 @@ TEST_F(TableScanTest, bucketConversion) {
     for (int bucket : selectedBuckets) {
       std::vector<std::shared_ptr<HiveColumnHandle>> handles;
       handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
-      auto split = makeHiveConnectorSplit(file->getPath());
+      auto split = makeHiveConnectorSplit(file);
       split->tableBucketNumber = bucket;
       split->bucketConversion = {kNewNumBuckets, 2, std::move(handles)};
       splits.push_back(split);
@@ -3669,10 +3660,8 @@ TEST_F(TableScanTest, bucketConversion) {
     auto plan = builder.tableScan(outputType, {}, "", schema)
                     .capturePlanNodeId(scanNodeId)
                     .hashJoin(
-                        {"c1"},
-                        {"cc1"},
+                        "c1 = cc1",
                         builder.newPlan().values({build}).planNode(),
-                        "",
                         {"c1"})
                     .planNode();
     auto expected = makeRowVector({makeConstant<int64_t>(2, 1)});
@@ -3697,7 +3686,7 @@ TEST_F(TableScanTest, bucketConversionWithSubfieldPruning) {
   for (int bucket : selectedBuckets) {
     std::vector<std::shared_ptr<HiveColumnHandle>> handles;
     handles.push_back(makeColumnHandle("c0", key->type(), {}));
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     split->tableBucketNumber = bucket;
     split->bucketConversion = {kNewNumBuckets, 1, std::move(handles)};
     splits.push_back(split);
@@ -3743,7 +3732,7 @@ TEST_F(TableScanTest, bucketConversionLazyColumn) {
     std::vector<std::shared_ptr<HiveColumnHandle>> handles;
     handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
 
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     split->tableBucketNumber = 1;
     split->bucketConversion = {kNewNumBuckets, 2, std::move(handles)};
     splits.push_back(split);
@@ -3755,13 +3744,13 @@ TEST_F(TableScanTest, bucketConversionLazyColumn) {
       makeFlatVector<int64_t>({4, 5, 6}),
   });
   auto file2 = writeToFile(vector);
-  splits.push_back(makeHiveConnectorSplit(file2->getPath()));
+  splits.push_back(makeHiveConnectorSplit(file2));
   {
     // Third split requires bucket conversion, empty after filter.
     std::vector<std::shared_ptr<HiveColumnHandle>> handles;
     handles.push_back(makeColumnHandle("c0", INTEGER(), {}));
 
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     split->tableBucketNumber = 3;
     split->bucketConversion = {kNewNumBuckets, 2, std::move(handles)};
     splits.push_back(split);
@@ -3994,7 +3983,7 @@ TEST_F(TableScanTest, compactComplexNulls) {
   auto schema = data->rowType();
   auto file = writeToFile(data);
   auto plan = PlanBuilder().tableScan(schema, {"(c0).c1 > 0"}).planNode();
-  auto split = makeHiveConnectorSplit(file->getPath());
+  auto split = makeHiveConnectorSplit(file);
   const vector_size_t indices[] = {1, 3, 4, 5, 6, 7, 8, 9};
   auto expected = makeRowVector({wrapInDictionary(
       makeIndices(8, [&](auto i) { return indices[i]; }), c0)});
@@ -4099,7 +4088,7 @@ TEST_F(TableScanTest, remainingFilterWithNoProjectedColumns) {
                     .tableScan(outputType, {}, remainingFilter, data->rowType())
                     .planNode();
     auto result = AssertQueryBuilder(plan)
-                      .split(makeHiveConnectorSplit(file->getPath()))
+                      .split(makeHiveConnectorSplit(file))
                       .copyResults(pool());
 
     EXPECT_EQ(result->size(), expectedSize);
@@ -4129,8 +4118,7 @@ TEST_F(TableScanTest, remainingFilterLazyWithMultiReferences) {
           .tableScan(schema, {}, "NOT (c0 % 2 == 0 AND c2 % 3 == 0)")
           .planNode();
   auto cursor = TaskCursor::create(params);
-  cursor->task()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
+  cursor->task()->addSplit("0", exec::Split(makeHiveConnectorSplit(file)));
   cursor->task()->noMoreSplits("0");
   int i = 0;
   while (cursor->moveNext()) {
@@ -4169,8 +4157,7 @@ TEST_F(TableScanTest, sharedNullBufferFromComplexResult) {
   params.queryConfigs.emplace(QueryConfig::kPreferredOutputBatchBytes, "1");
 
   auto cursor = TaskCursor::create(params);
-  cursor->task()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
+  cursor->task()->addSplit("0", exec::Split(makeHiveConnectorSplit(file)));
   cursor->task()->noMoreSplits("0");
   int i = 0;
   BufferPtr nullBufferHolder;
@@ -4206,8 +4193,7 @@ TEST_F(
                         .tableScan(schema, {}, "c0 % 7 == 0 AND c1 % 2 == 0")
                         .planNode();
   auto cursor = TaskCursor::create(params);
-  cursor->task()->addSplit(
-      "0", exec::Split(makeHiveConnectorSplit(file->getPath())));
+  cursor->task()->addSplit("0", exec::Split(makeHiveConnectorSplit(file)));
   cursor->task()->noMoreSplits("0");
   ASSERT_TRUE(cursor->moveNext());
   auto* result = cursor->current()->asUnchecked<RowVector>();
@@ -4264,7 +4250,7 @@ TEST_F(TableScanTest, skipStridesForParentNulls) {
   auto file = writeToFile(vector);
   auto plan =
       PlanBuilder().tableScan(vector->rowType(), {"a.b IS NULL"}).planNode();
-  auto split = makeHiveConnectorSplit(file->getPath());
+  auto split = makeHiveConnectorSplit(file);
   ASSERT_EQ(AssertQueryBuilder(plan).split(split).countResults(), 5000);
 }
 
@@ -4312,8 +4298,7 @@ TEST_F(TableScanTest, randomSample) {
   ASSERT_TRUE(TaskMonitor::waitForCompletion(*cursor->task()));
   ASSERT_GT(
       PlanNodeStats::extract(cursor->task()->taskStats(), scanId)
-          .customStat(dwio::common::kSkippedStrides)
-          .sum,
+          .customSum(dwio::common::kSkippedStrides),
       0);
   double expectedNumRows = 0.01 * numTotalRows;
   ASSERT_LT(abs(numRows - expectedNumRows) / expectedNumRows, 0.1);
@@ -4380,7 +4365,7 @@ TEST_F(TableScanTest, aggregationPushdown) {
                               const core::PlanNodePtr& plan) {
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
     return stats.hasCustomStat("loadedToValueHook")
-        ? stats.customStat("loadedToValueHook").sum
+        ? stats.customSum("loadedToValueHook")
         : 0;
   };
 
@@ -4577,8 +4562,7 @@ TEST_F(TableScanTest, aggregationPushdownSchemaEvolution) {
               it == duckDbAgg.end() ? agg : it->second));
       ASSERT_EQ(
           PlanNodeStats::extract(task->taskStats(), plan->id())
-              .customStat("loadedToValueHook")
-              .sum,
+              .customSum("loadedToValueHook"),
           kSize);
     }
   };
@@ -4918,8 +4902,8 @@ TEST_F(TableScanTest, reuseRowVector) {
                   .tableScan(rowType, {}, "c0 < 5")
                   .project({"c1.c0"})
                   .planNode();
-  auto firstSplit = makeHiveConnectorSplit(file->getPath());
-  auto secondSplit = makeHiveConnectorSplit(file->getPath());
+  auto firstSplit = makeHiveConnectorSplit(file);
+  auto secondSplit = makeHiveConnectorSplit(file);
   auto expected = makeRowVector(
       {makeFlatVector<int32_t>(10, [](auto i) { return i % 5; })});
   AssertQueryBuilder(plan)
@@ -4937,7 +4921,7 @@ TEST_F(TableScanTest, readMissingFields) {
   auto rowType = makeRowType(
       {makeRowType({BIGINT(), BIGINT(), BIGINT(), BIGINT()}), BIGINT()});
   auto op = PlanBuilder().tableScan(rowType).planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto nulls = makeNullConstant(TypeKind::BIGINT, size);
   auto expected =
       makeRowVector({makeRowVector({iota, iota, nulls, nulls}), iota});
@@ -4951,7 +4935,7 @@ TEST_F(TableScanTest, readExtraFields) {
   auto filePath = writeToFile(rowVector);
   auto rowType = makeRowType({makeRowType({BIGINT()}), BIGINT()});
   auto op = PlanBuilder().tableScan(rowType).planNode();
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto nulls = makeNullConstant(TypeKind::BIGINT, size);
   auto expected = makeRowVector({makeRowVector({iota}), iota});
   AssertQueryBuilder(op).split(split).assertResults(expected);
@@ -4982,13 +4966,12 @@ TEST_F(TableScanTest, readMissingFieldsFilesVary) {
                 .project({"c0.c0", "c0.c1", "c0.c2", "c0.c3"})
                 .planNode();
 
-  auto result =
-      AssertQueryBuilder(op)
-          .split(makeHiveConnectorSplit(missingFieldsFilePath->getPath()))
-          .split(makeHiveConnectorSplit(allFieldsFilePath->getPath()))
-          .split(makeHiveConnectorSplit(missingFieldsFilePath->getPath()))
-          .split(makeHiveConnectorSplit(allFieldsFilePath->getPath()))
-          .copyResults(pool());
+  auto result = AssertQueryBuilder(op)
+                    .split(makeHiveConnectorSplit(missingFieldsFilePath))
+                    .split(makeHiveConnectorSplit(allFieldsFilePath))
+                    .split(makeHiveConnectorSplit(missingFieldsFilePath))
+                    .split(makeHiveConnectorSplit(allFieldsFilePath))
+                    .copyResults(pool());
 
   ASSERT_EQ(result->size(), size * 4);
   auto rows = result->as<RowVector>();
@@ -5057,7 +5040,7 @@ TEST_F(TableScanTest, readMissingFieldsInArray) {
                 .project({"c0[1].c0", "c0[2].c1", "c0[3].c2", "c0[4].c3"})
                 .planNode();
 
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
 
   ASSERT_EQ(result->size(), size);
@@ -5128,7 +5111,7 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
                      "a2[4].d"})
                 .planNode();
 
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
 
   ASSERT_EQ(result->size(), size);
@@ -5174,7 +5157,7 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
 
   // Now run query with column mapping using names - we should not be able to
   // find any names.
-  split = makeHiveConnectorSplit(filePath->getPath());
+  split = makeHiveConnectorSplit(filePath);
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
@@ -5231,7 +5214,7 @@ TEST_F(TableScanTest, readMissingFieldsInMap) {
            .endTableScan()
            .project({"i1"})
            .planNode();
-  split = makeHiveConnectorSplit(filePath->getPath());
+  split = makeHiveConnectorSplit(filePath);
 
   EXPECT_THROW(
       AssertQueryBuilder(op).split(split).copyResults(pool()), VeloxUserError);
@@ -5253,7 +5236,7 @@ TEST_F(TableScanTest, filterMissingFields) {
     auto plan = PlanBuilder()
                     .tableScan(ROW({}, {}), subfieldFilters, "", schema)
                     .planNode();
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     auto result = AssertQueryBuilder(plan).split(split).copyResults(pool());
     ASSERT_EQ(result->size(), expectedSize);
   };
@@ -5292,7 +5275,7 @@ TEST_F(TableScanTest, tableScanProjections) {
     auto scanRowType = ROW(std::move(cols), BIGINT());
     auto op = PlanBuilder().tableScan(scanRowType).planNode();
 
-    auto split = makeHiveConnectorSplit(filePath->getPath());
+    auto split = makeHiveConnectorSplit(filePath);
     auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
 
     ASSERT_EQ(result->size(), size);
@@ -5371,7 +5354,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
           .project({"st1.a", "st1.b", "st1.c", "st1.d", "i2", "d3", "b4", "c4"})
           .planNode();
 
-  auto split = makeHiveConnectorSplit(filePath->getPath());
+  auto split = makeHiveConnectorSplit(filePath);
   auto result = AssertQueryBuilder(op).split(split).copyResults(pool());
 
   ASSERT_EQ(result->size(), size);
@@ -5431,7 +5414,7 @@ TEST_F(TableScanTest, readMissingFieldsWithMoreColumns) {
 
   // Now run query with column mapping using names - we should not be able to
   // find any names, except for the last string column.
-  split = makeHiveConnectorSplit(filePath->getPath());
+  split = makeHiveConnectorSplit(filePath);
   result = AssertQueryBuilder(op)
                .connectorSessionProperty(
                    kHiveConnectorId,
@@ -5667,7 +5650,7 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
                     .tableScan(readSchema, {}, "", writeSchema)
                     .planNode();
     AssertQueryBuilder(plan)
-        .split(makeHiveConnectorSplit(file->getPath()))
+        .split(makeHiveConnectorSplit(file))
         .assertResults(vector);
   }
 
@@ -5685,7 +5668,7 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
             c0->childAt(1),
         })});
     AssertQueryBuilder(plan)
-        .split(makeHiveConnectorSplit(file->getPath()))
+        .split(makeHiveConnectorSplit(file))
         .assertResults(expected);
   }
 }
@@ -5710,7 +5693,7 @@ TEST_F(TableScanTest, readFlatMapAsStructNoMatchingKeys) {
   auto readSchema = ROW("c0", ROW({"4", "5"}, BIGINT()));
   auto plan =
       PlanBuilder().tableScan(readSchema, {}, "", writeSchema).planNode();
-  auto split = makeHiveConnectorSplit(file->getPath());
+  auto split = makeHiveConnectorSplit(file);
   auto expected = makeRowVector({makeRowVector(
       {"4", "5"},
       {
@@ -5729,7 +5712,7 @@ TEST_F(TableScanTest, flatMapReadOffset) {
 
   auto expected = makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}}})});
   AssertQueryBuilder(plan)
-      .split(makeHiveConnectorSplit(file->getPath()))
+      .split(makeHiveConnectorSplit(file))
       .config(QueryConfig::kMaxOutputBatchRows, 1)
       .assertResults(expected);
 }
@@ -5745,7 +5728,7 @@ TEST_F(TableScanTest, flatMapKeyTypeEvolution) {
     auto expected =
         makeRowVector({makeMapVector<int64_t, int64_t>({{{1, 2}, {3, 4}}})});
     AssertQueryBuilder(plan)
-        .split(makeHiveConnectorSplit(file->getPath()))
+        .split(makeHiveConnectorSplit(file))
         .assertResults(expected);
   }
   {
@@ -5756,7 +5739,7 @@ TEST_F(TableScanTest, flatMapKeyTypeEvolution) {
         {"1", "3"},
         {makeConstant<int64_t>(2, 1), makeConstant<int64_t>(4, 1)})});
     AssertQueryBuilder(plan)
-        .split(makeHiveConnectorSplit(file->getPath()))
+        .split(makeHiveConnectorSplit(file))
         .assertResults(expected);
   }
 }
@@ -5782,7 +5765,7 @@ TEST_F(TableScanTest, flatMapLazyRowValue) {
                     .planNode();
     auto expected = makeRowVector({wrapInDictionary(makeIndices({1}), c0)});
     AssertQueryBuilder(plan)
-        .split(makeHiveConnectorSplit(file->getPath()))
+        .split(makeHiveConnectorSplit(file))
         .assertResults(expected);
   }
   {
@@ -5808,7 +5791,7 @@ TEST_F(TableScanTest, flatMapLazyRowValue) {
             }),
         })});
     AssertQueryBuilder(plan)
-        .split(makeHiveConnectorSplit(file->getPath()))
+        .split(makeHiveConnectorSplit(file))
         .assertResults(expected);
   }
 }
@@ -5843,7 +5826,7 @@ TEST_F(TableScanTest, flatMapReuseWithRemainingFilter) {
                     .project({"c0[1] + 1"})
                     .planNode();
     auto task = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .config(
                         QueryConfig::kMaxOutputBatchRows,
                         folly::to<std::string>(kBatchRows))
@@ -5855,8 +5838,7 @@ TEST_F(TableScanTest, flatMapReuseWithRemainingFilter) {
                         connector::FileConfig::kPreserveFlatMapsInMemorySession,
                         "true")
                     .assertResults(expected);
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& scanStats = planStats.at(scanId);
+    const auto scanStats = PlanNodeStats::extract(task->taskStats(), scanId);
     EXPECT_GE(scanStats.outputVectors, kNumRows / kBatchRows);
     return scanStats.numMemoryAllocations;
   };
@@ -5890,163 +5872,6 @@ TEST_F(TableScanTest, flatMapReuseWithRemainingFilter) {
     EXPECT_LT(
         numAllocs,
         numAllocsWithoutFilter + kNumRows / kBatchRows * kNumKeys / 2);
-  }
-}
-
-TEST_F(TableScanTest, dynamicFilters) {
-  // Make sure filters on same column from multiple downstream operators are
-  // merged properly without overwriting each other.
-  auto aVector =
-      makeNamedRowVector("a", makeFlatIdentityVector<int64_t>(20'000));
-  auto bVector =
-      makeNamedRowVector("b", makeFlatIdentityVector<int64_t>(10'000));
-  auto cVector = makeNamedRowVector(
-      "c", makeFlatVector<int64_t>(10'000, [](auto i) { return i + 10'000; }));
-
-  std::shared_ptr<TempFilePath> files[3];
-  files[0] = writeToFile(aVector);
-  files[1] = writeToFile(bVector);
-  files[2] = writeToFile(cVector);
-
-  PlanBuilder builder;
-  core::PlanNodeId aScanId;
-  core::PlanNodeId bScanId;
-  core::PlanNodeId cScanId;
-  auto plan = builder.tableScan(ROW("a", BIGINT()))
-                  .capturePlanNodeId(aScanId)
-                  .hashJoin(
-                      {"a"},
-                      {"b"},
-                      builder.newPlan()
-                          .tableScan(ROW("b", BIGINT()))
-                          .capturePlanNodeId(bScanId)
-                          .planNode(),
-                      "", /*filter*/
-                      {"a"})
-                  .hashJoin(
-                      {"a"},
-                      {"c"},
-                      builder.newPlan()
-                          .tableScan(ROW("c", BIGINT()))
-                          .capturePlanNodeId(cScanId)
-                          .planNode(),
-                      "", /*filter*/
-                      {"a"})
-                  .planNode();
-  AssertQueryBuilder(plan)
-      .split(aScanId, makeHiveConnectorSplit(files[0]->getPath()))
-      .split(bScanId, makeHiveConnectorSplit(files[1]->getPath()))
-      .split(cScanId, makeHiveConnectorSplit(files[2]->getPath()))
-      .assertResults(makeRowVector({makeFlatVector<int64_t>(0)}));
-}
-
-TEST_F(TableScanTest, dynamicFilterWithRowIndexColumn) {
-  // This test ensures dynamic filters can be mapped to correct field when
-  // there is row_index column.
-  auto aVector = makeNamedRowVector("a", makeFlatIdentityVector<int64_t>(10));
-  auto bVector =
-      makeNamedRowVector("b", makeFlatVector<int64_t>(10, [](auto i) {
-                           if (i < 5) {
-                             return i;
-                           } else {
-                             return 10 + i;
-                           }
-                         }));
-  auto resVector = makeRowVector(
-      {"row_index", "a"},
-      {makeFlatIdentityVector<int64_t>(5), makeFlatIdentityVector<int64_t>(5)});
-  connector::ColumnHandleMap assignments;
-  assignments["a"] = std::make_shared<connector::hive::HiveColumnHandle>(
-      "a",
-      connector::FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
-      BIGINT());
-  assignments["row_index"] =
-      std::make_shared<connector::hive::HiveColumnHandle>(
-          "row_index",
-          connector::FileColumnHandle::ColumnType::kRowIndex,
-          BIGINT(),
-          BIGINT());
-  std::shared_ptr<TempFilePath> files[2];
-  files[0] = writeToFile(aVector);
-  files[1] = writeToFile(bVector);
-  PlanBuilder builder;
-  core::PlanNodeId aScanId;
-  core::PlanNodeId bScanId;
-  auto plan =
-      builder
-          .tableScan(
-              ROW({"row_index", "a"}, BIGINT()), {}, "", nullptr, assignments)
-          .capturePlanNodeId(aScanId)
-          .hashJoin(
-              {"a"},
-              {"b"},
-              builder.newPlan()
-                  .tableScan(ROW("b", BIGINT()))
-                  .capturePlanNodeId(bScanId)
-                  .planNode(),
-              "", /*filter*/
-              {"row_index", "a"})
-          .planNode();
-  AssertQueryBuilder(plan)
-      .split(aScanId, makeHiveConnectorSplit(files[0]->getPath()))
-      .split(bScanId, makeHiveConnectorSplit(files[1]->getPath()))
-      .assertResults(resVector);
-}
-
-TEST_F(TableScanTest, bloomFilterPushdown) {
-  auto build = makeRowVector(
-      {"b"},
-      {
-          makeFlatVector<int64_t>(
-              10'001 + VectorHasher::kMaxDistinct,
-              [](auto i) { return 1000 * i; }),
-      });
-  auto probe = makeRowVector(
-      {"a"},
-      {
-          makeFlatVector<int64_t>(
-              2 * build->size(), [](auto i) { return 500 * i; }),
-      });
-  std::shared_ptr<TempFilePath> files[2];
-  files[0] = writeToFile(probe);
-  files[1] = writeToFile(build);
-
-  PlanBuilder planBuilder;
-  core::PlanNodeId probeScanId, buildScanId, joinId;
-  auto plan = planBuilder.tableScan(ROW("a", BIGINT()))
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"a"},
-                      {"b"},
-                      planBuilder.newPlan()
-                          .tableScan(ROW("b", BIGINT()))
-                          .capturePlanNodeId(buildScanId)
-                          .planNode(),
-                      /*filter=*/"",
-                      {"a"})
-                  .capturePlanNodeId(joinId)
-                  .planNode();
-  for (bool parallelBuild : {false, true}) {
-    SCOPED_TRACE(fmt::format("parallelBuild={}", parallelBuild));
-    AssertQueryBuilder builder(plan);
-    builder
-        .config(
-            QueryConfig::kHashProbeBloomFilterPushdownMaxSize,
-            4 * build->size())
-        .split(probeScanId, makeHiveConnectorSplit(files[0]->getPath()))
-        .split(buildScanId, makeHiveConnectorSplit(files[1]->getPath()));
-    if (parallelBuild) {
-      builder.serialExecution(false).maxDrivers(2).config(
-          QueryConfig::kMinTableRowsForParallelJoinBuild, 1);
-    }
-    auto task = builder.assertResults(build);
-
-    const auto joinStats = PlanNodeStats::extract(task->taskStats(), joinId);
-    ASSERT_EQ(
-        joinStats.customStat(DriverStats::kDynamicFiltersProduced).sum,
-        parallelBuild ? 2 : 1);
-    ASSERT_GT(joinStats.customStat(HashProbe::kBloomFilterSize).sum, 0);
   }
 }
 
@@ -6191,7 +6016,7 @@ TEST_F(TableScanTest, rowNumberInRemainingFilter) {
         return row * 2;
       }));
   AssertQueryBuilder(plan)
-      .split(makeHiveConnectorSplit(file->getPath()))
+      .split(makeHiveConnectorSplit(file))
       .assertResults(expected);
 }
 
@@ -6302,7 +6127,7 @@ TEST_F(TableScanTest, rowIndexWithDynamicFilterOnPartitionKey) {
                   .assignments(assignments)
                   .endTableScan()
                   .capturePlanNodeId(scanId)
-                  .hashJoin({"p"}, {"bk"}, build, "", {"row_index", "p"})
+                  .hashJoin("p = bk", build, {"row_index", "p"})
                   .planNode();
 
   std::unordered_map<std::string, std::optional<std::string>> partitionKeys{
@@ -6378,7 +6203,7 @@ TEST_F(TableScanTest, rowId) {
     query.config(QueryConfig::kMaxSplitPreloadPerDriver, 4);
     auto expected = BaseVector::create<RowVector>(outputType, 0, pool());
     for (int i = 0; i < 10; ++i) {
-      auto split = makeHiveConnectorSplit(file->getPath());
+      auto split = makeHiveConnectorSplit(file);
       split->rowIdProperties = {
           .metadataVersion = i,
           .partitionId = 2 * i,
@@ -6400,7 +6225,7 @@ TEST_F(TableScanTest, rowId) {
     }
     auto task = query.assertResults(expected);
     const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-    ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 0);
+    ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 0);
   }
   {
     SCOPED_TRACE("Remaining filter only");
@@ -6416,7 +6241,7 @@ TEST_F(TableScanTest, rowId) {
                     })
                     .endTableScan()
                     .planNode();
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     split->rowIdProperties = {
         .metadataVersion = 42,
         .partitionId = 24,
@@ -6434,7 +6259,7 @@ TEST_F(TableScanTest, rowId) {
                     .assignments({{"c0", makeRowIdColumnHandle("c0")}})
                     .endTableScan()
                     .planNode();
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     split->rowIdProperties = {
         .metadataVersion = 42,
         .partitionId = 24,
@@ -6535,7 +6360,7 @@ TEST_F(TableScanTest, readRangeColumnsCoverWholeFile) {
       writeToFile(makeRowVector({makeFlatIdentityVector<int64_t>(kNumRows)}));
 
   const auto result = AssertQueryBuilder(makeReadRangeScan({}, nullptr))
-                          .split(makeHiveConnectorSplit(file->getPath()))
+                          .split(makeHiveConnectorSplit(file))
                           .config(QueryConfig::kPreferredOutputBatchRows, 7)
                           .config(QueryConfig::kMaxOutputBatchRows, 7)
                           .copyResults(pool());
@@ -6575,7 +6400,7 @@ TEST_F(TableScanTest, readRangeColumnsWithFiltersAndPrunedStrides) {
 
   const auto result =
       AssertQueryBuilder(makeReadRangeScan(std::move(filters), remainingFilter))
-          .split(makeHiveConnectorSplit(file->getPath()))
+          .split(makeHiveConnectorSplit(file))
           .config(QueryConfig::kPreferredOutputBatchRows, 7)
           .config(QueryConfig::kMaxOutputBatchRows, 7)
           .copyResults(pool());
@@ -6626,7 +6451,7 @@ TEST_F(TableScanTest, readRangeColumnMustBeRowOfBigintAndInteger) {
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan)
-          .split(makeHiveConnectorSplit(file->getPath()))
+          .split(makeHiveConnectorSplit(file))
           .copyResults(pool()),
       "Read range column must be ROW(BIGINT, INTEGER)");
 }
@@ -6669,13 +6494,11 @@ TEST_F(TableScanTest, dynamicFilterWithReadRangeColumn) {
                             assignments)
                         .capturePlanNodeId(probeScanId)
                         .hashJoin(
-                            {"a"},
-                            {"b"},
+                            "a = b",
                             builder.newPlan()
                                 .tableScan(ROW({"b"}, BIGINT()))
                                 .capturePlanNodeId(buildScanId)
                                 .planNode(),
-                            /*filter=*/"",
                             {"read_range", "a"})
                         .capturePlanNodeId(joinId)
                         .planNode();
@@ -6689,16 +6512,14 @@ TEST_F(TableScanTest, dynamicFilterWithReadRangeColumn) {
           makeFlatIdentityVector<int64_t>(5),
       });
 
-  auto task =
-      AssertQueryBuilder(plan)
-          .split(probeScanId, makeHiveConnectorSplit(probeFile->getPath()))
-          .split(buildScanId, makeHiveConnectorSplit(buildFile->getPath()))
-          .assertResults(expected);
+  auto task = AssertQueryBuilder(plan)
+                  .split(probeScanId, makeHiveConnectorSplit(probeFile))
+                  .split(buildScanId, makeHiveConnectorSplit(buildFile))
+                  .assertResults(expected);
 
   EXPECT_EQ(
       PlanNodeStats::extract(task->taskStats(), joinId)
-          .customStat(DriverStats::kDynamicFiltersProduced)
-          .sum,
+          .customSum(DriverStats::kDynamicFiltersProduced),
       1);
 }
 
@@ -6725,7 +6546,7 @@ TEST_F(TableScanTest, readRangeColumnWithoutDataColumns) {
           .planNode();
 
   AssertQueryBuilder(plan)
-      .split(makeHiveConnectorSplit(file->getPath()))
+      .split(makeHiveConnectorSplit(file))
       .assertResults(makeNamedRowVector(
           "read_range",
           makeRowVector(
@@ -6746,7 +6567,7 @@ TEST_F(TableScanTest, footerIOCount) {
               BaseVector::create<RowVector>(vector->type(), 0, pool()));
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_EQ(stats.customStat(io::kStorageReadBytes).count, 1);
-  ASSERT_GT(stats.customStat(dwio::common::kFooterBufferOverread).sum, 0);
+  ASSERT_GT(stats.customSum(dwio::common::kFooterBufferOverread), 0);
 }
 
 TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
@@ -6833,7 +6654,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
       auto tableScanStats =
           PlanNodeStats::extract(task->taskStats(), plan->id());
       ASSERT_TRUE(tableScanStats.hasCustomStat(io::kStorageReadBytes));
-      ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).sum, 0);
+      ASSERT_GT(tableScanStats.customSum(io::kStorageReadBytes), 0);
       ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).count, 0);
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
@@ -6876,7 +6697,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
         }
         // Cache miss, should behave like first time run
         ASSERT_TRUE(tableScanStats.hasCustomStat(io::kStorageReadBytes));
-        ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).sum, 0);
+        ASSERT_GT(tableScanStats.customSum(io::kStorageReadBytes), 0);
         ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).count, 0);
       }
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
@@ -6911,7 +6732,7 @@ TEST_F(TableScanTest, prevBatchEmptyAdaptivity) {
   {
     auto task = AssertQueryBuilder(duckDbQueryRunner_)
                     .plan(plan)
-                    .split(makeHiveConnectorSplit(filePath->getPath()))
+                    .split(makeHiveConnectorSplit(filePath))
                     .config(QueryConfig::kMaxOutputBatchRows, size * 4)
                     .config(
                         QueryConfig::kPreferredOutputBatchBytes,
@@ -6920,7 +6741,9 @@ TEST_F(TableScanTest, prevBatchEmptyAdaptivity) {
     const auto scanStats =
         PlanNodeStats::extract(task->taskStats(), plan->id());
     const auto numBatchesRead =
-        scanStats.customStat(TableScan::kDataSourceReadWallNanos).count - 1;
+        scanStats.customStat(TableScanStatNames::kDataSourceReadWallNanos)
+            .count -
+        1;
     const auto batchSizeWithoutAdaptivity =
         QueryConfig({}).preferredOutputBatchBytes() /
         (sizeof(int64_t) + stringBytes + sizeof(StringView));
@@ -6971,7 +6794,7 @@ TEST_F(TableScanTest, textfileEscape) {
                   .assertResults(expected);
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   const int64_t overreadBytes = stats.hasCustomStat(io::kOverreadBytes)
-      ? stats.customStat(io::kOverreadBytes).sum
+      ? stats.customSum(io::kOverreadBytes)
       : 0;
 
   ASSERT_EQ(stats.rawInputBytes, 11);
@@ -7027,11 +6850,8 @@ TEST_F(TableScanTest, textfileChunkReadEntireFile) {
                   .split(split)
                   .assertResults(expected);
 
-  auto planStats = facebook::velox::exec::toPlanStats(task->taskStats());
-  auto scanNodeId = plan->id();
-  auto it = planStats.find(scanNodeId);
-  ASSERT_TRUE(it != planStats.end());
-  auto rawInputBytes = it->second.rawInputBytes;
+  const auto rawInputBytes =
+      PlanNodeStats::extract(task->taskStats(), plan->id()).rawInputBytes;
 
   // Entire file was read in a single chunk even though range is [0,59]
   ASSERT_EQ(rawInputBytes, 106);
@@ -7119,8 +6939,8 @@ TEST_F(TableScanTest, textfileLarge) {
 
   // Verify we did not read the entire file but only a chunk
   ASSERT_EQ(stats.rawInputBytes, loadQuantum);
-  ASSERT_GT(stats.customStat(io::kTotalScanTime).sum, 0);
-  ASSERT_GT(stats.customStat(io::kIoWaitWallNanos).sum, 0);
+  ASSERT_GT(stats.customSum(io::kTotalScanTime), 0);
+  ASSERT_GT(stats.customSum(io::kIoWaitWallNanos), 0);
 }
 
 TEST_F(TableScanTest, duplicateFieldProject) {
@@ -7141,7 +6961,7 @@ TEST_F(TableScanTest, duplicateFieldProject) {
                   .planNode();
 
   AssertQueryBuilder(plan, duckDbQueryRunner_)
-      .split(makeHiveConnectorSplit(file->getPath()))
+      .split(makeHiveConnectorSplit(file))
       .assertResults("SELECT id, id FROM tmp WHERE name = 'John'");
 }
 
@@ -7251,7 +7071,7 @@ TEST_F(TableScanTest, columnPostProcessorWithSubfieldFilters) {
             .assignments({{"c0", c0Handle}, {"c1", c1Handle}, {"c2", c2Handle}})
             .endTableScan()
             .planNode();
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     AssertQueryBuilder(plan).split(split).assertResults(expected);
   }
   {
@@ -7264,7 +7084,7 @@ TEST_F(TableScanTest, columnPostProcessorWithSubfieldFilters) {
             .assignments({{"c0", c0Handle}, {"c1", c1Handle}, {"c2", c2Handle}})
             .endTableScan()
             .planNode();
-    auto split = makeHiveConnectorSplit(file->getPath());
+    auto split = makeHiveConnectorSplit(file);
     AssertQueryBuilder(plan).split(split).assertResults(expected);
   }
 }
@@ -7439,11 +7259,8 @@ TEST_F(TableScanTest, fileFormatRuntimeStats) {
   auto task = assertQuery(plan, filePaths, "SELECT * FROM tmp");
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   ASSERT_EQ(
-      stats
-          .customStat(
-              fmt::format(
-                  "{}dwrf", connector::hive::HiveDataSource::kFileFormat))
-          .sum,
+      stats.customSum(
+          fmt::format("{}dwrf", connector::hive::HiveDataSource::kFileFormat)),
       3);
 }
 
@@ -7530,8 +7347,8 @@ TEST_F(TableScanTest, scanBatchCallbackDistinguishesScans) {
                   .planNode();
 
   AssertQueryBuilder(plan)
-      .split(firstScanId, makeHiveConnectorSplit(firstFile->getPath()))
-      .split(secondScanId, makeHiveConnectorSplit(secondFile->getPath()))
+      .split(firstScanId, makeHiveConnectorSplit(firstFile))
+      .split(secondScanId, makeHiveConnectorSplit(secondFile))
       .queryCtx(queryCtx)
       .copyResults(pool());
 
@@ -7623,8 +7440,7 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytes) {
   // small -- a delta measured only around next() would report zero here.
   const auto operatorBytes =
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customStat(io::kStorageReadBytes)
-          .sum;
+          .customSum(io::kStorageReadBytes);
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
 }
@@ -7664,13 +7480,13 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesMultiStripe) {
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   // Guards against the file collapsing to a single stripe, which would make
   // this a duplicate of the test above.
-  ASSERT_GT(stats.customStat(dwio::common::kNumStripes).sum, 1);
-  const auto operatorBytes = stats.customStat(io::kStorageReadBytes).sum;
+  ASSERT_GT(stats.customSum(dwio::common::kNumStripes), 1);
+  const auto operatorBytes = stats.customSum(io::kStorageReadBytes);
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
   EXPECT_GT(eventsCarryingBytes, 0);
   LOG(INFO) << "multiStripe: numStripes="
-            << stats.customStat(dwio::common::kNumStripes).sum
+            << stats.customSum(dwio::common::kNumStripes)
             << " eventsCarryingBytes=" << eventsCarryingBytes
             << " bytes=" << operatorBytes;
 }
@@ -7704,8 +7520,8 @@ TEST_F(TableScanTest, scanBatchCallbackStorageReadBytesPreload) {
 
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
   // Without this the test would silently stop covering the handover path.
-  ASSERT_GT(stats.customStat(TableScan::kPreloadedSplits).sum, 0);
-  const auto operatorBytes = stats.customStat(io::kStorageReadBytes).sum;
+  ASSERT_GT(stats.customSum(TableScanStatNames::kPreloadedSplits), 0);
+  const auto operatorBytes = stats.customSum(io::kStorageReadBytes);
   EXPECT_GT(operatorBytes, 0);
   EXPECT_EQ(summedEventBytes, operatorBytes);
 }
@@ -7811,8 +7627,7 @@ TEST_F(TableScanTest, scanBatchCallbackPreloadedSplits) {
 
   ASSERT_GT(
       PlanNodeStats::extract(task->taskStats(), plan->id())
-          .customStat(TableScan::kPreloadedSplits)
-          .sum,
+          .customSum(TableScanStatNames::kPreloadedSplits),
       0);
   EXPECT_THAT(reads, ::testing::ElementsAreArray(expected));
 }
@@ -7851,7 +7666,7 @@ TEST_F(TableScanTest, extractionMapKeys) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -7892,7 +7707,7 @@ TEST_F(TableScanTest, extractionMapValues) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -7933,7 +7748,7 @@ TEST_F(TableScanTest, extractionSize) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -7974,7 +7789,7 @@ TEST_F(TableScanTest, extractionMapKeyFilter) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -8019,7 +7834,7 @@ TEST_F(TableScanTest, extractionMapKeyFilterIntegerKeys) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -8061,7 +7876,7 @@ TEST_F(TableScanTest, extractionStructField) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 3);
@@ -8107,7 +7922,7 @@ TEST_F(TableScanTest, extractionArrayElementsStructField) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -8152,7 +7967,7 @@ TEST_F(TableScanTest, extractionArraySize) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 3);
@@ -8199,7 +8014,7 @@ TEST_F(TableScanTest, extractionMapValuesStructField) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -8252,7 +8067,7 @@ TEST_F(TableScanTest, extractionMultipleFromSameColumn) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -8302,7 +8117,7 @@ TEST_F(TableScanTest, extractionWithRegularColumn) {
           .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 3);
@@ -8360,7 +8175,7 @@ TEST_F(TableScanTest, extractionSizeAndMapKeyFilter) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   ASSERT_EQ(result->size(), 2);
@@ -8427,7 +8242,7 @@ TEST_F(TableScanTest, extractionSizeLargeDataMultipleBatches) {
                   .planNode();
 
   auto result = AssertQueryBuilder(plan)
-                    .split(makeHiveConnectorSplit(file->getPath()))
+                    .split(makeHiveConnectorSplit(file))
                     .copyResults(pool());
 
   // Verify all rows are present with correct sizes.
@@ -8502,7 +8317,7 @@ TEST_F(TableScanTest, extractionDeeplyNestedChain) {
 
   auto extractionTask = AssertQueryBuilder(plan)
                             .config(QueryConfig::kMaxSplitPreloadPerDriver, 0)
-                            .split(makeHiveConnectorSplit(file->getPath()))
+                            .split(makeHiveConnectorSplit(file))
                             .copyResults(pool());
 
   ASSERT_EQ(extractionTask->size(), 2);
@@ -8604,9 +8419,9 @@ TEST_F(TableScanTest, extractionMultipleFormatsMultipleSplits) {
   // all splits are processed by a single split reader.
   auto result = AssertQueryBuilder(plan)
                     .config(QueryConfig::kMaxSplitPreloadPerDriver, 0)
-                    .split(makeHiveConnectorSplit(dwrfFile1->getPath()))
+                    .split(makeHiveConnectorSplit(dwrfFile1))
                     .split(exec::Split(textSplit))
-                    .split(makeHiveConnectorSplit(dwrfFile2->getPath()))
+                    .split(makeHiveConnectorSplit(dwrfFile2))
                     .copyResults(pool());
 
   // 2 rows per split × 3 splits = 6 rows total.

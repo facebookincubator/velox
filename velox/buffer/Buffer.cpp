@@ -77,8 +77,14 @@ BufferPtr Buffer::slice<bool>(
     size_t length,
     memory::MemoryPool* pool) {
   VELOX_CHECK_NOT_NULL(buffer, "Buffer must not be null.");
+  const uint64_t numBits = static_cast<uint64_t>(buffer->size()) * 8;
+  VELOX_CHECK_LE(
+      offset, numBits, "Slice offset is past the end of the buffer.");
+  VELOX_CHECK_LE(
+      length, numBits - offset, "Slice length is past the end of the buffer.");
 
-  if (offset % 8 == 0) {
+  // A zero-copy slice must start 8-byte aligned, as vector bitmaps must.
+  if (offset % 64 == 0) {
     return sliceBufferZeroCopy(
         1, true, buffer, bits::nbytes(offset), bits::nbytes(length));
   }
@@ -88,4 +94,13 @@ BufferPtr Buffer::slice<bool>(
       buffer->as<uint64_t>(), offset, ans->asMutable<uint64_t>(), 0, length);
   return ans;
 }
+
+size_t Buffer::alignment() const {
+  const auto address = reinterpret_cast<uintptr_t>(data_);
+  if (address == 0) {
+    return size_t{1} << (sizeof(size_t) * 8 - 1);
+  }
+  return address & (~address + 1);
+}
+
 } // namespace facebook::velox

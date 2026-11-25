@@ -17,12 +17,14 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <vector>
 
 #include <fmt/format.h>
 
 #include "velox/dwio/nimble/common/RowRange.h"
+#include "velox/dwio/nimble/index/ClusterIndexBase.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
 
 namespace facebook::nimble {
@@ -59,6 +61,11 @@ struct ProjectedStripe {
   // Keeps the storage referenced by streams alive. Stripes loaded together
   // share the same handle.
   DataInput::Handle dataHandle;
+  // The cluster index key chunk of the stripe, its key stream, when the load
+  // read it with the streams, so that the keys of the stripe's rows can decode
+  // without reading the index. Its data handle is dataHandle, which a key
+  // cursor over the chunk holds after the stripe's streams are freed.
+  std::optional<index::ClusterIndexBase::KeyChunk> keyChunk;
 };
 
 } // namespace facebook::nimble

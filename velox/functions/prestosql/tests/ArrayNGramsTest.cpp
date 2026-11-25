@@ -54,16 +54,21 @@ TEST_F(ArrayNGramsTest, integers) {
 }
 
 TEST_F(ArrayNGramsTest, invalidN) {
-  auto input = makeArrayVector<int64_t>({{1, 2, 3, 4}});
+  {
+    auto input =
+        makeRowVector({makeArrayVectorFromJson<int64_t>({"[1, 2, 3, 4]"})});
+    VELOX_ASSERT_THROW(
+        evaluate("ngrams(c0, 0::INTEGER)", input),
+        "(0 vs. 0) N must be greater than zero");
+    VELOX_ASSERT_THROW(
+        evaluate("ngrams(c0, -5::INTEGER)", input),
+        "(-5 vs. 0) N must be greater than zero");
+  }
+
   VELOX_ASSERT_THROW(
-      evaluate("ngrams(c0, 0::INTEGER)", makeRowVector({input})),
-      "(0 vs. 0) N must be greater than zero");
-  VELOX_ASSERT_THROW(
-      evaluate("ngrams(c0, -5::INTEGER)", makeRowVector({input})),
-      "Scalar function signature is not supported");
-  input = makeArrayVector<int64_t>({{}});
-  VELOX_ASSERT_THROW(
-      evaluate("ngrams(c0, 0::INTEGER)", makeRowVector({input})),
+      evaluate(
+          "ngrams(c0, 0::INTEGER)",
+          makeRowVector({makeArrayVectorFromJson<int64_t>({"[]"})})),
       "(0 vs. 0) N must be greater than zero");
 }
 

@@ -39,6 +39,7 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
+#include "velox/exec/TableWriterStatNames.h"
 #include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
 
@@ -271,16 +272,14 @@ TEST_F(BasicTableWriterTest, flatMapConversionRuntimeStats) {
   AssertQueryBuilder(plan).copyResults(pool(), task);
 
   const auto stats =
-      toPlanStats(task->taskStats()).at(tableWriteNodeId).customStats;
-  const auto& conversions =
-      stats.at(std::string{FlatMapVector::kNumMapConversions});
+      PlanNodeStats::extract(task->taskStats(), tableWriteNodeId);
+  const auto& conversions = stats.customStat(FlatMapVector::kNumMapConversions);
   ASSERT_EQ(conversions.count, batches.size());
   ASSERT_EQ(conversions.sum, batches.size());
   ASSERT_EQ(
-      stats.at(std::string{FlatMapVector::kNumMapConversionEntries}).sum,
-      numEntries);
+      stats.customSum(FlatMapVector::kNumMapConversionEntries), numEntries);
   ASSERT_EQ(
-      stats.at(std::string{FlatMapVector::kMapConversionWallNanos}).count,
+      stats.customStat(FlatMapVector::kMapConversionWallNanos).count,
       batches.size());
 }
 
@@ -1520,15 +1519,25 @@ TEST_P(UnpartitionedTableWriterTest, runtimeStatsCheck) {
     ASSERT_EQ(
         stats[1].runtimeStats["stripeSize"].count, testData.expectedNumStripes);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].sum,
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kNumWrittenFiles)]
+            .sum,
         1);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kNumWrittenFiles)].count,
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kNumWrittenFiles)]
+            .count,
         1);
     ASSERT_GE(
-        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].sum, 0);
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kWriteIOTime)]
+            .sum,
+        0);
     ASSERT_EQ(
-        stats[1].runtimeStats[std::string(TableWriter::kWriteIOTime)].count, 1);
+        stats[1]
+            .runtimeStats[std::string(TableWriterStatNames::kWriteIOTime)]
+            .count,
+        1);
   }
 }
 
@@ -2635,17 +2644,17 @@ TEST_P(AllTableWriterTest, tableWriterStats) {
       fixedWrittenBytes);
   ASSERT_EQ(
       stats.operatorStats.at("TableWrite")
-          ->customStat(TableWriter::kNumWrittenFiles)
+          ->customStat(TableWriterStatNames::kNumWrittenFiles)
           .sum,
       numWrittenFiles);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStat(TableWriter::kWriteIOTime)
+          ->customStat(TableWriterStatNames::kWriteIOTime)
           .sum,
       0);
   ASSERT_GE(
       stats.operatorStats.at("TableWrite")
-          ->customStat(TableWriter::kRunningWallNanos)
+          ->customStat(TableWriterStatNames::kRunningWallNanos)
           .sum,
       0);
 }
@@ -2792,16 +2801,16 @@ TEST_P(BucketSortOnlyTableWriterTest, sortWriterSpill) {
   ASSERT_GT(stats.spilledRows, 0);
   ASSERT_GT(stats.spilledBytes, 0);
   // One spilled partition per each written files.
-  const int numWrittenFiles = stats.customStat("numWrittenFiles").sum;
+  const int numWrittenFiles = stats.customSum("numWrittenFiles");
   ASSERT_GE(stats.spilledPartitions, numWrittenFiles);
-  ASSERT_GT(stats.customStat(Operator::kSpillRuns).sum, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillFillTime).sum, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillSortTime).sum, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillExtractVectorTime).sum, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillSerializationTime).sum, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillFlushTime).sum, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillWrites).sum, 0);
-  ASSERT_GT(stats.customStat(Operator::kSpillWriteTime).sum, 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillRuns), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillFillTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillSortTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillExtractVectorTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillSerializationTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillFlushTime), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillWrites), 0);
+  ASSERT_GT(stats.customSum(Operator::kSpillWriteTime), 0);
 }
 
 DEBUG_ONLY_TEST_P(BucketSortOnlyTableWriterTest, outputBatchRows) {
@@ -3161,27 +3170,22 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
                 .config(core::QueryConfig::kWriterFlushThresholdBytes, 0)
                 .plan(std::move(writerPlan))
                 .assertResults(fmt::format("SELECT {}", numRows));
-        auto planStats = toPlanStats(task->taskStats());
-        auto& tableWriteStats =
-            planStats.at(tableWriteNodeId).operatorStats.at("TableWrite");
+        const auto planStats =
+            PlanNodeStats::extract(task->taskStats(), tableWriteNodeId);
+        const auto& tableWriteStats = planStats.operatorStatsFor("TableWrite");
         if (writerSpillEnabled) {
           ASSERT_GT(
-              tableWriteStats->customStats
-                  .at(HiveDataSink::kEarlyFlushedRawBytes)
+              tableWriteStats.customStat(HiveDataSink::kEarlyFlushedRawBytes)
                   .count,
               0);
           ASSERT_GT(
-              tableWriteStats->customStats
-                  .at(HiveDataSink::kEarlyFlushedRawBytes)
-                  .sum,
+              tableWriteStats.customSum(HiveDataSink::kEarlyFlushedRawBytes),
               0);
           ASSERT_EQ(
               arbitrator->stats().numFailures, numPrevArbitrationFailures);
         } else {
-          ASSERT_EQ(
-              tableWriteStats->customStats.count(
-                  HiveDataSink::kEarlyFlushedRawBytes),
-              0);
+          ASSERT_FALSE(tableWriteStats.hasCustomStat(
+              HiveDataSink::kEarlyFlushedRawBytes));
           ASSERT_EQ(
               arbitrator->stats().numFailures, numPrevArbitrationFailures + 1);
         }

@@ -38,9 +38,9 @@ TEST(IndexConfigTest, buildersSetFactoryIdentity) {
       {ClusterIndexConfigBuilder{}.build(),
        IndexFamily::Cluster,
        kClusterIndexName},
-      {ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}.build(),
+      {ClusterIndexConfigBuilder{kTrieClusterIndexName}.build(),
        IndexFamily::Cluster,
-       kHierarchicalClusterIndexName},
+       kTrieClusterIndexName},
       {HashIndexConfigBuilder{}.build(),
        IndexFamily::Dense,
        kDenseHashIndexName},
@@ -69,7 +69,7 @@ TEST(IndexConfigTest, buildersPreserveDefaults) {
   EXPECT_EQ(clusterOptions.maxRowsPerKeyChunk, 10'000);
   EXPECT_EQ(
       clusterOptions.keyChunkCompressionType, CompressionType::Uncompressed);
-  EXPECT_TRUE(clusterOptions.hierarchicalKeyEncodingReadFactors.empty());
+  EXPECT_TRUE(clusterOptions.trieKeyEncodingReadFactors.empty());
 
   const auto hash = HashIndexConfigBuilder{}.build();
   const auto& hashOptions = checkedIndexConfig<HashIndexConfig>(*hash);
@@ -115,30 +115,28 @@ TEST(IndexConfigTest, buildersPreserveConfiguredValues) {
   EXPECT_EQ(clusterOptions.maxRowsPerKeyChunk, 123);
   EXPECT_EQ(clusterOptions.keyChunkCompressionType, CompressionType::Lz4);
 
-  const auto hierarchical =
-      ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}
+  const auto trie =
+      ClusterIndexConfigBuilder{kTrieClusterIndexName}
           .withKeyColumns({"key"})
           .withSortOrders({SortOrder{.ascending = false}})
           .withEnforceKeyOrder(true)
           .withNoDuplicateKey(true)
           .withMaxRowsPerKeyChunk(456)
           .withKeyChunkCompressionType(CompressionType::Zstd)
-          .withHierarchicalKeyEncodingReadFactors(
-              {{EncodingType::Trivial, 0.5}})
+          .withTrieKeyEncodingReadFactors({{EncodingType::Trivial, 0.5}})
           .build();
-  const auto& hierarchicalOptions =
-      checkedIndexConfig<ClusterIndexConfig>(*hierarchical);
-  EXPECT_EQ(hierarchicalOptions.columns, std::vector<std::string>{"key"});
+  const auto& trieOptions = checkedIndexConfig<ClusterIndexConfig>(*trie);
+  EXPECT_EQ(trieOptions.columns, std::vector<std::string>{"key"});
   EXPECT_EQ(
-      hierarchicalOptions.sortOrders,
+      trieOptions.sortOrders,
       std::vector<SortOrder>{SortOrder{.ascending = false}});
-  EXPECT_TRUE(hierarchicalOptions.enforceKeyOrder);
-  EXPECT_TRUE(hierarchicalOptions.noDuplicateKey);
-  EXPECT_EQ(hierarchicalOptions.name, kHierarchicalClusterIndexName);
-  EXPECT_EQ(hierarchicalOptions.maxRowsPerKeyChunk, 456);
-  EXPECT_EQ(hierarchicalOptions.keyChunkCompressionType, CompressionType::Zstd);
+  EXPECT_TRUE(trieOptions.enforceKeyOrder);
+  EXPECT_TRUE(trieOptions.noDuplicateKey);
+  EXPECT_EQ(trieOptions.name, kTrieClusterIndexName);
+  EXPECT_EQ(trieOptions.maxRowsPerKeyChunk, 456);
+  EXPECT_EQ(trieOptions.keyChunkCompressionType, CompressionType::Zstd);
   EXPECT_EQ(
-      hierarchicalOptions.hierarchicalKeyEncodingReadFactors,
+      trieOptions.trieKeyEncodingReadFactors,
       (std::vector<std::pair<EncodingType, float>>{
           {EncodingType::Trivial, 0.5}}));
 

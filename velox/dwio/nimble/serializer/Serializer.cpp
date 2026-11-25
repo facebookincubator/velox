@@ -68,9 +68,15 @@ Serializer::Serializer(
   options_.encodingOptions.encodingBufferPool = nestedEncodingBufferPool_.get();
 
   NIMBLE_CHECK(
-      options_.version == SerializationVersion::kSerialization,
-      "Serializer writes must use kSerialization. Got: {}",
+      options_.version == SerializationVersion::kSerialization ||
+          options_.version == SerializationVersion::kBlob,
+      "Serializer writes must use kSerialization or kBlob. Got: {}",
       options_.version);
+
+  if (options_.version == SerializationVersion::kBlob) {
+    initBlobOptions();
+  }
+
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(type);
 
@@ -103,6 +109,10 @@ Serializer::Serializer(
           "Hybrid FlatMap column '{}' must be a MAP.",
           columnName);
       context_.addHybridFlatMapNode(child->id(), hybridMap);
+    }
+    if (options_.hybridFlatMapGroupKeysLayout.has_value()) {
+      context_.setHybridFlatMapGroupKeysLayout(
+          *options_.hybridFlatMapGroupKeysLayout);
     }
   }
 
@@ -169,6 +179,26 @@ Serializer::Serializer(
   }
 
   buildStreamEncodingLayouts();
+}
+
+void Serializer::initBlobOptions() {
+  NIMBLE_USER_CHECK(
+      !options_.encodingLayoutTree.has_value(),
+      "kBlob does not support encodingLayoutTree.");
+  NIMBLE_USER_CHECK(
+      isSupportedBlobCompression(
+          options_.blobCompressionOptions.compressionType),
+      "kBlob blob compression must be Lz4, Zstd, MetaInternal, OpenZL or Uncompressed. Got: {}",
+      options_.blobCompressionOptions.compressionType);
+  const std::vector<std::pair<EncodingType, float>> trivialReadFactors{
+      {EncodingType::Trivial, 1.0F}};
+  auto trivialPolicyFactory =
+      std::make_shared<const ManualEncodingSelectionPolicyFactory>(
+          trivialReadFactors, options_.compressionOptions);
+  options_.encodingSelectionPolicyCreator =
+      [trivialPolicyFactory](DataType dataType) {
+        return trivialPolicyFactory->createPolicy(dataType);
+      };
 }
 
 std::string_view Serializer::serialize(

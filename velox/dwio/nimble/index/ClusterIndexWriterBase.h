@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,9 +72,9 @@ class ClusterIndexWriterBase : public IndexWriter {
 
   /// In the Stripe layout, encodes the keys written since the last call into
   /// 'buffer' as the key chunk of the stripe being written, and returns it as
-  /// the content of the stripe's key stream. Returns no chunks in the
-  /// Partition layout.
-  std::vector<Chunk> finishStripe(Buffer& buffer) override;
+  /// the content of the stripe's one index stream, its key stream. Returns no
+  /// streams in the Partition layout.
+  std::vector<std::vector<Chunk>> finishStripe(Buffer& buffer) override;
 
   /// Writes the key stream data and the partition metadata of the stripe group
   /// in the Partition layout, and the ClusterIndexGroup of the stripe group in
@@ -101,6 +102,14 @@ class ClusterIndexWriterBase : public IndexWriter {
     /// Stripe layout only.
     std::optional<uint32_t> keyStreamId{};
   };
+
+  // Returns the key stream of a cluster index created with 'keyStreamLayout'
+  // and the index streams 'indexStreamIds', which the Writer allocates: the
+  // one index stream of the Stripe layout, or nullopt in the Partition layout,
+  // which has none.
+  static std::optional<uint32_t> stripeKeyStreamId(
+      KeyStreamLayout keyStreamLayout,
+      std::span<const uint32_t> indexStreamIds);
 
   ClusterIndexWriterBase(
       const velox::RowTypePtr& inputType,

@@ -12,8 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_parse_test QueryPlannerTest.cpp)
+# GCC warning flags. TREAT_WARNINGS_AS_ERRORS makes only the warnings in
+# GccFatalWarnings.txt fail the build; GCC prints the rest. One flag per line.
 
-add_test(velox_parse_test velox_parse_test)
-
-target_link_libraries(velox_parse_test velox_parse_parser GTest::gtest GTest::gtest_main)
+-Wall
+-Wextra
+-Wno-unused
+-Wno-unused-parameter
+-Wno-sign-compare
+-Wno-ignored-qualifiers
+-Wno-implicit-fallthrough
+-Wno-class-memaccess
+-Wno-comment
+-Wno-int-in-bool-context
+-Wno-redundant-move
+-Wno-array-bounds
+-Wno-maybe-uninitialized
+-Wno-unused-result
+-Wno-format-overflow
+-Wno-strict-aliasing
+-Wno-overloaded-virtual
+# False positives: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+-Wno-restrict

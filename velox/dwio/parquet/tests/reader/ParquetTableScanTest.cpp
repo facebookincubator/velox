@@ -2242,10 +2242,8 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
                   .tableScan(fact->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"k"},
-                      {"dk"},
+                      "k = dk",
                       builder.newPlan().values(build).planNode(),
-                      "",
                       {"k", "payload", "dim_payload"})
                   .capturePlanNodeId(joinId)
                   .planNode();
@@ -2313,17 +2311,13 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterReplacement) {
   PlanBuilder builder(pool_.get());
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinId;
-  auto plan = builder.newPlan()
-                  .tableScan(fact->rowType())
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"k"},
-                      {"dk"},
-                      builder.newPlan().values(build).planNode(),
-                      "",
-                      {"k"})
-                  .capturePlanNodeId(joinId)
-                  .planNode();
+  auto plan =
+      builder.newPlan()
+          .tableScan(fact->rowType())
+          .capturePlanNodeId(probeScanId)
+          .hashJoin("k = dk", builder.newPlan().values(build).planNode(), {"k"})
+          .capturePlanNodeId(joinId)
+          .planNode();
 
   auto task = AssertQueryBuilder(plan)
                   .split(probeScanId, makeSplit(filePath->getPath()))

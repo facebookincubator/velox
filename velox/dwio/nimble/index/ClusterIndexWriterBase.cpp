@@ -107,7 +107,24 @@ void ClusterIndexWriterBase::write(const velox::VectorPtr& input) {
   encodeKeyChunks();
 }
 
-std::vector<Chunk> ClusterIndexWriterBase::finishStripe(Buffer& buffer) {
+std::optional<uint32_t> ClusterIndexWriterBase::stripeKeyStreamId(
+    KeyStreamLayout keyStreamLayout,
+    std::span<const uint32_t> indexStreamIds) {
+  if (keyStreamLayout == KeyStreamLayout::kPartition) {
+    NIMBLE_CHECK(
+        indexStreamIds.empty(),
+        "A Partition layout cluster index stores no stream in stripes");
+    return std::nullopt;
+  }
+  NIMBLE_CHECK_EQ(
+      indexStreamIds.size(),
+      1,
+      "A Stripe layout cluster index stores its keys in one stream of each stripe");
+  return indexStreamIds.front();
+}
+
+std::vector<std::vector<Chunk>> ClusterIndexWriterBase::finishStripe(
+    Buffer& buffer) {
   checkNotClosed();
   if (keyStreamLayout_ == KeyStreamLayout::kPartition) {
     return {};
@@ -120,7 +137,9 @@ std::vector<Chunk> ClusterIndexWriterBase::finishStripe(Buffer& buffer) {
   auto chunks = encodeBufferedKeys(/*maxRowsPerChunk=*/0, buffer);
   NIMBLE_CHECK_EQ(chunks.size(), 1);
   indexPartition_->keyStreamOffset = 0;
-  return chunks;
+  std::vector<std::vector<Chunk>> streams;
+  streams.emplace_back(std::move(chunks));
+  return streams;
 }
 
 void ClusterIndexWriterBase::encodeKeyChunks(bool force) {

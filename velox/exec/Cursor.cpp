@@ -1143,6 +1143,14 @@ bool RowCursor::next() {
   return true;
 }
 
+uint64_t TaskCursor::countRows() {
+  uint64_t numRows{0};
+  while (moveNext()) {
+    numRows += current()->size();
+  }
+  return numRows;
+}
+
 std::unique_ptr<TaskCursor> TaskCursor::create(const CursorParameters& params) {
   if (!params.breakpoints.empty()) {
     if (params.serialExecution) {

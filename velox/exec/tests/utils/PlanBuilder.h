@@ -1258,7 +1258,7 @@ class PlanBuilder {
   /// By default, uses ASC NULLS LAST sort order, e.g. column "a" above will use
   /// ASC NULLS LAST and column "b" will use DESC NULLS LAST.
   PlanBuilder&
-  topN(const std::vector<std::string>& keys, int32_t count, bool isPartial);
+  topN(const std::vector<std::string>& keys, int64_t count, bool isPartial);
 
   /// Add a LimitNode.
   ///
@@ -1343,6 +1343,22 @@ class PlanBuilder {
   /// @param idName The name of output column that contains the unique ID.
   /// Column type is assumed as BIGINT.
   PlanBuilder& assignUniqueId(const std::string& idName = "unique");
+
+  /// Add an RPCNode that calls a registered AsyncRPCFunction and appends its
+  /// result to the input columns, e.g. rpc("demo_rpc(prompt) as result").
+  ///
+  /// @param call SQL call of the RPC function. An optional alias names the
+  /// result column, which defaults to '__rpc_result'. The result type is
+  /// resolved from the signatures the function is registered with.
+  /// @param streamingMode Whether the function is called per row or per batch.
+  /// @param dispatchBatchSize See core::RPCNode.
+  /// @param executionPhase See core::RPCNode.
+  PlanBuilder& rpc(
+      std::string_view call,
+      velox::rpc::RPCStreamingMode streamingMode =
+          velox::rpc::RPCStreamingMode::kPerRow,
+      int32_t dispatchBatchSize = 0,
+      std::string executionPhase = "INLINE");
 
   /// Add a PartitionedOutputNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction.
@@ -1480,6 +1496,22 @@ class PlanBuilder {
       const std::vector<std::string>& rightKeys,
       const core::PlanNodePtr& build,
       const std::string& filter,
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType = core::JoinType::kInner,
+      bool nullAware = false,
+      bool nullAsValue = false);
+
+  /// Same as above, with the join keys and the filter given as one SQL
+  /// condition.
+  ///
+  /// @param condition Conjuncts joined by AND. Each conjunct that equates a
+  /// probe column with a build column, in either order, is a join key. The
+  /// others form the filter. Needs at least one join key. For example,
+  /// "t0 = u0 AND t1 = u1 AND t2 < u2" joins on (t0, t1) = (u0, u1) and
+  /// filters on t2 < u2.
+  PlanBuilder& hashJoin(
+      const std::string& condition,
+      const core::PlanNodePtr& build,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner,
       bool nullAware = false,
@@ -1898,6 +1930,18 @@ class PlanBuilder {
   }
 
  private:
+  // Adds a HashJoinNode. 'filter' is typed against the probe columns followed
+  // by the build columns, or null.
+  PlanBuilder& addHashJoin(
+      const std::vector<std::string>& leftKeys,
+      const std::vector<std::string>& rightKeys,
+      const core::PlanNodePtr& build,
+      const core::TypedExprPtr& filter,
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType,
+      bool nullAware,
+      bool nullAsValue);
+
   // Adds a TopNRowNumberNode with the given rank column and partial flag.
   PlanBuilder& addTopNRowNumber(
       std::string_view function,

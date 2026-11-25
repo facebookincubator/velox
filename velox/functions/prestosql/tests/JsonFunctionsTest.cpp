@@ -1281,6 +1281,40 @@ TEST_F(JsonFunctionsTest, jsonExtract) {
   EXPECT_EQ(std::nullopt, jsonExtract("{\"a\": {}", "$.a.[*]"));
 }
 
+TEST_F(JsonFunctionsTest, jsonExtractMultipleRows) {
+  // The output buffer is reused across the rows of a batch. Each row must start
+  // from an empty output, including after a row that failed with a partial
+  // output.
+  auto data = makeRowVector(
+      {makeFlatVector<std::string>(
+           {R"({"a": [1, 2, 3]})",
+            R"({"a": [4]})",
+            R"({"a": [5, 6]})",
+            R"([6849,26,"a",{4422863654280672950:43},26,"a"])",
+            R"({"a": [7]})",
+            R"({"b": 1})",
+            R"({"a": [8, 9]})"},
+           JSON()),
+       makeFlatVector<std::string>(
+           {"$.a[*]", "$.a[*]", "$.a[0]", "$.*", "$.a[*]", "$.a[*]", "$.a"})});
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"[1,2,3]", "[4]", "5", std::nullopt, "[7]", std::nullopt, "[8, 9]"},
+          JSON()),
+      evaluate("json_extract(c0, c1)", data));
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"[1,2,3]",
+           "[4]",
+           "[5,6]",
+           std::nullopt,
+           "[7]",
+           std::nullopt,
+           "[8,9]"},
+          JSON()),
+      evaluate("json_extract(c0, '$.a[*]')", data));
+}
+
 TEST_F(JsonFunctionsTest, jsonExtractVarcharInput) {
   auto jsonExtract = [&](std::optional<std::string> json,
                          const std::string& path,

@@ -24,6 +24,7 @@
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/HashBuild.h"
+#include "velox/exec/HashBuildStatNames.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
@@ -210,12 +211,13 @@ int32_t maxHashBuildSpillLevel(const exec::Task& task) {
     for (auto& operatorStat : pipelineStat.operatorStats) {
       if (operatorStat.operatorType == OperatorType::kHashBuild) {
         if (operatorStat.runtimeStats.count(
-                std::string(HashBuild::kMaxSpillLevel)) == 0) {
+                std::string(HashBuildStatNames::kMaxSpillLevel)) == 0) {
           continue;
         }
         maxSpillLevel = std::max<int32_t>(
             maxSpillLevel,
-            operatorStat.runtimeStats[std::string(HashBuild::kMaxSpillLevel)]
+            operatorStat
+                .runtimeStats[std::string(HashBuildStatNames::kMaxSpillLevel)]
                 .max);
       }
     }

@@ -31,6 +31,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/VectorReaders.h"
+#include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -1383,7 +1384,7 @@ PlanBuilder& PlanBuilder::orderBy(
 
 PlanBuilder& PlanBuilder::topN(
     const std::vector<std::string>& keys,
-    int32_t count,
+    int64_t count,
     bool isPartial) {
   VELOX_CHECK_NOT_NULL(planNode_, "TopN cannot be the source node");
   auto [sortingKeys, sortingOrders] =
@@ -1518,6 +1519,65 @@ PlanBuilder& PlanBuilder::assignUniqueId(const std::string& idName) {
   planNode_ = std::make_shared<core::AssignUniqueIdNode>(
       nextPlanNodeId(), idName, planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
+  return *this;
+}
+
+namespace {
+TypePtr resolveRPCType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  const auto entry = exec::rpc::AsyncRPCFunctionRegistry::find(name);
+  VELOX_USER_CHECK(entry.has_value(), "RPC function doesn't exist: {}", name);
+  for (const auto& signature : entry->signatures) {
+    SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
+    if (binder.tryBind()) {
+      return binder.tryResolveType(signature->returnType());
+    }
+  }
+  VELOX_USER_FAIL(
+      "RPC function signature is not supported: {}. Supported signatures: {}.",
+      toString(name, argTypes),
+      toString(entry->signatures));
+}
+} // namespace
+
+PlanBuilder& PlanBuilder::rpc(
+    std::string_view call,
+    velox::rpc::RPCStreamingMode streamingMode,
+    int32_t dispatchBatchSize,
+    std::string executionPhase) {
+  VELOX_CHECK_NOT_NULL(planNode_, "RPC cannot be the source node");
+  const auto untyped =
+      parse::DuckSqlExpressionsParser(options_).parseExpr(std::string(call));
+  const auto* callExpr = untyped->as<core::CallExpr>();
+  VELOX_USER_CHECK_NOT_NULL(callExpr, "RPC must be a function call: {}", call);
+
+  std::vector<core::TypedExprPtr> inputs;
+  std::vector<TypePtr> argTypes;
+  for (const auto& input : callExpr->inputs()) {
+    inputs.push_back(inferTypes(input));
+    argTypes.push_back(inputs.back()->type());
+  }
+  const auto resultColumn = callExpr->alias().value_or("__rpc_result");
+  VELOX_USER_CHECK(
+      !planNode_->outputType()->containsChild(resultColumn),
+      "RPC result column already exists in the input. Use an alias: {}",
+      resultColumn);
+  auto typedCall = std::make_shared<core::CallTypedExpr>(
+      resolveRPCType(callExpr->name(), argTypes),
+      std::move(inputs),
+      callExpr->name());
+  auto outputType =
+      planNode_->outputType()->unionWith({resultColumn}, {typedCall->type()});
+  planNode_ = std::make_shared<core::RPCNode>(
+      nextPlanNodeId(),
+      planNode_,
+      std::move(typedCall),
+      resultColumn,
+      std::move(outputType),
+      streamingMode,
+      dispatchBatchSize,
+      std::move(executionPhase));
   return *this;
 }
 
@@ -1907,15 +1967,40 @@ PlanBuilder& PlanBuilder::hashJoin(
     bool nullAware,
     bool nullAsValue) {
   VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
+  core::TypedExprPtr filterExpr;
+  if (!filter.empty()) {
+    filterExpr = parseExpr(
+        filter,
+        concat(planNode_->outputType(), build->outputType()),
+        options_,
+        pool_);
+  }
+  return addHashJoin(
+      leftKeys,
+      rightKeys,
+      build,
+      filterExpr,
+      outputLayout,
+      joinType,
+      nullAware,
+      nullAsValue);
+}
+
+PlanBuilder& PlanBuilder::addHashJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& build,
+    const core::TypedExprPtr& filter,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType,
+    bool nullAware,
+    bool nullAsValue) {
+  VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
 
   auto leftType = planNode_->outputType();
   auto rightType = build->outputType();
   auto resultType = concat(leftType, rightType);
-  core::TypedExprPtr filterExpr;
-  if (!filter.empty()) {
-    filterExpr = parseExpr(filter, resultType, options_, pool_);
-  }
 
   RowTypePtr outputType;
   if (isLeftSemiProjectJoin(joinType) || isRightSemiProjectJoin(joinType)) {
@@ -1943,7 +2028,7 @@ PlanBuilder& PlanBuilder::hashJoin(
       nullAware,
       leftKeyFields,
       rightKeyFields,
-      std::move(filterExpr),
+      filter,
       std::move(planNode_),
       build,
       outputType,
@@ -1951,6 +2036,109 @@ PlanBuilder& PlanBuilder::hashJoin(
       nullAsValue);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
+}
+
+namespace {
+
+// Adds the conjuncts of 'expr' to 'conjuncts'.
+void splitConjuncts(
+    const core::ExprPtr& expr,
+    std::vector<core::ExprPtr>& conjuncts) {
+  const auto* call = expr->as<core::CallExpr>();
+  if (call != nullptr && call->name() == "and") {
+    for (const auto& input : call->inputs()) {
+      splitConjuncts(input, conjuncts);
+    }
+    return;
+  }
+  conjuncts.push_back(expr);
+}
+
+std::optional<std::string> columnName(const core::ExprPtr& expr) {
+  const auto* field = expr->as<core::FieldAccessExpr>();
+  if (field != nullptr && field->isRootColumn()) {
+    return field->name();
+  }
+  return std::nullopt;
+}
+
+// Returns the left and right columns 'conjunct' equates, if it equates a left
+// column with a right column.
+std::optional<std::pair<std::string, std::string>> joinKey(
+    const core::ExprPtr& conjunct,
+    const std::string& equalsName,
+    const RowTypePtr& leftType,
+    const RowTypePtr& rightType) {
+  const auto* call = conjunct->as<core::CallExpr>();
+  if (call == nullptr || call->name() != equalsName) {
+    return std::nullopt;
+  }
+  auto first = columnName(call->inputAt(0));
+  auto second = columnName(call->inputAt(1));
+  if (!first.has_value() || !second.has_value()) {
+    return std::nullopt;
+  }
+  if (leftType->containsChild(*first) && rightType->containsChild(*second)) {
+    return std::make_pair(*first, *second);
+  }
+  if (leftType->containsChild(*second) && rightType->containsChild(*first)) {
+    return std::make_pair(*second, *first);
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+PlanBuilder& PlanBuilder::hashJoin(
+    const std::string& condition,
+    const core::PlanNodePtr& build,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType,
+    bool nullAware,
+    bool nullAsValue) {
+  VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
+  const auto& leftType = planNode_->outputType();
+  const auto& rightType = build->outputType();
+
+  std::vector<core::ExprPtr> conjuncts;
+  splitConjuncts(
+      parse::DuckSqlExpressionsParser(options_).parseExpr(condition),
+      conjuncts);
+
+  const auto equalsName = options_.functionPrefix + "eq";
+  std::vector<std::string> leftKeys;
+  std::vector<std::string> rightKeys;
+  core::ExprPtr filter;
+  for (const auto& conjunct : conjuncts) {
+    if (auto key = joinKey(conjunct, equalsName, leftType, rightType)) {
+      leftKeys.push_back(std::move(key->first));
+      rightKeys.push_back(std::move(key->second));
+    } else if (filter == nullptr) {
+      filter = conjunct;
+    } else {
+      filter = std::make_shared<core::CallExpr>(
+          "and", std::vector<core::ExprPtr>{filter, conjunct}, std::nullopt);
+    }
+  }
+  VELOX_USER_CHECK(
+      !leftKeys.empty(),
+      "Hash join condition must equate a probe column with a build column: {}",
+      condition);
+
+  core::TypedExprPtr typedFilter;
+  if (filter != nullptr) {
+    typedFilter = core::Expressions::inferTypes(
+        filter, concat(leftType, rightType), pool_);
+  }
+  return addHashJoin(
+      leftKeys,
+      rightKeys,
+      build,
+      typedFilter,
+      outputLayout,
+      joinType,
+      nullAware,
+      nullAsValue);
 }
 
 PlanBuilder& PlanBuilder::mergeJoin(

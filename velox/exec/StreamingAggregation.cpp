@@ -57,6 +57,9 @@ StreamingAggregation::StreamingAggregation(
     VELOX_UNSUPPORTED(
         "Streaming aggregation doesn't support ignoring null keys yet");
   }
+  VELOX_CHECK(
+      aggregationNode_->globalGroupingSets().empty(),
+      "Streaming aggregation doesn't support global grouping sets");
 }
 
 void StreamingAggregation::initialize() {

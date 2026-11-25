@@ -574,6 +574,16 @@ void NimbleDumpLib::emitSchema(bool collapseFlatMap) {
                       type.asArrayWithOffsets().lengthsDescriptor().offset());
         break;
       }
+      case Kind::SlidingWindowArray: {
+        offsets =
+            "o:" +
+            folly::to<std::string>(
+                type.asSlidingWindowArray().offsetsDescriptor().offset()) +
+            ",l:" +
+            folly::to<std::string>(
+                type.asSlidingWindowArray().lengthsDescriptor().offset());
+        break;
+      }
       case Kind::SlidingWindowMap: {
         offsets = "o:" +
             folly::to<std::string>(
@@ -1341,6 +1351,8 @@ void NimbleDumpLib::emitIndex() {
   ostream_ << std::endl;
   ostream_ << "Number of Partitions: "
            << commaSeparated(indexLayout.numPartitions) << std::endl;
+  ostream_ << "Key Stream Layout: "
+           << index::toString(indexLayout.keyStreamLayout) << std::endl;
 
   if (!indexLayout.partitions.empty()) {
     ostream_ << "Index Groups:" << std::endl;
@@ -1373,6 +1385,11 @@ void NimbleDumpLib::emitIndex() {
          {"Metadata", 15, Alignment::Right},
          {"Key Offset", 15, Alignment::Right}},
         /*noHeader=*/false);
+
+    // In the Stripe layout, each stripe of a partition holds one key chunk in
+    // its key stream, so the partition has no key stream offset of its own.
+    const bool stripeLayout =
+        indexLayout.keyStreamLayout == index::KeyStreamLayout::kStripe;
     uint64_t totalChunks = 0;
     uint64_t totalKeyStreamBytes = 0;
     uint64_t totalMetadataBytes = 0;
@@ -1391,7 +1408,7 @@ void NimbleDumpLib::emitIndex() {
           commaSeparated(part.numRows),
           commaSeparated(keyStreamBytes),
           commaSeparated(part.metadataSizeBytes),
-          commaSeparated(keyStreamOffset),
+          stripeLayout ? "-" : commaSeparated(keyStreamOffset),
       });
       totalChunks += part.numChunks;
       totalKeyStreamBytes += keyStreamBytes;
@@ -1401,6 +1418,31 @@ void NimbleDumpLib::emitIndex() {
              << ", Key Stream: " << commaSeparated(totalKeyStreamBytes)
              << " bytes, Metadata: " << commaSeparated(totalMetadataBytes)
              << " bytes" << std::endl;
+
+    if (stripeLayout) {
+      ostream_ << "Stripe Key Streams:" << std::endl;
+      TableFormatter stripeFormatter(
+          ostream_,
+          enableColors_,
+          {{"Stripe", 8, Alignment::Right},
+           {"Partition", 10, Alignment::Right},
+           {"Offset", 15, Alignment::Right},
+           {"Size", 15, Alignment::Right}},
+          /*noHeader=*/false);
+
+      // Partitions hold consecutive stripes, in file order.
+      uint32_t stripe{0};
+      for (size_t i = 0; i < indexLayout.partitions.size(); ++i) {
+        for (const auto& region : indexLayout.partitions[i].keyStreamRegions) {
+          stripeFormatter.writeRow({
+              std::to_string(stripe++),
+              std::to_string(i),
+              commaSeparated(region.offset),
+              commaSeparated(region.length),
+          });
+        }
+      }
+    }
   }
 }
 

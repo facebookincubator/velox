@@ -65,6 +65,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       return 1;
     case Kind::Array:
     case Kind::ArrayWithOffsets:
+    case Kind::SlidingWindowArray:
     case Kind::Map:
     case Kind::SlidingWindowMap:
       return 4;

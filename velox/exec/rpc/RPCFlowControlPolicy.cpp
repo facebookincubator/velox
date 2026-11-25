@@ -18,9 +18,23 @@
 
 #include <string>
 
+#include "velox/common/EnumDefine.h"
 #include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::exec::rpc {
+
+namespace {
+const auto& rpcFlowControlPolicyNames() {
+  static const folly::F14FastMap<RPCFlowControlPolicy, std::string_view>
+      kNames = {
+          {RPCFlowControlPolicy::kWindowAimd, "WINDOW_AIMD"},
+          {RPCFlowControlPolicy::kCapacityProbing, "CAPACITY_PROBING"},
+      };
+  return kNames;
+}
+} // namespace
+
+VELOX_DEFINE_ENUM_NAME(RPCFlowControlPolicy, rpcFlowControlPolicyNames);
 
 RPCFlowControlPolicy parseRPCFlowControlPolicy(std::string_view value) {
   std::string normalized{value};
@@ -29,25 +43,13 @@ RPCFlowControlPolicy parseRPCFlowControlPolicy(std::string_view value) {
       character = static_cast<char>(character - 'a' + 'A');
     }
   }
-  if (normalized == "WINDOW_AIMD") {
-    return RPCFlowControlPolicy::kWindowAimd;
-  }
-  if (normalized == "CAPACITY_PROBING") {
-    return RPCFlowControlPolicy::kCapacityProbing;
+  if (const auto policy =
+          RPCFlowControlPolicyName::tryToRPCFlowControlPolicy(normalized)) {
+    return *policy;
   }
   VELOX_USER_FAIL(
       "RPC flow control policy must be WINDOW_AIMD or CAPACITY_PROBING; received '{}'",
       value);
-}
-
-std::string_view rpcFlowControlPolicyName(RPCFlowControlPolicy policy) {
-  switch (policy) {
-    case RPCFlowControlPolicy::kWindowAimd:
-      return "WINDOW_AIMD";
-    case RPCFlowControlPolicy::kCapacityProbing:
-      return "CAPACITY_PROBING";
-  }
-  VELOX_UNREACHABLE();
 }
 
 } // namespace facebook::velox::exec::rpc

@@ -29,6 +29,7 @@ velox_add_library(
   velox_file_connector
   STATIC
   BufferedInputBuilder.cpp
+  DeletionVectorReader.cpp
   ExtractionUtils.cpp
   FileColumnHandle.cpp
   FileConnector.cpp
@@ -39,6 +40,7 @@ velox_add_library(
   PartitionValue.cpp
   HEADERS
   BufferedInputBuilder.h
+  DeletionVectorReader.h
   ExtractionUtils.h
   FileColumnHandle.h
   FileConnector.h

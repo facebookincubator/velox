@@ -36,13 +36,11 @@ class CountingJoinTest : public OperatorTestBase {
     auto plan = builder.newPlan()
                     .values(makeRowVector({makeFlatVector<int32_t>(probe)}))
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan()
                             .values(makeRowVector(
                                 {"u0"}, {makeFlatVector<int32_t>(build)}))
                             .planNode(),
-                        "",
                         {"c0"},
                         joinType,
                         /*nullAware=*/false,
@@ -123,10 +121,8 @@ TEST_F(CountingJoinTest, multipleProbeBatches) {
     auto plan = builder.newPlan()
                     .values(probeVectors)
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         {"c0"},
                         joinType,
                         /*nullAware=*/false,
@@ -159,10 +155,8 @@ TEST_F(CountingJoinTest, multipleKeys) {
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"c0", "c1"},
-                      {"u0", "u1"},
+                      "c0 = u0 AND c1 = u1",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1"},
                       core::JoinType::kCountingAnti,
                       /*nullAware=*/false,
@@ -192,10 +186,8 @@ TEST_F(CountingJoinTest, nullKeys) {
     auto plan = builder.newPlan()
                     .values(probeVector)
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         {"c0"},
                         joinType,
                         /*nullAware=*/false,
@@ -230,10 +222,8 @@ TEST_F(CountingJoinTest, buildSideDedup) {
           .values(makeRowVector(
               {makeFlatVector<int32_t>(15, [](auto row) { return row; })}))
           .hashJoin(
-              {"c0"},
-              {"u0"},
+              "c0 = u0",
               builder.newPlan().values({buildVector}, false, 1'000).planNode(),
-              "",
               {"c0"},
               core::JoinType::kCountingAnti,
               /*nullAware=*/false,
@@ -246,12 +236,9 @@ TEST_F(CountingJoinTest, buildSideDedup) {
 
   // Verify the build received 10'000 rows but the hash table has only 10
   // distinct keys.
-  auto planStats = toPlanStats(task->taskStats());
-  const auto& joinStats = planStats.at(plan->id());
+  const auto joinStats = PlanNodeStats::extract(task->taskStats(), plan->id());
   EXPECT_EQ(10'000, joinStats.operatorStats.at("HashBuild")->inputRows);
-  EXPECT_EQ(
-      10,
-      joinStats.customStats.at(std::string(BaseHashTable::kNumDistinct)).sum);
+  EXPECT_EQ(10, joinStats.customSum(BaseHashTable::kNumDistinct));
 }
 
 // Verifies that counts are correctly merged when multiple build drivers process
@@ -297,8 +284,8 @@ TEST_F(CountingJoinTest, multipleBuildDrivers) {
                     .assertResults(expected);
 
     // Verify that all build drivers ran. Each driver processes 1 batch.
-    auto planStats = toPlanStats(task->taskStats());
-    const auto& joinStats = planStats.at(plan->id());
+    const auto joinStats =
+        PlanNodeStats::extract(task->taskStats(), plan->id());
 
     const auto& buildStats = *joinStats.operatorStats.at("HashBuild");
     EXPECT_EQ(kNumDrivers, buildStats.numDrivers);
@@ -314,7 +301,7 @@ TEST_F(CountingJoinTest, multipleBuildDrivers) {
 
     EXPECT_EQ(
         static_cast<int64_t>(expectedHashMode),
-        buildStats.customStats.at(std::string(BaseHashTable::kHashMode)).sum);
+        buildStats.customSum(BaseHashTable::kHashMode));
   };
 
   // Small keys {1, 2}: triggers array-based hash mode.

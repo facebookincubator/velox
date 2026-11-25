@@ -28,6 +28,7 @@
 #include "velox/exec/HashBuild.h"
 #include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/HashProbe.h"
+#include "velox/exec/HashProbeStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -152,10 +153,8 @@ TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
                   .values(probeVector)
                   .localPartition({"t_key"})
                   .hashJoin(
-                      {"t_key"},
-                      {"u_key"},
+                      "t_key = u_key",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"t_key", "match"},
                       core::JoinType::kLeftSemiProject,
                       true)
@@ -197,10 +196,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
                   .values(probeVector)
                   .localPartition({"t_key"})
                   .hashJoin(
-                      {"t_key"},
-                      {"u_key"},
+                      "t_key = u_key",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"u_key"},
                       core::JoinType::kRight)
                   .limit(0, 1, true)
@@ -305,10 +302,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
                     // closes early while its peers wait at the barrier.
                     .localPartition({"partition_key"})
                     .hashJoin(
-                        {"t_key"},
-                        {"u_key"},
+                        "t_key = u_key",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         {"t_key", "u_key"},
                         testParam.joinType)
                     .limit(0, 5, true)
@@ -402,10 +397,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
                     .values(probeVector)
                     .localPartition({"t_key"})
                     .hashJoin(
-                        {"t_key"},
-                        {"u_key"},
+                        "t_key = u_key",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         outputLayout,
                         joinType)
                     .limit(0, 5, true)
@@ -827,10 +820,8 @@ TEST_P(MultiThreadedHashJoinTest, nullAsValueAntiJoin) {
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"c0", "c1"},
-                      {"u0", "u1"},
+                      "c0 = u0 AND c1 = u1",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1"},
                       core::JoinType::kAnti,
                       /*nullAware=*/false,
@@ -859,10 +850,8 @@ TEST_P(MultiThreadedHashJoinTest, nullAsValueSemiJoin) {
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"c0", "c1"},
-                      {"u0", "u1"},
+                      "c0 = u0 AND c1 = u1",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1"},
                       core::JoinType::kLeftSemiFilter,
                       /*nullAware=*/false,
@@ -1534,13 +1523,11 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
                   .tableScan(probeVectors[0]->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .tableScan(buildVectors[0]->rowType())
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
-                      "",
                       {"t0", "t1"},
                       core::JoinType::kLeftSemiFilter)
                   .planNode();
@@ -1569,13 +1556,11 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
              .tableScan(probeVectors[0]->rowType())
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0 AND (t1 + u1) % 3 = 0",
                  builder.newPlan()
                      .tableScan(buildVectors[0]->rowType())
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
-                 "(t1 + u1) % 3 = 0",
                  {"t0", "t1"},
                  core::JoinType::kLeftSemiFilter)
              .planNode();
@@ -1694,10 +1679,8 @@ TEST_P(HashJoinTest, nullAwareRightAntiJoinIsRejected) {
       builder.newPlan()
           .values(probeVector)
           .hashJoin(
-              {"t0"},
-              {"u0"},
+              "t0 = u0",
               builder.newPlan().values(buildVector).planNode(),
-              /*filter=*/"",
               {"u0"},
               core::JoinType::kRightAnti,
               /*nullAware=*/true)
@@ -2288,11 +2271,15 @@ TEST_P(HashJoinTest, bloomFilterLocalProbe) {
         .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
           const auto testedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterTestedRows))
                   .sum;
           const auto acceptedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                   .sum;
           if (hasSpill) {
             verifiedSpillRun = true;
@@ -2367,11 +2354,15 @@ TEST_P(HashJoinTest, bloomFilterLocalProbeInt32Keys) {
         ASSERT_FALSE(hasSpill);
         const auto testedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterTestedRows))
                 .sum;
         const auto acceptedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                 .sum;
         EXPECT_EQ(testedRows, numRows);
         EXPECT_GE(acceptedRows, numRows * 50 / 100);
@@ -2448,15 +2439,21 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbe) {
           ASSERT_FALSE(hasSpill);
           const auto testedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterTestedRows))
                   .sum;
           const auto acceptedRows =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                   .sum;
           const auto bypassed =
               getOperatorRuntimeStats(
-                  task, 1, std::string(HashProbe::kBloomFilterBypassed))
+                  task,
+                  1,
+                  std::string(HashProbeStatNames::kBloomFilterBypassed))
                   .sum;
           EXPECT_EQ(100, testedRows);
           EXPECT_EQ(100, acceptedRows);
@@ -2496,11 +2493,15 @@ TEST_P(HashJoinTest, bypassBloomFilterLocalProbeWithoutSampling) {
         ASSERT_FALSE(hasSpill);
         const auto testedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterTestedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterTestedRows))
                 .sum;
         const auto acceptedRows =
             getOperatorRuntimeStats(
-                task, 1, std::string(HashProbe::kBloomFilterAcceptedRows))
+                task,
+                1,
+                std::string(HashProbeStatNames::kBloomFilterAcceptedRows))
                 .sum;
         EXPECT_EQ(0, testedRows);
         EXPECT_EQ(0, acceptedRows);

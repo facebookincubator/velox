@@ -28,22 +28,6 @@ namespace facebook::velox::exec {
 // Probes a hash table made by HashBuild.
 class HashProbe : public Operator {
  public:
-  /// Runtime stat keys for hash probe.
-  /// Size of the bloom filter in bytes.
-  static constexpr std::string_view kBloomFilterSize = "bloomFilterSize";
-  /// Number of probe rows tested by the build-side Bloom filter locally.
-  static constexpr std::string_view kBloomFilterTestedRows =
-      "bloomFilterTestedRows";
-  /// Number of local Bloom-filter tests that required a hash table lookup.
-  static constexpr std::string_view kBloomFilterAcceptedRows =
-      "bloomFilterAcceptedRows";
-  /// Number of times local Bloom filter probing was bypassed after sampling.
-  static constexpr std::string_view kBloomFilterBypassed =
-      "bloomFilterBypassed";
-  /// Number of rows bypassed via dynamic filter replacement.
-  static constexpr std::string_view kReplacedWithDynamicFilterRows =
-      "replacedWithDynamicFilterRows";
-
   HashProbe(
       int32_t operatorId,
       DriverCtx* driverCtx,

@@ -80,6 +80,7 @@ target_link_libraries(
   velox_core
   velox_exception
   velox_expression
+  velox_async_rpc_function_registry
   velox_parse_parser
   velox_duckdb_conversion
   velox_dwio_common

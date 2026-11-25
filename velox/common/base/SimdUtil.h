@@ -192,8 +192,28 @@ struct Gather;
 // batch<int64_t> which has 4 lanes, so this function will load 4
 // 32-bits indices.
 template <typename T, typename IndexType, typename A = xsimd::default_arch>
+  requires std::is_convertible_v<const A&, const xsimd::generic&>
 auto loadGatherIndices(const IndexType* indices, const A& arch = {}) {
   return detail::Gather<T, IndexType, A>::loadIndices(indices, arch);
+}
+
+// Same as above, but reads only the first 'numIndices' indices, and sets the
+// other lanes to 0.
+//
+// Alignment: 'indices' must be aligned to alignof(IndexType).
+// Padding: not required.
+template <typename T, typename IndexType, typename A = xsimd::default_arch>
+auto loadGatherIndices(
+    const IndexType* indices,
+    int32_t numIndices,
+    const A& arch = {}) {
+  using Indices = decltype(loadGatherIndices<T, IndexType>(indices, arch));
+  if (numIndices >= Indices::size) {
+    return loadGatherIndices<T, IndexType>(indices, arch);
+  }
+  IndexType lastIndices[Indices::size]{};
+  std::copy(indices, indices + numIndices, lastIndices);
+  return loadGatherIndices<T, IndexType>(lastIndices, arch);
 }
 
 // Gather data from memory location specified in 'base' and 'vindex'
@@ -322,6 +342,9 @@ xsimd::batch<int16_t, A> gather(
 
 // Loads up to 8 disjoint bits at bit offsets 'indices' and returns
 // these as a bit mask.
+//
+// Alignment: 'bits' must be 4-byte aligned.
+// Padding: not required.
 template <typename A = xsimd::default_arch>
 uint8_t gather8Bits(
     const void* bits,
@@ -329,15 +352,26 @@ uint8_t gather8Bits(
     int32_t numIndices,
     const A& = {});
 
-// Same as 'gather8Bits' above but read indices from memory.
+// Same as 'gather8Bits' above but read indices from memory. 'numIndices' is at
+// most 8 and at most the int32 batch width.
+//
+// Alignment: 'bits' and 'indices' must be 4-byte aligned.
+// Padding: not required.
 template <typename A = xsimd::default_arch>
 uint8_t gather8Bits(
     const void* bits,
     const int32_t* indices,
     int32_t numIndices,
     const A& arch = {}) {
+  VELOX_DCHECK_LE(
+      numIndices,
+      std::min<int32_t>(xsimd::batch<int32_t, A>::size, 8),
+      "gather8Bits takes at most 8 indices, and at most a batch of them.");
   return gather8Bits(
-      bits, loadGatherIndices<int32_t>(indices, arch), numIndices, arch);
+      bits,
+      loadGatherIndices<int32_t>(indices, numIndices, arch),
+      numIndices,
+      arch);
 }
 
 namespace detail {
@@ -519,9 +553,12 @@ inline void storeLeading(
 
 /// Stores elements of 'input' selected by 'indices' into 'output'. output[i] =
 /// input[indices[i]].
-/// Indices and output may be the same. May over-read indices but will not
-/// dereference indices that are not in range. Writes exactly indices.size()
-/// elements of 'output'.
+/// Indices and output may be the same. Reads exactly 'indices' and writes
+/// exactly indices.size() elements of 'output'.
+///
+/// Alignment: 'input' and 'output' must be aligned to alignof(TData), and
+/// 'indices' to alignof(TIndex).
+/// Padding: not required.
 template <typename TData, typename TIndex, typename A = xsimd::default_arch>
 inline void transpose(
     const TData* input,
@@ -530,14 +567,15 @@ inline void transpose(
   constexpr int32_t kBatch = xsimd::batch<TData>::size;
   const auto size = indices.size();
   int32_t i = 0;
-  for (; i + kBatch < size; i += kBatch) {
+  for (; i + kBatch <= size; i += kBatch) {
     auto indexBatch = loadGatherIndices<TData, TIndex>(indices.data() + i);
     simd::gather<TData, TIndex>(input, indexBatch).store_unaligned(output + i);
   }
   if (i < size) {
     const auto numLeft = size - i;
     auto mask = simd::leadingMask<TData>(numLeft);
-    auto indexBatch = loadGatherIndices<TData, TIndex>(indices.data() + i);
+    auto indexBatch =
+        loadGatherIndices<TData, TIndex>(indices.data() + i, numLeft);
     const auto values = simd::maskGather<TData, TIndex>(
         xsimd::broadcast<TData>(0), mask, input, indexBatch);
     storeLeading<TData, A>(values, mask, numLeft, output + i);
@@ -547,6 +585,9 @@ inline void transpose(
 /// Gathers the bit from 'bits' for each bit offset in 'indices'. Stores the
 /// result in 'result'. Writes one byte of 'result' for each 8 bits. If the last
 /// byte is not full the trailing bits are undefined.
+///
+/// Alignment: 'bits' must be 8-byte aligned and 'indices' 4-byte aligned.
+/// Padding: not required.
 void gatherBits(
     const uint64_t* bits,
     folly::Range<const int32_t*> indices,

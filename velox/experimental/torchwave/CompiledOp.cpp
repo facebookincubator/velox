@@ -943,7 +943,8 @@ void buildGridDescriptor(
       const bool broadcast = expr.broadcast || !expr.constShapes.empty();
       count = broadcast                   ? GridLaunchDesc::Count::kBroadcast
           : expr.op == SizeShortcut::kSum ? GridLaunchDesc::Count::kSum
-                                          : GridLaunchDesc::Count::kMax;
+          : expr.op == SizeShortcut::kProduct ? GridLaunchDesc::Count::kProduct
+                                              : GridLaunchDesc::Count::kMax;
       for (const auto& shape : expr.constShapes) {
         desc.constShapes.emplace_back(shape.begin(), shape.end());
       }
@@ -959,6 +960,16 @@ void buildGridDescriptor(
       desc.countOffsets.push_back(it->second.first);
       desc.countIsScalar.push_back(it->second.second);
     }
+    // As the host has it in runBoundLaunch: the outputs count too.
+    if (count == GridLaunchDesc::Count::kMax && countsOutputs(expr)) {
+      for (auto id : data.actualOutputs) {
+        auto it = offsetOf.find(id);
+        if (it != offsetOf.end() && !it->second.second) {
+          desc.countOffsets.push_back(it->second.first);
+          desc.countIsScalar.push_back(false);
+        }
+      }
+    }
     desc.count = count;
   }
   grid.targetBlocks = sv.gridStats.targetBlocks;
@@ -967,9 +978,8 @@ void buildGridDescriptor(
   grid.blockCapacity = sv.blockCapacity;
 }
 
-// The element count 'desc' gives a launch from its parameters at 'base', or
-// -1 for one the host has to give. A launch with an operand absent this
-// execution is empty whatever this gives; the host's value table knows that.
+} // namespace
+
 int64_t gridCount(const GridLaunchDesc& desc, const uint8_t* base) {
   using Count = GridLaunchDesc::Count;
   if (desc.count == Count::kHost) {
@@ -978,25 +988,34 @@ int64_t gridCount(const GridLaunchDesc& desc, const uint8_t* base) {
   if (desc.countOffsets.empty() && desc.constShapes.empty()) {
     return 1;
   }
-  int64_t count = 0;
+  int64_t count = desc.count == Count::kProduct ? 1 : 0;
   int32_t dims[kMaxDims] = {1, 1, 1, 1};
   int32_t rank = 0;
-  // Right-aligned; a dim of 1 broadcasts.
+  // Right-aligned; a dim of 1 broadcasts and an empty dim empties the
+  // result, as the device grid kernel has it.
   auto broadcastIn = [&](const int32_t* termDims, int32_t termRank) {
     rank = std::max(rank, termRank);
     for (int32_t d = 0; d < termRank; ++d) {
       auto& dim = dims[kMaxDims - termRank + d];
-      dim = std::max(dim, termDims[d]);
+      const auto term = termDims[d];
+      dim = term == 1             ? dim
+          : dim == 1              ? term
+          : dim == 0 || term == 0 ? 0
+                                  : std::max(dim, term);
     }
   };
   for (size_t t = 0; t < desc.countOffsets.size(); ++t) {
     const auto* term = base + desc.countOffsets[t];
     if (desc.countIsScalar[t]) {
-      count = std::max(count, *reinterpret_cast<const int64_t*>(term));
+      const auto value = *reinterpret_cast<const int64_t*>(term);
+      count = desc.count == Count::kProduct ? count * value
+                                            : std::max(count, value);
       continue;
     }
     const auto* tensor = reinterpret_cast<const Tensor*>(term);
-    if (desc.count == Count::kSum) {
+    if (desc.count == Count::kProduct) {
+      count *= tensor->numEl;
+    } else if (desc.count == Count::kSum) {
       count += tensor->numEl;
     } else if (desc.count == Count::kMax) {
       count = std::max<int64_t>(count, tensor->numEl);
@@ -1015,6 +1034,8 @@ int64_t gridCount(const GridLaunchDesc& desc, const uint8_t* base) {
   }
   return count;
 }
+
+namespace {
 
 // Compares the element count the descriptor gives each launch with the count
 // the host sized it for.
@@ -1134,6 +1155,109 @@ void checkDeviceGrid(
   }
 }
 
+// How the export slot 'device' differs from the host's Tensor 'host', or empty.
+// A step off the path does not fill the slot's static header, so rank and
+// element type are the host's.
+std::string exportDifference(
+    const TableTensor& host,
+    const TableTensor& device) {
+  std::string difference;
+  for (int32_t d = 0; d < host.rank; ++d) {
+    if (device.dims[d] != host.dims[d]) {
+      difference += fmt::format(
+          " dim {} is {}, host {};", d, device.dims[d], host.dims[d]);
+    } else if (host.dims[d] != 1 && device.strides[d] != host.strides[d]) {
+      difference += fmt::format(
+          " stride {} is {}, host {};", d, device.strides[d], host.strides[d]);
+    }
+  }
+  if (device.numEl != host.numEl) {
+    difference +=
+        fmt::format(" numEl is {}, host {};", device.numEl, host.numEl);
+  }
+  if (host.numEl > 0 && device.storage != host.storage) {
+    difference += fmt::format(
+        " storage is host {:+} bytes;",
+        reinterpret_cast<intptr_t>(device.storage) -
+            reinterpret_cast<intptr_t>(host.storage));
+  }
+  return difference;
+}
+
+// Whether the host's Tensor differs from the export slot only by dims at a
+// capacity: the host sizes values of data-dependent dims at their capacities.
+bool hostAtCapacity(const TableTensor& host, const TableTensor& device) {
+  bool larger = false;
+  for (int32_t d = 0; d < host.rank; ++d) {
+    if (device.dims[d] > host.dims[d]) {
+      return false;
+    }
+    larger = larger || device.dims[d] < host.dims[d];
+  }
+  return larger && device.storage == host.storage;
+}
+
+// Compares each export slot the setup of a step off the path placed with the
+// host's Tensor of its value.
+void checkExports(
+    const StepVectors& sv,
+    ExecutionState& state,
+    uint8_t* deviceBase,
+    int32_t sequenceNumber,
+    int32_t stepIdx) {
+  static std::atomic<int32_t> numReports{0};
+  static std::atomic<int64_t> numChecked{0};
+  static std::atomic<int64_t> numDifferent{0};
+  static std::atomic<int64_t> numAtCapacity{0};
+  static std::atomic<int64_t> numUnwritten{0};
+  const auto& program = *sv.program;
+  if (program.placedExports.empty()) {
+    return;
+  }
+  const auto begin = roundUp(sv.launchParamBytes, int64_t{16});
+  std::vector<uint8_t> slots(sv.paramRegionBytes - begin);
+  state.stream->wait();
+  state.stream->deviceToHostAsync(
+      slots.data(), deviceBase + begin, sv.paramRegionBytes - begin);
+  state.stream->wait();
+  const auto& table = state.valueTable;
+  for (const auto& fill : program.fills) {
+    const auto id = fill.valueId;
+    if (fill.kernel != FillOp::kExport ||
+        program.placedExports.count(fill.offset) == 0 || !table.valid(id) ||
+        !table.isTensor(id)) {
+      continue;
+    }
+    TableTensor device;
+    std::memcpy(&device, slots.data() + fill.offset - begin, sizeof(device));
+    ++numChecked;
+    const auto& host = table.tensor(id);
+    const auto difference = exportDifference(host, device);
+    if (difference.empty()) {
+      continue;
+    }
+    if (hostAtCapacity(host, device)) {
+      ++numAtCapacity;
+      continue;
+    }
+    // A setup that finds a value over its capacity leaves the step to the
+    // host and writes no dims.
+    if (device.storage == nullptr && device.numEl == 0) {
+      ++numUnwritten;
+      continue;
+    }
+    ++numDifferent;
+    if (numReports++ < 10) {
+      LOG(WARNING) << "Export check: step " << sequenceNumber << "." << stepIdx
+                   << " %" << id << ":" << difference;
+    }
+  }
+  LOG_EVERY_N(WARNING, 500)
+      << "Export check: " << numChecked << " slots, " << numDifferent
+      << " differ, " << numAtCapacity << " host dims at a capacity, "
+      << numUnwritten << " not written";
+}
+
 // The most blocks the device grid of 'sv' can give its launches: each at most
 // its element count over the elements a block takes, from the host's sizes,
 // which bound the counts the device reads.
@@ -1158,12 +1282,16 @@ void maybePackDeviceGrid(StepVectors& sv) {
       (sv.deviceGridTried && sv.deviceGridChoices == sv.gridChoiceBitmap)) {
     return;
   }
+  // A step split into several launches may come out whole at the next grid.
+  if (sv.segments.size() > 1) {
+    return;
+  }
   sv.deviceGridTried = true;
   sv.deviceGridChoices = sv.gridChoiceBitmap;
   sv.deviceGrid = nullptr;
   const auto& grid = sv.program->grid;
   const auto numLaunches = sv.kernels.size();
-  if (sv.segments.size() > 1 || grid.launches.size() != numLaunches ||
+  if (grid.launches.size() != numLaunches ||
       sv.paramOffsets.size() < numLaunches ||
       static_cast<int64_t>(numLaunches) >= grid.targetBlocks ||
       grid.targetBlocks > sv.blockCapacity) {
@@ -1339,6 +1467,38 @@ void recordD2hProducers(ExecutionState& state, const StepVectors& sv) {
 
 } // namespace
 
+bool CompositeInvocation::prepareCountFreeGrid(StepVectors& sv) {
+  auto usable = [&] {
+    return sv.deviceGrid != nullptr &&
+        sv.deviceGridChoices == sv.gridChoiceBitmap &&
+        sv.deviceGrid->numLaunches == static_cast<int32_t>(sv.kernels.size()) &&
+        sv.segments.size() <= 1;
+  };
+  if (usable()) {
+    return true;
+  }
+  if (sv.program == nullptr || sv.kernels.empty() || !kernel_) {
+    return false;
+  }
+  // Full width: every launch could use all the blocks.
+  for (auto& data : sv.kernels) {
+    data.numElements = int64_t{1} << 30;
+  }
+  const auto blockSize = makeGrid(
+      sv.kernels,
+      sv,
+      sv.blockSize,
+      kernel_->maxOccupancy(sv.entry),
+      /*staticSharedPerBlock=*/0,
+      occupancyQuery(kernel_.get(), sv.entry));
+  sv.cachedBlockSize = blockSize;
+  ++sv.gridVersion;
+  buildGridDescriptor(sv.kernels, sv, blockSize);
+  sv.deviceGridTried = false;
+  maybePackDeviceGrid(sv);
+  return usable();
+}
+
 void setViewReadIds(LaunchData& data) {
   data.viewReadIds.clear();
   for (const auto& desc : data.actualOutputDescs) {
@@ -1482,6 +1642,11 @@ Launch::Launch(
     }
     auto* cpuValue = waveGraph.newTensorValue(
         waveGraph.placeholderNode(), waveGraph.uniqueName("cpu_copy"), dtype);
+    auto& constraints = waveGraph.types().constraints;
+    if (static_cast<size_t>(id) < constraints.size() &&
+        static_cast<size_t>(cpuValue->id()) < constraints.size()) {
+      constraints[cpuValue->id()].rank = constraints[id].rank;
+    }
     argOnDevice.push_back(deviceValue);
     argOnCpu.push_back(cpuValue);
   }
@@ -2874,6 +3039,7 @@ void CompositeInvocation::layoutParamSlots(int32_t stepIdx, StepVectors& sv) {
   }
   sv.opSlotBegin.push_back(static_cast<int32_t>(sv.slotOffsets.size()));
   sv.paramRegionBytes = cursor;
+  sv.launchParamBytes = cursor;
 
   // Everything this step can read, unioned over the same three variants. Same
   // sources and same reason as Compile.cpp's opReadSet: orderingInputs is what
@@ -3292,6 +3458,17 @@ bool readShapeIntoTable(
   }
   auto& entry = state->valueEntries[id];
   auto& t = entry.t;
+  // A value a step on the device path made has no host entry: it takes the
+  // whole descriptor its setup and kernel wrote.
+  if (state->deviceAllocActive &&
+      static_cast<size_t>(id) < state->deviceOnlyValue.size() &&
+      state->deviceOnlyValue[id] != 0) {
+    std::memcpy(&t, &returned, sizeof(TableTensor));
+    entry.kind = ValueEntry::kTensor;
+    entry.flags = 0;
+    entry.generation = state->tableGeneration;
+    return true;
+  }
   const auto owner = state->valueCold[id].owner;
   if (owner >= 0 && t.elementSize > 0) {
     const auto& buffer = state->allocations[owner].buffer;
@@ -3793,6 +3970,7 @@ void CompositeInvocation::materializeStepGroups(
           collector.sizedMask(g),
           state,
           numCarved);
+      noteGroupBase(state, collector.group(g), buffer.base);
     } else {
       // A complete group carves every request; only a partial one needs the
       // copy of the sized ones.
@@ -3907,7 +4085,9 @@ void CompositeInvocation::finishStep(
     }
   }
   markD2hDependencies(state, sv);
-  if (!state.pendingReturns.empty()) {
+  // A step on the device path reads returned values on the device.
+  if (!state.pendingReturns.empty() &&
+      !(state.deviceAllocActive && sv.deviceAllocStep)) {
     checkNoPendingReads(state, sv, sequenceNumber_, stepIdx);
   }
   if (doTiming) {
@@ -4024,6 +4204,7 @@ void CompositeInvocation::finishStep(
     blockSize = sv.cachedBlockSize;
     sv.blockInfoPinned = nullptr;
     sv.deviceGridBlocks = deviceGridBound(sv);
+    sv.gridUs = 0;
   } else {
     auto t0 = Clock::now();
     if (gridSizesMatch(sv.kernels, sv)) {
@@ -4146,6 +4327,8 @@ void CompositeInvocation::finishStep(
         state, *sv.program, pinnedBase, sequenceNumber_, stepIdx);
   }
   prepareHostCopies(state, sv);
+  state.stepOrdinal = state.nextStepOrdinal++;
+  state.ordinalSteps.emplace_back(sequenceNumber_, stepIdx);
   const bool hasTransfer = returnBegin >= 0 || !sv.hostCopies.empty();
   const bool deferReturn = WaveConfig::get().deferD2h && hasTransfer &&
       !WaveConfig::get().debugSingleOps;
@@ -4174,6 +4357,10 @@ void CompositeInvocation::finishStep(
     advanceCompletedStages(state);
     if (sv.onDeviceGrid && WaveConfig::get().checkGridDescriptor) {
       checkDeviceGrid(sv, *state.stream, sequenceNumber_, stepIdx);
+    }
+    if (WaveConfig::get().checkExports && sv.program != nullptr &&
+        !(state.deviceAllocActive && sv.deviceAllocStep)) {
+      checkExports(sv, state, deviceBase, sequenceNumber_, stepIdx);
     }
 
     if (deferReturn) {
@@ -4307,6 +4494,11 @@ void CompositeInvocation::launch(
         : nullptr;
   };
   setClocks(0);
+  if (auto* executionState = currentExecutionState();
+      executionState != nullptr && executionState->failureWords.defined()) {
+    params.failure = executionState->failureWords.data_ptr<int32_t>();
+    params.stepOrdinal = executionState->stepOrdinal;
+  }
   void* args[] = {&params};
 
   // Ops declare their extern __shared__ needs through
@@ -4554,7 +4746,24 @@ void CompositeInvocation::launch(
         state->lastWaveDone->wait(*setupStream);
       }
     }
-    setupStream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
+    if (hasFixups && WaveConfig::get().deviceSizingPoison) {
+      DeviceSymbols::poisonSizedParams(*sv.program->symbolFixups, pinnedBase);
+    }
+    copyAddresses(*state, *setupStream);
+    // A resident block gets only its block table part.
+    const bool resident = hasFixups && sv.allWordsFromSetup &&
+        (WaveConfig::get().residentBlocks || state->deviceAllocActive);
+    const int64_t h2dBegin =
+        resident && sv.residentBase == deviceBase ? sv.blockInfoOffset : 0;
+    if (h2dBytes > h2dBegin) {
+      setupStream->hostToDeviceAsync(
+          deviceBase + h2dBegin, pinnedBase + h2dBegin, h2dBytes - h2dBegin);
+    }
+    if (state->deviceAllocActive && sv.deviceAllocStep) {
+      ++state->numPathLaunches;
+      state->numPathParamUploads += h2dBegin == 0 ? 1 : 0;
+    }
+    sv.residentBase = resident ? deviceBase : nullptr;
     if (sv.onDeviceGrid) {
       // One kernel runs the fixups and then the grid.
       FixupArgs fixups;
@@ -4571,7 +4780,11 @@ void CompositeInvocation::launch(
           CHECK_NOTNULL(deviceClocks),
           sv.previousClocksInPlace,
           hasFixups ? &fixups : nullptr,
-          setupStream);
+          setupStream,
+          state->failureWords.defined()
+              ? state->failureWords.data_ptr<int32_t>()
+              : nullptr,
+          state->stepOrdinal);
       if (setupStream != stream) {
         // Safe to re-record at the next step: the wait has captured it.
         state->setupDone->record(*setupStream);

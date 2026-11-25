@@ -1441,10 +1441,8 @@ TEST_F(MergeJoinTest, matchRatioStats) {
     const auto mergeJoinStats =
         PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId);
     ASSERT_EQ(mergeJoinStats.outputRows, 5);
-
-    auto runtimeStats = mergeJoinStats.customStats;
-    ASSERT_EQ(runtimeStats.at("matchedLeftRows").sum, 5);
-    ASSERT_EQ(runtimeStats.at("matchedRightRows").sum, 5);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedLeftRows"), 5);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedRightRows"), 5);
   }
 
   // Inner join with partial match.
@@ -1473,14 +1471,13 @@ TEST_F(MergeJoinTest, matchRatioStats) {
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                     .assertResults("SELECT t0, u0 FROM t, u WHERE t0 = u0");
 
-    auto stats = toPlanStats(task->taskStats());
-    ASSERT_EQ(stats.at(mergeJoinNodeId).outputRows, 3);
-
-    auto runtimeStats = stats.at(mergeJoinNodeId).customStats;
+    const auto mergeJoinStats =
+        PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId);
+    ASSERT_EQ(mergeJoinStats.outputRows, 3);
     // Only 3 left rows match (2, 4, 6).
-    ASSERT_EQ(runtimeStats.at("matchedLeftRows").sum, 3);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedLeftRows"), 3);
     // Only 3 right rows match (2, 4, 6).
-    ASSERT_EQ(runtimeStats.at("matchedRightRows").sum, 3);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedRightRows"), 3);
   }
 
   // Left join - all left rows appear in output.
@@ -1513,11 +1510,9 @@ TEST_F(MergeJoinTest, matchRatioStats) {
     const auto mergeJoinStats =
         PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId);
     ASSERT_EQ(mergeJoinStats.outputRows, 5);
-
-    auto runtimeStats = mergeJoinStats.customStats;
     // Only 2 left rows match (2, 4).
-    ASSERT_EQ(runtimeStats.at("matchedLeftRows").sum, 2);
-    ASSERT_EQ(runtimeStats.at("matchedRightRows").sum, 2);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedLeftRows"), 2);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedRightRows"), 2);
   }
 
   // Join with duplicate keys (cartesian product).
@@ -1546,14 +1541,13 @@ TEST_F(MergeJoinTest, matchRatioStats) {
     auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
                     .assertResults("SELECT t0, u0 FROM t, u WHERE t0 = u0");
 
-    auto stats = toPlanStats(task->taskStats());
-    ASSERT_EQ(stats.at(mergeJoinNodeId).outputRows, 12);
-
-    auto runtimeStats = stats.at(mergeJoinNodeId).customStats;
+    const auto mergeJoinStats =
+        PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId);
+    ASSERT_EQ(mergeJoinStats.outputRows, 12);
     // 3 left rows with key=1 and 2 left rows with key=2.
-    ASSERT_EQ(runtimeStats.at("matchedLeftRows").sum, 5);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedLeftRows"), 5);
     // 2 right rows with key=1 and 3 right rows with key=2.
-    ASSERT_EQ(runtimeStats.at("matchedRightRows").sum, 5);
+    ASSERT_EQ(mergeJoinStats.customSum("matchedRightRows"), 5);
   }
 }
 
@@ -1756,9 +1750,9 @@ TEST_F(MergeJoinTest, streamLeftSideInertWhereUnsupported) {
                     .config(core::QueryConfig::kPreferredOutputBatchRows, 3)
                     .assertResults(testCase.duckDbSql);
 
-    const auto runtimeStats =
-        PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId).customStats;
-    ASSERT_EQ(runtimeStats.at("streamedLeftBatches").sum, 0);
+    const auto mergeJoinStats =
+        PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId);
+    ASSERT_EQ(mergeJoinStats.customSum("streamedLeftBatches"), 0);
   }
 }
 
@@ -1834,8 +1828,7 @@ TEST_F(MergeJoinTest, streamLeftSideWithFilter) {
                         filter));
         const auto streamedBatches =
             PlanNodeStats::extract(task->taskStats(), joinId)
-                .customStat("streamedLeftBatches")
-                .sum;
+                .customSum("streamedLeftBatches");
         if (streamLeft == std::string_view("true")) {
           ASSERT_GT(streamedBatches, 0);
         } else {
@@ -1918,10 +1911,10 @@ TEST_F(MergeJoinTest, streamLeftSideMultiBatchKeyGroup) {
       // only sign that streaming engaged at all. Key 1 spans five batches, so
       // a streamed run has to drop some; without it the config could quietly
       // become inert and every result assertion above would still pass.
-      const auto runtimeStats =
-          PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId)
-              .customStats;
-      const auto streamedBatches = runtimeStats.at("streamedLeftBatches").sum;
+      const auto mergeJoinStats =
+          PlanNodeStats::extract(task->taskStats(), mergeJoinNodeId);
+      const auto streamedBatches =
+          mergeJoinStats.customSum("streamedLeftBatches");
       if (streamLeft == std::string_view("true")) {
         ASSERT_GT(streamedBatches, 0);
       } else {

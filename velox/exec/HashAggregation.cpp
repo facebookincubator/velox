@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <optional>
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PrefixSort.h"
 #include "velox/exec/Task.h"
@@ -309,12 +310,12 @@ void HashAggregation::resetPartialOutputIfNeed() {
   {
     auto lockedStats = stats_.wlock();
     lockedStats->addRuntimeStat(
-        std::string(HashAggregation::kFlushRowCount),
+        std::string(HashAggregationStatNames::kFlushRowCount),
         RuntimeCounter(numOutputRows_));
     lockedStats->addRuntimeStat(
-        std::string(HashAggregation::kFlushTimes), RuntimeCounter(1));
+        std::string(HashAggregationStatNames::kFlushTimes), RuntimeCounter(1));
     lockedStats->addRuntimeStat(
-        std::string(HashAggregation::kPartialAggregationPct),
+        std::string(HashAggregationStatNames::kPartialAggregationPct),
         RuntimeCounter(saturateCast(aggregationPct)));
   }
   groupingSet_->resetTable(/*freeTable=*/false);
@@ -379,7 +380,7 @@ RowVectorPtr HashAggregation::getOutput() {
     prepareOutput(input_->size());
     groupingSet_->toIntermediate(input_, output_);
     addRuntimeStat(
-        std::string(HashAggregation::kAbandonedPartialAggregationRows),
+        std::string(HashAggregationStatNames::kAbandonedPartialAggregationRows),
         RuntimeCounter(input_->size()));
     numOutputRows_ += input_->size();
     input_ = nullptr;
@@ -697,7 +698,7 @@ void HashAggregation::close() {
         groupingSet->numToIntermediateFastPathCalls();
     if (numToIntermediateFastPathCalls > 0) {
       addRuntimeStat(
-          std::string(kToIntermediateFastPathCalls),
+          std::string(HashAggregationStatNames::kToIntermediateFastPathCalls),
           RuntimeCounter(numToIntermediateFastPathCalls));
     }
   }
