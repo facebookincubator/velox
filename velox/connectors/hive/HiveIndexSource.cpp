@@ -880,7 +880,7 @@ void HiveIndexSource::initRemainingFilter(
 
   remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
   for (auto& subfield : remainingFilterSubfields_) {
-    const auto& name = connector::getColumnName(subfield);
+    const auto& name = subfield.baseName();
     auto it = projectedSubfields_.find(name);
     if (it != projectedSubfields_.end()) {
       // Some subfields of the column are already projected out, we append
@@ -947,7 +947,7 @@ void HiveIndexSource::init(
 
     for (auto& subfield : handle->requiredSubfields()) {
       VELOX_USER_CHECK_EQ(
-          connector::getColumnName(subfield),
+          subfield.baseName(),
           handle->name(),
           "Required subfield does not match column name");
       projectedSubfields_[handle->name()].push_back(&subfield);

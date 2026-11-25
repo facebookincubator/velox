@@ -595,13 +595,6 @@ bool isSpecialColumn(
 
 } // namespace
 
-const std::string& getColumnName(const common::Subfield& subfield) {
-  VELOX_CHECK_GT(subfield.path().size(), 0);
-  auto* field = checkedPointerCast<const common::Subfield::NestedField>(
-      subfield.path()[0].get());
-  return field->name();
-}
-
 void checkColumnNameLowerCase(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::ARRAY:
@@ -753,7 +746,7 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
       VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowIndex));
       VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowId));
       VELOX_CHECK(!isSpecialColumn(name, specialColumns.readRange));
-      filterSubfields[getColumnName(subfield)].push_back(&subfield);
+      filterSubfields[subfield.baseName()].push_back(&subfield);
     }
   }
 
