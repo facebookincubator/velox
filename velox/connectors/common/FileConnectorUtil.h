@@ -185,28 +185,4 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     common::SubfieldFilters& filters,
     double& sampleRate);
 
-/// Creates a point lookup filter from a variant value.
-/// Null values are not allowed.
-/// Supports TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, BOOLEAN,
-/// VARCHAR, and VARBINARY types.
-/// @param type The type of the value.
-/// @param value The filter value (must not be null).
-/// @return A filter for point lookup, or nullptr if type is not supported.
-std::unique_ptr<common::Filter> createPointFilter(
-    const TypePtr& type,
-    const variant& value);
-
-/// Creates a range filter from two variant values.
-/// Both lower and upper bounds are inclusive. Null values are not allowed.
-/// Supports TINYINT, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, VARCHAR,
-/// and VARBINARY types.
-/// @param type The type of the values.
-/// @param lower The lower bound value.
-/// @param upper The upper bound value.
-/// @return A filter for range lookup, or nullptr if type is not supported.
-std::unique_ptr<common::Filter> createRangeFilter(
-    const TypePtr& type,
-    const variant& lower,
-    const variant& upper);
-
 } // namespace facebook::velox::connector
