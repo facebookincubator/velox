@@ -371,6 +371,7 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       {"cat_token", secret},
       {"metagen_key", secret},
       {"model_api_key", secret},
+      {"synth_key", secret},
       {"crypto_auth_tokens_metagen", secret},
       {core::QueryConfig::kSpillEnabled, "true"},
       {core::QueryConfig::kSpillNumPartitionBits, "17"},
@@ -428,6 +429,8 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
               "metagen_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "model_api_key", std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "synth_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "crypto_auth_tokens_metagen", std::string(kRedactedConfigValue)},
           // Non-credential entries stay verbatim; replay reparses these as a

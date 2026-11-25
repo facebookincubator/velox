@@ -176,11 +176,12 @@ bool isCredentialConfigKey(std::string_view key) {
   //
   // On the plan path nothing else is consulted, so this list must name every
   // function option that carries a credential.
-  static constexpr std::array<std::string_view, 4> kCredentialConfigKeys{
+  static constexpr std::array<std::string_view, 5> kCredentialConfigKeys{
       "cat_token",
       "crypto_auth_tokens_metagen",
       "metagen_key",
       "model_api_key",
+      "synth_key",
   };
   return std::find(
              kCredentialConfigKeys.begin(), kCredentialConfigKeys.end(), key) !=
