@@ -39,6 +39,7 @@
 
 #include <fmt/format.h>
 #include <folly/String.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -2302,7 +2303,7 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
           .values({realData})
           .window({"avg(v) over (partition by ord) as a"})
           .planNode(),
-      "Partitioned full-partition AVG requires DOUBLE input");
+      "Unsupported input type for partition-wide AVG: REAL");
 
   auto integerData = makeRowVector(
       {"p", "v"},
@@ -2315,24 +2316,7 @@ TEST_F(CudfWindowTest, unsupportedAggregateInputTypesFallback) {
           .values({integerData})
           .window({"avg(v) over (partition by p) as a"})
           .planNode(),
-      "Partitioned full-partition AVG requires DOUBLE input");
-
-  auto decimalData = makeRowVector(
-      {"ord", "d"},
-      {
-          makeFlatVector<int32_t>({1, 2}),
-          makeFlatVector<int64_t>({100, 101}, DECIMAL(3, 2)),
-      });
-  for (const auto& expression :
-       {"avg(d) over (rows between unbounded preceding and current row) as a",
-        "avg(d) over (order by ord rows between unbounded preceding and "
-        "current row) as a",
-        "avg(d) over (order by ord) as a"}) {
-    SCOPED_TRACE(expression);
-    assertWindowRejected(
-        PlanBuilder().values({decimalData}).window({expression}).planNode(),
-        "DECIMAL AVG only supports partition-wide frames");
-  }
+      "Unsupported input type for partition-wide AVG: BIGINT");
 
   for (int64_t sign : {1, -1}) {
     SCOPED_TRACE(fmt::format("interval sign={}", sign));
@@ -2608,6 +2592,41 @@ TEST_F(CudfWindowTest, fullPartitionAverage) {
   }
 }
 
+TEST_F(CudfWindowTest, decimalAverageNonPartitionWideFallsBack) {
+  auto data = makeRowVector(
+      {"ord", "d"},
+      {makeFlatVector<int32_t>({1, 2}),
+       makeFlatVector<int64_t>({100, 101}, DECIMAL(3, 2))});
+  for (const auto& frame :
+       {"rows between unbounded preceding and current row",
+        "order by ord rows between unbounded preceding and current row",
+        "order by ord"}) {
+    SCOPED_TRACE(frame);
+    assertWindowRejected(
+        PlanBuilder()
+            .values({data})
+            .window({fmt::format("avg(d) over ({}) as a", frame)})
+            .planNode(),
+        "DECIMAL AVG only supports partition-wide frames");
+  }
+}
+
+TEST_F(CudfWindowTest, decimalAverageWithSumAndCount) {
+  auto data = makeRowVector(
+      {"p", "d"},
+      {makeFlatVector<int32_t>({1, 1, 1, 2}),
+       makeNullableFlatVector<int64_t>(
+           {100, 101, std::nullopt, std::nullopt}, DECIMAL(15, 2))});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window(
+                      {"avg(d) over (partition by p) as a",
+                       "sum(d) over (partition by p) as s",
+                       "count(d) over (partition by p) as n"})
+                  .planNode();
+  assertCpuAndGpuResults(plan);
+}
+
 TEST_F(CudfWindowTest, decimalAveragePartitionWide) {
   std::vector<int32_t> partitions;
   std::vector<int32_t> orders;
@@ -2633,7 +2652,7 @@ TEST_F(CudfWindowTest, decimalAveragePartitionWide) {
           makeNullableFlatVector<int64_t>(values, DECIMAL(15, 2)),
       });
 
-  // Verifies HALF_UP rounding: 250 / 6 to 42 and -100 / 6 to -17.
+  // Rounds rather than truncates: 250 / 6 to 42 and -100 / 6 to -17.
   std::vector<std::optional<int64_t>> partitionAverages;
   partitionAverages.insert(partitionAverages.end(), 7, int64_t{42});
   partitionAverages.insert(partitionAverages.end(), 7, int64_t{-17});
@@ -2782,20 +2801,22 @@ TEST_F(CudfWindowTest, decimalAverageMismatchedResultTypeFallsBack) {
         std::vector<core::FieldAccessTypedExprPtr>{},
         std::vector<core::SortOrder>{},
         std::vector<std::string>{"a"},
-        std::vector<core::WindowNode::Function>{{call, frame, false}},
-        false,
+        std::vector<core::WindowNode::Function>{
+            {call, frame, /*ignoreNulls=*/false}},
+        /*inputsSorted=*/false,
         source);
   };
 
-  auto windowNode = makeWindowNode(DECIMAL(16, 2));
+  auto windowNode = makeWindowNode(DECIMAL(19, 6));
   std::string reason;
   EXPECT_FALSE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason));
-  EXPECT_EQ(
-      reason, "DECIMAL AVG result type must match its input type on cuDF");
+  EXPECT_THAT(reason, testing::HasSubstr("DECIMAL(19, 6) vs DECIMAL(15, 2)"));
 
   windowNode = makeWindowNode(BIGINT());
   EXPECT_FALSE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason));
-  EXPECT_EQ(reason, "DECIMAL AVG requires a DECIMAL result type on cuDF");
+  EXPECT_THAT(
+      reason,
+      testing::HasSubstr("requires a DECIMAL result type on cuDF: BIGINT"));
 }
 
 TEST_F(CudfWindowTest, decimalAverageHighPrecisionFallsBack) {
@@ -2814,8 +2835,10 @@ TEST_F(CudfWindowTest, decimalAverageHighPrecisionFallsBack) {
   ASSERT_TRUE(windowNode);
   std::string reason;
   EXPECT_FALSE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason));
-  EXPECT_EQ(
-      reason, "DECIMAL AVG precision may overflow the cuDF DECIMAL128 sum");
+  EXPECT_THAT(
+      reason,
+      testing::HasSubstr(
+          "may overflow the cuDF DECIMAL128 sum: DECIMAL(29, 3)"));
 
   VELOX_ASSERT_THROW(
       AssertQueryBuilder(plan).copyResults(pool()),

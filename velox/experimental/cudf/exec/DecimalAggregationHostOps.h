@@ -85,6 +85,10 @@ std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
+// With at most 2^31 - 1 rows in a cuDF column, summing unscaled values
+// below 10^28 in magnitude cannot overflow a signed int128 accumulator.
+inline constexpr uint8_t kMaxOverflowFreeDecimalSumPrecision = 28;
+
 /**
  * Normalizes the count column to INT64, computes a per-row decimal average
  * from intermediate sum/count (delegates to computeDecimalAverage), then casts

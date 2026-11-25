@@ -56,12 +56,6 @@ namespace facebook::velox::cudf_velox {
 
 namespace {
 
-// Limits DECIMAL AVG to precision 28 because a DECIMAL128 rolling SUM wraps
-// silently. Each |value| is below 10^precision and a cuDF column holds at most
-// 2^31 - 1 rows, so this limit cannot overflow int128.
-// TODO: Support higher precision after tracking overflow in the rolling SUM.
-constexpr uint8_t kMaxOverflowFreeDecimalAveragePrecision = 28;
-
 // Returns true when the window function's value argument is a cast expression.
 // The CPU Window operator only accepts field-access or constant arguments
 // (exec::exprToChannel throws on anything else), so casts on window arguments
@@ -678,7 +672,9 @@ bool CudfWindow::canRunOnGPU(
         const auto& resultType = func.functionCall->type();
         if (!resultType->isDecimal()) {
           if (reason) {
-            *reason = "DECIMAL AVG requires a DECIMAL result type on cuDF";
+            *reason = fmt::format(
+                "DECIMAL AVG requires a DECIMAL result type on cuDF: {}",
+                resultType->toString());
           }
           return false;
         }
@@ -695,17 +691,20 @@ bool CudfWindow::canRunOnGPU(
         // input scale loses fractional digits.
         if (!resultType->equivalent(*argumentType)) {
           if (reason) {
-            *reason =
-                "DECIMAL AVG result type must match its input type on cuDF";
+            *reason = fmt::format(
+                "DECIMAL AVG result type must match its input type on cuDF: {} vs {}",
+                resultType->toString(),
+                argumentType->toString());
           }
           return false;
         }
 
         const auto precision = getDecimalPrecisionScale(*argumentType).first;
-        if (precision > kMaxOverflowFreeDecimalAveragePrecision) {
+        if (precision > kMaxOverflowFreeDecimalSumPrecision) {
           if (reason) {
-            *reason =
-                "DECIMAL AVG precision may overflow the cuDF DECIMAL128 sum";
+            *reason = fmt::format(
+                "DECIMAL AVG precision may overflow the cuDF DECIMAL128 sum: {}",
+                argumentType->toString());
           }
           return false;
         }
@@ -718,7 +717,9 @@ bool CudfWindow::canRunOnGPU(
         !windowNode.partitionKeys().empty() &&
         !func.functionCall->inputs()[0]->type()->isDouble()) {
       if (reason) {
-        *reason = "Partitioned full-partition AVG requires DOUBLE input";
+        *reason = fmt::format(
+            "Unsupported input type for partition-wide AVG: {}",
+            func.functionCall->inputs()[0]->type()->toString());
       }
       return false;
     }
@@ -1052,14 +1053,12 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     bool isFullPartition,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
-  // Non-full RANGE frames are handled by grouped_range_rolling_window in
-  // doGetOutput. A full-partition frame uses unbounded bounds regardless of
-  // whether SQL expresses it as ROWS or RANGE.
+  // RANGE frames are handled by the batched grouped_range_rolling_window path
+  // in doGetOutput (see toBatchRangeWindowTypes). canRunOnGPU only accepts
+  // RANGE frames that path can express, so RANGE never reaches here.
   VELOX_CHECK(
-      isFullPartition ||
-          func.frame.type != core::WindowNode::WindowType::kRange,
-      "Non-full RANGE window frames must be handled by the batched range "
-      "rolling path");
+      func.frame.type != core::WindowNode::WindowType::kRange,
+      "RANGE window frames must be handled by the batched range rolling path");
 
   if (isFullPartition) {
     return cudf::grouped_rolling_window(
@@ -1125,23 +1124,26 @@ std::unique_ptr<cudf::column> CudfWindow::computeDecimalAverageColumn(
   // OVER (), or groupby plus a group-label gather for PARTITION BY. Reusing
   // that path keeps row-to-group expansion and input ordering inside cuDF.
   auto sumAggregation = cudf::make_sum_aggregation<cudf::rolling_aggregation>();
-  auto sum = invokeGroupedRollingWindow(
+  auto const unbounded = cudf::window_bounds::unbounded();
+  auto sum = cudf::grouped_rolling_window(
       partitionKeys,
       inputColumn,
-      function,
-      std::move(sumAggregation),
-      isFullPartition,
+      unbounded,
+      unbounded,
+      /*min_periods=*/1,
+      *sumAggregation,
       stream,
       tempMr);
   auto countAggregation =
       cudf::make_count_aggregation<cudf::rolling_aggregation>(
           cudf::null_policy::EXCLUDE);
-  auto count = invokeGroupedRollingWindow(
+  auto count = cudf::grouped_rolling_window(
       partitionKeys,
       inputColumn,
-      function,
-      std::move(countAggregation),
-      isFullPartition,
+      unbounded,
+      unbounded,
+      /*min_periods=*/1,
+      *countAggregation,
       stream,
       tempMr);
   return finalizeDecimalAverage(
@@ -1348,8 +1350,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
           func.functionCall->inputs()[0]->type()->isDecimal();
       const bool isDecimalSum = baseName == "sum" &&
           func.functionCall->inputs()[0]->type()->isDecimal();
-      const bool requiresWidenedDecimalInput = isDecimalAverage || isDecimalSum;
-      if (requiresWidenedDecimalInput) {
+      if (isDecimalAverage || isDecimalSum) {
         inputCol = castDecimal64InputToDecimal128(
             inputCol, widenedDecimalInputOwners[funcIndex], stream_);
       }

@@ -152,8 +152,8 @@ class CudfWindow : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
-  // Dispatches ROWS frames and full-partition RANGE frames to
-  // grouped_rolling_window. Other RANGE frames use the batched range path.
+  // Dispatch ROWS window frames to grouped_rolling_window. RANGE frames are
+  // handled separately by the batched grouped_range_rolling_window path.
   std::unique_ptr<cudf::column> invokeGroupedRollingWindow(
       const cudf::table_view& partKeys,
       cudf::column_view inputCol,
