@@ -17,8 +17,6 @@
 #include "velox/experimental/wave/exec/tests/utils/WaveTestSplitReader.h"
 #include "velox/experimental/wave/exec/tests/utils/TestFormatReader.h"
 
-DECLARE_int32(wave_max_reader_batch_rows);
-
 namespace facebook::velox::wave::test {
 
 using common::Subfield;
@@ -26,8 +24,8 @@ using common::Subfield;
 WaveTestSplitReader::WaveTestSplitReader(
     const std::shared_ptr<connector::ConnectorSplit>& split,
     const SplitReaderParams& params,
-    const DefinesMap* defines) {
-  params_ = params;
+    const DefinesMap* defines)
+    : StripedSplitReader(params), defines_(defines) {
   auto hiveSplit =
       dynamic_cast<connector::hive::HiveConnectorSplit*>(split.get());
   VELOX_CHECK_NOT_NULL(hiveSplit);
@@ -52,17 +50,6 @@ WaveTestSplitReader::WaveTestSplitReader(
     }
   }
   VELOX_CHECK_NOT_NULL(stripe_);
-  TestFormatParams formatParams(
-      *params.connectorQueryCtx->memoryPool(), readerStats_, stripe_);
-  std::vector<std::unique_ptr<Subfield::PathElement>> empty;
-  columnReader_ = TestFormatReader::build(
-      params.readerOutputType,
-      stripe_->typeWithId,
-      formatParams,
-      *params.scanSpec,
-      empty,
-      *defines,
-      true);
   if (fileHandle_.get()) {
     fileInfo_.file = fileHandle_->file.get();
     fileInfo_.fileId = &fileHandle_->uuid;
@@ -70,45 +57,21 @@ WaveTestSplitReader::WaveTestSplitReader(
   }
 }
 
-int32_t WaveTestSplitReader::canAdvance(WaveStream& stream) {
-  if (!stripe_) {
-    return 0;
-  }
-  return std::min<int32_t>(FLAGS_wave_max_reader_batch_rows, available());
-}
-
-void WaveTestSplitReader::schedule(WaveStream& waveStream, int32_t maxRows) {
-  auto numRows = std::min<int32_t>(maxRows, available());
-  scheduledRows_ = numRows;
-  auto rowSet = folly::Range<const int32_t*>(iota(numRows, rows_), numRows);
-  std::unique_ptr<ReadStream> exe(
-      reinterpret_cast<ReadStream*>(
-          waveStream.recycleExecutable(nullptr, 0).release()));
-  if (exe) {
-    VELOX_DCHECK_NOT_NULL(
-        dynamic_cast<ReadStream*>(reinterpret_cast<Executable*>(exe.get())));
-    if (reinterpret_cast<ColumnReader*>(exe->reader()) != columnReader_.get()) {
-      // The previous read exe on the WaveStream is a different split. Make new.
-      exe.reset();
-    }
-  }
-  if (!exe) {
-    exe = std::make_unique<ReadStream>(
-        reinterpret_cast<StructColumnReader*>(columnReader_.get()),
-        waveStream,
-        params_.ioStatistics.get(),
-        fileInfo_);
-  }
-  ReadStream::launch(std::move(exe), nextRow_, rowSet);
-  nextRow_ += scheduledRows_;
-}
-
-vector_size_t WaveTestSplitReader::outputSize(WaveStream& stream) const {
-  return scheduledRows_;
-}
-
-bool WaveTestSplitReader::isFinished() const {
-  return nextRow_ >= available();
+std::unique_ptr<ColumnReader> WaveTestSplitReader::startStripe(
+    int32_t /*index*/,
+    int32_t& numRows) {
+  numRows = stripe_->columns[0]->numValues;
+  TestFormatParams formatParams(
+      *params_.connectorQueryCtx->memoryPool(), readerStats_, stripe_);
+  std::vector<std::unique_ptr<Subfield::PathElement>> empty;
+  return TestFormatReader::build(
+      params_.readerOutputType,
+      stripe_->typeWithId,
+      formatParams,
+      *params_.scanSpec,
+      empty,
+      *defines_,
+      true);
 }
 
 namespace {
