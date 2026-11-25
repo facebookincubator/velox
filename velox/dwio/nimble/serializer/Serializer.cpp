@@ -89,31 +89,11 @@ Serializer::Serializer(
     }
   }
 
-  if (!options_.hybridFlatMapColumns.empty()) {
-    context_.reserveHybridFlatMapNodes(options_.hybridFlatMapColumns.size());
-    for (const auto& [columnName, hybridMap] : options_.hybridFlatMapColumns) {
-      NIMBLE_USER_CHECK(
-          !options_.flatMapColumns.contains(columnName),
-          "Column '{}' cannot use both FlatMap and hybrid FlatMap options.",
-          columnName);
-      const auto childIndex =
-          type->as<velox::TypeKind::ROW>().getChildIdxIfExists(columnName);
-      NIMBLE_USER_CHECK(
-          childIndex.has_value(),
-          "Hybrid FlatMap column '{}' does not exist.",
-          columnName);
-      const auto& child = typeWithId->childAt(*childIndex);
-      NIMBLE_USER_CHECK_EQ(
-          child->type()->kind(),
-          velox::TypeKind::MAP,
-          "Hybrid FlatMap column '{}' must be a MAP.",
-          columnName);
-      context_.addHybridFlatMapNode(child->id(), hybridMap);
-    }
-    if (options_.hybridFlatMapGroupKeysLayout.has_value()) {
-      context_.setHybridFlatMapGroupKeysLayout(
-          *options_.hybridFlatMapGroupKeysLayout);
-    }
+  context_.addHybridFlatMapColumns(*typeWithId, options_.hybridFlatMapColumns);
+  if (!options_.hybridFlatMapColumns.empty() &&
+      options_.hybridFlatMapGroupKeysLayout.has_value()) {
+    context_.setHybridFlatMapGroupKeysLayout(
+        *options_.hybridFlatMapGroupKeysLayout);
   }
 
   typeWithId_ = typeWithId;
