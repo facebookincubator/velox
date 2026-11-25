@@ -551,9 +551,11 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
 
   // Filter-only process() and processNull() add output rows without advancing
   // numValues(). Sync before anything that reads it, such as processBulk().
+  // numRows() is the recorded output rows, which is 0 without a row filter
+  // (e.g., AlwaysTrue).
   void syncFilterOnlyNumValues() {
     if constexpr (DictionaryVisitor::kFilterOnly) {
-      visitor_.reader().setNumValues(visitor_.reader().outputRows().size());
+      visitor_.reader().setNumValues(visitor_.reader().numRows());
     }
   }
 

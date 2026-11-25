@@ -2624,6 +2624,63 @@ class ReadWithVisitorTest : public ::testing::Test,
     }
   }
 
+  // Reads 'input', written with 'layout' in several chunks, as a column that is
+  // only filtered, with an AlwaysTrue filter, in two reads. 'scanFastPath' is
+  // passed to the reader. After each chunk of a filter-only read,
+  // ChunkedDecoder sets numValues() to the output rows the reader recorded.
+  // An AlwaysTrue filter records none, so numValues() must be 0 after each
+  // read. A later chunk of the same read asks for scratch values at
+  // numValues(). A larger numValues() fails the capacity check in
+  // mutableValues() in dev builds.
+  void verifyAlwaysTrueFilterOnlyReadAcrossChunks(
+      const RowVectorPtr& input,
+      const EncodingLayout& layout,
+      bool scanFastPath) {
+    if (!process::hasSimd()) {
+      GTEST_SKIP() << "The bulk path requires SIMD support";
+    }
+    constexpr uint64_t kMaxChunkBytes{4'096};
+    auto writerOptions = makeSingleColumnWriterOptions(layout);
+    writerOptions.minStreamChunkRawSize = 1;
+    writerOptions.maxStreamChunkRawSize = kMaxChunkBytes;
+    auto fileContext = makeFileContext(input, writerOptions);
+
+    // Each chunk holds 512 BIGINT or 1'024 INTEGER rows. Both reads cross a
+    // chunk boundary for BIGINT. For INTEGER only the second read does: it
+    // starts at row 1'000, 24 rows before the chunk at row 1'024, and reads
+    // that chunk whole.
+    const auto valueBytes = input->childAt(0)->type()->cppSizeInBytes();
+    ASSERT_EQ(
+        countFirstColumnChunks(*fileContext),
+        input->size() * valueBytes / kMaxChunkBytes);
+    const auto captured = captureFirstColumnEncoding(*fileContext);
+    ASSERT_TRUE(captured.has_value());
+    ASSERT_EQ(captured->encodingType(), layout.encodingType());
+
+    auto rowType = asRowType(input->type());
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    auto* childSpec = scanSpec->childByName("c0");
+    childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
+    childSpec->setProjectOut(false);
+    auto root = buildReader(*fileContext, rowType, *scanSpec, scanFastPath);
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    ASSERT_NE(structReader, nullptr);
+    auto* child = structReader->children()[0];
+
+    vector_size_t offset{0};
+    for (const vector_size_t numRows : {1'000, 1'100}) {
+      SCOPED_TRACE(fmt::format("offset={}", offset));
+      std::vector<vector_size_t> rowNumbers(numRows);
+      std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+      root->read(offset, RowSet(rowNumbers.data(), rowNumbers.size()), nullptr);
+      EXPECT_EQ(child->numValues(), 0);
+      offset += numRows;
+    }
+  }
+
   const std::shared_ptr<io::IoStatistics> dataIoStats_{
       std::make_shared<io::IoStatistics>()};
   const std::shared_ptr<io::IoStatistics> metadataIoStats_{
@@ -2806,6 +2863,92 @@ TEST_F(ReadWithVisitorTest, encodingFastPathFollowsReaderNulls) {
       EXPECT_EQ(values[row], valueAt(row));
     }
   }
+}
+
+// ===========================================================================
+// Test: a column that is only filtered, with an AlwaysTrue filter, is read
+// across chunks. See verifyAlwaysTrueFilterOnlyReadAcrossChunks.
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, alwaysTrueFilterOnlyReadAcrossTrivialChunks) {
+  // Trivial values take the bulk path even with scanFastPath off.
+  verifyAlwaysTrueFilterOnlyReadAcrossChunks(
+      makeRowVector({makeFlatVector<int64_t>(4'096, std::identity{})}),
+      TrivialEnc{},
+      /*scanFastPath=*/false);
+}
+
+TEST_F(ReadWithVisitorTest, alwaysTrueFilterOnlyReadAcrossFixedBitWidthChunks) {
+  // FixedBitWidth values take the bulk path for a filter-only read only with
+  // scanFastPath.
+  verifyAlwaysTrueFilterOnlyReadAcrossChunks(
+      makeRowVector({makeFlatVector<int64_t>(4'096, std::identity{})}),
+      FixedBitWidthEnc{},
+      /*scanFastPath=*/true);
+}
+
+TEST_F(ReadWithVisitorTest, alwaysTrueFilterOnlyReadAcrossDictionaryChunks) {
+  // buildReader() turns dictionaryAwareReads off, so the indices decode
+  // through DictionaryIndicesHook, which takes the FixedBitWidth bulk path
+  // only with scanFastPath.
+  verifyAlwaysTrueFilterOnlyReadAcrossChunks(
+      makeRowVector(
+          {makeFlatVector<int32_t>(4'096, [](auto row) { return row % 10; })}),
+      DictionaryEnc{.indices = FixedBitWidthEnc{}},
+      /*scanFastPath=*/true);
+}
+
+// ===========================================================================
+// Test: a dictionary-aware read of a column that is only filtered, with an
+// AlwaysTrue filter, leaves numValues() at 0. The read runs without
+// ChunkedDecoder, so FusedDictionaryIndicesHook makes the last sync.
+// ===========================================================================
+TEST_F(ReadWithVisitorTest, alwaysTrueFilterOnlyDictionaryAwareRead) {
+  if (!process::hasSimd()) {
+    GTEST_SKIP() << "The dictionary-aware read requires SIMD support";
+  }
+  constexpr vector_size_t kNumRows{1'000};
+  const auto valueAt = [](vector_size_t row) { return row % 10; };
+  auto input = makeRowVector({makeFlatVector<int32_t>(kNumRows, valueAt)});
+  auto rowType = asRowType(input->type());
+  auto fileContext = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  auto* childSpec = scanSpec->childByName("c0");
+  childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
+  childSpec->setProjectOut(false);
+  auto root = buildReader(*fileContext, rowType, *scanSpec);
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  ASSERT_NE(structReader, nullptr);
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  std::vector<vector_size_t> rowNumbers(kNumRows);
+  std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+  const RowSet rows(rowNumbers.data(), rowNumbers.size());
+  reader->doPrepareRead<int32_t>(0, rows, nullptr);
+  std::vector<int32_t> values;
+  values.reserve(rowNumbers.size());
+  for (const auto row : rowNumbers) {
+    values.push_back(valueAt(row));
+  }
+  Buffer buffer(*pool());
+  auto encoding = createFromCustomLayout<int32_t>(
+      DictionaryEnc{.indices = FixedBitWidthEnc{}}, values, *pool(), buffer);
+  common::AlwaysTrue filter;
+  DecoderVisitor<
+      int32_t,
+      common::AlwaysTrue,
+      dwio::common::DropValues,
+      /*isDense=*/true>
+      visitor(filter, reader, rows, dwio::common::DropValues{});
+  auto params = makeReadWithVisitorParams(visitor, rows, pool());
+  params.dictionaryAwareReads = true;
+  dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+  EXPECT_EQ(visitor.rowIndex(), kNumRows);
+  EXPECT_EQ(reader->numValues(), 0);
 }
 
 // ===========================================================================
