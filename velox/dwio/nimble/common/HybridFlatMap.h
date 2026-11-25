@@ -259,6 +259,164 @@ T HybridFlatMap::parseCanonicalIntegerKey(std::string_view key) {
 /// Returns the name of `mode` as spelled in the serialized schema.
 std::string toString(HybridFlatMap::KeyPresenceMode mode);
 
+/// Locates one Hybrid FlatMap group's entries in one decode run, which is a
+/// file stripe or a Serializer batch.
+///
+/// Example: keys {"7", "9", "11"}, key presence [1, 0, 1] and in-map
+/// [1, 0, 1, 0, 1, 1] describe three non-null maps. "7" is in maps 0 and 2,
+/// and "11" is in maps 1 and 2. The layout is numNonNullRows 3, presentKeys
+/// {0, 2} and valueStarts {0, 2, 4}.
+struct HybridFlatMapGroupLayout {
+  /// Non-null maps covered by each present key's in-map bits. 0 when empty().
+  uint32_t numNonNullRows{0};
+  /// Ordinals of the present keys among the group's keys, ascending. Present
+  /// key p owns in-map bits [p * numNonNullRows, (p + 1) * numNonNullRows).
+  std::vector<uint32_t> presentKeys;
+  /// Present key p owns values [valueStarts[p], valueStarts[p + 1]) of the
+  /// group's key-major value stream. Holds presentKeys.size() + 1 entries, or
+  /// none when empty().
+  std::vector<uint32_t> valueStarts;
+
+  bool empty() const {
+    return presentKeys.empty();
+  }
+
+  uint32_t numValues() const {
+    return valueStarts.empty() ? 0 : valueStarts.back();
+  }
+
+  /// Empties the layout and keeps the capacity of its vectors.
+  void clear();
+};
+
+/// Sizes of one Hybrid FlatMap group's metadata in one decode run.
+struct HybridFlatMapGroupMetadata {
+  /// Keys that key presence refers to: the group's schema keys, or the keys
+  /// the group lists in this decode run with KeyPresenceMode::kKeyList.
+  uint32_t numKeys{0};
+  /// All bits in the key-presence bitmap, at most numKeys. 0 when the bitmap
+  /// is omitted or the group lists its keys, in which case every key is
+  /// present.
+  uint32_t numAllKeyPresenceBits{0};
+  /// Set bits in the key-presence bitmap: the present keys. Readers count them
+  /// over their own bit layout, e.g. a word popcount over packed bits, so the
+  /// layout is found in one pass over the keys. Ignored when
+  /// numAllKeyPresenceBits is 0.
+  uint32_t numSetKeyPresenceBits{0};
+  /// Bits in the group's key-major in-map stream.
+  uint32_t numInMap{0};
+  /// Whether the group lists its keys in each decode run.
+  bool listsKeys{false};
+  /// Whether any stream of the group's value subtree has data in this decode
+  /// run.
+  bool hasValueStreams{false};
+};
+
+/// Builds `layout` from one group's metadata by splitting its in-map bits
+/// evenly among the present keys and starting each present key's values after
+/// those of the present keys before it.
+template <typename IsKeyPresent, typename CountKeyValues, typename KeyName>
+void decodeHybridFlatMapGroupLayout(
+    const HybridFlatMapGroupMetadata& metadata,
+    const IsKeyPresent& isKeyPresent,
+    const CountKeyValues& countKeyValues,
+    const KeyName& keyName,
+    HybridFlatMapGroupLayout& layout) {
+  layout.clear();
+
+  // The writer omits all-false in-map metadata. With no value streams, the
+  // group therefore has no entries in this decode run, even if key presence was
+  // retained to preserve the schema prefix.
+  if (metadata.numInMap == 0 && !metadata.hasValueStreams) {
+    if (metadata.listsKeys) {
+      NIMBLE_CHECK_FILE_EQ(
+          metadata.numKeys,
+          0,
+          "Hybrid FlatMap group lists keys without in-map rows.");
+    }
+    return;
+  }
+
+  // A key list carries no presence bits; every listed key is present. An
+  // omitted key-presence bitmap with in-map rows applies to all schema keys.
+  // All-false metadata is omitted only when the group is empty.
+  const bool allKeysPresent = metadata.numAllKeyPresenceBits == 0;
+  NIMBLE_CHECK_FILE_LE(
+      metadata.numAllKeyPresenceBits,
+      metadata.numKeys,
+      "Hybrid FlatMap key-presence count exceeds schema key count.");
+  const uint32_t numKeys =
+      allKeysPresent ? metadata.numKeys : metadata.numAllKeyPresenceBits;
+
+  // numNonNullRows locates each key's in-map bits, and it needs the number of
+  // present keys before the pass over the keys.
+  const uint32_t numPresentKeys =
+      allKeysPresent ? numKeys : metadata.numSetKeyPresenceBits;
+  if (numPresentKeys == 0) {
+    NIMBLE_CHECK_FILE_EQ(
+        metadata.numInMap,
+        0,
+        "Hybrid FlatMap group has in-map rows without present keys.");
+    NIMBLE_CHECK_FILE(
+        !metadata.hasValueStreams,
+        "Hybrid FlatMap group has value streams without present keys.");
+    return;
+  }
+  NIMBLE_CHECK_FILE_NE(
+      metadata.numInMap,
+      0,
+      "Hybrid FlatMap group with present keys is missing in-map rows.");
+  NIMBLE_CHECK_FILE_EQ(
+      metadata.numInMap % numPresentKeys,
+      0,
+      "Hybrid FlatMap in-map count is not divisible by present key "
+      "count.");
+
+  // Each present key has one in-map bit per non-null map.
+  layout.numNonNullRows = metadata.numInMap / numPresentKeys;
+  layout.presentKeys.reserve(numPresentKeys);
+  layout.valueStarts.reserve(numPresentKeys + 1);
+
+  // Records each present key, in key order, with the start of its values.
+  // `isKeyPresent(key)` reads the key's presence bit. `countKeyValues(key,
+  // presentKey, firstValue)` returns the number of set in-map bits of present
+  // key `presentKey`, which are its values, starting at value `firstValue`.
+  // It can locate those bits because numNonNullRows is already set. The
+  // function is defined in the header so that readers inline these callbacks
+  // into the loop.
+  uint32_t numValues{0};
+  for (uint32_t key = 0; key < numKeys; ++key) {
+    if (!allKeysPresent && !isKeyPresent(key)) {
+      continue;
+    }
+    const auto presentKey = static_cast<uint32_t>(layout.presentKeys.size());
+
+    // Keeps the in-map bits of `presentKey` within numInMap.
+    NIMBLE_CHECK_LT(
+        presentKey,
+        numPresentKeys,
+        "Hybrid FlatMap present key count does not match the key-presence "
+        "bitmap.");
+    const auto numKeyValues = countKeyValues(key, presentKey, numValues);
+    NIMBLE_CHECK_FILE_GT(
+        numKeyValues,
+        0,
+        "Hybrid FlatMap key '{}' has no present rows.",
+        keyName(key));
+    layout.presentKeys.push_back(key);
+    layout.valueStarts.push_back(numValues);
+    numValues += numKeyValues;
+  }
+  NIMBLE_CHECK_EQ(
+      layout.presentKeys.size(),
+      numPresentKeys,
+      "Hybrid FlatMap present key count does not match the key-presence "
+      "bitmap.");
+
+  // Ends the values of the last present key.
+  layout.valueStarts.push_back(numValues);
+}
+
 namespace detail {
 
 // Checks the rules for one group's own keys, used only by whole-schema
