@@ -22,6 +22,7 @@ add_executable(
   # E2EIndexTest.cpp
   FlatMapColumnReaderTest.cpp
   FloatingPointColumnReaderTest.cpp
+  HybridFlatMapColumnReaderTest.cpp
   NimbleDataTest.cpp
   NullColumnReaderTest.cpp
   ReadWithVisitorTest.cpp
@@ -39,6 +40,7 @@ target_link_libraries(
   nimble_common_file_writer
   nimble_encoding_layout_test_helper
   nimble_encodings_tests_utils
+  nimble_hybrid_flat_map_groupings
   nimble_index_test_base
   nimble_shared_dictionary_test_utils
   velox_vector_test_lib

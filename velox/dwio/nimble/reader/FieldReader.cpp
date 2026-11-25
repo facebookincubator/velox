@@ -6134,14 +6134,11 @@ class HybridFlatMapGroupReader {
     Vector<DecodedKey> keys{pool};
     keys.reserve(group.groupKeys.size());
     for (const auto& key : group.groupKeys) {
-      if constexpr (std::is_same_v<T, velox::StringView>) {
-        keys.emplace_back(key);
-      } else {
-        // Callers that build a reader for every serialized value parse these
-        // keys for every batch, so canonical keys take the allocation-free
-        // path. Any other key throws an error that names its problem.
-        keys.push_back(HybridFlatMap::parseCanonicalIntegerKey<T>(key));
-      }
+      // Callers that build a reader for every serialized value parse these
+      // keys for every batch, so canonical integer keys take the
+      // allocation-free path. Any other integer key throws an error that names
+      // its problem.
+      keys.push_back(HybridFlatMap::parseKey<DecodedKey>(key));
     }
     return keys;
   }
@@ -7297,32 +7294,26 @@ std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
   const auto& valueType = veloxType->childAt(1);
   std::vector<HybridFlatMapGroupReaderParams> hybridGroupParams;
   hybridGroupParams.reserve(hybridMap.groupCount());
-  const auto shouldReadGroup = [&](const auto& group) {
-    if (selectionMode == SelectionMode::Exclude) {
-      if (HybridFlatMap::isDefaultGroup(group.groupId)) {
-        return true;
-      }
-      return std::any_of(
-          group.groupKeys.begin(), group.groupKeys.end(), [&](const auto& key) {
-            return !selectedKeys.contains(key);
-          });
+  // Include mode lists the keys it reads, so the key index finds their groups
+  // with one lookup per included key.
+  const auto holdsIncludedKey = selectionMode == SelectionMode::Include
+      ? hybridMap.hybridFlatMap().groupsHoldingKeys(selectedKeys)
+      : std::vector<bool>{};
+  const auto shouldReadGroup = [&](size_t groupIndex, const auto& group) {
+    if (selectionMode == SelectionMode::Include) {
+      return static_cast<bool>(holdsIncludedKey[groupIndex]);
     }
-    // A Default group that lists its keys may hold any key in no configured
-    // group.
-    if (hybridMap.useKeyPresentList(group.groupId)) {
-      return std::any_of(
-          selectedKeys.begin(), selectedKeys.end(), [&](const auto& key) {
-            return !hybridMap.findGroup(key).has_value();
-          });
+    if (HybridFlatMap::isDefaultGroup(group.groupId)) {
+      return true;
     }
     return std::any_of(
         group.groupKeys.begin(), group.groupKeys.end(), [&](const auto& key) {
-          return selectedKeys.contains(key);
+          return !selectedKeys.contains(key);
         });
   };
   for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
     const auto& group = hybridMap.groupAt(i);
-    if (!shouldReadGroup(group)) {
+    if (!shouldReadGroup(i, group)) {
       continue;
     }
     offsets.push_back(group.keyPresenceDescriptor.offset());

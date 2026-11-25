@@ -24,6 +24,7 @@
 #include "velox/dwio/nimble/selective/ByteColumnReader.h"
 #include "velox/dwio/nimble/selective/FlatMapColumnReader.h"
 #include "velox/dwio/nimble/selective/FloatingPointColumnReader.h"
+#include "velox/dwio/nimble/selective/HybridFlatMapColumnReader.h"
 #include "velox/dwio/nimble/selective/IntegerColumnReader.h"
 #include "velox/dwio/nimble/selective/NullColumnReader.h"
 #include "velox/dwio/nimble/selective/StringColumnReader.h"
@@ -131,6 +132,9 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> buildColumnReader(
     case TypeKind::MAP:
       if (nimbleType->isFlatMap()) {
         return createFlatMapColumnReader(
+            requestedType, fileType, params, scanSpec);
+      } else if (nimbleType->isHybridFlatMap()) {
+        return createHybridFlatMapColumnReader(
             requestedType, fileType, params, scanSpec);
       } else if (nimbleType->isSlidingWindowMap()) {
         if (!params.streams().hasStream(nimbleType->asSlidingWindowMap()

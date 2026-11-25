@@ -349,6 +349,22 @@ TEST(HybridFlatMapTest, canonicalStringKeys) {
       "Hybrid FlatMap key cannot be empty.");
 }
 
+// parseKey() gives an integer key its value, as parseCanonicalIntegerKey()
+// does, and returns a view of a String key.
+TEST(HybridFlatMapTest, parseKeyParsesIntegersAndViewsStrings) {
+  EXPECT_EQ(HybridFlatMap::parseKey<int8_t>("-128"), int8_t{-128});
+  EXPECT_EQ(
+      HybridFlatMap::parseKey<int64_t>("9223372036854775807"),
+      std::numeric_limits<int64_t>::max());
+  NIMBLE_ASSERT_USER_THROW(
+      HybridFlatMap::parseKey<int32_t>("07"),
+      "Hybrid FlatMap key '07' is not canonical.");
+  const std::string key{"feature"};
+  const auto view = HybridFlatMap::parseKey<std::string_view>(key);
+  EXPECT_EQ(view, "feature");
+  EXPECT_EQ(view.data(), key.data());
+}
+
 TEST(HybridFlatMapTest, canonicalKeyRejectsUnsupportedKinds) {
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap::canonicalKey(ScalarKind::Double, "1"),
@@ -545,6 +561,37 @@ TEST(HybridFlatMapTest, usesKeyPresentListOnlyForKeyListDefault) {
         ScalarKind::Int64, config({{kDefault, {}}}), kKeyList};
     EXPECT_TRUE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
     EXPECT_FALSE(hybridMap.useKeyPresentList(0));
+  }
+}
+
+// A group that lists keys holds the keys it lists. A Default group that lists
+// its keys per decode run holds every key in no other group.
+TEST(HybridFlatMapTest, groupsHoldingKeysFindsTheGroupOfEachKey) {
+  {
+    const auto hybridMap = schemaGroups(
+        ScalarKind::Int32,
+        config({{0, {"1", "5"}}, {1, {"2", "3"}}, {kDefault, {}}}),
+        kKeyList);
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"5"}),
+        (std::vector<bool>{true, false, false}));
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"3", "9"}),
+        (std::vector<bool>{false, true, true}));
+  }
+  {
+    // A bitmap Default lists the keys it recorded, so it holds only those, as
+    // an explicit group does.
+    const auto hybridMap = schemaGroups(
+        ScalarKind::Int32,
+        config({{0, {"1", "5"}}, {kDefault, {"7", "9"}}}),
+        kBitmap);
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"9"}),
+        (std::vector<bool>{false, true}));
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"1", "8"}),
+        (std::vector<bool>{true, false}));
   }
 }
 

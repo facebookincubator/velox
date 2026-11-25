@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <fmt/format.h>
@@ -189,6 +190,22 @@ class HybridFlatMap {
   template <typename T>
   static T parseCanonicalIntegerKey(std::string_view key);
 
+  /// Returns `key`, a key that a group lists, as a reader key of type T. An
+  /// integer T gets the key's value from parseCanonicalIntegerKey(). A
+  /// std::string_view or velox::StringView T views `key`, which must outlive
+  /// it. The batch and selective readers parse schema keys with it.
+  template <typename T>
+  static T parseKey(std::string_view key);
+
+  /// Returns, for each group in groups(), whether it may hold one of `keys`,
+  /// the canonical keys a read selects. A group that lists a key holds it. A
+  /// Default group that lists its keys in each decode run lists none here, and
+  /// holds every key that findGroup() does not find. Looks up each key once,
+  /// so the cost follows the number of selected keys, not of schema keys. The
+  /// batch and selective readers decide which groups to read with it.
+  template <typename Keys>
+  std::vector<bool> groupsHoldingKeys(const Keys& keys) const;
+
   /// Serializes `groups` and `defaultGroupKeyPresenceMode` of a schema node
   /// whose keys are of `keyKind` into the flattened HybridFlatMap FlatBuffer
   /// table. `group_ids` and `group_key_counts` are parallel per-group vectors.
@@ -254,6 +271,35 @@ T HybridFlatMap::parseCanonicalIntegerKey(std::string_view key) {
       key,
       TypeTraits<T>::dataType);
   NIMBLE_USER_FAIL("Hybrid FlatMap key '{}' is not canonical.", key);
+}
+
+template <typename T>
+T HybridFlatMap::parseKey(std::string_view key) {
+  if constexpr (std::is_integral_v<T>) {
+    return parseCanonicalIntegerKey<T>(key);
+  } else {
+    return T{key};
+  }
+}
+
+template <typename Keys>
+std::vector<bool> HybridFlatMap::groupsHoldingKeys(const Keys& keys) const {
+  const auto& allGroups = groups();
+  std::vector<bool> holdsKey(allGroups.size(), false);
+  std::optional<size_t> keyListDefault;
+  for (size_t i = 0; i < allGroups.size(); ++i) {
+    if (useKeyPresentList(allGroups[i].groupId)) {
+      keyListDefault = i;
+    }
+  }
+  for (const auto& key : keys) {
+    if (const auto groupIndex = findGroup(key); groupIndex.has_value()) {
+      holdsKey[*groupIndex] = true;
+    } else if (keyListDefault.has_value()) {
+      holdsKey[*keyListDefault] = true;
+    }
+  }
+  return holdsKey;
 }
 
 /// Returns the name of `mode` as spelled in the serialized schema.

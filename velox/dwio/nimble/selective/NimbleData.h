@@ -121,6 +121,12 @@ class NimbleData : public velox::dwio::common::FormatData {
 
   std::unique_ptr<ChunkedDecoder> makeLengthDecoder();
 
+  /// Returns a decoder of the stream of 'descriptor', or null when the stream
+  /// is absent from the stripe.
+  std::unique_ptr<ChunkedDecoder> makeDecoder(
+      const StreamDescriptor& descriptor,
+      bool decodeValuesWithNulls);
+
   bool nimblePreserveDictionaryEncoding() const {
     return nimblePreserveDictionaryEncoding_;
   }
@@ -132,10 +138,6 @@ class NimbleData : public velox::dwio::common::FormatData {
   void loadLazyInputStreams() override;
 
  private:
-  std::unique_ptr<ChunkedDecoder> makeDecoder(
-      const StreamDescriptor& descriptor,
-      bool decodeValuesWithNulls);
-
   const std::shared_ptr<const Type> nimbleType_;
   StripeStreams* const streams_;
   velox::memory::MemoryPool* const pool_;
