@@ -217,13 +217,11 @@ class HashJoinBuildBenchmark : public VectorTestBase {
         .values(probeVectors)
         .project({"c0 AS t0", "c1 as t1", "c2 as t2"})
         .hashJoin(
-            {"t0"},
-            {"u0"},
+            "t0 = u0",
             builder.newPlan()
                 .values(buildVectors)
                 .project({"c0 AS u0"})
                 .planNode(),
-            "",
             {"t0", "t1", "match"},
             core::JoinType::kLeftSemiProject)
         .planNode();

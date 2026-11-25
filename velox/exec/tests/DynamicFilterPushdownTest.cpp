@@ -52,8 +52,7 @@ struct JoinPlan {
 JoinPlan makeJoinPlan(
     const RowTypePtr& probeType,
     const RowTypePtr& buildType,
-    const std::vector<std::string>& probeKeys,
-    const std::vector<std::string>& buildKeys,
+    const std::string& condition,
     const JoinCase& joinCase,
     bool nullAsValue) {
   JoinPlan joinPlan;
@@ -61,13 +60,11 @@ JoinPlan makeJoinPlan(
   joinPlan.plan = planBuilder.tableScan(probeType)
                       .capturePlanNodeId(joinPlan.probeScanId)
                       .hashJoin(
-                          probeKeys,
-                          buildKeys,
+                          condition,
                           planBuilder.newPlan()
                               .tableScan(buildType)
                               .capturePlanNodeId(joinPlan.buildScanId)
                               .planNode(),
-                          /*filter=*/"",
                           joinCase.outputLayout,
                           joinCase.joinType,
                           /*nullAware=*/false,
@@ -99,22 +96,18 @@ TEST_F(DynamicFilterPushdownTest, mergeFiltersOnSameColumn) {
   auto plan = builder.tableScan(ROW("a", BIGINT()))
                   .capturePlanNodeId(aScanId)
                   .hashJoin(
-                      {"a"},
-                      {"b"},
+                      "a = b",
                       builder.newPlan()
                           .tableScan(ROW("b", BIGINT()))
                           .capturePlanNodeId(bScanId)
                           .planNode(),
-                      "", /*filter*/
                       {"a"})
                   .hashJoin(
-                      {"a"},
-                      {"c"},
+                      "a = c",
                       builder.newPlan()
                           .tableScan(ROW("c", BIGINT()))
                           .capturePlanNodeId(cScanId)
                           .planNode(),
-                      "", /*filter*/
                       {"a"})
                   .planNode();
   AssertQueryBuilder(plan)
@@ -163,13 +156,11 @@ TEST_F(DynamicFilterPushdownTest, rowIndexColumn) {
               ROW({"row_index", "a"}, BIGINT()), {}, "", nullptr, assignments)
           .capturePlanNodeId(aScanId)
           .hashJoin(
-              {"a"},
-              {"b"},
+              "a = b",
               builder.newPlan()
                   .tableScan(ROW("b", BIGINT()))
                   .capturePlanNodeId(bScanId)
                   .planNode(),
-              "", /*filter*/
               {"row_index", "a"})
           .planNode();
   AssertQueryBuilder(plan)
@@ -209,22 +200,16 @@ TEST_F(DynamicFilterPushdownTest, bloomFilter) {
   const auto buildFile = writeToFile(build);
 
   struct {
-    std::vector<std::string> probeKeys;
-    std::vector<std::string> buildKeys;
     std::string condition;
     BaseHashTable::HashMode hashMode;
     int32_t numFilters;
   } keyCases[] = {
       {
-          {"a1"},
-          {"b1"},
           "a1 = b1",
           BaseHashTable::HashMode::kNormalizedKey,
           1,
       },
       {
-          {"a1", "a2", "a3"},
-          {"b1", "b2", "b3"},
           "a1 = b1 AND a2 = b2 AND a3 = b3",
           BaseHashTable::HashMode::kHash,
           2,
@@ -271,8 +256,7 @@ TEST_F(DynamicFilterPushdownTest, bloomFilter) {
         const auto joinPlan = makeJoinPlan(
             ROW({"a1", "a2", "a3"}, BIGINT()),
             ROW({"b1", "b2", "b3"}, BIGINT()),
-            keyCase.probeKeys,
-            keyCase.buildKeys,
+            keyCase.condition,
             joinCase,
             /*nullAsValue=*/false);
         AssertQueryBuilder builder(joinPlan.plan, duckDbQueryRunner_);
@@ -355,8 +339,7 @@ TEST_F(DynamicFilterPushdownTest, nullAsValue) {
       const auto joinPlan = makeJoinPlan(
           ROW("a", BIGINT()),
           ROW("b", BIGINT()),
-          {"a"},
-          {"b"},
+          "a = b",
           joinCase,
           /*nullAsValue=*/true);
       auto task =

@@ -71,13 +71,11 @@ class VectorSearchTest : public HiveConnectorTestBase {
     auto indexes =
         run(plan.values({points})
                 .hashJoin(
-                    {"ds"},
-                    {"c_ds"},
+                    "ds = c_ds",
                     plan.newPlan()
                         .values({codecs})
                         .project({"ds AS c_ds", "codec_id"})
                         .planNode(),
-                    /*filter=*/"",
                     {"ds", "id", "embedding", "codec_id"})
                 .vectorSearchJoin(
                     /*leftKeys=*/{"ds", "codec_id"},

@@ -589,10 +589,8 @@ TEST_F(CudfBatchConcatTest, concatBeforeHashJoinProbe) {
                     return createFragmentedSource(probeVectors, builder);
                   })
                   .hashJoin(
-                      {"c0"},
-                      {"u_c0"},
+                      "c0 = u_c0",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1"},
                       core::JoinType::kInner)
                   .capturePlanNodeId(joinNodeId)
@@ -641,10 +639,8 @@ TEST_F(CudfBatchConcatTest, rightJoinCollectsMatchedRowsFromPeerProbes) {
                     return createFragmentedSource(probeVectors, builder);
                   })
                   .hashJoin(
-                      {"c0"},
-                      {"u_c0"},
+                      "c0 = u_c0",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1", "u_c0"},
                       core::JoinType::kRight)
                   .capturePlanNodeId(joinNodeId)

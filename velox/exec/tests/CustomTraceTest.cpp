@@ -1115,14 +1115,12 @@ TEST_F(CustomTraceTest, parallelHashJoinBreakpoints) {
                   .project({"t_key", "t_val * 10 as t_val"})
                   .capturePlanNodeId(probeProjectId)
                   .hashJoin(
-                      {"t_key"},
-                      {"u_key"},
+                      "t_key = u_key",
                       builder.newPlan()
                           .values({buildData}, /*parallelizable=*/true)
                           .project({"u_key", "u_val * 10 as u_val"})
                           .capturePlanNodeId(buildProjectId)
                           .planNode(),
-                      "",
                       {"t_key", "t_val", "u_val"})
                   .capturePlanNodeId(joinId)
                   .planNode();
