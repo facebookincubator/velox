@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <bit>
 #include <memory>
 
 #include <faiss/IndexHNSW.h>
@@ -28,13 +29,39 @@
 
 namespace facebook::velox::common::vectorindex {
 
-// In cuVS's multi-CTA search, 32 of 256 buffer entries are reserved for
-// intermediate results. Wider graphs require a different search algorithm.
-inline faiss::gpu::search_algo cagraSearchAlgorithm(size_t graphDegree) {
+// Configures the search algorithm and checks the visited-node budget with
+// FAISS's default CAGRA search width, iterations, and hash fill rate.
+inline bool configureCagraSearch(
+    size_t graphDegree,
+    size_t numVectors,
+    faiss::gpu::SearchParametersCagra& params) {
+  // Multi-CTA search reserves 32 of 256 buffer entries for candidates.
   constexpr size_t kMaxMultiCtaGraphDegree{224};
-  return graphDegree > kMaxMultiCtaGraphDegree
-      ? faiss::gpu::search_algo::MULTI_KERNEL
-      : faiss::gpu::search_algo::AUTO;
+  if (graphDegree <= kMaxMultiCtaGraphDegree) {
+    params.algo = faiss::gpu::search_algo::AUTO;
+    return true;
+  }
+  params.algo = faiss::gpu::search_algo::MULTI_KERNEL;
+
+  // cuVS search_plan.cuh allows a 2^13-entry small hash for unfiltered
+  // searches and a 2^20-entry regular hash, each at half fill by default.
+  constexpr size_t kSmallHashVisitedNodes{1 << 12};
+  constexpr size_t kMaxVisitedNodes{1 << 19};
+  if (params.itopk_size > kMaxVisitedNodes) {
+    return false;
+  }
+  constexpr size_t kWarpSize{32};
+  const auto candidates =
+      (params.itopk_size + kWarpSize - 1) / kWarpSize * kWarpSize;
+  if (params.sel == nullptr &&
+      candidates + graphDegree <= kSmallHashVisitedNodes) {
+    return true;
+  }
+
+  // Bound cuVS's default iteration count by the padded candidate count
+  // plus its initial traversal, which expands by at least two per iteration.
+  const auto iterations = candidates + std::bit_width(numVectors - 1);
+  return iterations <= (kMaxVisitedNodes - candidates) / graphDegree;
 }
 
 inline std::unique_ptr<faiss::Index> cloneCuvsIndex(

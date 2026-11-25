@@ -34,9 +34,12 @@ Velox-cuDF builds are included in Velox CI as part of the [adapters build](https
 
 ### Building GPU vector indexes
 
-Enable `VELOX_ENABLE_FAISS_GPU` with `VELOX_ENABLE_CUDF` to use cuVS-backed
-vector indexes. A bundled cuVS build requires Python 3.10 or later for kernel
-generation. Use `-DPython_EXECUTABLE=/path/to/python` to select an interpreter.
+Enable `VELOX_ENABLE_FAISS_GPU=ON` and `VELOX_ENABLE_CUDF=ON` to use cuVS-backed
+vector indexes. Also enable `VELOX_ENABLE_FAISS=ON` for local vector indexes,
+`VELOX_ENABLE_NIMBLE=ON` for Nimble vector indexes, or both.
+
+A bundled cuVS build requires Python 3.10 or later for kernel generation.
+Use `-DPython_EXECUTABLE=/path/to/python` to select an interpreter.
 For CUDA 13.1 and newer, install `cuda-tile[tileiras]` in that Python environment
 before configuring.
 

@@ -3550,15 +3550,21 @@ TEST_F(VectorIndexTest, gpuSingleQuerySearchesWideCagraGraphs) {
     auto indexConfig = makeConfig(kind);
     indexConfig.hnswNumConnections = 128;
     const auto index = readIndex(writeIndexFromVectors(indexConfig, data));
-    const auto result = index->search({
+    VectorIndex::SearchConfig config{
         .numQueries = 1,
         .queryVectors = generateRandomVectors(1, kDimensions),
         .numNeighbors = 10,
         .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(128),
         .useGpu = true,
-    });
+    };
+    const auto result = index->search(config);
     EXPECT_TRUE(result.stats().usedGpu);
     EXPECT_EQ(result.totalNumResults(), 10);
+
+    config.searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(4096);
+    const auto fallback = index->search(config);
+    EXPECT_FALSE(fallback.stats().usedGpu);
+    EXPECT_EQ(fallback.totalNumResults(), 10);
   }
 }
 

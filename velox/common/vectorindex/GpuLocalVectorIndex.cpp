@@ -90,7 +90,7 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
         maxK_{maxK},
         translatePadding_{translatePadding},
         efSearch_{efSearch},
-        cagraAlgo_{cagraSearchAlgorithm(cagraDegree)} {}
+        cagraDegree_{cagraDegree} {}
 
   ~ClonedIndex() override {
     const std::lock_guard<std::mutex> lock(device_->mutex);
@@ -118,7 +118,9 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
     const faiss::SearchParameters* params = nullptr;
     if (efSearch_ > 0) {
       cagraParams.itopk_size = std::max(efSearch_, static_cast<size_t>(gpuK));
-      cagraParams.algo = cagraAlgo_;
+      if (!configureCagraSearch(cagraDegree_, index_->ntotal, cagraParams)) {
+        return false;
+      }
       params = &cagraParams;
     }
     std::vector<int64_t> limitedIds;
@@ -193,7 +195,7 @@ class ClonedIndex : public LocalVectorIndexAccelerator::Index {
   const int64_t maxK_;
   const bool translatePadding_;
   const size_t efSearch_;
-  const faiss::gpu::search_algo cagraAlgo_;
+  const size_t cagraDegree_;
 };
 
 // A kHnswSq local index rebuilt as a CAGRA graph. CAGRA numbers embeddings
@@ -210,7 +212,7 @@ class CagraIndex : public LocalVectorIndexAccelerator::Index {
         index_{std::move(index)},
         ids_{ids},
         efSearch_{efSearch},
-        cagraAlgo_{cagraSearchAlgorithm(cagraDegree)} {}
+        cagraDegree_{cagraDegree} {}
 
   ~CagraIndex() override {
     const std::lock_guard<std::mutex> lock(device_->mutex);
@@ -231,7 +233,9 @@ class CagraIndex : public LocalVectorIndexAccelerator::Index {
     }
     faiss::gpu::SearchParametersCagra params;
     params.itopk_size = std::max(efSearch_, static_cast<size_t>(gpuK));
-    params.algo = cagraAlgo_;
+    if (!configureCagraSearch(cagraDegree_, ids_.size(), params)) {
+      return false;
+    }
     std::vector<int64_t> limitedIds;
     std::vector<float> limitedScores;
     auto* searchIds = ids.data();
@@ -283,7 +287,7 @@ class CagraIndex : public LocalVectorIndexAccelerator::Index {
   std::unique_ptr<faiss::gpu::GpuIndexCagra> index_;
   const std::vector<faiss::idx_t>& ids_;
   const size_t efSearch_;
-  const faiss::gpu::search_algo cagraAlgo_;
+  const size_t cagraDegree_;
 };
 
 // Returns the even graph degree nearest 'requested' that 'numEmbeddings' can

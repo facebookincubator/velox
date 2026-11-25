@@ -69,8 +69,9 @@ class GpuVectorIndex {
       const faiss::SearchParametersIVF& params) const;
 
   /// Searches a CAGRA graph. 'intermediateResults' is the CAGRA itopk size
-  /// and must be at least 'maxNumNeighbors'. 'selector' may be null.
-  void searchCagra(
+  /// and must be at least 'maxNumNeighbors'. 'selector' may be null. Returns
+  /// false when the request needs CPU search.
+  bool searchCagra(
       faiss::idx_t numQueries,
       const float* queryVectors,
       faiss::idx_t maxNumNeighbors,

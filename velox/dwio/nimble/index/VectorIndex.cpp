@@ -614,7 +614,7 @@ void searchGpuCagra(
   faiss::SearchParameters searchParameters;
   rowSelection.applyTo(searchParameters);
   velox::CpuWallTimer timer{stats.searchTiming};
-  gpuIndex.searchCagra(
+  stats.usedGpu = gpuIndex.searchCagra(
       numQueries,
       queryVectors,
       maxNumNeighbors,
@@ -622,7 +622,6 @@ void searchGpuCagra(
       labels,
       intermediateResults,
       searchParameters.sel);
-  stats.usedGpu = true;
 }
 #endif
 

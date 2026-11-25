@@ -161,6 +161,27 @@ TEST_F(CudfVectorDistanceFunctionsTest, doublePrecisionMatchesCpu) {
   assertMatchesCpu<double>("cosine_similarity(c0, c1)", tinyInputs);
 }
 
+TEST_F(CudfVectorDistanceFunctionsTest, coalesceKeepsLazyDistanceOnCpu) {
+  const auto input = makeRowVector({
+      makeNullableFlatVector<double>({0.8, std::nullopt}),
+      makeArrayVector<double>({{1.0, 2.0, 3.0}, {1.0, 2.0}}),
+      makeArrayVector<double>({{1.0, 2.0}, {1.0, 2.0}}),
+  });
+  const std::string sql = "coalesce(c0, abs(dot_product(c1, c2)))";
+  const auto rowType = asRowType(input->type());
+  EXPECT_FALSE(cudf_velox::canExprRunOnGpu(
+      makeTypedExpr(sql, rowType), execCtx_.queryCtx(), pool()));
+  EXPECT_TRUE(cudf_velox::canExprRunOnGpu(
+      makeTypedExpr("coalesce(dot_product(c1, c2), c0)", rowType),
+      execCtx_.queryCtx(),
+      pool()));
+
+  auto exprSet = compileExpression(sql, rowType);
+  auto result = functions::test::FunctionBaseTest::evaluate(*exprSet, input);
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<double>({0.8, 5.0}), result);
+}
+
 class CudfFaissVectorDistanceFunctionsTest
     : public CudfVectorDistanceFunctionsTest {
  protected:

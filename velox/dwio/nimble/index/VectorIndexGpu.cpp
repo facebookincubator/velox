@@ -404,7 +404,7 @@ bool GpuVectorIndex::search(
   return true;
 }
 
-void GpuVectorIndex::searchCagra(
+bool GpuVectorIndex::searchCagra(
     faiss::idx_t numQueries,
     const float* queryVectors,
     faiss::idx_t maxNumNeighbors,
@@ -415,8 +415,11 @@ void GpuVectorIndex::searchCagra(
   faiss::gpu::SearchParametersCagra params;
   params.itopk_size =
       std::max(intermediateResults, static_cast<size_t>(maxNumNeighbors));
-  params.algo = velox::common::vectorindex::cagraSearchAlgorithm(cagraDegree_);
   params.sel = selector;
+  if (!velox::common::vectorindex::configureCagraSearch(
+          cagraDegree_, index_->ntotal, params)) {
+    return false;
+  }
   const std::lock_guard<std::mutex> lock{device_.mutex};
   try {
     index_->search(
@@ -424,6 +427,7 @@ void GpuVectorIndex::searchCagra(
   } catch (const faiss::FaissException& error) {
     NIMBLE_FAIL("CAGRA GPU search failed: {}", error.what());
   }
+  return true;
 }
 
 std::unique_ptr<faiss::Index> buildGpuCagraIndex(
