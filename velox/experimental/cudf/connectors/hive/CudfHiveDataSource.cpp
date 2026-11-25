@@ -31,7 +31,6 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/common/FileColumnHandle.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/common/PartitionValue.h"
 #include "velox/connectors/hive/FileHandle.h"

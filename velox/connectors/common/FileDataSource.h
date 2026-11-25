@@ -25,7 +25,6 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/FileScanState.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/common/FileTableHandle.h"

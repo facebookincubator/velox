@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 
 #include <gtest/gtest.h>
 
@@ -127,12 +127,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::DWRF);
@@ -149,12 +150,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
 
     EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::ORC);
@@ -177,12 +179,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
 
     EXPECT_EQ(
@@ -202,12 +205,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     VELOX_ASSERT_THROW(
-        connector::configureReaderOptions(
+        connector::FileSplitReader::configureReaderOptions(
             fileConfig,
             holder.ctx.get(),
-            /*fileSchema=*/nullptr,
             split,
+            /*fileSchema=*/nullptr,
             /*tableParameters=*/{},
+            /*serdeParameters=*/{},
             readerOptions),
         "not supported for file format orc");
   }
@@ -221,14 +225,15 @@ TEST_F(FileConnectorUtilTest, configureReaderOptions) {
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileFormat(dwio::common::FileFormat::PARQUET);
     VELOX_ASSERT_THROW(
-        connector::configureReaderOptions(
+        connector::FileSplitReader::configureReaderOptions(
             fileConfig,
             holder.ctx.get(),
-            /*fileSchema=*/nullptr,
             split,
+            /*fileSchema=*/nullptr,
             /*tableParameters=*/{},
+            /*serdeParameters=*/{},
             readerOptions),
-        "received splits of different formats");
+        "All splits of a data source must have the same file format");
   }
 }
 
@@ -249,12 +254,13 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
     EXPECT_TRUE(readerOptions.cacheMetadata());
     EXPECT_TRUE(readerOptions.cacheIndex());
@@ -270,12 +276,13 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
     EXPECT_FALSE(readerOptions.cacheMetadata());
     EXPECT_FALSE(readerOptions.cacheIndex());
@@ -289,12 +296,13 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
     EXPECT_FALSE(readerOptions.cacheMetadata());
     EXPECT_FALSE(readerOptions.cacheIndex());
@@ -311,12 +319,13 @@ TEST_F(FileConnectorUtilTest, cacheMetadataRequiresCacheableSplit) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
     EXPECT_TRUE(readerOptions.pinMetadata());
     EXPECT_TRUE(readerOptions.pinIndex());
@@ -331,12 +340,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsWithoutReaderFactory) {
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
 
-  connector::configureReaderOptions(
+  connector::FileSplitReader::configureReaderOptions(
       fileConfig,
       holder.ctx.get(),
-      /*fileSchema=*/nullptr,
       split,
+      /*fileSchema=*/nullptr,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       readerOptions);
 
   EXPECT_EQ(readerOptions.fileFormat(), dwio::common::FileFormat::JSON);
@@ -354,12 +364,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsNimbleLazyFileStats) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
 
     EXPECT_TRUE(readerOptions.nimbleLazyFileStats());
@@ -371,12 +382,13 @@ TEST_F(FileConnectorUtilTest, configureReaderOptionsNimbleLazyFileStats) {
     dwio::common::ReaderOptions readerOptions(pool_.get());
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
-    connector::configureReaderOptions(
+    connector::FileSplitReader::configureReaderOptions(
         fileConfig,
         holder.ctx.get(),
-        /*fileSchema=*/nullptr,
         split,
+        /*fileSchema=*/nullptr,
         /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         readerOptions);
 
     EXPECT_FALSE(readerOptions.nimbleLazyFileStats());
@@ -391,15 +403,16 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptions) {
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   dwio::common::RowReaderOptions rowReaderOptions;
-  connector::configureRowReaderOptions(
-      /*tableParameters=*/{},
+  connector::FileSplitReader::configureRowReaderOptions(
+      fileConfig,
+      holder.ctx.get(),
+      split,
       scanSpec,
       /*metadataFilter=*/nullptr,
       rowType,
-      split,
-      fileConfig,
-      holder.ctx->sessionProperties(),
       /*ioExecutor=*/nullptr,
+      /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       rowReaderOptions);
 
   EXPECT_EQ(rowReaderOptions.scanSpec(), scanSpec);
@@ -422,15 +435,16 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
           "true"},
          {connector::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
     dwio::common::RowReaderOptions rowReaderOptions;
-    connector::configureRowReaderOptions(
-        /*tableParameters=*/{},
+    connector::FileSplitReader::configureRowReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        split,
         scanSpec,
         /*metadataFilter=*/nullptr,
         rowType,
-        split,
-        fileConfig,
-        holder.ctx->sessionProperties(),
         /*ioExecutor=*/nullptr,
+        /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         rowReaderOptions);
 
     EXPECT_TRUE(rowReaderOptions.nimbleFsstDecodeRepeatedPayloads());
@@ -443,15 +457,16 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
   {
     auto holder = makeConnectorQueryCtx();
     dwio::common::RowReaderOptions rowReaderOptions;
-    connector::configureRowReaderOptions(
-        /*tableParameters=*/{},
+    connector::FileSplitReader::configureRowReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        split,
         scanSpec,
         /*metadataFilter=*/nullptr,
         rowType,
-        split,
-        fileConfig,
-        holder.ctx->sessionProperties(),
         /*ioExecutor=*/nullptr,
+        /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         rowReaderOptions);
 
     EXPECT_FALSE(rowReaderOptions.nimbleFsstDecodeRepeatedPayloads());
@@ -472,15 +487,16 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSkipRows) {
   };
 
   dwio::common::RowReaderOptions rowReaderOptions;
-  connector::configureRowReaderOptions(
-      tableParameters,
+  connector::FileSplitReader::configureRowReaderOptions(
+      fileConfig,
+      holder.ctx.get(),
+      split,
       scanSpec,
       /*metadataFilter=*/nullptr,
       rowType,
-      split,
-      fileConfig,
-      holder.ctx->sessionProperties(),
       /*ioExecutor=*/nullptr,
+      tableParameters,
+      /*serdeParameters=*/{},
       rowReaderOptions);
 
   EXPECT_EQ(rowReaderOptions.skipRows(), 5);
@@ -499,15 +515,16 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRange) {
   auto rowType = ROW({"c0"}, {BIGINT()});
 
   dwio::common::RowReaderOptions rowReaderOptions;
-  connector::configureRowReaderOptions(
-      /*tableParameters=*/{},
+  connector::FileSplitReader::configureRowReaderOptions(
+      fileConfig,
+      holder.ctx.get(),
+      split,
       scanSpec,
       /*metadataFilter=*/nullptr,
       rowType,
-      split,
-      fileConfig,
-      holder.ctx->sessionProperties(),
       /*ioExecutor=*/nullptr,
+      /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       rowReaderOptions);
 
   EXPECT_EQ(rowReaderOptions.offset(), 100);
@@ -528,15 +545,16 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRowRange) {
         "testConnectorId", "/tmp/testfile", fileFormat);
     split->splitRowRange = splitRowRange;
     dwio::common::RowReaderOptions rowReaderOptions;
-    connector::configureRowReaderOptions(
-        /*tableParameters=*/{},
+    connector::FileSplitReader::configureRowReaderOptions(
+        fileConfig,
+        holder.ctx.get(),
+        split,
         scanSpec,
         /*metadataFilter=*/nullptr,
         rowType,
-        split,
-        fileConfig,
-        holder.ctx->sessionProperties(),
         /*ioExecutor=*/nullptr,
+        /*tableParameters=*/{},
+        /*serdeParameters=*/{},
         rowReaderOptions);
     return rowReaderOptions;
   };

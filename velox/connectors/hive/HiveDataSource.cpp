@@ -18,7 +18,6 @@
 
 #include <utility>
 
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveBucketPruning.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"

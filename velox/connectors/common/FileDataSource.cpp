@@ -434,8 +434,7 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
-  splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
+  splitReader_->initialize(randomSkip_, remainingFilterColumns_);
   splitReader_->prepareSplit(
       fileScanState_->metadataFilter, runtimeStats_, fileReadOps_);
 

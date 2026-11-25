@@ -78,7 +78,7 @@ class IcebergChangelogSplitReaderTest : public test::IcebergTestBase {
   RowVectorPtr readAll(IcebergChangelogSplitReader& reader) {
     dwio::common::RuntimeStats runtimeStats;
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
-    reader.configureReaderOptions(randomSkip);
+    reader.initialize(randomSkip, /*remainingFilterColumns=*/{});
     reader.prepareSplit(nullptr, runtimeStats);
     if (reader.emptySplit()) {
       return nullptr;
@@ -242,7 +242,7 @@ TEST_F(IcebergChangelogSplitReaderTest, rowdataPermutedOrderThrows) {
 
   dwio::common::RuntimeStats runtimeStats;
   std::shared_ptr<random::RandomSkipTracker> randomSkip;
-  reader->configureReaderOptions(randomSkip);
+  reader->initialize(randomSkip, /*remainingFilterColumns=*/{});
   reader->prepareSplit(nullptr, runtimeStats);
   ASSERT_FALSE(reader->emptySplit());
 
@@ -274,7 +274,7 @@ TEST_F(IcebergChangelogSplitReaderTest, filterRejectsEmpty) {
         &filters);
     dwio::common::RuntimeStats runtimeStats;
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
-    reader->configureReaderOptions(randomSkip);
+    reader->initialize(randomSkip, /*remainingFilterColumns=*/{});
     reader->prepareSplit(nullptr, runtimeStats);
     ASSERT_TRUE(reader->emptySplit()) << "snapshotid reject";
   }
@@ -294,7 +294,7 @@ TEST_F(IcebergChangelogSplitReaderTest, filterRejectsEmpty) {
         &filters);
     dwio::common::RuntimeStats runtimeStats;
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
-    reader->configureReaderOptions(randomSkip);
+    reader->initialize(randomSkip, /*remainingFilterColumns=*/{});
     reader->prepareSplit(nullptr, runtimeStats);
     ASSERT_TRUE(reader->emptySplit()) << "operation reject";
   }
@@ -312,7 +312,7 @@ TEST_F(IcebergChangelogSplitReaderTest, filterRejectsEmpty) {
         &filters);
     dwio::common::RuntimeStats runtimeStats;
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
-    reader->configureReaderOptions(randomSkip);
+    reader->initialize(randomSkip, /*remainingFilterColumns=*/{});
     reader->prepareSplit(nullptr, runtimeStats);
     ASSERT_TRUE(reader->emptySplit()) << "ordinal reject";
   }
@@ -435,7 +435,7 @@ TEST_F(IcebergChangelogSplitReaderTest, missingChangelogSplitInfoThrows) {
 
   dwio::common::RuntimeStats runtimeStats;
   std::shared_ptr<random::RandomSkipTracker> randomSkip;
-  reader->configureReaderOptions(randomSkip);
+  reader->initialize(randomSkip, /*remainingFilterColumns=*/{});
   VELOX_ASSERT_THROW(
       reader->prepareSplit(nullptr, runtimeStats),
       "HiveIcebergSplit missing changelogSplitInfo for changelog query");
@@ -470,7 +470,7 @@ TEST_F(IcebergChangelogSplitReaderTest, deleteFilesThrows) {
 
   dwio::common::RuntimeStats runtimeStats;
   std::shared_ptr<random::RandomSkipTracker> randomSkip;
-  reader->configureReaderOptions(randomSkip);
+  reader->initialize(randomSkip, /*remainingFilterColumns=*/{});
   VELOX_ASSERT_THROW(
       reader->prepareSplit(nullptr, runtimeStats),
       "Changelog splits do not support delete files");

@@ -20,7 +20,6 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/SortingWriter.h"

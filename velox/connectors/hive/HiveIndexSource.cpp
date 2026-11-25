@@ -21,7 +21,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/FileDataSource.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/FileIndexReader.h"

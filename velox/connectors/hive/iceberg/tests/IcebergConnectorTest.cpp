@@ -19,7 +19,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/common/FileConfig.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -101,12 +101,13 @@ TEST_F(IcebergConnectorTest, splitMappingOverridesSession) {
   dwio::common::ReaderOptions readerOptions(pool_.get());
   readerOptions.setDataIoStats(std::make_shared<io::IoStatistics>());
   readerOptions.setMetadataIoStats(std::make_shared<io::IoStatistics>());
-  configureReaderOptions(
+  FileSplitReader::configureReaderOptions(
       fileConfig,
       connectorQueryCtx_.get(),
-      /*fileSchema=*/nullptr,
       split,
+      /*fileSchema=*/nullptr,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       readerOptions);
 
   EXPECT_EQ(
