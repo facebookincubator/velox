@@ -32,8 +32,6 @@
 #include "velox/dwio/parquet/common/ParquetConfig.h"
 #endif
 
-#include "velox/dwio/common/CachedBufferedInput.h"
-#include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -767,55 +765,6 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     spec->disableStatsBasedFilterReorder();
   }
   return spec;
-}
-
-std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
-    const FileHandle& fileHandle,
-    const dwio::common::ReaderOptions& readerOpts,
-    const ConnectorQueryCtx* connectorQueryCtx,
-    std::shared_ptr<io::IoStatistics> ioStatistics,
-    std::shared_ptr<IoStats> ioStats,
-    folly::Executor* executor,
-    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
-  if (connectorQueryCtx->cache()) {
-    return std::make_unique<dwio::common::CachedBufferedInput>(
-        fileHandle.file,
-        dwio::common::MetricsLog::voidLog(),
-        fileHandle.uuid,
-        connectorQueryCtx->cache(),
-        Connector::getTracker(
-            connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
-        fileHandle.groupId,
-        ioStatistics,
-        std::move(ioStats),
-        executor,
-        readerOpts,
-        fileReadOps);
-  }
-  if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE &&
-      !readerOpts.nimbleDirectBufferedInputEnabled()) {
-    return std::make_unique<dwio::common::BufferedInput>(
-        fileHandle.file,
-        readerOpts.memoryPool(),
-        dwio::common::MetricsLog::voidLog(),
-        ioStatistics.get(),
-        ioStats.get(),
-        dwio::common::BufferedInput::kMaxMergeDistance,
-        std::nullopt,
-        fileReadOps);
-  }
-  return std::make_unique<dwio::common::DirectBufferedInput>(
-      fileHandle.file,
-      dwio::common::MetricsLog::voidLog(),
-      fileHandle.uuid,
-      Connector::getTracker(
-          connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
-      fileHandle.groupId,
-      std::move(ioStatistics),
-      std::move(ioStats),
-      executor,
-      readerOpts,
-      fileReadOps);
 }
 
 namespace {
