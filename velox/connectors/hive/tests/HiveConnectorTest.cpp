@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/connectors/common/FileDataSource.h"
@@ -38,8 +40,26 @@ using namespace facebook::velox::exec::test;
 
 class HiveConnectorTest : public exec::test::HiveConnectorTestBase {
  protected:
+  // Records the options of every file opened for read through the faulty file
+  // system in 'fileOpens_'. HiveConnectorTestBase::TearDown removes the hook.
+  void recordFileOpens() {
+    tests::utils::faultyFileSystem()->setFilesystemInjectionHook(
+        [this](tests::utils::FaultFileSystemOperation* op) {
+          if (op->type ==
+              tests::utils::FaultFileSystemOperation::Type::kOpenFileForRead) {
+            fileOpens_.push_back(
+                static_cast<
+                    tests::utils::FaultFileSystemOpenFileForReadOperation*>(op)
+                    ->options);
+          }
+        });
+  }
+
   std::shared_ptr<memory::MemoryPool> pool_ =
       memory::memoryManager()->addLeafPool();
+
+  // Options of the files opened since recordFileOpens(), in open order.
+  std::vector<filesystems::FileOptions> fileOpens_;
 };
 
 void validateNullConstant(const ScanSpec& spec, const Type& type) {
@@ -821,90 +841,8 @@ TEST_F(HiveConnectorTest, disjuncts) {
 
 #undef VELOX_ASSERT_FILTER
 
-/// A mock filesystem that delegates to the local filesystem but captures
-/// the FileOptions::fileReadOps passed to openFileForRead. Used to verify
-/// that FileSplitReader::createReader() propagates table identity (dbName,
-/// tableName) into fileReadOps.
-class CapturingFileSystem : public filesystems::FileSystem {
- public:
-  static constexpr std::string_view kScheme = "capture:";
-
-  static folly::F14FastMap<std::string, std::string>& capturedFileReadOps() {
-    static folly::F14FastMap<std::string, std::string> instance;
-    return instance;
-  }
-
-  explicit CapturingFileSystem(std::shared_ptr<const config::ConfigBase> config)
-      : FileSystem(std::move(config)) {}
-
-  std::string name() const override {
-    return "capture";
-  }
-
-  std::string_view extractPath(std::string_view path) const override {
-    if (path.substr(0, kScheme.size()) == kScheme) {
-      return path.substr(kScheme.size());
-    }
-    return path;
-  }
-
-  std::unique_ptr<ReadFile> openFileForRead(
-      std::string_view path,
-      const filesystems::FileOptions& options) override {
-    capturedFileReadOps() = options.fileReadOps;
-    auto localPath = extractPath(path);
-    return filesystems::getFileSystem(localPath, config_)
-        ->openFileForRead(localPath, options);
-  }
-
-  std::unique_ptr<WriteFile> openFileForWrite(
-      std::string_view,
-      const filesystems::FileOptions&) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  void remove(std::string_view) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  void rename(std::string_view, std::string_view, bool) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  bool exists(std::string_view path) override {
-    auto localPath = extractPath(path);
-    return filesystems::getFileSystem(localPath, config_)->exists(localPath);
-  }
-
-  std::vector<std::string> list(std::string_view) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  void mkdir(std::string_view, const filesystems::DirectoryOptions&) override {
-    VELOX_UNSUPPORTED();
-  }
-
-  void rmdir(std::string_view) override {
-    VELOX_UNSUPPORTED();
-  }
-};
-
-void registerCapturingFileSystem() {
-  static bool registered = false;
-  if (!registered) {
-    filesystems::registerFileSystem(
-        [](std::string_view path) {
-          return path.find(CapturingFileSystem::kScheme) == 0;
-        },
-        [](std::shared_ptr<const config::ConfigBase> config, std::string_view) {
-          return std::make_shared<CapturingFileSystem>(std::move(config));
-        });
-    registered = true;
-  }
-}
-
 TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
-  registerCapturingFileSystem();
+  recordFileOpens();
 
   // Write test data to a local temp file.
   auto rowType = ROW({"c0"}, {BIGINT()});
@@ -924,16 +862,17 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
       /*sampleRate=*/1.0,
       /*dbName=*/"test_db");
 
-  // Build the split using the capturing filesystem scheme so that
-  // openFileForRead captures the fileReadOps populated by FileSplitReader.
-  auto split = exec::test::HiveConnectorSplitBuilder(
-                   fmt::format("capture:{}", filePath->getPath()))
-                   .fileFormat(dwio::common::FileFormat::DWRF)
-                   .build();
+  // Build the split on the faulty file system so that its open hook sees the
+  // fileReadOps populated by FileSplitReader.
+  auto split =
+      exec::test::HiveConnectorSplitBuilder(
+          tests::utils::FaultyFileSystem::scheme() + filePath->getPath())
+          .fileFormat(dwio::common::FileFormat::DWRF)
+          .build();
 
   // Build and run a table scan. This exercises the full pipeline:
   // FileSplitReader::createReader() -> FileHandleGenerator ->
-  // CapturingFileSystem.
+  // FaultyFileSystem.
   auto plan = PlanBuilder()
                   .startTableScan()
                   .outputType(rowType)
@@ -947,13 +886,18 @@ TEST_F(HiveConnectorTest, fileReadOpsTableIdentityPropagation) {
 
   // Verify that FileSplitReader propagated dbName and tableName into
   // fileReadOps.
-  auto& captured = CapturingFileSystem::capturedFileReadOps();
-  ASSERT_EQ(captured.at(std::string(kDbNameKey)), "test_db");
-  ASSERT_EQ(captured.at(std::string(kTableNameKey)), "test_table");
+  const folly::F14FastMap<std::string, std::string> expected{
+      {std::string(kDbNameKey), "test_db"},
+      {std::string(kTableNameKey), "test_table"},
+  };
+  EXPECT_THAT(
+      fileOpens_,
+      testing::ElementsAre(
+          testing::Field(&filesystems::FileOptions::fileReadOps, expected)));
 }
 
 TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
-  registerCapturingFileSystem();
+  recordFileOpens();
 
   const auto rowType = ROW({"c0"}, {BIGINT()});
   const auto tableHandle = makeTableHandle(
@@ -967,11 +911,11 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
   const config::ConfigBase sessionProperties({});
   auto connector = ConnectorRegistry::tryGet(kHiveConnectorId);
 
-  // Returns the options a new data source opens its split's file with, calling
-  // setFileReadOps() first when 'fileReadOps' is set. Each call writes its own
-  // file because file handles are cached by path and a cached handle is not
-  // reopened.
-  auto openFileReadOps =
+  // Returns the options of each file a new data source opens for its split,
+  // calling setFileReadOps() first when 'fileReadOps' is set. Each call writes
+  // its own file because file handles are cached by path and a cached handle is
+  // not reopened.
+  auto openFileOptions =
       [&](std::optional<folly::F14FastMap<std::string, std::string>>
               fileReadOps) {
         auto filePath = TempFilePath::create();
@@ -995,34 +939,37 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
           checkedPointerCast<FileDataSource>(dataSource.get())
               ->setFileReadOps(std::move(*fileReadOps));
         }
-        CapturingFileSystem::capturedFileReadOps().clear();
+        fileOpens_.clear();
         dataSource->addSplit(
             exec::test::HiveConnectorSplitBuilder(
-                fmt::format("capture:{}", filePath->getPath()))
+                tests::utils::FaultyFileSystem::scheme() + filePath->getPath())
                 .fileFormat(dwio::common::FileFormat::DWRF)
                 .build());
-        return CapturingFileSystem::capturedFileReadOps();
+        return fileOpens_;
       };
 
   const folly::F14FastMap<std::string, std::string> tableIdentity{
       {std::string(kDbNameKey), "test_db"},
       {std::string(kTableNameKey), "test_table"},
   };
-  EXPECT_EQ(openFileReadOps(std::nullopt), tableIdentity);
+  EXPECT_THAT(
+      openFileOptions(std::nullopt),
+      testing::ElementsAre(
+          testing::Field(
+              &filesystems::FileOptions::fileReadOps, tableIdentity)));
 
   auto expected = tableIdentity;
   expected.emplace("test.key", "test.value");
-  EXPECT_EQ(
-      openFileReadOps(
+  EXPECT_THAT(
+      openFileOptions(
           folly::F14FastMap<std::string, std::string>{
               {"test.key", "test.value"},
           }),
-      expected);
+      testing::ElementsAre(
+          testing::Field(&filesystems::FileOptions::fileReadOps, expected)));
 }
 
 TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
-  registerCapturingFileSystem();
-
   const auto rowType = ROW({"c0"}, {BIGINT()});
   const auto filePath = TempFilePath::create();
   writeToFile(
@@ -1064,10 +1011,10 @@ TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
       {"sharedKey", "splitValue"},
       {std::string(kTableNameKey), "split_table"},
   };
-  CapturingFileSystem::capturedFileReadOps().clear();
+  recordFileOpens();
   dataSource->addSplit(
       exec::test::HiveConnectorSplitBuilder(
-          fmt::format("capture:{}", filePath->getPath()))
+          tests::utils::FaultyFileSystem::scheme() + filePath->getPath())
           .fileFormat(dwio::common::FileFormat::DWRF)
           .fileProperties(fileProperties)
           .build());
@@ -1079,7 +1026,10 @@ TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
       {std::string(kDbNameKey), "test_db"},
       {std::string(kTableNameKey), "test_table"},
   };
-  EXPECT_EQ(CapturingFileSystem::capturedFileReadOps(), expected);
+  EXPECT_THAT(
+      fileOpens_,
+      testing::ElementsAre(
+          testing::Field(&filesystems::FileOptions::fileReadOps, expected)));
 }
 
 /// Verifies that getRuntimeStats() merge logic allows IoStats (ReadFile-layer)

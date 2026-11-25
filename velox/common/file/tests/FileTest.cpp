@@ -20,6 +20,7 @@
 #include "velox/common/file/tests/FaultyFileSystem.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 
+#include <gmock/gmock.h>
 #include "gtest/gtest.h"
 
 using namespace facebook::velox;
@@ -220,6 +221,7 @@ class FaultyFsTest : public ::testing::Test {
 
   void TearDown() {
     fs_->clearFileFaultInjections();
+    fs_->clearFileSystemInjections();
   }
 
   void writeData(WriteFile* file) {
@@ -432,6 +434,37 @@ TEST_F(FaultyFsTest, fileReadFaultHookInjection) {
     readData(readFile.get(), true);
     VELOX_ASSERT_THROW(readData(readFile.get(), false), "Data Mismatch");
   }
+}
+
+TEST_F(FaultyFsTest, openFileForReadInjection) {
+  const std::string delegatedPath{fs_->extractPath(readFilePath_)};
+  std::vector<std::pair<std::string, FileOptions>> fileOpens;
+  fs_->setFilesystemInjectionHook([&](FaultFileSystemOperation* op) {
+    ASSERT_EQ(op->type, FaultFileSystemOperation::Type::kOpenFileForRead);
+    const auto* openOp =
+        static_cast<FaultFileSystemOpenFileForReadOperation*>(op);
+    fileOpens.emplace_back(openOp->path, openOp->options);
+  });
+  FileOptions options;
+  options.fileReadOps = {{"source", "test"}};
+  readData(fs_->openFileForRead(readFilePath_, options).get());
+  EXPECT_THAT(
+      fileOpens,
+      testing::ElementsAre(
+          testing::Pair(
+              delegatedPath,
+              testing::Field(&FileOptions::fileReadOps, options.fileReadOps))));
+
+  fs_->setFileSystemInjectionError(
+      fileError_, {FaultFileSystemOperation::Type::kOpenFileForRead});
+  VELOX_ASSERT_THROW(
+      fs_->openFileForRead(readFilePath_, {}), "InjectedFaultFileError");
+
+  fs_->setFilesystemInjectionHook(
+      [](FaultFileSystemOperation* op) { op->delegate = false; });
+  VELOX_ASSERT_THROW(
+      fs_->openFileForRead(readFilePath_, {}),
+      "A file system hook cannot skip openFileForRead");
 }
 
 TEST_F(FaultyFsTest, fileWriteErrorInjection) {
