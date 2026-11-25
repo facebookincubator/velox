@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include <optional>
 #include <thread>
 
 #include <cudf/contiguous_split.hpp>
 #include <folly/String.h>
 #include <folly/Uri.h>
+#include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -492,15 +494,23 @@ void UcxExchangeSource::onMetadata(
         std::static_pointer_cast<std::vector<uint8_t>>(arg);
 
     ProducerMessage message;
+    std::optional<std::string> decodeError;
     try {
       message = decodeProducerMessage(metadataMsg->data(), kMaxMetaBufSize);
+    } catch (const VeloxException& e) {
+      // what() of a VeloxException carries its context and stack trace, which
+      // do not belong in a query's error.
+      decodeError = e.message();
     } catch (const std::exception& e) {
+      decodeError = e.what();
+    }
+    if (decodeError.has_value()) {
       std::string errorMsg = fmt::format(
           "Cannot decode message from producer, host {}:{}, task {}: {}",
           host_,
           port_,
           partitionKey_.toString(),
-          e.what());
+          *decodeError);
       VLOG(0) << errorMsg;
       queue_->setError(errorMsg);
       deliverEndMarker();

@@ -79,9 +79,13 @@ std::unique_ptr<FakeUcxPeer> FakeUcxPeer::connect(
 }
 
 FakeUcxPeer::~FakeUcxPeer() {
-  running_ = false;
-  worker_->signal();
-  progressThread_.join();
+  // A factory that threw before startProgressThread() leaves no thread, and
+  // possibly no listener or endpoint.
+  if (progressThread_.joinable()) {
+    running_ = false;
+    worker_->signal();
+    progressThread_.join();
+  }
   // The progress thread has stopped, so closeBlocking() progresses the worker
   // on this thread.
   if (endpoint_ != nullptr) {
@@ -140,15 +144,17 @@ void FakeUcxPeer::progressLoop() {
   }
 }
 
-void FakeUcxPeer::runOnProgressThread(std::function<void()> action) {
-  auto done = std::make_shared<std::promise<void>>();
+std::shared_ptr<ucxx::Request> FakeUcxPeer::runOnProgressThread(
+    std::function<std::shared_ptr<ucxx::Request>()> action) {
+  // The action owns everything it touches, so it is safe to run after this
+  // call has given up on it.
+  auto done = std::make_shared<std::promise<std::shared_ptr<ucxx::Request>>>();
   auto future = done->get_future();
   {
     std::lock_guard<std::mutex> lock(mutex_);
     actions_.emplace_back([action = std::move(action), done] {
       try {
-        action();
-        done->set_value();
+        done->set_value(action());
       } catch (...) {
         done->set_exception(std::current_exception());
       }
@@ -158,7 +164,7 @@ void FakeUcxPeer::runOnProgressThread(std::function<void()> action) {
   VELOX_CHECK(
       future.wait_for(kInternalTimeout) == std::future_status::ready,
       "FakeUcxPeer's progress thread did not run an action in time");
-  future.get();
+  return future.get();
 }
 
 ucs_status_t FakeUcxPeer::waitForRequest(
@@ -172,7 +178,10 @@ ucs_status_t FakeUcxPeer::waitForRequest(
   if (request->isCompleted()) {
     return request->getStatus();
   }
-  runOnProgressThread([request] { request->cancel(); });
+  runOnProgressThread([request]() -> std::shared_ptr<ucxx::Request> {
+    request->cancel();
+    return nullptr;
+  });
   // The request owns its buffer, so a late completion cannot write to freed
   // memory. Waiting keeps a cancelled request from completing in a later step.
   const auto cancelDeadline =
@@ -199,17 +208,14 @@ std::vector<uint8_t> FakeUcxPeer::waitForHandshake(
 void FakeUcxPeer::sendAm(const void* data, size_t size) {
   const auto* bytes = static_cast<const uint8_t*>(data);
   auto buffer = std::make_shared<std::vector<uint8_t>>(bytes, bytes + size);
-  std::shared_ptr<ucxx::Request> request;
-  runOnProgressThread([this, buffer, &request] {
+  auto request = runOnProgressThread([this, buffer] {
     VELOX_CHECK_NOT_NULL(endpoint_, "FakeUcxPeer has no connection");
-    request =
-        endpoint_
-            ->amSendBuilder(
-                buffer->data(), buffer->size(), UCS_MEMORY_TYPE_HOST)
-            .receiverCallbackInfo(
-                ucxx::AmReceiverCallbackInfo(kAmCallbackOwner, kAmCallbackId))
-            .callbackData(buffer)
-            .build();
+    return endpoint_
+        ->amSendBuilder(buffer->data(), buffer->size(), UCS_MEMORY_TYPE_HOST)
+        .receiverCallbackInfo(
+            ucxx::AmReceiverCallbackInfo(kAmCallbackOwner, kAmCallbackId))
+        .callbackData(buffer)
+        .build();
   });
   const auto status = waitForRequest(request, kInternalTimeout);
   VELOX_CHECK(
@@ -225,14 +231,12 @@ ucs_status_t FakeUcxPeer::sendTag(
     std::chrono::milliseconds timeout) {
   const auto* bytes = static_cast<const uint8_t*>(data);
   auto buffer = std::make_shared<std::vector<uint8_t>>(bytes, bytes + size);
-  std::shared_ptr<ucxx::Request> request;
-  runOnProgressThread([this, buffer, tag, &request] {
+  auto request = runOnProgressThread([this, buffer, tag] {
     VELOX_CHECK_NOT_NULL(endpoint_, "FakeUcxPeer has no connection");
-    request =
-        endpoint_
-            ->tagSendBuilder(buffer->data(), buffer->size(), ucxx::Tag{tag})
-            .callbackData(buffer)
-            .build();
+    return endpoint_
+        ->tagSendBuilder(buffer->data(), buffer->size(), ucxx::Tag{tag})
+        .callbackData(buffer)
+        .build();
   });
   return waitForRequest(request, timeout);
 }
@@ -242,16 +246,12 @@ std::pair<ucs_status_t, std::vector<uint8_t>> FakeUcxPeer::receiveTag(
     size_t bufferSize,
     std::chrono::milliseconds timeout) {
   auto buffer = std::make_shared<std::vector<uint8_t>>(bufferSize, 0);
-  std::shared_ptr<ucxx::Request> request;
-  runOnProgressThread([this, buffer, tag, &request] {
-    request = worker_
-                  ->tagRecvBuilder(
-                      buffer->data(),
-                      buffer->size(),
-                      ucxx::Tag{tag},
-                      ucxx::TagMaskFull)
-                  .callbackData(buffer)
-                  .build();
+  auto request = runOnProgressThread([this, buffer, tag] {
+    return worker_
+        ->tagRecvBuilder(
+            buffer->data(), buffer->size(), ucxx::Tag{tag}, ucxx::TagMaskFull)
+        .callbackData(buffer)
+        .build();
   });
   const auto status = waitForRequest(request, timeout);
   if (status == UCS_ERR_TIMED_OUT) {

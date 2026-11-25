@@ -20,6 +20,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
@@ -114,6 +115,17 @@ class UcxProtocolVersionTest : public UcxExchangeTestBase {
     }
   }
 
+  // Returns the message of the error that draining 'client' throws, or an
+  // empty string if the drain ends without one.
+  static std::string drainError(UcxExchangeClient& client) {
+    try {
+      drain(client);
+    } catch (const VeloxException& e) {
+      return e.message();
+    }
+    return "";
+  }
+
   // Sends one chunk from a new producer task to a client of this worker and
   // checks that it arrives: the worker still serves queries after meeting a
   // bad peer.
@@ -172,7 +184,9 @@ TEST_F(UcxProtocolVersionTest, olderProducerFailsConsumer) {
           "UCX exchange peers must run the same protocol version: this worker "
           "runs 1, producer worker 127.0.0.1:{} runs 0",
           port));
-  // The source sends nothing more, not even a close message.
+  client->close();
+  // The source sends nothing more, not even a close message when its client
+  // closes.
   EXPECT_EQ(
       peer->receiveTag(
               getCloseTag(fnv1a_32(PartitionKey{taskId, 0}.toString())),
@@ -180,7 +194,6 @@ TEST_F(UcxProtocolVersionTest, olderProducerFailsConsumer) {
               1s)
           .first,
       UCS_ERR_TIMED_OUT);
-  client->close();
 }
 
 TEST_F(UcxProtocolVersionTest, olderConsumerGetsTruncatedResponse) {
@@ -278,15 +291,26 @@ TEST_F(UcxProtocolVersionTest, undecodableMessageFailsConsumer) {
           3s),
       UCS_OK);
 
-  // The queue keeps its error, so each drain reports it again.
-  VELOX_ASSERT_THROW(
-      drain(*client),
+  // The whole message, so that it cannot carry the decode error's stack trace.
+  EXPECT_EQ(
+      drainError(*client),
       fmt::format(
-          "Cannot decode message from producer, host 127.0.0.1:{}, task {}/0: ",
+          "Cannot decode message from producer, host 127.0.0.1:{}, task {}/0: "
+          "(4294967295 vs. 305419896) Unexpected magic number: 4294967295",
           port,
           taskId));
-  VELOX_ASSERT_THROW(drain(*client), "Unexpected magic number: 4294967295");
   client->close();
+}
+
+TEST_F(UcxProtocolVersionTest, listenOnUsedPortThrows) {
+  // The Communicator listens on this port. A peer that cannot listen must
+  // throw, not abort the test binary.
+  try {
+    FakeUcxPeer::listen(listenerPort());
+    FAIL() << "Expected FakeUcxPeer::listen() to throw";
+  } catch (const ucxx::BusyError& e) {
+    EXPECT_STREQ(e.what(), "Device is busy");
+  }
 }
 
 } // namespace

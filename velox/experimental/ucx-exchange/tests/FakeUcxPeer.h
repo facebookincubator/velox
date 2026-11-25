@@ -94,9 +94,12 @@ class FakeUcxPeer {
 
   void progressLoop();
 
-  // Runs 'action' on the progress thread and waits for it. Rethrows what
-  // 'action' throws.
-  void runOnProgressThread(std::function<void()> action);
+  // Runs 'action' on the progress thread, waits for it and returns what it
+  // returns. Rethrows what 'action' throws. Throws if the action does not run
+  // within a few seconds; it may still run later, so it must not refer to the
+  // caller's stack.
+  std::shared_ptr<ucxx::Request> runOnProgressThread(
+      std::function<std::shared_ptr<ucxx::Request>()> action);
 
   // Waits for 'request' to complete and returns its status. Cancels it and
   // returns UCS_ERR_TIMED_OUT if it does not complete within 'timeout'.
