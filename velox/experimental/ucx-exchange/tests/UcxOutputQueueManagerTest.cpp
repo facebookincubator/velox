@@ -33,6 +33,7 @@
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
@@ -487,9 +488,9 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
   int numPartitions = 1;
   int destination = 0;
 
-  // Clear stale state from prior tests (removeTask on a non-existing queue
-  // clears the removedTasks_ set, allowing getData to create a placeholder).
-  queueManager_->removeTask(taskId);
+  // A manager with no state from prior tests, so that getData() below creates
+  // a Pending entry for a task it has not seen.
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
 
   // Fetch data from a non-existing task.
   struct Response {
@@ -554,7 +555,9 @@ TEST_F(UcxOutputQueueManagerTest, pendingReadersBeforeInitialization) {
         core::PartitionedOutputNode::Kind::kBroadcast}) {
     SCOPED_TRACE(kind);
     const std::string taskId = "pendingBeforeInit";
-    queueManager_->removeTask(taskId);
+    // A manager that has not seen the task, so getData() below leaves Pending
+    // readers.
+    queueManager_ = std::make_shared<UcxOutputQueueManager>();
     bool receivedEnd{false};
     queueManager_->getData(taskId, 3, receiveEndMarker(3, receivedEnd));
     EXPECT_FALSE(receivedEnd);
@@ -585,6 +588,253 @@ TEST_F(UcxOutputQueueManagerTest, pendingReadersBeforeInitialization) {
     fetchEndMarker(taskId, 0);
     EXPECT_TRUE(queueManager_->isFinished(taskId));
     queueManager_->removeTask(taskId);
+  }
+}
+
+// A server that closes while it waits on a Pending entry leaves nothing that
+// would ever erase the entry if its producer never arrives. Releasing the last
+// reader erases it, and the task can still be initialized later.
+TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPendingEntry) {
+  const std::string taskId = "pendingEntryWithClosedReaders";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  bool fired{false};
+  auto receive = [&fired](
+                     std::shared_ptr<cudf::packed_columns> /*data*/,
+                     vector_size_t /*numRows*/,
+                     std::vector<int64_t> /*remainingBytes*/) { fired = true; };
+  auto reader0 = queueManager_->bindReader(taskId, 0);
+  reader0->getData(0, receive);
+  auto reader1 = queueManager_->bindReader(taskId, 1);
+  reader1->getData(1, receive);
+  ASSERT_EQ(reader0, reader1);
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+
+  queueManager_->releaseReader(reader0, 0);
+  EXPECT_TRUE(queueManager_->stats(taskId).has_value());
+  queueManager_->releaseReader(reader1, 1);
+  EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+  EXPECT_FALSE(fired);
+
+  auto task = initializeTask(
+      taskId, /*numDestinations=*/1, /*numDrivers=*/1, /*cleanup=*/false);
+  enqueue(taskId, /*size=*/10);
+  noMoreData(taskId);
+  fetch(taskId, 0);
+  fetchEndMarker(taskId, 0);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  EXPECT_FALSE(fired);
+  queueManager_->removeTask(taskId);
+}
+
+// Releasing one reader of a Pending entry keeps the entry for the readers that
+// are still bound, so that the producer finds them when it initializes.
+TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsPendingEntry) {
+  const std::string taskId = "pendingEntryWithBoundReader";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  bool receivedData{false};
+  auto reader0 = queueManager_->bindReader(taskId, 0);
+  reader0->getData(0, receiveData(0, receivedData));
+  auto reader1 = queueManager_->bindReader(taskId, 1);
+  queueManager_->releaseReader(reader1, 1);
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+  EXPECT_EQ(reader0->state(), TaskEntryState::kPending);
+
+  auto task = initializeTask(
+      taskId, /*numDestinations=*/1, /*numDrivers=*/1, /*cleanup=*/false);
+  EXPECT_EQ(reader0->state(), TaskEntryState::kActive);
+  enqueue(taskId, /*size=*/10);
+  EXPECT_TRUE(receivedData);
+  noMoreData(taskId);
+  fetchEndMarker(taskId, 0);
+  EXPECT_TRUE(queueManager_->isFinished(taskId));
+  queueManager_->releaseReader(reader0, 0);
+  queueManager_->removeTask(taskId);
+}
+
+// A caller that holds a Pending entry for another reason must not keep it in
+// the map once its last reader is released: nothing would erase it later.
+TEST_F(UcxOutputQueueManagerTest, pendingEntryHeldElsewhereIsStillErased) {
+  const std::string taskId = "pendingEntryHeldElsewhere";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto held = queueManager_->bindReader(taskId, 0);
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+  queueManager_->releaseReader(held, 0);
+  EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+  EXPECT_EQ(held->state(), TaskEntryState::kPending);
+
+  // The next reader gets a new entry, not the one still held.
+  auto next = queueManager_->bindReader(taskId, 0);
+  EXPECT_NE(next, held);
+  queueManager_->releaseReader(next, 0);
+}
+
+// A reader that arrives after a removal is bound to the Removed entry, which
+// ends it at once, rather than to a new Pending entry that no producer fills.
+TEST_F(UcxOutputQueueManagerTest, readerBoundDuringRemovalFindsRemovedEntry) {
+  const std::string taskId = "readerAfterRemoval";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  queueManager_->removeTask(taskId);
+  auto entry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+  EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+
+  bool receivedEnd{false};
+  entry->getData(0, receiveEndMarker(0, receivedEnd));
+  EXPECT_TRUE(receivedEnd);
+  queueManager_->releaseReader(entry, 0);
+  IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
+}
+
+// The methods Velox calls see a Removed task as absent.
+TEST_F(UcxOutputQueueManagerTest, removedTaskIsInvisibleToVelox) {
+  const std::string taskId = "removedInvisibleToVelox";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
+  EXPECT_EQ(queueManager_->getUtilization(taskId), std::nullopt);
+  EXPECT_EQ(queueManager_->isOverutilized(taskId), std::nullopt);
+  EXPECT_FALSE(queueManager_->updateOutputBuffers(taskId, 1, true));
+  EXPECT_FALSE(queueManager_->updateNumDrivers(taskId, 1));
+  EXPECT_FALSE(queueManager_->canUseIntraNode(taskId));
+  VELOX_ASSERT_THROW(
+      queueManager_->isFinished(taskId),
+      "Output cudf queue for task not found");
+  VELOX_ASSERT_THROW(
+      queueManager_->noMoreData(taskId),
+      "Output cudf queue for task not found");
+}
+
+// A server keeps the entry it was bound to. When the task ID is initialized
+// again, the old server's calls must not reach the new task.
+TEST_F(UcxOutputQueueManagerTest, queueHandleDoesNotFollowReusedTaskId) {
+  const std::string taskId = "reusedTaskId";
+  auto oldTask = initializeTask(taskId, 1, 1);
+  auto oldEntry = queueManager_->bindReader(taskId, /*destination=*/0);
+
+  oldTask->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  auto newTask = initializeTask(taskId, 1, 1);
+
+  oldEntry->deleteResults(0);
+
+  EXPECT_EQ(oldTask->state(), TaskState::kAborted);
+  EXPECT_EQ(newTask->state(), TaskState::kRunning);
+  EXPECT_FALSE(queueManager_->isFinished(taskId));
+  EXPECT_EQ(oldEntry->state(), TaskEntryState::kRemoved);
+  queueManager_->releaseReader(oldEntry, 0);
+  newTask->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+// A Removed entry lives as long as its Task, so that a consumer that connects
+// late still finds the removal. The next removal after the Task is destroyed
+// erases it.
+TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
+  const std::string taskId = "recordedWhileTaskLives";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  // Other removals keep the entry while the Task is alive.
+  queueManager_->removeTask("otherRemovedTask");
+  auto entry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+  queueManager_->releaseReader(entry, 0);
+
+  std::weak_ptr<Task> weakTask = task;
+  task.reset();
+  ASSERT_TRUE(weakTask.expired());
+  queueManager_->removeTask("removalAfterTaskDestroyed");
+
+  // A consumer that arrives now is treated like one of a task not created yet.
+  auto lateEntry = queueManager_->bindReader(taskId, 0);
+  EXPECT_NE(lateEntry, entry);
+  EXPECT_EQ(lateEntry->state(), TaskEntryState::kPending);
+  queueManager_->releaseReader(lateEntry, 0);
+  for (const auto& removedTaskId :
+       {taskId,
+        std::string{"otherRemovedTask"},
+        std::string{"removalAfterTaskDestroyed"}}) {
+    IntraNodeTransferRegistry::getInstance()->clearCancelledTask(removedTaskId);
+  }
+}
+
+// A server bound to a Removed entry keeps it, even after its Task is destroyed.
+TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedEntry) {
+  const std::string taskId = "removedEntryWithBoundReader";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  queueManager_->removeTask("otherRemovedTask");
+  auto entry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+
+  std::weak_ptr<Task> weakTask = task;
+  task.reset();
+  ASSERT_TRUE(weakTask.expired());
+  queueManager_->removeTask("removalAfterTaskDestroyed");
+
+  auto sameEntry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(sameEntry, entry);
+  EXPECT_EQ(sameEntry->state(), TaskEntryState::kRemoved);
+  queueManager_->releaseReader(sameEntry, 0);
+  queueManager_->releaseReader(entry, 0);
+  for (const auto& removedTaskId :
+       {taskId,
+        std::string{"otherRemovedTask"},
+        std::string{"removalAfterTaskDestroyed"}}) {
+    IntraNodeTransferRegistry::getInstance()->clearCancelledTask(removedTaskId);
+  }
+}
+
+// A task whose initializeTask() threw is removed with its entry still Pending,
+// so only the failed initialization knew its Task. The Removed entry must still
+// live as long as the Task rather than until the next removal.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    recordOfFailedInitializationLivesAsLongAsItsTask) {
+  const std::string taskId = "failedInitialization";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
+  VELOX_ASSERT_THROW(
+      queueManager_->initializeTask(
+          task,
+          core::PartitionedOutputNode::Kind::kPartitioned,
+          /*numDestinations=*/-1,
+          /*numDrivers=*/1),
+      "Number of destinations must be non-negative");
+  // The failed initialization left the entry Pending and untouched: it has no
+  // capacity yet and cannot use the intra-node path.
+  ASSERT_TRUE(queueManager_->stats(taskId).has_value());
+  EXPECT_EQ(queueManager_->getUtilization(taskId), std::nullopt);
+  EXPECT_FALSE(queueManager_->canUseIntraNode(taskId));
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  queueManager_->removeTask("removalAfterFailedInitialization");
+  auto entry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+  queueManager_->releaseReader(entry, 0);
+
+  std::weak_ptr<Task> weakTask = task;
+  task.reset();
+  ASSERT_TRUE(weakTask.expired());
+  queueManager_->removeTask("removalAfterTaskDestroyed");
+  auto lateEntry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(lateEntry->state(), TaskEntryState::kPending);
+  queueManager_->releaseReader(lateEntry, 0);
+  for (const auto& removedTaskId :
+       {taskId,
+        std::string{"removalAfterFailedInitialization"},
+        std::string{"removalAfterTaskDestroyed"}}) {
+    IntraNodeTransferRegistry::getInstance()->clearCancelledTask(removedTaskId);
   }
 }
 
@@ -645,7 +895,9 @@ TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
 
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
   const std::string taskId = "orphanTest";
-  queueManager_->removeTask(taskId);
+  // A manager that has not seen the task, so the reader below waits on a
+  // Pending entry. A removal leaves a Removed entry that ends readers at once.
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
 
   bool receivedEndMarker{false};
   registerForEndMarker(taskId, 0, receivedEndMarker);
@@ -677,8 +929,15 @@ TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
   const std::string taskId = "terminatedPendingReader";
   auto task = initializeTask(
       taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
-  auto queue = std::make_shared<UcxOutputQueue>(
-      task, 1, 1, core::PartitionedOutputNode::Kind::kBroadcast);
+  auto queue = std::make_shared<UcxOutputQueue>(taskId);
+  std::vector<UcxDataAvailable> notifications;
+  ASSERT_TRUE(queue->initialize(
+      task,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      core::PartitionedOutputNode::Kind::kBroadcast,
+      notifications));
+  EXPECT_TRUE(notifications.empty());
   int endCount{0};
   queue->getData(
       5,

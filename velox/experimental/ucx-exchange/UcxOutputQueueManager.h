@@ -20,7 +20,7 @@
 #include <velox/exec/Task.h>
 #include <functional>
 #include <string_view>
-#include <unordered_set>
+#include <unordered_map>
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -40,7 +40,10 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   UcxOutputQueueManager& operator=(const UcxOutputQueueManager&) = delete;
 
   /// @brief Initializes a task and creates the corresponding output queues that
-  /// are associated with this task.
+  /// are associated with this task. Initializes the task's Pending entry in
+  /// place, or a new one if the task ID is absent or Removed. If the
+  /// initialization throws, the entry stays Pending and, once removed, lives as
+  /// long as 'task'.
   /// @param task The task.
   /// @param kind The output mode (partitioned, broadcast, etc.)
   /// @param numDestinations The number of queues (destinations or partitions)
@@ -96,13 +99,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @brief
   void deleteResults(std::string_view taskId, int destination);
 
-  /// @brief Asynchronously returns data through 'notify', immediately if
-  /// available. Keeps unpublished readers pending until task initialization or
-  /// a buffer update publishes their destination. Published broadcast readers
-  /// receive earlier data and the end marker. Invokes 'notify' with nullptr
-  /// when the final destination count excludes the reader, results have been
-  /// deleted, or the task has terminated. Negative destinations also receive
-  /// nullptr.
+  /// @brief For tests: bindReader() followed by UcxOutputQueue::getData().
+  /// Never releases the reader it binds.
   /// @param taskId The unique taskId.
   /// @param destination The destination.
   /// @param notify The callback function.
@@ -111,6 +109,20 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       int destination,
       UcxDataAvailableCallback notify);
 
+  /// Finds or creates the entry for 'taskId' and counts a bound reader. Never
+  /// returns null: a Removed entry is returned as is. A server binds once and
+  /// sends every later call to the entry, so that it never reaches a task that
+  /// reuses the ID. Does not throw, since it runs inside a UCX callback.
+  std::shared_ptr<UcxOutputQueue> bindReader(
+      std::string_view taskId,
+      int destination);
+
+  /// Unbinds a reader. Erases a Pending entry that has no bound reader left and
+  /// no Released destination. Does not throw.
+  void releaseReader(
+      const std::shared_ptr<UcxOutputQueue>& entry,
+      int destination);
+
   /// Returns true if the given task can use intra-node transfer.
   /// Returns false if the task is not yet initialized (placeholder queue
   /// from early sink connections) or if the task uses broadcast mode
@@ -118,14 +130,16 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// source's destructive move would corrupt data for other servers).
   bool canUseIntraNode(std::string_view taskId);
 
-  /// Fails the producer task 'taskId' with 'error' if its output is
-  /// initialized on this worker; otherwise only logs 'error'. Calls
+  /// Fails the producer task 'taskId' with 'error' if its entry is Active on
+  /// this worker; otherwise only logs 'error'. Calls
   /// Task::setError() with no lock held. Task::setError() terminates the task
   /// synchronously, so this must not be called inside a UCX callback.
   void failTask(std::string_view taskId, std::string_view error);
 
-  /// @brief Removes the queue for the given task from the queue manager.
-  /// Calls "terminate" on the queue to awake waiting producers.
+  /// @brief Makes the task's entry Removed, creating it if absent, so that a
+  /// later reader finds the removal. Calls "terminate" on the queue to awake
+  /// waiting producers and readers. Erases the other Removed entries whose
+  /// Task is gone and that have no bound reader.
   void removeTask(const std::string& taskId) override;
 
   /// @brief Returns the queue statistics of the queue associated with the given
@@ -143,22 +157,19 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   std::string toString(const std::string& taskId) override;
 
  private:
-  // Retrieves the queue for a task if it exists.
-  // Returns NULL if task not found.
+  // Returns the Pending or Active entry of a task, or null. Every method that
+  // Velox calls looks up through it, so that a Removed task is absent to Velox.
   std::shared_ptr<UcxOutputQueue> getQueueIfExists(std::string_view taskId);
 
-  // Throws an exception if queue doesn't exist.
+  // Same as getQueueIfExists(), but throws if there is no such entry.
   std::shared_ptr<UcxOutputQueue> getQueue(std::string_view taskId);
 
+  // One entry per task ID, from the first contact to its erasure. The lock
+  // only adds and erases entries; it is taken before an entry's lock.
   folly::Synchronized<
       std::unordered_map<std::string, std::shared_ptr<UcxOutputQueue>>,
       std::mutex>
-      queues_;
-
-  // Tracks removed tasks so late readers receive EOS instead of waiting on
-  // a recreated placeholder.
-  folly::Synchronized<std::unordered_set<std::string>, std::mutex>
-      removedTasks_;
+      entries_;
 };
 
 } // namespace facebook::velox::ucx_exchange

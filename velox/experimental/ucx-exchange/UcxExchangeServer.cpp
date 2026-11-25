@@ -102,6 +102,7 @@ std::shared_ptr<UcxExchangeServer> UcxExchangeServer::create(
     bool isIntraNodeTransfer) {
   auto ptr = std::shared_ptr<UcxExchangeServer>(new UcxExchangeServer(
       communicator, endpointRef, key, isIntraNodeTransfer));
+  ptr->entry_ = ptr->queueMgr_->bindReader(key.taskId, key.destination);
   return ptr;
 }
 
@@ -118,15 +119,13 @@ void UcxExchangeServer::process() {
     case ServerState::ReadyToTransfer: {
       // Fetch the data from UcxQueueManager and store it in the dataPtr_;
       setState(ServerState::WaitingForDataFromQueue);
-      // Register the callback with the destination queue to get data.
-      // If the queue doesn't exist yet, getData will create an empty
-      // queue and the callback will be triggered once the corresponding
-      // source task has initialized the queue and added data to it.
+      // Register the callback with the destination queue to get data. If the
+      // task's entry is still Pending, the callback is triggered once the
+      // source task has initialized it and added data to it.
       // Use weak_ptr to prevent use-after-free if close() is called during
       // callback
       std::weak_ptr<UcxExchangeServer> weakQueue = weak_from_this();
-      queueMgr_->getData(
-          partitionKey_.taskId,
+      entry_->getData(
           partitionKey_.destination,
           [weakQueue](
               std::shared_ptr<cudf::packed_columns> data,
@@ -239,6 +238,8 @@ void UcxExchangeServer::close() {
     completedRequests_.clear();
   }
 
+  queueMgr_->releaseReader(entry_, partitionKey_.destination);
+
   communicator_->unregister(getSelfPtr());
 }
 
@@ -304,7 +305,7 @@ void UcxExchangeServer::sendData() {
               key, nullptr, /*numRows=*/0, /*atEnd=*/true);
       intraNodeAtEndPublished_ = true;
 
-      queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      entry_->deleteResults(partitionKey_.destination);
 
       // Wait for source to acknowledge atEnd before finishing
       setState(ServerState::WaitingForIntraNodeRetrieve);
@@ -447,7 +448,7 @@ void UcxExchangeServer::sendData() {
       VLOG(3) << "@" << partitionKey_.taskId
               << " Finished transferring partition for task "
               << partitionKey_.toString();
-      queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      entry_->deleteResults(partitionKey_.destination);
       setState(ServerState::Done);
       communicator_->addToWorkQueue(getSelfPtr());
     }

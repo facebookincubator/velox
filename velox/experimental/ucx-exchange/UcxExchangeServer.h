@@ -156,6 +156,11 @@ class UcxExchangeServer
   std::size_t bytes_;
 
   std::shared_ptr<UcxOutputQueueManager> queueMgr_;
+
+  // The entry of the producer task, bound once in create(). Every call for
+  // the task's data goes to it, so that a task that reuses the ID is never
+  // reached.
+  std::shared_ptr<UcxOutputQueue> entry_;
 };
 
 } // namespace facebook::velox::ucx_exchange

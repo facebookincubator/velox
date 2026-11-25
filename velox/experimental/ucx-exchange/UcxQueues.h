@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include "velox/core/PlanNode.h"
@@ -140,6 +141,16 @@ class UcxDestinationQueue {
   Stats stats_;
 };
 
+/// The state of a task's entry in UcxOutputQueueManager.
+enum class TaskEntryState : uint8_t {
+  /// A server asked for the task before initializeTask().
+  kPending,
+  /// initializeTask() succeeded.
+  kActive,
+  /// removeTask() ended the task's output.
+  kRemoved,
+};
+
 /// @brief The UcxOutputQueue manages all data coming from a single task that
 /// are destined to one or more downstream sink tasks. The UcxOutputQueue uses
 /// a vector of DestinationQueues, one for each destination. The UcxOutputQueue
@@ -149,35 +160,61 @@ class UcxDestinationQueue {
 /// - updateNumDrivers is used to track the number of drivers.
 /// - noMoreData is called by each driver when the driver is done and has no
 /// more data will be added.
+///
+/// The output queue is also the task's entry in UcxOutputQueueManager, from the
+/// first contact for the task ID to its erasure. It starts Pending, becomes
+/// Active at initialize() and Removed at markRemoved(), and stays the same
+/// object throughout, so that a server bound to it reads every change.
 class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
  public:
-  /// @brief Creates a new output queue for a data-producing task.
-  /// @param taskId The id of the source task that produces the data
-  /// @param numDestinations The number of destinations, i.e. the partitions.
-  /// @param numDrivers The initial number of drivers.
-  /// @param kind The output mode (partitioned, broadcast, etc.)
-  UcxOutputQueue(
-      std::shared_ptr<exec::Task> task,
-      uint32_t numDestinations,
-      uint32_t numDrivers,
-      core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned);
+  /// @brief Creates the Pending entry of task 'taskId'. initialize() supplies
+  /// the task, its destinations and its drivers.
+  explicit UcxOutputQueue(std::string taskId);
 
-  /// @brief initializes an unitialized queue. This is needed in order to
-  /// support delayed construction, i.e. if a "getData" arrives before the queue
-  /// exists, the queue manager can create an unitialized queue just for the
-  /// sake of storing the callback notification. The queue is then initialized
-  /// later properly, and eventually the callback fires.
+  /// @brief Initializes a Pending entry, which a server may have created for
+  /// its reader before the producer task initialized its output. The readers
+  /// waiting on it are kept, and get their data once it is enqueued.
   /// Appends ready notifications for the caller to invoke outside manager
-  /// locks.
-  /// @return True, if initialization was successful, i.e. the queue wasn't
-  /// already initialized.
+  /// locks. Throws, and leaves the entry Pending and unchanged, if
+  /// 'numDestinations' is negative.
+  /// @return True, if initialization was successful, i.e. the entry was
+  /// Pending.
   bool initialize(
       std::shared_ptr<exec::Task> task,
-      uint32_t numDestinations,
+      int32_t numDestinations,
       uint32_t numDrivers,
       core::PartitionedOutputNode::Kind kind,
       std::vector<UcxDataAvailable>& notifications);
+
+  /// Returns the ID of the task this entry belongs to.
+  const std::string& taskId() const {
+    return taskId_;
+  }
+
+  /// Returns the state of this entry.
+  TaskEntryState state() const {
+    return state_.load(std::memory_order_acquire);
+  }
+
+  /// Counts a server bound to this entry. Called under the manager's lock.
+  void addBoundReader();
+
+  /// Unbinds a server. Called under the manager's lock. Returns true if the
+  /// entry is Pending, has no bound reader, and no destination is Released, so
+  /// that the manager can erase it.
+  bool removeBoundReader();
+
+  /// Records the task of a failed initializeTask(). The entry stays Pending,
+  /// and once Removed lives as long as 'task'.
+  void recordFailedInitialization(std::weak_ptr<exec::Task> task);
+
+  /// Makes the entry Removed. Keeps only a weak pointer to the task, which is
+  /// released outside the entry's lock. Call after terminate().
+  void markRemoved();
+
+  /// True once Removed, its Task is gone (the weak pointer expired), and no
+  /// reader is bound.
+  bool isDroppable();
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -191,8 +228,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
     return initialized_.load(std::memory_order_acquire);
   }
 
-  /// Returns the task that initialize() or the constructor supplied, or null
-  /// while this queue is a placeholder.
+  /// Returns the task that initialize() supplied while the entry is Active, or
+  /// null.
   std::shared_ptr<exec::Task> task();
 
   /// @brief When we understand the final number of split groups (for grouped
@@ -329,8 +366,25 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // outside the locks. Pending queues never contain data.
   void clearPendingReadersLocked(std::vector<UcxDataAvailable>& notifications);
 
-  // Reference to the task that owns this UcxQueue.
+  // True if the results of an unpublished destination were deleted. Requires
+  // mutex_.
+  bool hasReleasedDestinationLocked() const;
+
+  const std::string taskId_;
+
+  // Written under mutex_. Read without it by the manager, which must not see
+  // a Removed entry.
+  std::atomic<TaskEntryState> state_{TaskEntryState::kPending};
+
+  // Reference to the task that owns this UcxQueue while the entry is Active.
   std::shared_ptr<exec::Task> task_{nullptr};
+
+  // The task of a Removed entry, or of a failed initialize(). Expires when the
+  // host destroys the task, after which no server is expected.
+  std::weak_ptr<exec::Task> removedTask_;
+
+  // The servers bound to this entry.
+  int32_t numBoundReaders_{0};
 
   // The output mode (partitioned, broadcast, etc.)
   core::PartitionedOutputNode::Kind kind_{
@@ -401,7 +455,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   folly::stop_watch<std::chrono::milliseconds> queueWatch_;
 
   // Total time data is queued as bytes * time.
-  double totalQueuedBytesMs_;
+  double totalQueuedBytesMs_{0};
 };
 
 } // namespace facebook::velox::ucx_exchange
