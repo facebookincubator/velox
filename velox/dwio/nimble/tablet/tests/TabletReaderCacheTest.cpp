@@ -324,6 +324,20 @@ TEST_F(TabletReaderCacheTest, cacheHitAndMiss) {
   EXPECT_EQ(cache.stats().numElements, 2);
 }
 
+TEST_F(TabletReaderCacheTest, cachesCoexist) {
+  TabletReaderCache first(makeOptions());
+  TabletReaderCache second(makeOptions());
+
+  // Each cache builds its own tablet for the same file.
+  const auto file = writeTestFile();
+  auto readFile = makeReadFile("file", file);
+  auto firstCached = first.get(readFile, {});
+  auto secondCached = second.get(readFile, {});
+  verifySchema(firstCached);
+  verifySchema(secondCached);
+  EXPECT_NE(firstCached->tablet().get(), secondCached->tablet().get());
+}
+
 TEST_F(TabletReaderCacheTest, createBypassesCache) {
   std::vector<const CachedTabletReader*> created;
   std::vector<const CachedTabletReader*> released;
