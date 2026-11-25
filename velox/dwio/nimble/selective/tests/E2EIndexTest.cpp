@@ -18,6 +18,7 @@
 #include <fmt/ranges.h> // IWYU pragma: keep
 #include <gtest/gtest.h>
 
+#include <folly/ScopeGuard.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
@@ -44,6 +45,7 @@
 #include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
+#include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/Filter.h"
@@ -5090,6 +5092,104 @@ TEST_F(E2EIndexTestBase, createIndexReaderRejectsHiddenKeyReadAccess) {
     NIMBLE_ASSERT_THROW(
         reader->createIndexReader(rowReaderOpts), scenario.expectedMessage);
   }
+}
+
+TEST_F(E2EIndexTestBase, indexReadersShareCachedTablet) {
+  auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  auto batch = vectorMaker_->rowVector(
+      {"key", "value"},
+      {vectorMaker_->flatVector<int64_t>({1, 2, 3}),
+       vectorMaker_->flatVector<int32_t>({10, 20, 30})});
+
+  sinkData_.clear();
+  WriterOptions options;
+  options.clusterIndexConfig =
+      ClusterIndexConfigBuilder{}
+          .withKeyColumns({"key"})
+          .withSortOrders({SortOrder{.ascending = true}})
+          .withEnforceKeyOrder(true)
+          .build();
+  Writer writer(
+      rowType,
+      std::make_unique<InMemoryWriteFile>(&sinkData_),
+      *rootPool_,
+      std::move(options));
+  writer.write(batch);
+  writer.close();
+
+  const CachedTabletReader* tablet{nullptr};
+  int32_t numTablets{0};
+  TabletReaderCache::Options cacheOptions;
+  cacheOptions.numShards = 1;
+  cacheOptions.maxEntries = 1;
+  cacheOptions.executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
+  cacheOptions.onCreate = [&](const CachedTabletReader& created) {
+    tablet = &created;
+    ++numTablets;
+  };
+  cacheOptions.onRelease = [](const CachedTabletReader& /*released*/) {};
+  TabletReaderCache tabletReaderCache(cacheOptions);
+  unregisterSelectiveNimbleReaderFactory();
+  registerSelectiveNimbleReaderFactory(&tabletReaderCache);
+  SCOPE_EXIT {
+    unregisterSelectiveNimbleReaderFactory();
+    registerSelectiveNimbleReaderFactory();
+  };
+
+  // Looks up 'key' through a new reader.
+  const auto expectLookup = [&](int64_t key, int32_t expectedValue) {
+    SCOPED_TRACE(fmt::format("key {}", key));
+    auto reader = createReader();
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setRequestedType(rowType);
+    rowReaderOpts.setScanSpec(createScanSpec(rowType, {}));
+    auto indexReader = reader->createIndexReader(rowReaderOpts);
+    ASSERT_NE(indexReader, nullptr);
+
+    auto bound = vectorMaker_->rowVector(
+        {"key"}, {vectorMaker_->flatVector<int64_t>({key})});
+    serializer::IndexBounds bounds;
+    bounds.indexColumns = {"key"};
+    bounds.set(
+        serializer::IndexBound{bound, /*inclusive=*/true},
+        serializer::IndexBound{bound, /*inclusive=*/true});
+    indexReader->startLookup(bounds, {});
+    ASSERT_TRUE(indexReader->hasNext());
+    auto result = indexReader->next(10);
+    ASSERT_NE(result, nullptr);
+    ASSERT_EQ(result->output->size(), 1);
+    EXPECT_EQ(
+        result->output->childAt(1)->asFlatVector<int32_t>()->valueAt(0),
+        expectedValue);
+    EXPECT_FALSE(indexReader->hasNext());
+  };
+
+  expectLookup(/*key=*/2, /*expectedValue=*/20);
+  ASSERT_EQ(numTablets, 1);
+  const auto metadataBytes = tablet->metadataIoStats().rawBytesRead();
+  const auto indexBytes = tablet->indexIoStats().rawBytesRead();
+  EXPECT_GT(metadataBytes, 0);
+
+  // A second reader shares the tablet, so its lookup reads neither metadata
+  // nor the index.
+  expectLookup(/*key=*/3, /*expectedValue=*/30);
+  EXPECT_EQ(numTablets, 1);
+  EXPECT_EQ(tablet->metadataIoStats().rawBytesRead(), metadataBytes);
+  EXPECT_EQ(tablet->indexIoStats().rawBytesRead(), indexBytes);
+
+  // A reader that does not load the cluster index builds its own tablet.
+  const auto numLookups = tabletReaderCache.stats().numLookups;
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setFileFormat(FileFormat::NIMBLE);
+  auto reader = getReaderFactory(FileFormat::NIMBLE)
+                    ->createReader(
+                        std::make_unique<BufferedInput>(
+                            std::make_shared<InMemoryReadFile>(
+                                std::string_view(sinkData_)),
+                            *leafPool_),
+                        readerOptions);
+  EXPECT_EQ(reader->numberOfRows().value(), 3);
+  EXPECT_EQ(tabletReaderCache.stats().numLookups, numLookups);
 }
 
 // TODO: add schema revolution tests like column renaming to make sure selective

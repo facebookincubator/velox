@@ -33,6 +33,7 @@
 #include "velox/dwio/nimble/selective/ReaderBase.h"
 #include "velox/dwio/nimble/selective/RowSizeTracker.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleIndexReader.h"
+#include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble {
@@ -1220,7 +1221,24 @@ std::unique_ptr<dwio::common::Reader>
 SelectiveNimbleReaderFactory::createReader(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options) {
-  return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
+  if (tabletReaderCache_ == nullptr || !options.loadClusterIndex()) {
+    return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
+  }
+
+  // The shared tablet outlives this reader, so it must not keep the reader's
+  // file handle. It pins its metadata and index instead of caching them in the
+  // data cache, whose entries the file handle keys.
+  auto tabletOptions = TabletReader::configureOptions(options);
+  tabletOptions.fileHandle = nullptr;
+  tabletOptions.blockCache = nullptr;
+  tabletOptions.cacheMetadata = false;
+  tabletOptions.cacheIndex = false;
+  tabletOptions.pinMetadata = true;
+  tabletOptions.pinIndex = true;
+  const auto cachedTablet =
+      tabletReaderCache_->get(input->getReadFile(), tabletOptions);
+  return std::make_unique<SelectiveNimbleReader>(
+      ReaderBase::create(std::move(input), cachedTablet, options), options);
 }
 
 std::unique_ptr<dwio::common::Reader>
