@@ -118,14 +118,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // 1) the delete file doesn't contain the base file that is being read; 2) The
   // delete file does not contain the positions in the current batch for the
   // base file.
-  if (!connector::testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit_->filePath,
-          deleteSplit_->partitionKeys,
-          {},
-          fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+  if (!common::testFilters(*scanSpec, *deleteReader)) {
     // We only count the number of base splits skipped as skippedSplits runtime
     // statistics in Velox.  Skipped delta split is only counted as skipped
     // bytes.

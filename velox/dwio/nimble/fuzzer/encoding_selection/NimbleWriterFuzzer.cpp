@@ -39,7 +39,6 @@
 #include "velox/common/file/File.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/io/IoStatistics.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -3343,13 +3342,7 @@ bool fileSkippedByStats(
     const std::vector<RowPosition>& expectedRows,
     std::string_view fileStatsMode,
     uint64_t seed) {
-  if (velox::connector::testFilters(
-          &scanSpec,
-          &reader,
-          /*filePath=*/"point lookup file",
-          /*partitionKey=*/{},
-          /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false)) {
+  if (velox::common::testFilters(scanSpec, reader)) {
     return false;
   }
   if (!expectedRows.empty()) {

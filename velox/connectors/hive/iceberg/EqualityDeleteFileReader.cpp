@@ -147,7 +147,6 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    dwio::common::RuntimeStats& runtimeStats,
     const std::string& connectorId,
     const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : equalityColumnNames_(equalityColumnNames),
@@ -231,18 +230,6 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
-
-  if (!connector::testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit->filePath,
-          deleteSplit->partitionKeys,
-          {},
-          fileConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
-    runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
-    return;
-  }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
   connector::configureRowReaderOptions(

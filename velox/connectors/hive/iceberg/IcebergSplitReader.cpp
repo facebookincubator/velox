@@ -664,7 +664,6 @@ void IcebergSplitReader::prepareSplit(
                   fileConfig_,
                   dataIoStats_,
                   ioStats_,
-                  runtimeStats,
                   fileSplit_->connectorId,
                   deleteFileReadOps(deleteFile, effectiveFileReadOps)));
         }
