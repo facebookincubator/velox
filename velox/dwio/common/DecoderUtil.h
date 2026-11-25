@@ -315,9 +315,10 @@ void fixedWidthScan(
     }
     T lastValues[kWidth]{};
     for (auto i = 0; i < width; ++i) {
-      // Copies from the byte address: the stream buffer may be unaligned.
       std::memcpy(
-          &lastValues[i], buffer + (batchRows[i] - rowOffset), sizeof(T));
+          &lastValues[i],
+          fixedWidthValueBytes<T>(buffer, batchRows[i], rowOffset),
+          sizeof(T));
     }
     return xsimd::load_unaligned(lastValues);
   };

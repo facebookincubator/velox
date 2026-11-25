@@ -457,7 +457,9 @@ TEST_F(DecoderUtilTest, fixedWidthScanSmallintAtEndOfMapping) {
       ASSERT_TRUE(input.Next(&buffer, &bufferSize));
       const char* bufferStart = static_cast<const char*>(buffer);
       const char* bufferEnd = bufferStart + bufferSize;
-      common::IsNotNull filter;
+      // A range that passes every value. An IsNotNull scan may copy the values
+      // without gathering them.
+      common::BigintRange filter(1, numData, false);
       NoHook noHook;
       int32_t numValues = 0;
       fixedWidthScan<int16_t, false, false>(
