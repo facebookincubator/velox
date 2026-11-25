@@ -5969,91 +5969,74 @@ class HybridFlatMapGroupReader {
 
     const bool hasValueStreams = hasValueStreams_();
 
-    // The writer omits all-false in-map metadata. With no value streams, the
-    // group therefore has no entries in this batch, even if key presence was
-    // retained to preserve the schema prefix.
-    if (inMap_.empty() && !hasValueStreams) {
-      NIMBLE_CHECK_FILE(
-          keyPresenceList_.empty(),
-          "Hybrid FlatMap group lists keys without in-map rows.");
-      keyPresenceBits_.clear();
+    // Lays out the group in one pass over its present keys. Each selected key
+    // also maps its in-map cells to positions in the group's decoded values.
+    // Cells where the key is absent keep kAbsentHybridFlatMapValueIndex.
+    // Unselected keys are only counted, because their values still take
+    // positions in the value stream.
+    valueIndices_.assign(inMap_.size(), kAbsentHybridFlatMapValueIndex);
+    decodeHybridFlatMapGroupLayout(
+        HybridFlatMapGroupMetadata{
+            .numKeys = static_cast<uint32_t>(keys().size()),
+            .numAllKeyPresenceBits =
+                static_cast<uint32_t>(keyPresenceBits_.size()),
+            .numSetKeyPresenceBits = static_cast<uint32_t>(std::count(
+                keyPresenceBits_.begin(), keyPresenceBits_.end(), true)),
+            .numInMap = static_cast<uint32_t>(inMap_.size()),
+            .listsKeys = hasKeyPresenceList(),
+            .hasValueStreams = hasValueStreams,
+        },
+        [&](uint32_t key) { return keyPresenceBits_[key]; },
+        [&](uint32_t key, uint32_t presentKey, uint32_t firstValue) {
+          // Reserves room for the selected keys at the first present key.
+          // Include selects at most the listed keys. Exclude may select every
+          // present key, and inMap_.size() / numNonNullRows counts them,
+          // because the helper sets layout_.numNonNullRows before the first
+          // call.
+          if (presentKey == 0) {
+            selectedKeyIndices_.reserve(
+                selectionMode_ == SelectionMode::Include
+                    ? selectedKeys_.size()
+                    : inMap_.size() / layout_.numNonNullRows);
+          }
+
+          // Present key p owns the in-map cells [p * N, (p + 1) * N), where N
+          // is layout_.numNonNullRows.
+          const auto* begin =
+              inMap_.data() + presentKey * layout_.numNonNullRows;
+          const auto* end = begin + layout_.numNonNullRows;
+
+          // A key the selection drops is decoded but never emitted. It still
+          // returns its value count, because the next key's values start
+          // after its values in the shared value stream.
+          if (!isSelected(key)) {
+            return static_cast<uint32_t>(std::count(begin, end, true));
+          }
+
+          // A selected key is emitted, and each of its present rows gets the
+          // next value position, starting at firstValue.
+          selectedKeyIndices_.push_back(SelectedKeyIndex{key, presentKey});
+          auto value = static_cast<velox::vector_size_t>(firstValue);
+          for (const auto* cell = begin; cell < end; ++cell) {
+            if (*cell) {
+              valueIndices_[cell - inMap_.data()] = value++;
+            }
+          }
+
+          // The positions handed out are the key's value count.
+          return static_cast<uint32_t>(value) - firstValue;
+        },
+        [&](uint32_t key) { return keyNameAt(key); },
+        layout_);
+
+    // A group without present keys or in-map rows has no entries in this
+    // batch.
+    if (layout_.empty()) {
       co_return;
     }
-
-    if (keyPresenceBits_.empty()) {
-      // A key list carries no presence bits; every listed key is present. An
-      // omitted key-presence bitmap with in-map rows applies to all schema
-      // keys. All-false metadata is omitted only when the group is empty.
-      keyPresenceBits_.resize(keys().size(), true);
-    }
-
-    NIMBLE_CHECK_FILE_LE(
-        keyPresenceBits_.size(),
-        keys().size(),
-        "Hybrid FlatMap key-presence count exceeds schema key count.");
-    const auto numPresentKeys = static_cast<uint32_t>(
-        std::count(keyPresenceBits_.begin(), keyPresenceBits_.end(), true));
-    if (numPresentKeys == 0) {
-      NIMBLE_CHECK_FILE(
-          inMap_.empty(),
-          "Hybrid FlatMap group has in-map rows without present keys.");
-      NIMBLE_CHECK_FILE(
-          !hasValueStreams,
-          "Hybrid FlatMap group has value streams without present keys.");
-      keyPresenceBits_.clear();
-      co_return;
-    }
-    NIMBLE_CHECK_FILE(
-        !inMap_.empty(),
-        "Hybrid FlatMap group with present keys is missing in-map rows.");
-    const auto numInMap = static_cast<uint32_t>(inMap_.size());
-    NIMBLE_CHECK_FILE_EQ(
-        numInMap % numPresentKeys,
-        0,
-        "Hybrid FlatMap in-map count is not divisible by present key "
-        "count.");
-    nonNullRowCount_ = numInMap / numPresentKeys;
-
-    valueIndices_.assign(numInMap, kAbsentHybridFlatMapValueIndex);
-    selectedKeyIndices_.reserve(
-        selectionMode_ == SelectionMode::Include ? selectedKeys_.size()
-                                                 : numPresentKeys);
-    velox::vector_size_t numValues{0};
-    uint32_t presentKeyIndex{0};
-    for (uint32_t schemaKeyIndex = 0; schemaKeyIndex < keyPresenceBits_.size();
-         ++schemaKeyIndex) {
-      if (!keyPresenceBits_[schemaKeyIndex]) {
-        continue;
-      }
-      const bool selected = isSelected(schemaKeyIndex);
-      const auto keyOffset = presentKeyIndex * nonNullRowCount_;
-      bool hasPresentValue{false};
-      if (selected) {
-        selectedKeyIndices_.push_back(
-            SelectedKeyIndex{schemaKeyIndex, presentKeyIndex});
-        for (uint32_t row = 0; row < nonNullRowCount_; ++row) {
-          const auto cell = keyOffset + row;
-          if (inMap_[cell]) {
-            valueIndices_[cell] = numValues;
-            ++numValues;
-            hasPresentValue = true;
-          }
-        }
-      } else {
-        for (uint32_t row = 0; row < nonNullRowCount_; ++row) {
-          if (inMap_[keyOffset + row]) {
-            ++numValues;
-            hasPresentValue = true;
-          }
-        }
-      }
-      NIMBLE_CHECK_FILE(
-          hasPresentValue,
-          "Hybrid FlatMap key '{}' has no present rows.",
-          keyNameAt(schemaKeyIndex));
-      ++presentKeyIndex;
-    }
-    NIMBLE_CHECK_FILE_EQ(presentKeyIndex, numPresentKeys);
+    nonNullRowCount_ = layout_.numNonNullRows;
+    const auto numValues =
+        static_cast<velox::vector_size_t>(layout_.numValues());
 
     NIMBLE_CHECK_NOT_NULL(valueReader_, "Missing hybrid FlatMap value reader.");
     if (!hasValueStreams) {
@@ -6078,7 +6061,7 @@ class HybridFlatMapGroupReader {
       return;
     }
     // Missing key-presence and in-map streams represent an empty group.
-    if (keyPresenceBits_.empty()) {
+    if (layout_.empty()) {
       nextNonNullRow_ += count;
       return;
     }
@@ -6100,7 +6083,7 @@ class HybridFlatMapGroupReader {
     if (count == 0) {
       return;
     }
-    if (!keyPresenceBits_.empty()) {
+    if (!layout_.empty()) {
       NIMBLE_CHECK_LE(
           nextNonNullRow_ + count,
           nonNullRowCount_,
@@ -6131,6 +6114,7 @@ class HybridFlatMapGroupReader {
     scratchBuffers_.clear();
     keyPresenceBits_.clear();
     inMap_.clear();
+    layout_.clear();
   }
 
  private:
@@ -6221,15 +6205,15 @@ class HybridFlatMapGroupReader {
   const Vector<DecodedKey> keys_;
   // Owns the reader for values shared by every key in this group.
   std::unique_ptr<FieldReader> valueReader_;
-  // One presence bit per key in keys(), or empty when the group has no keys in
-  // this batch. Decoded from the key-presence bitmap, where a shorter bitmap
-  // omits trailing keys that were added to the accumulated schema by later
-  // batches. All set over a key-presence list.
+  // The decoded key-presence bitmap, one bit per key in keys(). A shorter
+  // bitmap omits trailing keys that were added to the accumulated schema by
+  // later batches. Empty when the bitmap is omitted or the group lists its
+  // keys, in which case every key is present.
   Vector<bool> keyPresenceBits_;
   // The batch's present keys, listed only by a Default group with
   // HybridFlatMap::KeyPresenceMode::kKeyList; empty for bitmap groups. The
-  // list is the sole record of the group's keys: keys_ is empty and
-  // keyPresenceBits_ is all set. String keys view scratchBuffers_.
+  // list is the sole record of the group's keys: keys_ and keyPresenceBits_
+  // are empty. String keys view scratchBuffers_.
   Vector<DecodedKey> keyPresenceList_;
   // Decoded key-major row-presence bits. Cell (present key, row) is at
   // key * nonNullRowCount_ + row.
@@ -6241,6 +6225,9 @@ class HybridFlatMapGroupReader {
   uint32_t nextNonNullRow_{0};
   // Number of compact non-null parent rows represented by inMap_.
   uint32_t nonNullRowCount_{0};
+  // Present keys and their value ranges in the current batch. Empty when the
+  // group has no keys in this batch.
+  HybridFlatMapGroupLayout layout_;
   // Selected schema-key and compact present-key ordinals.
   std::vector<SelectedKeyIndex> selectedKeyIndices_;
   // Maps each key-major presence cell to values_, or the absent sentinel.

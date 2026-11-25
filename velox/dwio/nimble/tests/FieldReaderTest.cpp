@@ -1134,6 +1134,11 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
       std::nullopt,
       "in-map rows without present keys");
   expectFailure(
+      std::vector<uint8_t>{false},
+      std::nullopt,
+      std::vector<int64_t>{10},
+      "value streams without present keys");
+  expectFailure(
       std::vector<uint8_t>{true},
       std::vector<uint8_t>{false},
       std::nullopt,
