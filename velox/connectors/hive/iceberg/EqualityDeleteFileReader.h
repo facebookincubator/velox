@@ -66,7 +66,6 @@ class EqualityDeleteFileReader {
   /// @param hiveConfig Hive configuration.
   /// @param ioStatistics IO statistics collector.
   /// @param ioStats IO stats tracker.
-  /// @param runtimeStats Runtime statistics for recording skipped bytes.
   /// @param connectorId Connector identifier.
   /// @param fileReadOps Options forwarded to the FileSystem when the delete
   ///   file is opened and on every read from it.
@@ -81,7 +80,6 @@ class EqualityDeleteFileReader {
       const std::shared_ptr<const connector::FileConfig>& fileConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
-      dwio::common::RuntimeStats& runtimeStats,
       const std::string& connectorId,
       const folly::F14FastMap<std::string, std::string>& fileReadOps);
 
