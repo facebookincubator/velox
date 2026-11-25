@@ -674,126 +674,10 @@ VectorizedFileStats::deserializeVectorizedStatistic(
   return stat;
 }
 
-struct SchemaInfo {
-  std::vector<uint32_t> flatmapNodeIds;
-  std::vector<uint32_t> slidingWindowMapNodeIds;
-  std::vector<uint32_t> arrayWithOffsetsNodeIds;
-
-  bool isFlatmapNode(uint32_t nodeId) const {
-    return std::find(flatmapNodeIds.begin(), flatmapNodeIds.end(), nodeId) !=
-        flatmapNodeIds.end();
-  }
-
-  bool isSlidingWindowMapNode(uint32_t nodeId) const {
-    return std::find(
-               slidingWindowMapNodeIds.begin(),
-               slidingWindowMapNodeIds.end(),
-               nodeId) != slidingWindowMapNodeIds.end();
-  }
-
-  bool isArrayWithOffsetsNode(uint32_t nodeId) const {
-    return std::find(
-               arrayWithOffsetsNodeIds.begin(),
-               arrayWithOffsetsNodeIds.end(),
-               nodeId) != arrayWithOffsetsNodeIds.end();
-  }
-};
-
 namespace {
-
-void populateSchemaInfo(
-    const velox::TypePtr& schema,
-    const std::shared_ptr<const nimble::Type>& nimbleType,
-    uint32_t& nodeId,
-    SchemaInfo& schemaInfo) {
-  uint32_t currentNodeId = nodeId++;
-
-  switch (schema->kind()) {
-    case velox::TypeKind::TINYINT:
-    case velox::TypeKind::SMALLINT:
-    case velox::TypeKind::INTEGER:
-    case velox::TypeKind::BIGINT:
-    case velox::TypeKind::REAL:
-    case velox::TypeKind::DOUBLE:
-    case velox::TypeKind::VARCHAR:
-    case velox::TypeKind::VARBINARY:
-    case velox::TypeKind::BOOLEAN:
-    case velox::TypeKind::TIMESTAMP:
-      break;
-
-    case velox::TypeKind::ROW: {
-      auto childCount = schema->size();
-      for (size_t i = 0; i < childCount; ++i) {
-        populateSchemaInfo(
-            schema->childAt(i),
-            nimbleType->asRow().childAt(i),
-            nodeId,
-            schemaInfo);
-      }
-      break;
-    }
-
-    case velox::TypeKind::ARRAY: {
-      if (nimbleType->isArrayWithOffsets()) {
-        schemaInfo.arrayWithOffsetsNodeIds.push_back(currentNodeId);
-        populateSchemaInfo(
-            schema->childAt(0),
-            nimbleType->asArrayWithOffsets().elements(),
-            nodeId,
-            schemaInfo);
-      } else if (nimbleType->isSlidingWindowArray()) {
-        populateSchemaInfo(
-            schema->childAt(0),
-            nimbleType->asSlidingWindowArray().elements(),
-            nodeId,
-            schemaInfo);
-      } else {
-        populateSchemaInfo(
-            schema->childAt(0),
-            nimbleType->asArray().elements(),
-            nodeId,
-            schemaInfo);
-      }
-      break;
-    }
-
-    case velox::TypeKind::MAP: {
-      if (nimbleType->isFlatMap()) {
-        schemaInfo.flatmapNodeIds.push_back(currentNodeId);
-      } else if (nimbleType->isSlidingWindowMap()) {
-        schemaInfo.slidingWindowMapNodeIds.push_back(currentNodeId);
-        const auto& slidingWindowMap = nimbleType->asSlidingWindowMap();
-        populateSchemaInfo(
-            schema->childAt(0), slidingWindowMap.keys(), nodeId, schemaInfo);
-        populateSchemaInfo(
-            schema->childAt(1), slidingWindowMap.values(), nodeId, schemaInfo);
-      } else {
-        const auto& map = nimbleType->asMap();
-        populateSchemaInfo(schema->childAt(0), map.keys(), nodeId, schemaInfo);
-        populateSchemaInfo(
-            schema->childAt(1), map.values(), nodeId, schemaInfo);
-      }
-      break;
-    }
-
-    default:
-      NIMBLE_UNSUPPORTED(
-          fmt::format("Unsupported schema kind: {}.", schema->kind()));
-  }
-}
-
-SchemaInfo getSchemaInfo(
-    const velox::TypePtr& schema,
-    const std::shared_ptr<const nimble::Type>& nimbleType) {
-  SchemaInfo schemaInfo;
-  uint32_t nodeId = 0;
-  populateSchemaInfo(schema, nimbleType, nodeId, schemaInfo);
-  return schemaInfo;
-}
 
 void traverseSchema(
     const velox::TypePtr& schema,
-    const SchemaInfo& schemaInfo,
     const std::map<StatStreamType, std::unique_ptr<VectorizedStatistic>>&
         statStreams,
     std::unordered_map<StatType, size_t>& statTypeCounts,
@@ -922,11 +806,7 @@ void traverseSchema(
       auto childCount = schema->size();
       for (size_t i = 0; i < childCount; ++i) {
         traverseSchema(
-            schema->childAt(i),
-            schemaInfo,
-            statStreams,
-            statTypeCounts,
-            columnStats);
+            schema->childAt(i), statStreams, statTypeCounts, columnStats);
       }
       break;
     }
@@ -938,11 +818,7 @@ void traverseSchema(
               logicalSize.value(),
               physicalSize.value()));
       traverseSchema(
-          schema->childAt(0),
-          schemaInfo,
-          statStreams,
-          statTypeCounts,
-          columnStats);
+          schema->childAt(0), statStreams, statTypeCounts, columnStats);
       break;
     }
     case velox::TypeKind::MAP: {
@@ -953,17 +829,9 @@ void traverseSchema(
               logicalSize.value(),
               physicalSize.value()));
       traverseSchema(
-          schema->childAt(0),
-          schemaInfo,
-          statStreams,
-          statTypeCounts,
-          columnStats);
+          schema->childAt(0), statStreams, statTypeCounts, columnStats);
       traverseSchema(
-          schema->childAt(1),
-          schemaInfo,
-          statStreams,
-          statTypeCounts,
-          columnStats);
+          schema->childAt(1), statStreams, statTypeCounts, columnStats);
       break;
     }
     default: {
@@ -978,7 +846,7 @@ void traverseSchema(
 std::vector<std::unique_ptr<ColumnStatistics>>
 VectorizedFileStats::toColumnStatistics(
     const velox::TypePtr& schema,
-    const std::shared_ptr<const nimble::Type>& nimbleType) {
+    const std::shared_ptr<const nimble::Type>& /*nimbleType*/) {
   NIMBLE_CHECK_NULL(
       lazyReader_,
       "toColumnStatistics() must not use a lazily deserialized "
@@ -986,8 +854,7 @@ VectorizedFileStats::toColumnStatistics(
 
   std::vector<std::unique_ptr<ColumnStatistics>> columnStats;
   std::unordered_map<StatType, size_t> statTypeCounts;
-  auto schemaInfo = getSchemaInfo(schema, nimbleType);
-  traverseSchema(schema, schemaInfo, statStreams_, statTypeCounts, columnStats);
+  traverseSchema(schema, statStreams_, statTypeCounts, columnStats);
   return columnStats;
 }
 
