@@ -217,6 +217,38 @@ TEST_F(TransformKeysTest, lastWinFloatingPointKeys) {
           std::bit_cast<uint64_t>(kNaN)));
 }
 
+TEST_F(TransformKeysTest, normalizedFloatingPointKeys) {
+  // The lambda turns keys 1.0 and -1.0 into 0.0 and -0.0.
+  auto data = makeRowVector({
+      makeMapVector<double, int64_t>({{{1.0, 10}, {-1.0, 20}}}),
+      makeFlatVector<double>({0.0}),
+  });
+  setMapKeyNormalization(false);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate(
+          "map_keys(transform_keys(c0, (k, v) -> multiply(k, c1)))", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+  assertEqualVectors(
+      makeArrayVector<int64_t>({{20}}),
+      evaluate(
+          "map_values(transform_keys(c0, (k, v) -> multiply(k, c1)))", data));
+
+  setMapKeyNormalization(true);
+  VELOX_ASSERT_THROW(
+      evaluate("transform_keys(c0, (k, v) -> multiply(k, c1))", data),
+      "Duplicate map key was found");
+  // Without a repeated key, the result keeps the offsets of the input map and
+  // holds the normalized key.
+  auto single = makeRowVector({
+      makeMapVector<double, int64_t>({{{-1.0, 20}}}),
+      makeFlatVector<double>({0.0}),
+  });
+  EXPECT_THAT(
+      elementBitPatterns(evaluate(
+          "map_keys(transform_keys(c0, (k, v) -> multiply(k, c1)))", single)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+}
+
 TEST_F(TransformKeysTest, throwPolicyFloatingPointKeys) {
   setThrowExceptionOnDuplicateMapKeys(true);
 

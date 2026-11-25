@@ -24,11 +24,15 @@ namespace facebook::velox::functions::sparksql {
 /// Implements Spark's map_from_arrays(array(K), array(V)) -> map(K,V). Entries
 /// are inserted in array order. A repeated key raises DUPLICATED_MAP_KEY, or
 /// under LAST_WIN overwrites the value of its first occurrence in place, so the
-/// key keeps that first position.
+/// key keeps that first position. With 'normalizeKeys', -0.0 and NaN keys are
+/// normalized first, as Spark 4.0+ does, see normalizeMapKeys.
 class MapFromArraysFunction : public exec::VectorFunction {
  public:
-  explicit MapFromArraysFunction(bool throwExceptionOnDuplicateMapKeys)
-      : throwExceptionOnDuplicateMapKeys_{throwExceptionOnDuplicateMapKeys} {}
+  MapFromArraysFunction(
+      bool throwExceptionOnDuplicateMapKeys,
+      bool normalizeKeys)
+      : throwExceptionOnDuplicateMapKeys_{throwExceptionOnDuplicateMapKeys},
+        normalizeKeys_{normalizeKeys} {}
 
   void apply(
       const SelectivityVector& rows,
@@ -42,6 +46,7 @@ class MapFromArraysFunction : public exec::VectorFunction {
 
  private:
   const bool throwExceptionOnDuplicateMapKeys_;
+  const bool normalizeKeys_;
 };
 
 /// Registers Spark's map_from_arrays under the given name.

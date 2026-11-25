@@ -15,11 +15,16 @@
  */
 #include "velox/functions/sparksql/Map.h"
 
+#include <cmath>
+#include <cstring>
+#include <limits>
+
 #include <velox/common/base/Exceptions.h>
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/sparksql/LastWin.h"
 #include "velox/functions/sparksql/MapFromArrays.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/vector/FlatMapVector.h"
 
 // The description of the map function in Spark
@@ -191,6 +196,64 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
           nullptr, std::move(valuesIndices), numEntries, valueElements));
 }
 
+namespace {
+
+// Returns the key Spark 4.0+ stores for a floating-point map key.
+template <typename T>
+T normalizeKey(T key) {
+  if (std::isnan(key)) {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+  // -0.0 == 0.0, so this turns -0.0 into 0.0.
+  return key == 0 ? T{0} : key;
+}
+
+// Whether a key has the bits of its normalized key.
+template <typename T>
+bool isNormalizedKey(T key) {
+  const T normalized = normalizeKey(key);
+  return std::memcmp(&normalized, &key, sizeof(T)) == 0;
+}
+
+template <typename T>
+VectorPtr normalizeFloatingPointKeys(
+    const VectorPtr& keys,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context) {
+  exec::LocalDecodedVector decoded(context, *keys, rows);
+  const bool normalized = rows.testSelected([&](vector_size_t row) {
+    return decoded->isNullAt(row) || isNormalizedKey(decoded->valueAt<T>(row));
+  });
+  if (normalized) {
+    return keys;
+  }
+  auto result = BaseVector::create<FlatVector<T>>(
+      keys->type(), keys->size(), context.pool());
+  result->copy(keys.get(), 0, 0, keys->size());
+  rows.applyToSelected([&](vector_size_t row) {
+    if (!result->isNullAt(row)) {
+      result->set(row, normalizeKey(result->valueAt(row)));
+    }
+  });
+  return result;
+}
+
+} // namespace
+
+VectorPtr normalizeMapKeys(
+    const VectorPtr& keys,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context) {
+  switch (keys->typeKind()) {
+    case TypeKind::REAL:
+      return normalizeFloatingPointKeys<float>(keys, rows, context);
+    case TypeKind::DOUBLE:
+      return normalizeFloatingPointKeys<double>(keys, rows, context);
+    default:
+      return keys;
+  }
+}
+
 void checkNullAndDuplicateKeys(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
@@ -325,9 +388,12 @@ class MapFunction : public exec::VectorFunction {
     }
 
     bool throwExceptionOnDuplicateMapKeys{false};
+    bool normalizeKeys{false};
     if (auto* ctx = context.execCtx()->queryCtx()) {
       throwExceptionOnDuplicateMapKeys =
           ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
+      normalizeKeys =
+          SparkQueryConfig{ctx->queryConfig()}.mapKeyNormalizationEnabled();
     }
 
     bool constantKeys{true};
@@ -352,7 +418,7 @@ class MapFunction : public exec::VectorFunction {
       auto* pool = context.pool();
       auto [keys, values] = toArrays(rows, args, mapSize, constantKeys, pool);
       std::vector<VectorPtr> arrays{std::move(keys), std::move(values)};
-      MapFromArraysFunction(throwExceptionOnDuplicateMapKeys)
+      MapFromArraysFunction(throwExceptionOnDuplicateMapKeys, normalizeKeys)
           .apply(rows, arrays, outputType, context, result);
     }
   }

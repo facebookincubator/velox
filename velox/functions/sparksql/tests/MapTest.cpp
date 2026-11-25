@@ -612,6 +612,76 @@ TEST_F(MapTest, nestedSignedZeroKeysAreOneKey) {
       evaluate("map_values(map(c0, c1, c2, c3))", data));
 }
 
+TEST_F(MapTest, normalizedSignedZeroKeysAreOneKey) {
+  const auto data = makeRowVector({
+      makeFlatVector<double>({-0.0}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<double>({0.0}),
+      makeFlatVector<int32_t>({2}),
+  });
+  setMapKeyNormalization(false);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate("map_keys(map(c0, c1, c2, c3))", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int32_t>({{2}}),
+      evaluate("map_values(map(c0, c1, c2, c3))", data));
+  // A lone -0.0 key is stored as 0.0.
+  EXPECT_THAT(
+      elementBitPatterns(evaluate("map_keys(map(c0, c1))", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+
+  setMapKeyNormalization(true);
+  VELOX_ASSERT_THROW(
+      evaluate("map(c0, c1, c2, c3)", data), "Duplicate map key was found");
+}
+
+TEST_F(MapTest, normalizedRealKeys) {
+  const auto data = makeRowVector({
+      makeFlatVector<float>({-0.0f}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<float>({0.0f}),
+      makeFlatVector<int32_t>({2}),
+  });
+  setMapKeyNormalization(false);
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int32_t>({{2}}),
+      evaluate("map_values(map(c0, c1, c2, c3))", data));
+  // A cast to DOUBLE keeps the sign of zero.
+  EXPECT_THAT(
+      elementBitPatterns(evaluate(
+          "transform(map_keys(map(c0, c1, c2, c3)), x -> cast(x as double))",
+          data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+}
+
+TEST_F(MapTest, normalizedNanKeyIsCanonical) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  const auto otherNaN =
+      std::bit_cast<double>(std::bit_cast<uint64_t>(kNaN) | uint64_t{1});
+  const auto data = makeRowVector({
+      makeFlatVector<double>({otherNaN}),
+      makeFlatVector<int32_t>({1}),
+  });
+  setMapKeyNormalization(false);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate("map_keys(map(c0, c1))", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(kNaN)));
+}
+
+TEST_F(MapTest, normalizationKeepsNestedSignedZero) {
+  // Spark normalizes only top-level floating-point keys.
+  const auto data = makeRowVector({
+      makeArrayVector<double>({{-0.0}}),
+      makeFlatVector<int32_t>({1}),
+  });
+  setMapKeyNormalization(false);
+  EXPECT_THAT(
+      elementBitPatterns(
+          evaluate("element_at(map_keys(map(c0, c1)), 1)", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(-0.0)));
+}
+
 TEST_F(MapTest, constantKeys) {
   const auto data = makeRowVector({
       makeFlatVector<int64_t>({10, 11}),

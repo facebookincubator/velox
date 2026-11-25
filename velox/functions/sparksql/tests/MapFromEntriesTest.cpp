@@ -270,6 +270,24 @@ TEST_F(MapFromEntriesTest, topLevelSignedZeroKeysStayDistinct) {
   }
 }
 
+TEST_F(MapFromEntriesTest, normalizedSignedZeroKeysAreOneKey) {
+  auto input = makeArrayOfRowVector(
+      ROW({DOUBLE(), INTEGER()}),
+      {{variant::row({-0.0, 1}), variant::row({0.0, 2})}});
+  auto data = makeRowVector({input});
+  setMapKeyNormalization(false);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate("map_keys(map_from_entries(c0))", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+  assertEqualVectors(
+      makeArrayVector<int32_t>({{2}}),
+      evaluate("map_values(map_from_entries(c0))", data));
+
+  setMapKeyNormalization(true);
+  VELOX_ASSERT_THROW(
+      evaluate("map_from_entries(c0)", data), "Duplicate map key was found");
+}
+
 TEST_F(MapFromEntriesTest, nanKeysAreOneKey) {
   constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
   auto input = makeArrayOfRowVector(

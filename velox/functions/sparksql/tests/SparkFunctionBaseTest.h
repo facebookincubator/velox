@@ -53,6 +53,18 @@ class SparkFunctionBaseTest : public FunctionBaseTest {
     });
   }
 
+  // Normalizes -0.0 and NaN map keys as Spark 4.0+ does, under the given
+  // duplicate map key policy.
+  void setMapKeyNormalization(bool throwExceptionOnDuplicateMapKeys) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+         throwExceptionOnDuplicateMapKeys ? "true" : "false"},
+        {SparkQueryConfig::qualify(
+             SparkQueryConfig::kMapKeyNormalizationEnabled),
+         "true"},
+    });
+  }
+
   // Builds flat maps in map() for constant keys, under the given duplicate map
   // key policy.
   void setGenerateConstantMapsAsFlatMaps(

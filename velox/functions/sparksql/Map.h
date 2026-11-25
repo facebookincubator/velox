@@ -44,6 +44,17 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
     const VectorPtr& valueElements,
     bool throwOnDuplicateKey);
 
+/// Returns the given map keys with their REAL or DOUBLE values in 'rows'
+/// normalized the way Spark 4.0+ normalizes the keys of a map it builds: -0.0
+/// becomes 0.0 and every NaN becomes the canonical NaN. Normalized keys are
+/// deduplicated and returned as they are, so -0.0 and 0.0 are one key. Keys of
+/// other types, and keys with no value to normalize, are returned without a
+/// copy. Nested floating-point values are not normalized, as in Spark.
+VectorPtr normalizeMapKeys(
+    const VectorPtr& keys,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context);
+
 /// Throws on a null key or a repeated key. Used by the zero-copy path, which
 /// builds no entry indices.
 void checkNullAndDuplicateKeys(

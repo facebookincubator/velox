@@ -673,6 +673,44 @@ TEST_F(MapFromArraysTest, floatingPointKeys) {
           std::bit_cast<uint64_t>(1.5)));
 }
 
+TEST_F(MapFromArraysTest, normalizedFloatingPointKeys) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  const auto otherNaN =
+      std::bit_cast<double>(std::bit_cast<uint64_t>(kNaN) | uint64_t{1});
+  {
+    setMapKeyNormalization(false);
+    auto keys = makeArrayVector<double>({{-0.0, 0.0, otherNaN, kNaN}});
+    auto values = makeArrayVectorFromJson<int64_t>({"[1, 2, 3, 4]"});
+    auto data = makeRowVector({keys, values});
+    EXPECT_THAT(
+        elementBitPatterns(evaluate("map_keys(map_from_arrays(c0, c1))", data)),
+        testing::ElementsAre(
+            std::bit_cast<uint64_t>(0.0), std::bit_cast<uint64_t>(kNaN)));
+    ::facebook::velox::test::assertEqualVectors(
+        makeArrayVector<int64_t>({{2, 4}}),
+        evaluate("map_values(map_from_arrays(c0, c1))", data));
+  }
+
+  setMapKeyNormalization(true);
+  {
+    // Without a repeated key, the result references the input arrays, so it
+    // holds the normalized keys too.
+    auto keys = makeArrayVector<double>({{-0.0, 1.5}});
+    auto values = makeArrayVectorFromJson<int64_t>({"[1, 2]"});
+    EXPECT_THAT(
+        elementBitPatterns(evaluate(
+            "map_keys(map_from_arrays(c0, c1))",
+            makeRowVector({keys, values}))),
+        testing::ElementsAre(
+            std::bit_cast<uint64_t>(0.0), std::bit_cast<uint64_t>(1.5)));
+  }
+  {
+    auto keys = makeArrayVector<double>({{-0.0, 0.0}});
+    auto values = makeArrayVectorFromJson<int64_t>({"[1, 2]"});
+    testMapFromArraysFails(keys, values, "Duplicate map key was found");
+  }
+}
+
 TEST_F(MapFromArraysTest, throwPolicyFloatingPointKeys) {
   setThrowExceptionOnDuplicateMapKeys(true);
 

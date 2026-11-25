@@ -19,6 +19,7 @@
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/sparksql/Map.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -34,8 +35,11 @@ namespace {
 // null map.
 class TransformKeysFunction : public exec::VectorFunction {
  public:
-  explicit TransformKeysFunction(bool throwExceptionOnDuplicateMapKeys)
-      : throwExceptionOnDuplicateMapKeys_{throwExceptionOnDuplicateMapKeys} {}
+  TransformKeysFunction(
+      bool throwExceptionOnDuplicateMapKeys,
+      bool normalizeKeys)
+      : throwExceptionOnDuplicateMapKeys_{throwExceptionOnDuplicateMapKeys},
+        normalizeKeys_{normalizeKeys} {}
 
   void apply(
       const SelectivityVector& rows,
@@ -72,10 +76,14 @@ class TransformKeysFunction : public exec::VectorFunction {
       remainingRows->deselectNulls(
           flatMap->rawNulls(), rows.begin(), rows.end());
     }
-    exec::LocalDecodedVector decodedKeys(
-        context,
-        *transformedKeys,
-        toElementRows<MapVector>(numKeys, *remainingRows, flatMap.get()));
+    const auto keyRows =
+        toElementRows<MapVector>(numKeys, *remainingRows, flatMap.get());
+    // The keys are normalized before they are deduplicated, and the result
+    // holds the normalized keys.
+    if (normalizeKeys_) {
+      transformedKeys = normalizeMapKeys(transformedKeys, keyRows, context);
+    }
+    exec::LocalDecodedVector decodedKeys(context, *transformedKeys, keyRows);
 
     // Under EXCEPTION no row can shrink, so the result keeps the offsets and
     // sizes of the input map.
@@ -134,6 +142,8 @@ class TransformKeysFunction : public exec::VectorFunction {
 
  private:
   const bool throwExceptionOnDuplicateMapKeys_;
+  // Whether -0.0 and NaN keys are normalized first, see normalizeMapKeys.
+  const bool normalizeKeys_;
 };
 
 std::shared_ptr<exec::VectorFunction> makeTransformKeys(
@@ -141,7 +151,8 @@ std::shared_ptr<exec::VectorFunction> makeTransformKeys(
     const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
     const core::QueryConfig& config) {
   return std::make_shared<TransformKeysFunction>(
-      config.throwExceptionOnDuplicateMapKeys());
+      config.throwExceptionOnDuplicateMapKeys(),
+      SparkQueryConfig{config}.mapKeyNormalizationEnabled());
 }
 } // namespace
 
