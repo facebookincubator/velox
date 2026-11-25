@@ -32,6 +32,22 @@ const auto& sharedDictionaryScopeNames() {
   return kNames;
 }
 
+// Shares the ownership of an encoded alphabet with a buffer view over it, so
+// that strings pointing into the alphabet stay valid while the view lives.
+class EncodedAlphabetReleaser {
+ public:
+  explicit EncodedAlphabetReleaser(std::shared_ptr<const void> owner)
+      : owner_{std::move(owner)} {}
+
+  void addRef() const {}
+
+  void release() const {}
+
+ private:
+  // Keeps the encoded alphabet alive.
+  const std::shared_ptr<const void> owner_;
+};
+
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(SharedDictionaryScope, sharedDictionaryScopeNames)
@@ -39,13 +55,14 @@ VELOX_DEFINE_ENUM_NAME(SharedDictionaryScope, sharedDictionaryScopeNames)
 SharedDictionaryAlphabet::SharedDictionaryAlphabet(
     std::string_view encoded,
     const Encoding::Options& options,
+    velox::BufferPtr encodedAlphabetBuffer,
     std::shared_ptr<const void> encodedAlphabetOwner,
     velox::memory::MemoryPool* pool)
     : encodedAlphabetOwner_{std::move(encodedAlphabetOwner)},
+      encodedAlphabetBuffer_{std::move(encodedAlphabetBuffer)},
       encodedAlphabet_{encoded},
       dataType_{EncodingPrefix::dataType(encoded)},
       encodingType_{EncodingPrefix::encodingType(encoded)},
-      entryPayload_{*velox::checkedNotNull(pool)},
       entries_{nullptr},
       entryView_{
           supportsEncodingView(encodingType_)
@@ -59,8 +76,10 @@ SharedDictionaryAlphabet::SharedDictionaryAlphabet(
   // No view for this encoding, so decode every entry once and serve lookups
   // from the decoded buffer instead.
   auto encoding = EncodingFactory{options}.create(
-      *pool, encoded, [this](uint32_t size) -> void* {
-        return entryPayload_.reserve(size);
+      *pool, encoded, [this, pool](uint32_t size) -> void* {
+        auto& entryBuffer = entryBuffers_.emplace_back(
+            velox::AlignedBuffer::allocate<char>(size, pool));
+        return entryBuffer->asMutable<void>();
       });
   NIMBLE_CHECK_EQ(
       encoding->dataType(),
@@ -85,16 +104,51 @@ SharedDictionaryAlphabet::create(
 
   // The alphabet serves every read of the streams bound to it for as long as
   // the reader keeps it, so its view builds lookup structures once, such as
-  // the offsets of string entries, instead of for each lookup.
+  // the offsets of string entries, instead of for each lookup. The input
+  // string buffer lets the view pass the encoded bytes to the reads whose
+  // strings point into them, and keeps those bytes alive after the alphabet is
+  // gone. The alphabet keeps the buffer, which the options of its view point
+  // to.
+  auto inputStringBuffer = velox::BufferView<EncodedAlphabetReleaser>::create(
+      reinterpret_cast<const uint8_t*>(encodedAlphabet.data()),
+      encodedAlphabet.size(),
+      EncodedAlphabetReleaser{encodedAlphabetOwner});
+  const Encoding::Options options{
+      .cacheEncodingView = true, .inputStringBuffer = inputStringBuffer.get()};
   auto alphabet =
       std::shared_ptr<SharedDictionaryAlphabet>{new SharedDictionaryAlphabet{
           encodedAlphabet,
-          Encoding::Options{.cacheEncodingView = true},
+          options,
+          std::move(inputStringBuffer),
           std::move(encodedAlphabetOwner),
           pool}};
   NIMBLE_CHECK_GT(
       alphabet->entryCount(), 0, "Shared dictionary alphabet has no entries.");
   return alphabet;
+}
+
+void SharedDictionaryAlphabet::readStrings(
+    std::span<const uint32_t> indices,
+    const std::function<void(velox::BufferPtr)>& addStringBuffer,
+    std::string_view* output) const {
+  NIMBLE_CHECK_NOT_NULL(addStringBuffer);
+  checkEntryType<std::string_view>();
+  if (indices.empty()) {
+    return;
+  }
+  if (entryView_ != nullptr) {
+    entryView_->read(
+        indices, /*setNull=*/[](uint32_t) {}, addStringBuffer, output);
+    return;
+  }
+  materialize<std::string_view>(indices, output);
+  for (const auto& entryBuffer : entryBuffers_) {
+    // A zero-size request of the decoder leaves an empty buffer, which holds
+    // no string bytes and must not be passed.
+    if (entryBuffer->size() > 0) {
+      addStringBuffer(entryBuffer);
+    }
+  }
 }
 
 } // namespace facebook::nimble

@@ -209,7 +209,8 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     auto& decoder = ensureStripeDecoder();
     auto options = encodingOptions_;
     options.bufferPool = &decoder.bufferPool;
-    decoder.streamReader.setStreams(stripe.streams, options);
+    decoder.streamReader.setStreams(
+        stripe.streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, options);
     // The data handle owns the bytes that the reader views, so they stay put.
     decoder.stripe = std::move(stripe);
     return decoder.streamReader;

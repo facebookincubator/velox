@@ -16,6 +16,10 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
+#include <limits>
+#include <span>
+#include <string_view>
 #include <type_traits>
 
 #include "velox/dwio/nimble/common/Vector.h"
@@ -29,6 +33,7 @@ template <typename T>
 class RLEEncodingView final : public TypedEncodingView<T> {
  public:
   using physicalType = typename TypedEncodingView<T>::physicalType;
+  using TypedEncodingView<T>::read;
 
   RLEEncodingView(
       std::string_view data,
@@ -64,7 +69,129 @@ class RLEEncodingView final : public TypedEncodingView<T> {
     this->releaseVectorBuffer(runEnds_);
   }
 
+  /// Reads the value of each run of string rows once, with one read of the
+  /// run values that takes `addStringBuffer`, so that it passes the buffers
+  /// of the strings. Reads other values as the base view does.
+  uint32_t read(
+      std::span<const uint32_t> indices,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      if (addStringBuffer != nullptr && !indices.empty()) {
+        NIMBLE_CHECK_LE(indices.size(), std::numeric_limits<uint32_t>::max());
+        this->checkReadIndices(indices);
+        ScopedVector<uint32_t> runIndices{
+            0, this->pool_, this->options_.bufferPool};
+        ScopedVector<uint32_t> runRows{
+            0, this->pool_, this->options_.bufferPool};
+        runIndices.reserve(indices.size());
+        runRows.reserve(indices.size());
+        for (const auto index : indices) {
+          const auto it =
+              std::upper_bound(runEnds_.begin(), runEnds_.end(), index);
+          addRun(
+              static_cast<uint32_t>(it - runEnds_.begin()),
+              /*numRows=*/1,
+              runIndices,
+              runRows);
+        }
+        readRuns(
+            runIndices,
+            runRows,
+            addStringBuffer,
+            static_cast<std::string_view*>(output));
+        return static_cast<uint32_t>(indices.size());
+      }
+    }
+    return EncodingView::read(indices, setNull, addStringBuffer, output);
+  }
+
+  /// Does the same as the read of indices above for ordered, disjoint ranges.
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      if (addStringBuffer != nullptr) {
+        const auto numRows = this->checkReadRanges(ranges);
+        ScopedVector<uint32_t> runIndices{
+            0, this->pool_, this->options_.bufferPool};
+        ScopedVector<uint32_t> runRows{
+            0, this->pool_, this->options_.bufferPool};
+        const auto maxRuns = std::min<uint64_t>(numRows, runEnds_.size());
+        runIndices.reserve(maxRuns);
+        runRows.reserve(maxRuns);
+        for (const auto& range : ranges) {
+          auto it = std::upper_bound(
+              runEnds_.begin(), runEnds_.end(), range.startRow);
+          for (auto row = range.startRow; row < range.endRow; ++it) {
+            const auto next = std::min(*it, range.endRow);
+            addRun(
+                static_cast<uint32_t>(it - runEnds_.begin()),
+                next - row,
+                runIndices,
+                runRows);
+            row = next;
+          }
+        }
+        readRuns(
+            runIndices,
+            runRows,
+            addStringBuffer,
+            static_cast<std::string_view*>(output));
+        return numRows;
+      }
+    }
+    return TypedEncodingView<T>::read(ranges, setNull, addStringBuffer, output);
+  }
+
  private:
+  // Adds 'numRows' rows of the run 'runIndex' to the runs that a read of
+  // strings reads, in the order of its output rows. Extends the last run when
+  // it is the same, so that each run of consecutive rows is read once.
+  static void addRun(
+      uint32_t runIndex,
+      uint32_t numRows,
+      ScopedVector<uint32_t>& runIndices,
+      ScopedVector<uint32_t>& runRows) {
+    if (!runIndices.empty() && runIndices[runIndices.size() - 1] == runIndex) {
+      runRows[runRows.size() - 1] += numRows;
+      return;
+    }
+    runIndices.push_back(runIndex);
+    runRows.push_back(numRows);
+  }
+
+  // Reads the value of each run in 'runIndices' with one read of 'values_'
+  // that passes the buffers of the strings to 'addStringBuffer', and writes
+  // it to the next 'runRows' rows of 'output'.
+  void readRuns(
+      const ScopedVector<uint32_t>& runIndices,
+      const ScopedVector<uint32_t>& runRows,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::string_view* output) const {
+    if (runIndices.empty()) {
+      return;
+    }
+    ScopedVector<std::string_view> runValues{
+        runIndices.size(), this->pool_, this->options_.bufferPool};
+    values_->read(
+        std::span<const uint32_t>{runIndices.data(), runIndices.size()},
+        /*setNull=*/[](uint32_t) {},
+        addStringBuffer,
+        runValues.data());
+    uint32_t outputOffset{0};
+    for (size_t i{0}; i < runIndices.size(); ++i) {
+      std::fill(
+          output + outputOffset,
+          output + outputOffset + runRows[i],
+          runValues[i]);
+      outputOffset += runRows[i];
+    }
+  }
+
   T readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
     const auto it = std::upper_bound(runEnds_.begin(), runEnds_.end(), index);
