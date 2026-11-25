@@ -1155,6 +1155,7 @@ std::optional<T> detail::LazyFileStatsReader::valueAt(
   const auto numNonNulls = view->read(
       std::span<const uint32_t>{&index, 1},
       /*setNull=*/[](uint32_t /*outputIndex*/) {},
+      /*addStringBuffer=*/nullptr,
       &value);
   if (numNonNulls == 0) {
     return std::nullopt;

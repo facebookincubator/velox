@@ -288,6 +288,7 @@ class EncodingViewTest : public ::testing::TestWithParam<bool> {
     const auto numNonNulls = view.read(
         std::span<const uint32_t>{positions.data(), positions.size()},
         [&](uint32_t) { setNullCalled = true; },
+        /*addStringBuffer=*/nullptr,
         actual.data());
     EXPECT_EQ(numNonNulls, positions.size());
     EXPECT_FALSE(setNullCalled);

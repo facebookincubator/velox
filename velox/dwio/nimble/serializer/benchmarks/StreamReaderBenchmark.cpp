@@ -282,13 +282,20 @@ void bindStreams(
   folly::BenchmarkSuspender suspender;
   ReaderFixture fixture{numColumns, numStripes, numPatterns, "bind_streams"};
   for (uint32_t i{0}; i < numStripes; ++i) {
-    fixture.reader.setStreams(fixture.table.stripeStreams[i], fixture.options);
+    fixture.reader.setStreams(
+        fixture.table.stripeStreams[i],
+        /*streamBufferHolders=*/{},
+        /*alphabets=*/{},
+        fixture.options);
   }
   suspender.dismiss();
 
   for (uint32_t i{0}; i < iters; ++i) {
     fixture.reader.setStreams(
-        fixture.table.stripeStreams[i % numStripes], fixture.options);
+        fixture.table.stripeStreams[i % numStripes],
+        /*streamBufferHolders=*/{},
+        /*alphabets=*/{},
+        fixture.options);
   }
   suspender.rehire();
 }
@@ -336,7 +343,10 @@ void lookupBindPerStripe(
     const auto stripe = (i / lookupsPerStripe) % numStripes;
     if (boundStripe != stripe) {
       fixture.reader.setStreams(
-          fixture.table.stripeStreams[stripe], fixture.options);
+          fixture.table.stripeStreams[stripe],
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          fixture.options);
       boundStripe = stripe;
     }
     folly::coro::blockingWait(
