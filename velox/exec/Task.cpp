@@ -1131,7 +1131,10 @@ RowVectorPtr Task::next(ContinueFuture* future) {
   const auto numDrivers = drivers_.size();
 
   std::vector<ContinueFuture> futures;
-  futures.resize(numDrivers);
+  futures.reserve(numDrivers);
+  for (size_t i = 0; i < numDrivers; ++i) {
+    futures.emplace_back(ContinueFuture::makeEmpty());
+  }
 
   for (;;) {
     int runnableDrivers = 0;
@@ -1142,14 +1145,16 @@ RowVectorPtr Task::next(ContinueFuture* future) {
       auto driver = getDriver(i);
       if (driver == nullptr) {
         // This driver has finished processing.
+        futures[i] = ContinueFuture::makeEmpty();
         continue;
       }
 
-      if (!futures[i].isReady()) {
+      if (futures[i].valid() && !futures[i].isReady()) {
         // This driver is still blocked.
         ++blockedDrivers;
         continue;
       }
+      futures[i] = ContinueFuture::makeEmpty();
 
       ContinueFuture blockFuture = ContinueFuture::makeEmpty();
       if (driverBlockingStates_[i]->blocked(&blockFuture)) {
@@ -1185,21 +1190,31 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 
     if (runnableDrivers == 0) {
       if (blockedDrivers > 0) {
+        // A blocked driver's future may have completed on another thread
+        // between blocked() and here; retry the pass immediately instead of
+        // sleeping on collectAny().
+        if (!hasBarrier || underBarrier()) {
+          if (std::any_of(
+                  futures.begin(),
+                  futures.end(),
+                  [](const auto& continueFuture) {
+                    return continueFuture.valid() && continueFuture.isReady();
+                  })) {
+            continue;
+          }
+        }
         if (future == nullptr) {
           VELOX_FAIL(
               "Cannot make progress as all remaining drivers are blocked and user are not expected to wait.");
         } else if (!hasBarrier || underBarrier()) {
-          // NOTE: we returns null without a future if this next() call finishes
-          // a barrier processing. We expect that the caller either resume the
-          // processing by sending new splits with a new barrier request or
-          // finish the task processing by sending no more split signal.
-          std::vector<ContinueFuture> notReadyFutures;
+          std::vector<ContinueFuture> blockingFutures;
+          blockingFutures.reserve(blockedDrivers);
           for (auto& continueFuture : futures) {
-            if (!continueFuture.isReady()) {
-              notReadyFutures.emplace_back(std::move(continueFuture));
+            if (continueFuture.valid()) {
+              blockingFutures.emplace_back(std::move(continueFuture));
             }
           }
-          *future = folly::collectAny(std::move(notReadyFutures)).unit();
+          *future = folly::collectAny(std::move(blockingFutures)).unit();
         }
       }
       return nullptr;

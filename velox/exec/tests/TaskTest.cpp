@@ -328,6 +328,10 @@ class TestExternalBlockableNode : public core::PlanNode {
     return "external blocking node";
   }
 
+  bool supportsBarrier() const override {
+    return true;
+  }
+
   ExternalBlocker* externalBlocker() const {
     return externalBlocker_.get();
   }
@@ -2101,6 +2105,240 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
         PlanNodeStats::extract(blockingTask->taskStats(), blockerNodeId);
     ASSERT_GT(blockerNodeStats.blockedWallNanos, 0);
   }
+}
+
+// Verifies that serial Task::next() does not deadlock when one driver in a
+// multi-branch UNION unblocks on a background thread between blocked() and
+// collectAny(). Sweeps the background unblock delay across barriers to hit
+// that race window reliably.
+TEST_F(TaskTest, serialExecutionAsyncUnblockDeadlock) {
+  struct AsyncAutoUnblocker : public ExternalBlocker {
+    std::atomic<bool> stop{false};
+    std::atomic<bool> triggered{false};
+    std::optional<ContinuePromise> pendingPromise;
+    std::atomic<int> delayNs{0};
+  };
+
+  class AsyncBlockerOperator : public exec::Operator {
+   public:
+    AsyncBlockerOperator(
+        int32_t operatorId,
+        exec::DriverCtx* driverCtx,
+        std::shared_ptr<const TestExternalBlockableNode> node,
+        std::shared_ptr<AsyncAutoUnblocker> unblocker,
+        bool isTrigger)
+        : Operator(
+              driverCtx,
+              node->outputType(),
+              operatorId,
+              node->id(),
+              isTrigger ? "TriggerOp" : "AsyncAutoBlocker"),
+          unblocker_(std::move(unblocker)),
+          isTrigger_(isTrigger) {}
+
+    bool needsInput() const override {
+      return !noMoreInput_ && input_ == nullptr && !isDraining();
+    }
+
+    void addInput(RowVectorPtr input) override {
+      input_ = std::move(input);
+      if (!isTrigger_) {
+        auto [promise, future] =
+            makeVeloxContinuePromiseContract("AsyncBlockerOperator");
+        continueFuture_ = std::move(future);
+        unblocker_->pendingPromise = std::move(promise);
+      }
+    }
+
+    RowVectorPtr getOutput() override {
+      if (continueFuture_.valid()) {
+        return nullptr;
+      }
+      auto output = std::move(input_);
+      input_ = nullptr;
+      if (output == nullptr && isDraining()) {
+        finishDrain();
+      }
+      return output;
+    }
+
+    exec::BlockingReason isBlocked(ContinueFuture* future) override {
+      if (continueFuture_.valid()) {
+        *future = std::move(continueFuture_);
+        return exec::BlockingReason::kWaitForIndexLookup;
+      }
+      return exec::BlockingReason::kNotBlocked;
+    }
+
+    bool startDrain() override {
+      if (isTrigger_) {
+        unblocker_->triggered.store(true, std::memory_order_release);
+      }
+      return input_ != nullptr;
+    }
+
+    bool isFinished() override {
+      return noMoreInput_ && input_ == nullptr;
+    }
+
+   private:
+    RowVectorPtr input_;
+    std::shared_ptr<AsyncAutoUnblocker> unblocker_;
+    const bool isTrigger_;
+    ContinueFuture continueFuture_{ContinueFuture::makeEmpty()};
+  };
+
+  class AsyncBlockerTranslator : public exec::Operator::PlanNodeTranslator {
+   public:
+    AsyncBlockerTranslator(
+        std::shared_ptr<AsyncAutoUnblocker> unblocker,
+        std::shared_ptr<ExternalBlocker> triggerMarker)
+        : unblocker_(std::move(unblocker)),
+          triggerMarker_(std::move(triggerMarker)) {}
+
+    std::unique_ptr<exec::Operator> toOperator(
+        exec::DriverCtx* ctx,
+        int32_t id,
+        const core::PlanNodePtr& node) override {
+      if (auto castedNode =
+              std::dynamic_pointer_cast<const TestExternalBlockableNode>(
+                  node)) {
+        if (castedNode->externalBlocker() == unblocker_.get()) {
+          return std::make_unique<AsyncBlockerOperator>(
+              id, ctx, castedNode, unblocker_, false);
+        }
+        if (castedNode->externalBlocker() == triggerMarker_.get()) {
+          return std::make_unique<AsyncBlockerOperator>(
+              id, ctx, castedNode, unblocker_, true);
+        }
+      }
+      return nullptr;
+    }
+
+   private:
+    std::shared_ptr<AsyncAutoUnblocker> unblocker_;
+    std::shared_ptr<ExternalBlocker> triggerMarker_;
+  };
+
+  auto unblocker = std::make_shared<AsyncAutoUnblocker>();
+  auto triggerMarker = std::make_shared<ExternalBlocker>();
+  exec::Operator::registerOperator(
+      std::make_unique<AsyncBlockerTranslator>(unblocker, triggerMarker));
+
+  std::thread unblockThread([unblocker]() {
+    while (!unblocker->stop.load(std::memory_order_acquire)) {
+      if (!unblocker->triggered.load(std::memory_order_acquire)) {
+        folly::asm_volatile_pause();
+        continue;
+      }
+      unblocker->triggered.store(false, std::memory_order_release);
+      const int delay = unblocker->delayNs.load(std::memory_order_relaxed);
+      if (delay > 0) {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::nanoseconds(delay);
+        while (std::chrono::steady_clock::now() < deadline) {
+          folly::asm_volatile_pause();
+        }
+      }
+      if (unblocker->pendingPromise.has_value()) {
+        auto promise = std::move(unblocker->pendingPromise);
+        unblocker->pendingPromise.reset();
+        promise->setValue();
+      }
+    }
+  });
+  SCOPE_EXIT {
+    unblocker->stop.store(true, std::memory_order_release);
+    unblockThread.join();
+  };
+
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1)});
+  auto filePath = writeToFile(data);
+
+  PlanBuilder builder;
+  core::PlanNodeId scan0Id;
+  std::vector<core::PlanNodeId> idleScanIds;
+  auto branch0 =
+      builder.newPlan()
+          .tableScan(data->rowType())
+          .capturePlanNodeId(scan0Id)
+          .addNode([unblocker](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<TestExternalBlockableNode>(
+                id, std::move(input), unblocker);
+          })
+          .planNode();
+  std::vector<core::PlanNodePtr> sources{branch0};
+  for (int i = 0; i < 100; ++i) {
+    core::PlanNodeId idleId;
+    sources.push_back(builder.newPlan()
+                          .tableScan(data->rowType())
+                          .capturePlanNodeId(idleId)
+                          .planNode());
+    idleScanIds.push_back(idleId);
+  }
+  {
+    core::PlanNodeId triggerId;
+    sources.push_back(
+        builder.newPlan()
+            .tableScan(data->rowType())
+            .capturePlanNodeId(triggerId)
+            .addNode([triggerMarker](
+                         const std::string& id, core::PlanNodePtr input) {
+              return std::make_shared<TestExternalBlockableNode>(
+                  id, std::move(input), triggerMarker);
+            })
+            .planNode());
+    idleScanIds.push_back(triggerId);
+  }
+
+  auto plan = builder.newPlan()
+                  .localPartition({}, sources)
+                  .project({"c0"})
+                  .planFragment();
+
+  auto queryCtx = core::QueryCtx::create();
+  queryCtx->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kMaxOutputBatchRows, "1"}});
+  auto task = Task::create(
+      "serialExecutionAsyncUnblockDeadlock",
+      plan,
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kSerial);
+
+  constexpr int kNumBarriers = 50;
+  for (int i = 0; i < kNumBarriers; ++i) {
+    unblocker->delayNs.store((i + 1) * 5'000);
+    task->addSplit(
+        scan0Id, exec::Split(makeHiveConnectorSplit(filePath->getPath())));
+    auto barrierFuture = task->requestBarrier();
+
+    int totalRows{0};
+    for (;;) {
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      auto result = task->next(&future);
+      if (future.valid()) {
+        ASSERT_EQ(result, nullptr);
+        if (!std::move(future).wait(std::chrono::seconds(2))) {
+          task->requestAbort().wait();
+          FAIL() << "Deadlock in Task::next() at barrier " << i;
+        }
+      } else if (result != nullptr) {
+        totalRows += result->size();
+      } else {
+        break;
+      }
+    }
+    ASSERT_EQ(totalRows, 1);
+    ASSERT_TRUE(barrierFuture.isReady());
+  }
+  task->noMoreSplits(scan0Id);
+  for (const auto& idleId : idleScanIds) {
+    task->noMoreSplits(idleId);
+  }
+  while (auto result = task->next()) {
+  }
+  ASSERT_TRUE(task->isFinished());
 }
 
 TEST_F(TaskTest, supportSerialExecutionMode) {
