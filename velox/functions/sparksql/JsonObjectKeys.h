@@ -33,9 +33,8 @@ struct JsonObjectKeysFunction {
       const arg_type<Varchar>& json) {
     simdjson::ondemand::document jsonDoc;
 
-    simdjson::padded_string paddedJson(json.data(), json.size());
     // The result is NULL if the given string is not a valid JSON string.
-    if (simdjsonParse(paddedJson).get(jsonDoc)) {
+    if (simdjsonParse(toPaddedStringView(json, paddedJson_)).get(jsonDoc)) {
       return false;
     }
 
@@ -75,6 +74,8 @@ struct JsonObjectKeysFunction {
     return error == simdjson::error_code::TAPE_ERROR ||
         error == simdjson::error_code::INCOMPLETE_ARRAY_OR_OBJECT;
   }
+
+  std::string paddedJson_;
 };
 
 } // namespace facebook::velox::functions::sparksql

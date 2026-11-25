@@ -54,6 +54,15 @@ simdjson::simdjson_result<simdjson::ondemand::document> simdjsonParse(
 simdjson::padded_string_view reusePaddedStringView(
     const std::string_view& json);
 
+/// Copies 'json' into 'buffer' followed by simdjson::SIMDJSON_PADDING zero
+/// bytes and returns a padded_string_view over the copy. 'buffer' only grows,
+/// so a caller that keeps it across rows allocates once instead of once per
+/// row as a simdjson::padded_string would. The view is valid until the next
+/// change to 'buffer'.
+simdjson::padded_string_view toPaddedStringView(
+    std::string_view json,
+    std::string& buffer);
+
 /// Parse the input json string using a thread local on demand parser. Allow
 /// incomplete json input.
 simdjson::simdjson_result<simdjson::ondemand::document> simdjsonParseIncomplete(

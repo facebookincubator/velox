@@ -53,9 +53,8 @@ class SIMDJsonExtractor {
    *                  simdjson::ondemand::value. Note: If the consumer holds
    *                  onto string_view(s) generated from applying
    *                  simdjson::to_json_string to the arguments, then those
-   *                  string_view(s) will reference the original `json`
-   *                  padded_string and remain valid as long as it remains
-   *                  in scope.
+   *                  string_view(s) will point into the buffer that `json`
+   *                  views and remain valid until that buffer changes.
    * @param isDefinitePath is an output param that will get set to
    *                       false if a token is evaluated which can return
    *                       multiple results like '*'.
@@ -64,7 +63,7 @@ class SIMDJsonExtractor {
    */
   template <typename TConsumer>
   simdjson::error_code extract(
-      const simdjson::padded_string& json,
+      const simdjson::padded_string_view& json,
       TConsumer& consumer,
       bool& isDefinitePath);
 
@@ -129,7 +128,7 @@ simdjson::error_code extractArray(
 
 template <typename TConsumer>
 simdjson::error_code SIMDJsonExtractor::extract(
-    const simdjson::padded_string& paddedJson,
+    const simdjson::padded_string_view& paddedJson,
     TConsumer& consumer,
     bool& isDefinitePath) {
   SIMDJSON_ASSIGN_OR_RAISE(auto jsonDoc, simdjsonParse(paddedJson));

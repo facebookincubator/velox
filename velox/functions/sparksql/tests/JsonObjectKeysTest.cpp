@@ -52,5 +52,18 @@ TEST_F(JsonObjectKeysTest, basic) {
   assertEqualVectors(jsonObjectKeys(R"([*.{cs,vb}])"), expected);
 }
 
+TEST_F(JsonObjectKeysTest, longRowBeforeShorterRows) {
+  // The function reuses one buffer across rows. The second row is a truncated
+  // copy of the first and must not see the bytes the first left.
+  auto input = makeFlatVector<std::string>(
+      {R"({"name": "Alice", "age": 5, "id": "001"})",
+       R"({"name": "Alice", "age")",
+       R"({"x": 1})"});
+  auto expected = makeNullableArrayVector<std::string>(
+      {{{"name", "age", "id"}}, std::nullopt, {{"x"}}});
+  assertEqualVectors(
+      expected, evaluate("json_object_keys(c0)", makeRowVector({input})));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
