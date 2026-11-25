@@ -244,8 +244,7 @@ void registerStringFunctions(const std::string& prefix) {
 
   registerFunction<Base64Function, Varchar, Varbinary>({prefix + "base64"});
   registerFunction<UnBase64Function, Varbinary, Varchar>({prefix + "unbase64"});
-  registerFunction<EncodeFunction, Varbinary, Varchar, Varchar>(
-      {prefix + "encode"});
+  registerEncode(prefix + "encode");
 
   registerFunction<InitCapFunction, Varchar, Varchar>({prefix + "initcap"});
 
