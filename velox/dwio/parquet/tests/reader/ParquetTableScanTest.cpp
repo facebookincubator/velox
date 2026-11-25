@@ -192,7 +192,8 @@ class ParquetTableScanTest : public ParquetTableScanTestBase {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<facebook::velox::dwio::common::BufferedInput>(
-            std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
+            std::make_shared<LocalReadFile>(filePath),
+            facebook::velox::FileIoContext{.pool = &readerOpts.memoryPool()}),
         readerOpts);
     rowType_ = reader->rowType();
     createDuckDbTable({data});

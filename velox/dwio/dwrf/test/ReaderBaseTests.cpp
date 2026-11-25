@@ -108,7 +108,9 @@ class EncryptedStatsTest : public Test {
     readerPool_ = pool_->addLeafChild("reader");
     reader_ = std::make_unique<ReaderBase>(
         *readerPool_,
-        std::make_unique<BufferedInput>(readFile, *readerPool_),
+        std::make_unique<BufferedInput>(
+            readFile,
+            facebook::velox::FileIoContext{.pool = readerPool_.get()}),
         std::make_unique<PostScript>(std::move(ps)),
         footerWrapper.getDwrfPtr(),
         nullptr,
@@ -227,7 +229,9 @@ std::unique_ptr<ReaderBase> createCorruptedFileReader(
   readerOpts.setMetadataIoStats(
       std::make_shared<facebook::velox::io::IoStatistics>());
   return std::make_unique<ReaderBase>(
-      readerOpts, std::make_unique<BufferedInput>(readFile, *pool));
+      readerOpts,
+      std::make_unique<BufferedInput>(
+          readFile, facebook::velox::FileIoContext{.pool = pool.get()}));
 }
 
 class ReaderBaseTest : public Test {

@@ -31,6 +31,31 @@ using cache::CoalescedLoad;
 using cache::ScanTracker;
 using cache::TrackingId;
 
+DirectBufferedInput::DirectBufferedInput(
+    std::shared_ptr<ReadFile> readFile,
+    const MetricsLogPtr& metricsLog,
+    StringIdLease fileNum,
+    std::shared_ptr<cache::ScanTracker> tracker,
+    StringIdLease groupId,
+    std::shared_ptr<IoStatistics> ioStatistics,
+    std::shared_ptr<velox::IoStats> ioStats,
+    folly::Executor* executor,
+    const io::ReaderOptions& readerOptions,
+    FileIoContext fileIoContext)
+    : BufferedInput(
+          std::move(readFile),
+          detail::withIoStats(std::move(fileIoContext), ioStats.get()),
+          metricsLog,
+          ioStatistics.get()),
+      fileNum_(std::move(fileNum)),
+      tracker_(std::move(tracker)),
+      groupId_(std::move(groupId)),
+      ioStatistics_(std::move(ioStatistics)),
+      ioStats_(std::move(ioStats)),
+      executor_(executor),
+      fileSize_(input_->getLength()),
+      options_(readerOptions) {}
+
 std::unique_ptr<SeekableInputStream> DirectBufferedInput::enqueue(
     Region region,
     const StreamIdentifier* sid = nullptr) {

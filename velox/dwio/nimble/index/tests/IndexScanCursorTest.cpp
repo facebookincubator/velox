@@ -495,8 +495,8 @@ TEST_P(IndexScanCursorTest, releasesSelectiveReaderStripeOwnership) {
       /*cacheData=*/false,
       /*verifyStreamChecksums=*/false);
   auto file = std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
-  auto input =
-      std::make_unique<velox::dwio::common::BufferedInput>(file, *leafPool_);
+  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+      file, velox::FileIoContext{.pool = leafPool_.get()});
   auto readerBase = ReaderBase::create(std::move(input), options);
   std::weak_ptr<ReaderBase> owner = readerBase;
   {
