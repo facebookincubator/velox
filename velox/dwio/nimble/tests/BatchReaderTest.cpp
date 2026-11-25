@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/system/HardwareConcurrency.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <array>
 #include <atomic>
@@ -63,6 +64,7 @@
 #include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/tests/HybridFlatMapGroupings.h"
 #include "velox/dwio/nimble/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/CppToType.h"
@@ -632,6 +634,8 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
   void verifyFlatMapNullValuesThenNonNullAcrossChunks();
 
   void verifyFlatMapAllNullValuesAcrossChunks();
+
+  void verifyHybridFlatMapNullAndEmptyMaps();
 
   nimble::WriterOptions createFlatMapWriterOptions() const {
     nimble::WriterOptions options;
@@ -5110,6 +5114,161 @@ TEST_P(BatchReaderTest, flatMapAllNullValuesAcrossChunks) {
 
 TEST_P(BatchReaderChunkedTest, flatMapAllNullValuesAcrossChunks) {
   verifyFlatMapAllNullValuesAcrossChunks();
+}
+
+void BatchReaderTest::verifyHybridFlatMapNullAndEmptyMaps() {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const auto makeStripe = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"hybrid_map"},
+        {vectorMaker.mapVectorFromJson<int32_t, int64_t>(maps)});
+  };
+  std::vector<std::string> manyMaps;
+  for (int32_t row = 0; row < 20; ++row) {
+    manyMaps.push_back(row % 3 == 0 ? "null" : fmt::format("{{1: {}}}", row));
+  }
+  manyMaps[1] = "{1: null}";
+  manyMaps[2] = "{1: 2, 7: 72}";
+  // Key 7 is in Default, which also gains 9 and 11 in later stripes. Stripes 1
+  // and 2 have no keys, so only their nulls streams are written. Stripe 3 has
+  // only Default keys, so the explicit group has no streams there.
+  const std::vector<velox::VectorPtr> stripes{
+      makeStripe({"{1: 10, 7: 70}", "null", "{}", "{2: null}"}),
+      makeStripe({"null", "null"}),
+      makeStripe({"{}", "{}"}),
+      makeStripe({"{7: 71}", "{9: 90}"}),
+      makeStripe({"{11: 110}", "{1: 11}"}),
+      makeStripe(manyMaps),
+  };
+
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.hybridFlatMapColumns.emplace(
+      "hybrid_map",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1", "2"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  writerOptions.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  // With chunking on, the last stripe's nulls stream and explicit group
+  // value stream exceed this size and split into several chunks.
+  writerOptions.maxStreamChunkRawSize = 16;
+  const auto file = nimble::test::createNimbleFile(
+      *rootPool_, stripes, std::move(writerOptions), /*flushAfterWrite=*/false);
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  ASSERT_EQ(tablet->stripeCount(), stripes.size());
+
+  auto reader = createBatchReader(readFile, *leafPool_);
+  const auto& hybridMap =
+      reader->schema()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(hybridMap.groupCount(), 2);
+  EXPECT_THAT(hybridMap.groupAt(0).groupKeys, testing::ElementsAre("1", "2"));
+  EXPECT_THAT(
+      hybridMap.defaultGroup().groupKeys, testing::ElementsAre("7", "9", "11"));
+
+  velox::VectorPtr result;
+  for (const auto& expected : stripes) {
+    ASSERT_TRUE(reader->next(expected->size(), result));
+    ASSERT_EQ(result->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(vectorEquals(expected, result, row))
+          << "Mismatch at row " << row;
+    }
+  }
+  EXPECT_FALSE(reader->next(1, result));
+
+  if (enableChunking()) {
+    const auto stripeId = tablet->stripeIdentifier(tablet->stripeCount() - 1);
+    const auto countChunks = [&](const nimble::StreamDescriptor& descriptor) {
+      const std::vector<uint32_t> streamIds{descriptor.offset()};
+      auto streamLoaders = tablet->load(stripeId, streamIds);
+      nimble::InMemoryChunkedStream chunkedStream{
+          *leafPool_, std::move(streamLoaders[0])};
+      uint32_t numChunks{0};
+      while (chunkedStream.hasNext()) {
+        chunkedStream.nextChunk();
+        ++numChunks;
+      }
+      return numChunks;
+    };
+    EXPECT_GT(countChunks(hybridMap.nullsDescriptor()), 1);
+    EXPECT_GT(
+        countChunks(
+            hybridMap.groupAt(0).valueType->asScalar().scalarDescriptor()),
+        1);
+  }
+}
+
+TEST_P(BatchReaderTest, hybridFlatMapNullAndEmptyMaps) {
+  verifyHybridFlatMapNullAndEmptyMaps();
+}
+
+TEST_P(BatchReaderChunkedTest, hybridFlatMapNullAndEmptyMaps) {
+  verifyHybridFlatMapNullAndEmptyMaps();
+}
+
+// A ROW value whose fields are all null is not null. A stripe whose group
+// holds only such values has no value streams for the group: the ROW has no
+// nulls to record, and its fields hold only nulls. The nested ROW `c` follows
+// the same rule, so it is read back as {d: null}, not as null.
+TEST_P(BatchReaderTest, hybridFlatMapRowValuesWithNullFields) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const std::vector<velox::VectorPtr> stripes{
+      vectorMaker.rowVector(
+          {"hybrid_map"},
+          {vectorMaker.mapVector(
+              {0, 1},
+              vectorMaker.flatVector<int32_t>({1}),
+              vectorMaker.rowVector(
+                  {"a", "b", "c"},
+                  {vectorMaker.flatVectorNullable<int64_t>({std::nullopt}),
+                   vectorMaker.flatVectorNullable<velox::StringView>(
+                       {std::nullopt}),
+                   vectorMaker.rowVector(
+                       {"d"},
+                       {vectorMaker.flatVectorNullable<int64_t>(
+                           {std::nullopt})})}))}),
+      vectorMaker.rowVector(
+          {"hybrid_map"},
+          {vectorMaker.mapVector(
+              {0},
+              vectorMaker.flatVector<int32_t>({1}),
+              vectorMaker.rowVector(
+                  {"a", "b", "c"},
+                  {vectorMaker.flatVector<int64_t>({5}),
+                   vectorMaker.flatVector<velox::StringView>({"x"}),
+                   vectorMaker.rowVector(
+                       {"d"}, {vectorMaker.flatVector<int64_t>({7})})}))}),
+  };
+
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.hybridFlatMapColumns.emplace(
+      "hybrid_map",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  writerOptions.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  const auto file = nimble::test::createNimbleFile(
+      *rootPool_, stripes, std::move(writerOptions), /*flushAfterWrite=*/false);
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto reader = createBatchReader(readFile, *leafPool_);
+  velox::VectorPtr result;
+  for (const auto& expected : stripes) {
+    ASSERT_TRUE(reader->next(expected->size(), result));
+    ASSERT_EQ(result->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(vectorEquals(expected, result, row))
+          << "Mismatch at row " << row << ": expected "
+          << expected->toString(row) << " got " << result->toString(row);
+    }
+  }
+  EXPECT_FALSE(reader->next(1, result));
 }
 
 // Verify mixed in-map streams: some keys present in all rows (all-true,
