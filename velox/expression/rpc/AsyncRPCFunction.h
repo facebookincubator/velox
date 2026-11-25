@@ -188,10 +188,11 @@ class AsyncRPCFunction {
   }
 
   /// Returns the concurrency ceiling requested by function options, or 0 when
-  /// unset. It takes precedence over rpc.ratelimiter.max_limit when
-  /// rpc.ratelimiter.hard_limit is 0 or more, and a positive hard limit caps
-  /// it. The operator resolves it with the session properties into the query's
-  /// rate-limiter policy.
+  /// unset. A positive rpc.ratelimiter.max_limit replaces it, or only lowers
+  /// it when rpc.ratelimiter.tighten_limit is true. It takes precedence over
+  /// max_limit when rpc.ratelimiter.hard_limit is 0 or more, and a positive
+  /// hard limit caps it. The operator resolves it with the session properties
+  /// into the query's rate-limiter policy.
   virtual int64_t configuredCeiling() const {
     return 0;
   }
