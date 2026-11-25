@@ -2258,6 +2258,46 @@ TEST_F(TableScanTest, readAsLowerCase) {
           "true")
       .split(makeHiveConnectorSplit(filePath))
       .assertResults("SELECT * FROM tmp");
+
+  // A column name that is not lowercase fails, whether it is projected or used
+  // in a filter.
+  const auto dataColumns = ROW({"a", "B"}, BIGINT());
+  const auto mixedCaseFile = writeToFile(makeVectors(1, 10, dataColumns));
+  struct TestCase {
+    RowTypePtr outputType;
+    std::vector<std::string> subfieldFilters;
+    std::string remainingFilter;
+  };
+  for (const auto& testCase : std::vector<TestCase>{
+           {ROW("B", BIGINT()), {}, ""},
+           {ROW("a", BIGINT()), {"\"B\" > 0"}, ""},
+           {ROW("a", BIGINT()), {}, "\"B\" % 2 = a"},
+       }) {
+    SCOPED_TRACE(
+        fmt::format(
+            "{} filters: {} remaining: {}",
+            testCase.outputType->toString(),
+            folly::join(", ", testCase.subfieldFilters),
+            testCase.remainingFilter));
+    const auto plan = PlanBuilder()
+                          .tableScan(
+                              testCase.outputType,
+                              testCase.subfieldFilters,
+                              testCase.remainingFilter,
+                              dataColumns)
+                          .planNode();
+    VELOX_ASSERT_USER_THROW(
+        AssertQueryBuilder(plan)
+            .connectorSessionProperty(
+                kHiveConnectorId,
+                connector::hive::HiveConfig::
+                    kFileColumnNamesReadAsLowerCaseSession,
+                "true")
+            .split(makeHiveConnectorSplit(mixedCaseFile->getPath()))
+            .copyResults(pool()),
+        "Column name must be lowercase when file column names are read as "
+        "lowercase: B");
+  }
 }
 
 void TableScanTest::testPartitionedTable(

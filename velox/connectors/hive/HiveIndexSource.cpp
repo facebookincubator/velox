@@ -957,9 +957,7 @@ void HiveIndexSource::init(
 
   if (hiveConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx_->sessionProperties())) {
-    connector::checkColumnNameLowerCase(outputType_);
-    connector::checkColumnNameLowerCase(tableHandle_->subfieldFilters(), {});
-    connector::checkColumnNameLowerCase(tableHandle_->remainingFilter());
+    tableHandle_->checkColumnNamesLowerCase(*outputType_);
   }
 
   for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {

@@ -68,6 +68,11 @@ class FileTableHandle : public ConnectorTableHandle {
     return tableParameters_;
   }
 
+  /// Throws if a column name in 'outputType' or in the filters has an uppercase
+  /// letter. A reader that lowercases the column names it reads from files
+  /// matches only lowercase names.
+  void checkColumnNamesLowerCase(const RowType& outputType) const;
+
   /// Extra columns used in filters but not in the output. Returns column
   /// handles as FileColumnHandlePtr for use in the generic scan pipeline.
   /// Concrete handles own the storage to also support typed accessors.

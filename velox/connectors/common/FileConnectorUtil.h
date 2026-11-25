@@ -95,14 +95,6 @@ bool testFilters(
         partitionKeysHandle,
     bool asLocalTime);
 
-void checkColumnNameLowerCase(const TypePtr& type);
-
-void checkColumnNameLowerCase(
-    const common::SubfieldFilters& filters,
-    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns);
-
-void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr);
-
 struct SpecialColumnNames {
   std::optional<std::string> rowIndex;
   std::optional<std::string> rowId;
