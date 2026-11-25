@@ -663,6 +663,10 @@ TEST_F(PlanRewriterTest, subclassOfCoreNodeStaysOnCpu) {
    public:
     using core::FilterNode::FilterNode;
   };
+  class CustomLocalMergeNode final : public core::LocalMergeNode {
+   public:
+    using core::LocalMergeNode::LocalMergeNode;
+  };
   auto ids = std::make_shared<core::PlanNodeIdGenerator>();
   auto values = PlanBuilder(ids).values({input_}).planNode();
 
@@ -675,6 +679,33 @@ TEST_F(PlanRewriterTest, subclassOfCoreNodeStaysOnCpu) {
     EXPECT_TRUE(adapted.operators.contains("Limit"));
     EXPECT_FALSE(adapted.operators.contains("CudfLimit"));
     EXPECT_EQ(adapted.results->size(), 2);
+  }
+
+  // A local merge is two operators: the CallbackSink that ends the pipeline
+  // of each source, and the LocalMerge. The driver adapter leaves both on the
+  // CPU, so the CudfOrderBy below hands Velox vectors to the sink.
+  {
+    auto merge = PlanBuilder()
+                     .values({input_})
+                     .orderBy({"c1 DESC"}, true)
+                     .localMerge({"c1 DESC"})
+                     .planNode();
+    const auto* coreMerge = merge->as<core::LocalMergeNode>();
+    auto customMerge = std::make_shared<CustomLocalMergeNode>(
+        "merge",
+        coreMerge->sortingKeys(),
+        coreMerge->sortingOrders(),
+        merge->sources());
+    auto adapted = execute(customMerge, /*useDriverAdapter=*/true);
+    EXPECT_TRUE(adapted.operators.contains("CudfOrderBy"));
+    EXPECT_TRUE(adapted.operators.contains("LocalMerge"));
+    EXPECT_FALSE(adapted.operators.contains("CudfLocalMerge"));
+    ::facebook::velox::test::assertEqualVectors(
+        makeRowVector(
+            {"c0", "c1"},
+            {makeFlatVector<int64_t>({3, 1, 2, 1}),
+             makeFlatVector<int64_t>({40, 30, 20, 10})}),
+        adapted.results);
   }
 
   // The Project still runs on the GPU, but not fused with the Filter.

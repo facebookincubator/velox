@@ -1023,13 +1023,17 @@ class CallbackSinkAdapter : public OperatorAdapter {
     return op->is<exec::CallbackSink>();
   }
 
+  // Asks the same questions as LocalMergeAdapter. The sink and the LocalMerge
+  // come from one LocalMergeNode, and the sink may take cuDF vectors only when
+  // CudfLocalMerge reads them.
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto supported = planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
             nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx()) &&
         !subtreeHasUnsupportedType(planNode);
     if (!supported) {
       LOG_FALLBACK(
