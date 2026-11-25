@@ -170,9 +170,13 @@ toStreamingGroupbyAggregators(
     const std::vector<VectorPtr>& constants,
     const std::vector<std::optional<uint32_t>>& maskChannels);
 
-// Groupby-specific validation
+// Groupby-specific validation. 'sourceNode' is the source of the aggregation
+// node, or nullptr.
 bool canGroupbyBeEvaluatedByCudf(
-    const core::AggregationNode& aggregationNode,
+    core::AggregationNode::Step step,
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 

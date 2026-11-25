@@ -200,6 +200,17 @@ bool canBeEvaluatedByCudf(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 
+// Same for the fields of an aggregation node, so that one check serves a
+// core::AggregationNode and a CudfAggregationNode. 'sourceNode' is the source
+// of the node, or nullptr.
+bool canBeEvaluatedByCudf(
+    core::AggregationNode::Step step,
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
+
 // Utility functions shared by groupby and reduce validation.
 core::TypedExprPtr expandFieldReference(
     const core::TypedExprPtr& expr,

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/exec/CudfPlanNode.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -25,6 +26,7 @@
 #include <folly/String.h>
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <typeinfo>
@@ -619,9 +621,16 @@ core::PlanNodePtr rebuildCustomCudfPlanNode(
 
 void validateCudfPlan(
     const core::PlanNodePtr& plan,
-    const core::QueryCtx& queryCtx,
+    core::QueryCtx& queryCtx,
     VectorRepresentation taskOutput) {
   VELOX_USER_CHECK_NOT_NULL(plan);
+  // Checking an expression folds its constants, which allocates. Child pools
+  // of one parent need distinct names.
+  static std::atomic<uint64_t> nextValidationId{0};
+  const auto pool = queryCtx.pool()->addLeafChild(
+      fmt::format(
+          "cudf-plan-validation-{}",
+          nextValidationId.fetch_add(1, std::memory_order_relaxed)));
   using Output = std::optional<VectorRepresentation>;
   std::unordered_set<core::PlanNodeId> ids;
   std::function<Output(const core::PlanNodePtr&)> visit =
@@ -663,6 +672,14 @@ void validateCudfPlan(
           "Unsupported cuDF conversion type at {}: {}",
           node->id(),
           node->sources()[0]->outputType()->toString());
+    }
+    if (auto reason = detail::cudfPlanNodeUnsupportedReason(
+            node, &queryCtx, pool.get())) {
+      VELOX_USER_FAIL(
+          "cuDF cannot run plan node {} ({}): {}",
+          node->name(),
+          node->id(),
+          *reason);
     }
     if (traits.outputSource) {
       VELOX_USER_CHECK_LT(*traits.outputSource, outputs.size());

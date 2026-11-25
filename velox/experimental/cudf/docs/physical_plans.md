@@ -23,8 +23,13 @@ auto physicalPlan = CudfPlanRewriter::rewrite(cpuPlan, config);
 Engines that construct complete physical plans directly do not need the
 rewriter. They can call `validateCudfPlan(plan, *queryCtx)` before creating the
 task. This checks representation boundaries, source arity, node IDs, conversion
-types, and terminal output. It is not an exhaustive expression or aggregation
-state-layout validator.
+types, and terminal output. It also checks that cuDF can run each built-in cuDF
+plan node with the session settings of that QueryCtx: the expressions of a
+filter or projection, the filter of a join, and the functions of an
+aggregation. For example, cuDF cannot run a cast from VARCHAR under
+`legacy_cast`. Pass the QueryCtx that the task runs with, because a plan that
+is valid for one session can give wrong results under another. It does not
+validate the state layout of an aggregation.
 
 The rewriter preserves supported GPU execution for aggregation, filter/project,
 hash and nested-loop joins, sorting, limits, top-N, top-N row number, window,
@@ -71,7 +76,8 @@ type, is a static `unsupportedReason()` of the node class. The constructor of
 the node throws for the same reason, so a plan that an engine builds from cuDF
 plan nodes cannot skip it. `canRunOnGpu` calls it and adds the rules that need
 the session settings of the query, such as whether cuDF can evaluate an
-expression.
+expression. `validateCudfPlan` applies those session rules to the cuDF plan
+node, through the same function.
 
 The rewriter and the cuDF driver adapter start from a core plan node and use
 the first two. `CudfPlanNodeTranslator` starts from a cuDF plan node and uses

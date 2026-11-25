@@ -59,8 +59,12 @@ std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
     std::vector<VectorPtr> const& constants,
     std::vector<std::optional<uint32_t>> const& maskChannels);
 
+// Reduce-specific validation of an aggregation without grouping keys.
+// 'sourceNode' is the source of the aggregation node, or nullptr.
 bool canReduceBeEvaluatedByCudf(
-    const core::AggregationNode& aggregationNode,
+    core::AggregationNode::Step step,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 

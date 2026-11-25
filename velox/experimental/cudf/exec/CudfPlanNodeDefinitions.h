@@ -22,6 +22,7 @@
 #include "velox/exec/Operator.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,16 @@ std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project,
     core::PlanNodePtr source);
+
+/// Returns why cuDF cannot run the built-in cuDF plan node 'node' with the
+/// session settings of 'queryCtx', such as a cast whose result depends on the
+/// session time zone. Returns std::nullopt if it can, and for any other node.
+/// These are the rules of canRunOnGpu() that need 'queryCtx' and 'pool'. The
+/// constructor of the node has already checked the rest.
+std::optional<std::string> cudfPlanNodeUnsupportedReason(
+    const core::PlanNodePtr& node,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
 
 /// Returns the operator that runs the cuDF plan node 'node'. Returns nullptr
 /// for any other node, and for the joins and local exchanges, whose operators

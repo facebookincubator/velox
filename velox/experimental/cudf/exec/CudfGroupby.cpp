@@ -1643,18 +1643,14 @@ bool canGroupbyAggregationBeEvaluatedByCudf(
 }
 
 bool canGroupbyBeEvaluatedByCudf(
-    const core::AggregationNode& aggregationNode,
+    core::AggregationNode::Step step,
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
-  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
-      ? nullptr
-      : aggregationNode.sources()[0].get();
-
-  // Get the aggregation step from the node
-  auto step = aggregationNode.step();
-
   // Check supported aggregation functions using step-aware aggregation registry
-  for (const auto& aggregate : aggregationNode.aggregates()) {
+  for (const auto& aggregate : aggregates) {
     // Use step-aware validation that handles partial/final/intermediate steps
     if (!canGroupbyAggregationBeEvaluatedByCudf(
             *aggregate.call, step, aggregate.rawInputTypes, queryCtx)) {
@@ -1691,7 +1687,7 @@ bool canGroupbyBeEvaluatedByCudf(
 
   // Check grouping key expressions
   if (!canGroupingKeysBeEvaluatedByCudf(
-          aggregationNode.groupingKeys(), sourceNode, queryCtx, pool)) {
+          groupingKeys, sourceNode, queryCtx, pool)) {
     return false;
   }
 

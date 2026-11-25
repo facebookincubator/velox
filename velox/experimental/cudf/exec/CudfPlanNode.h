@@ -84,9 +84,15 @@ void unregisterCudfPlanNodeDescriptor(const std::string& name);
 
 /// Validates an engine-built or rewritten plan without changing it. A terminal
 /// sink has no output and is independent of the requested task representation.
+///
+/// Checks that both ends of every edge agree on Velox or cuDF vectors. Also
+/// checks that cuDF can run each built-in cuDF plan node with the session
+/// settings of 'queryCtx': for example, a cast from TIMESTAMP to VARCHAR
+/// cannot run on cuDF when the session adjusts timestamps to its time zone.
+/// Pass the QueryCtx that the task will run with.
 void validateCudfPlan(
     const core::PlanNodePtr& plan,
-    const core::QueryCtx& queryCtx,
+    core::QueryCtx& queryCtx,
     VectorRepresentation taskOutput = VectorRepresentation::kVelox);
 
 namespace detail {

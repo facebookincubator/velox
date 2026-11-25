@@ -17,6 +17,8 @@
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -284,6 +286,76 @@ TEST_F(PhysicalPlanTest, validationChecksRepresentations) {
   VELOX_ASSERT_THROW(
       validateCudfPlan(merge, *queryCtx_, Kind::kCudf),
       "requires an explicit Exchange and CudfOrderBy");
+}
+
+// A plan is valid for the session settings of the QueryCtx it is validated
+// with, which may differ from the ones it was built with.
+TEST_F(PhysicalPlanTest, validationChecksSessionSettings) {
+  // The cuDF cast from VARCHAR is a Presto function.
+  registerPrestoFunctions(CudfConfig::getInstance().functionNamePrefix);
+  SCOPE_EXIT {
+    unregisterFunctions();
+  };
+  auto data = makeRowVector(
+      {"k", "s"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<std::string>({"1", "2", "3"})});
+  auto legacyCastCtx = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig({{core::QueryConfig::kLegacyCast, "true"}}));
+
+  // cuDF parses a VARCHAR the way CAST does without legacy_cast.
+  {
+    auto physical = rewrite(
+        PlanBuilder()
+            .values({data})
+            .project({"cast(s as bigint) AS v"})
+            .planNode());
+    ASSERT_EQ(count(physical, "CudfFilterProject"), 1);
+    validateCudfPlan(physical, *queryCtx_);
+    VELOX_ASSERT_USER_THROW(
+        validateCudfPlan(physical, *legacyCastCtx),
+        "cuDF cannot run plan node CudfFilterProject (1): FilterProject projections cannot be evaluated by cuDF");
+  }
+  {
+    auto physical = rewrite(
+        PlanBuilder()
+            .values({data})
+            .filter("cast(s as bigint) > 1")
+            .planNode());
+    ASSERT_EQ(count(physical, "CudfFilterProject"), 1);
+    validateCudfPlan(physical, *queryCtx_);
+    VELOX_ASSERT_USER_THROW(
+        validateCudfPlan(physical, *legacyCastCtx),
+        "cuDF cannot run plan node CudfFilterProject (1): FilterProject filter cannot be evaluated by cuDF");
+  }
+
+  // A join filter is checked too. cuDF does not run a cast from VARCHAR in a
+  // join filter under any session settings.
+  {
+    using Keys = std::vector<core::FieldAccessTypedExprPtr>;
+    auto generator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto probe = PlanBuilder(generator).values({data}).planNode();
+    auto build = PlanBuilder(generator).values({input_}).planNode();
+    auto key = std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "k");
+    auto join = std::make_shared<CudfHashJoinNode>(
+        "join",
+        std::make_shared<CudfFromVeloxNode>("probe-upload", probe),
+        std::make_shared<CudfFromVeloxNode>("build-upload", build),
+        data->rowType(),
+        core::JoinType::kInner,
+        /*nullAware=*/false,
+        Keys{key},
+        Keys{key},
+        std::make_shared<core::CastTypedExpr>(
+            BOOLEAN(),
+            std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "s"),
+            /*isTryCast=*/false));
+    VELOX_ASSERT_USER_THROW(
+        validateCudfPlan(
+            std::make_shared<CudfToVeloxNode>("download", join), *queryCtx_),
+        "cuDF cannot run plan node CudfHashJoin (join): HashJoin join filter cannot be evaluated by cuDF");
+  }
 }
 
 TEST_F(PhysicalPlanTest, conversionsRejectUnsupportedTypes) {

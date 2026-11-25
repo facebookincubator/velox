@@ -867,18 +867,13 @@ bool canReduceAggregationBeEvaluatedByCudf(
 }
 
 bool canReduceBeEvaluatedByCudf(
-    const core::AggregationNode& aggregationNode,
+    core::AggregationNode::Step step,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
-  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
-      ? nullptr
-      : aggregationNode.sources()[0].get();
-
-  // Get the aggregation step from the node
-  auto step = aggregationNode.step();
-
   // Check supported aggregation functions using reduce registry
-  for (const auto& aggregate : aggregationNode.aggregates()) {
+  for (const auto& aggregate : aggregates) {
     // Use step-aware validation that handles partial/final/intermediate steps
     if (!canReduceAggregationBeEvaluatedByCudf(
             *aggregate.call, step, aggregate.rawInputTypes, queryCtx)) {

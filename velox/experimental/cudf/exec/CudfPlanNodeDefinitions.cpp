@@ -69,6 +69,16 @@ namespace {
 //       exec::DriverCtx* driverCtx,
 //       int32_t operatorId);
 //
+//   // Optional. Why cuDF cannot run the cuDF plan node 'node' with the session
+//   // settings of 'queryCtx', or std::nullopt. Applies the rules of
+//   // canRunOnGpu() that need 'queryCtx' and 'pool', for validateCudfPlan(),
+//   // which starts from a cuDF plan node. canRunOnGpu() and this function
+//   // share one implementation, so the two cannot drift apart.
+//   static std::optional<std::string> unsupportedReason(
+//       const CudfNode& node,
+//       core::QueryCtx* queryCtx,
+//       memory::MemoryPool* pool);
+//
 // CoreNode, canRunOnGpu() and lower() are for the plan rewriter and the cuDF
 // driver adapter, which start from a core plan node. CudfNode and
 // createOperator() are for CudfPlanNodeTranslator, which starts from a cuDF
@@ -115,8 +125,25 @@ struct AggregationDefinition {
       core::QueryCtx* queryCtx,
       memory::MemoryPool* pool,
       std::string* reason) {
-    return canBeEvaluatedByCudf(*node, queryCtx, pool) ||
-        reject(reason, "Aggregation cannot be evaluated by cuDF");
+    return accept(unsupportedReason(*node, queryCtx, pool), reason);
+  }
+
+  // Serves CoreNode and CudfNode, which have the same accessors.
+  template <typename TNode>
+  static std::optional<std::string> unsupportedReason(
+      const TNode& node,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    if (canBeEvaluatedByCudf(
+            node.step(),
+            node.groupingKeys(),
+            node.aggregates(),
+            node.sources().empty() ? nullptr : node.sources()[0].get(),
+            queryCtx,
+            pool)) {
+      return std::nullopt;
+    }
+    return "Aggregation cannot be evaluated by cuDF";
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -154,6 +181,43 @@ struct AggregationDefinition {
   }
 };
 
+// Returns why cuDF cannot run 'filter' followed by 'projections' over an input
+// of 'inputType', or std::nullopt. 'filter' is null when there is no filter.
+// 'projections' is empty when there is no projection.
+std::optional<std::string> filterProjectUnsupportedReason(
+    const RowTypePtr& inputType,
+    const core::TypedExprPtr& filter,
+    const std::vector<core::TypedExprPtr>& projections,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
+  // cuDF sizes an expression result from an input column. Over a zero-column
+  // input a filter has nothing to evaluate against, and only constant
+  // projections, which CudfFilterProject fills to the row count of each batch,
+  // can run.
+  if (inputType->size() == 0) {
+    if (filter != nullptr) {
+      return "FilterProject filter over a zero-column input";
+    }
+    if (!std::all_of(
+            projections.begin(),
+            projections.end(),
+            [&](const auto& projection) {
+              return isConstantProjectionOverZeroColumns(inputType, projection);
+            })) {
+      return "FilterProject non-constant projection over a zero-column input";
+    }
+  }
+  if (filter != nullptr && !canExprRunOnGpu(filter, queryCtx, pool)) {
+    return "FilterProject filter cannot be evaluated by cuDF";
+  }
+  for (const auto& projection : projections) {
+    if (!canExprRunOnGpu(projection, queryCtx, pool)) {
+      return "FilterProject projections cannot be evaluated by cuDF";
+    }
+  }
+  return std::nullopt;
+}
+
 // One cuDF plan node and one operator run a Filter, a Project, or a Project
 // over a Filter. FilterDefinition and ProjectDefinition lower one of the two
 // alone. Callers that find a Project over a Filter decide the pair together
@@ -167,6 +231,18 @@ struct FilterProjectDefinition {
       exec::DriverCtx* driverCtx,
       int32_t operatorId) {
     return std::make_unique<CudfFilterProject>(operatorId, driverCtx, node);
+  }
+
+  static std::optional<std::string> unsupportedReason(
+      const CudfNode& node,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    return filterProjectUnsupportedReason(
+        node.sources()[0]->outputType(),
+        node.filter(),
+        node.projections(),
+        queryCtx,
+        pool);
   }
 };
 
@@ -492,9 +568,20 @@ struct HashJoinDefinition {
             reason)) {
       return false;
     }
-    return node->filter() == nullptr ||
-        canJoinFilterRunOnGpu(node->filter(), queryCtx, pool) ||
-        reject(reason, "HashJoin join filter cannot be evaluated by cuDF");
+    return accept(unsupportedReason(*node, queryCtx, pool), reason);
+  }
+
+  // Serves CoreNode and CudfNode, which have the same accessor.
+  template <typename TNode>
+  static std::optional<std::string> unsupportedReason(
+      const TNode& node,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    if (node.filter() == nullptr ||
+        canJoinFilterRunOnGpu(node.filter(), queryCtx, pool)) {
+      return std::nullopt;
+    }
+    return "HashJoin join filter cannot be evaluated by cuDF";
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -531,9 +618,20 @@ struct NestedLoopJoinDefinition {
             reason)) {
       return false;
     }
-    return node->joinCondition() == nullptr ||
-        canJoinFilterRunOnGpu(node->joinCondition(), queryCtx, pool) ||
-        reject(reason, "NestedLoopJoin filter cannot be evaluated by cuDF");
+    return accept(unsupportedReason(*node, queryCtx, pool), reason);
+  }
+
+  // Serves CoreNode and CudfNode, which have the same accessor.
+  template <typename TNode>
+  static std::optional<std::string> unsupportedReason(
+      const TNode& node,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    if (node.joinCondition() == nullptr ||
+        canJoinFilterRunOnGpu(node.joinCondition(), queryCtx, pool)) {
+      return std::nullopt;
+    }
+    return "NestedLoopJoin filter cannot be evaluated by cuDF";
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -644,6 +742,15 @@ struct Entry {
       const core::PlanNodePtr& node,
       exec::DriverCtx* driverCtx,
       int32_t operatorId){nullptr};
+
+  // Returns why cuDF cannot run a node with the session settings of
+  // 'queryCtx'. Returns std::nullopt if it can, and if the node is not the
+  // cuDF plan node of the definition. Null if the definition has no
+  // unsupportedReason().
+  std::optional<std::string> (*unsupportedReason)(
+      const core::PlanNodePtr& node,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool){nullptr};
 };
 
 // Returns 'node' as the core plan node of a definition. The caller found the
@@ -738,6 +845,24 @@ Entry unaryNode() {
   return entry;
 }
 
+// Lists unsupportedReason() of a definition, which validateCudfPlan() then
+// applies to its cuDF plan node.
+template <typename TDefinition>
+Entry withValidation(Entry entry) {
+  entry.unsupportedReason =
+      [](const core::PlanNodePtr& node,
+         core::QueryCtx* queryCtx,
+         memory::MemoryPool* pool) -> std::optional<std::string> {
+    const auto* cudfNode =
+        dynamic_cast<const typename TDefinition::CudfNode*>(node.get());
+    if (cudfNode == nullptr) {
+      return std::nullopt;
+    }
+    return TDefinition::unsupportedReason(*cudfNode, queryCtx, pool);
+  };
+  return entry;
+}
+
 // Makes the plan rewriter put a CudfBatchConcatNode below the first source of
 // the node, so that its operator gets fewer, larger batches.
 Entry withBatchConcat(Entry entry) {
@@ -748,7 +873,8 @@ Entry withBatchConcat(Entry entry) {
 
 const std::vector<Entry>& definitions() {
   static const std::vector<Entry> kDefinitions{
-      withBatchConcat(unaryNode<AggregationDefinition>()),
+      withValidation<AggregationDefinition>(
+          withBatchConcat(unaryNode<AggregationDefinition>())),
       unaryNode<OrderByDefinition>(),
       unaryNode<TopNDefinition>(),
       unaryNode<TopNRowNumberDefinition>(),
@@ -763,12 +889,15 @@ const std::vector<Entry>& definitions() {
       unaryLowering<FilterDefinition>(),
       // lowerFilterProject() keeps what a LazyDereferenceNode adds.
       unaryLowering<ProjectDefinition, core::LazyDereferenceNode>(),
-      operatorFactory<FilterProjectDefinition>(),
+      withValidation<FilterProjectDefinition>(
+          operatorFactory<FilterProjectDefinition>()),
 
       // Joins and local exchanges. Their definitions say where their operators
       // are created. The first source of a hash join is the probe side.
-      withBatchConcat(lowering<HashJoinDefinition>()),
-      lowering<NestedLoopJoinDefinition>(),
+      withValidation<HashJoinDefinition>(
+          withBatchConcat(lowering<HashJoinDefinition>())),
+      withValidation<NestedLoopJoinDefinition>(
+          lowering<NestedLoopJoinDefinition>()),
       lowering<LocalMergeDefinition>(),
       lowering<LocalPartitionDefinition>(),
 
@@ -801,41 +930,20 @@ bool canRunFilterProjectOnGpu(
     memory::MemoryPool* pool,
     std::string* reason) {
   VELOX_CHECK(filter != nullptr || project != nullptr);
-  // cuDF sizes an expression result from an input column. Over a zero-column
-  // input a filter has nothing to evaluate against, and only constant
-  // projections, which CudfFilterProject fills to the row count of each batch,
-  // can run. A FilterNode keeps its input type, so the source of the Project
-  // gives the input type of a fused FilterProject too.
+  // A FilterNode keeps its input type, so the source of the Project gives the
+  // input type of a fused FilterProject too.
   const auto& inputType =
       (project != nullptr ? project->sources()[0] : filter->sources()[0])
           ->outputType();
-  if (inputType->size() == 0) {
-    if (filter != nullptr) {
-      return reject(reason, "FilterProject filter over a zero-column input");
-    }
-    if (!std::all_of(
-            project->projections().begin(),
-            project->projections().end(),
-            [&](const auto& projection) {
-              return isConstantProjectionOverZeroColumns(inputType, projection);
-            })) {
-      return reject(
-          reason,
-          "FilterProject non-constant projection over a zero-column input");
-    }
-  }
-  if (filter != nullptr && !canExprRunOnGpu(filter->filter(), queryCtx, pool)) {
-    return reject(reason, "FilterProject filter cannot be evaluated by cuDF");
-  }
-  if (project != nullptr) {
-    for (const auto& projection : project->projections()) {
-      if (!canExprRunOnGpu(projection, queryCtx, pool)) {
-        return reject(
-            reason, "FilterProject projections cannot be evaluated by cuDF");
-      }
-    }
-  }
-  return true;
+  static const std::vector<core::TypedExprPtr> kNoProjections;
+  return accept(
+      filterProjectUnsupportedReason(
+          inputType,
+          filter != nullptr ? filter->filter() : nullptr,
+          project != nullptr ? project->projections() : kNoProjections,
+          queryCtx,
+          pool),
+      reason);
 }
 
 std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
@@ -853,6 +961,21 @@ std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
       project ? project->projections() : std::vector<core::TypedExprPtr>{},
       std::dynamic_pointer_cast<const core::LazyDereferenceNode>(project) !=
           nullptr);
+}
+
+std::optional<std::string> cudfPlanNodeUnsupportedReason(
+    const core::PlanNodePtr& node,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
+  for (const auto& entry : definitions()) {
+    if (entry.unsupportedReason == nullptr) {
+      continue;
+    }
+    if (auto reason = entry.unsupportedReason(node, queryCtx, pool)) {
+      return reason;
+    }
+  }
+  return std::nullopt;
 }
 
 std::unique_ptr<exec::Operator> createCudfOperator(
