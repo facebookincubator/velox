@@ -227,23 +227,38 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 
+TEST_F(CudfVectorTest, packedTableDeallocationUsesConsumerStream) {
+  TestCudaStream producer;
+  TestCudaStream consumer;
+  RecordingAsyncDeviceResource resource;
+  auto table = makePackedTable(producer.view(), resource);
+  const auto numRows = table->table.num_rows();
+  {
+    CudfVector vector(
+        pool_.get(),
+        ROW({"c0"}, {INTEGER()}),
+        numRows,
+        std::move(table),
+        consumer.view());
+    resource.reset();
+  }
+
+  EXPECT_EQ(resource.deallocationCount(), 1);
+  EXPECT_EQ(resource.lastDeallocationStream(), consumer.value());
+}
+
 TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;
   RecordingAsyncDeviceResource resource;
   auto packedTable = makePackedTable(allocationStream.view(), resource);
 
-  // Model the intra-node UCX path: the packed buffer was allocated on
-  // allocationStream, but downstream work is associated with targetStream.
-  // The CudfVector logical stream is already targetStream, but the packed
-  // buffer's deallocation stream is still allocationStream. rebindStream must
-  // update the packed buffer even when stream_ already matches targetStream.
   auto vector = std::make_shared<CudfVector>(
       pool_.get(),
       ROW({"c0"}, {INTEGER()}),
       packedTable->table.num_rows(),
       std::move(packedTable),
-      targetStream.view());
+      allocationStream.view());
   resource.reset();
 
   ASSERT_TRUE(vector->rebindStream(targetStream.view()));
