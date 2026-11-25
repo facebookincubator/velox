@@ -819,6 +819,12 @@ std::string toString(HybridFlatMap::KeyPresenceMode mode) {
       static_cast<int32_t>(mode));
 }
 
+void HybridFlatMapGroupLayout::clear() {
+  numNonNullRows = 0;
+  presentKeys.clear();
+  valueStarts.clear();
+}
+
 namespace detail {
 
 void checkHybridFlatMapGroupKeys(

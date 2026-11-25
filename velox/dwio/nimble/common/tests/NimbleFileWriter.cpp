@@ -14,11 +14,51 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
+
+#include <deque>
+
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 
 namespace facebook::nimble::test {
+namespace {
+
+// Emits every buffered input as its own stripe, so writes of 3 and 2 rows give
+// stripes of 3 and 2 rows.
+class StripePerWriteBufferPolicy final : public BufferPolicy {
+ public:
+  void bufferInput(velox::VectorPtr input) override {
+    NIMBLE_USER_CHECK_NOT_NULL(input, "Buffered input must not be null");
+    NIMBLE_USER_CHECK_GT(input->size(), 0, "Buffered input must not be empty");
+    BufferRange range;
+    range.rowRanges.emplace_back(0, static_cast<uint32_t>(input->size()));
+    range.inputs.push_back(std::move(input));
+    ready_.push_back(std::move(range));
+  }
+
+  BufferRange flushInput() override {
+    if (ready_.empty()) {
+      return {};
+    }
+    auto range = std::move(ready_.front());
+    ready_.pop_front();
+    return range;
+  }
+
+  void finalize() override {}
+
+ private:
+  // Stripes not yet returned by flushInput(), oldest first.
+  std::deque<BufferRange> ready_;
+};
+
+} // namespace
+
+std::function<std::unique_ptr<BufferPolicy>()>
+stripePerWriteBufferPolicyFactory() {
+  return [] { return std::make_unique<StripePerWriteBufferPolicy>(); };
+}
 
 std::string createNimbleFile(
     velox::memory::MemoryPool& memoryPool,
