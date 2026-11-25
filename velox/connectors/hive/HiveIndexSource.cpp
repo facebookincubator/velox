@@ -28,6 +28,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveIndexSourceUtils.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/LazyVector.h"
 
@@ -843,7 +844,7 @@ void HiveIndexSource::initRemainingFilter(
     std::vector<TypePtr>& readColumnTypes) {
   VELOX_CHECK_NULL(remainingFilterExprSet_);
   double sampleRate = tableHandle_->sampleRate();
-  auto remainingFilter = connector::extractFiltersFromRemainingFilter(
+  auto remainingFilter = exec::ExprToSubfieldFilterParser::extractFilters(
       tableHandle_->remainingFilter(),
       expressionEvaluator_,
       filters_,
