@@ -26,6 +26,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/connectors/common/FileConfig.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -159,7 +160,7 @@ FileDataSource::FileDataSource(
     fileScanState_->filters.emplace(k.clone(), v);
   }
   double sampleRate = tableHandle_->sampleRate();
-  auto remainingFilter = extractFiltersFromRemainingFilter(
+  auto remainingFilter = exec::ExprToSubfieldFilterParser::extractFilters(
       tableHandle_->remainingFilter(),
       expressionEvaluator_,
       fileScanState_->filters,
