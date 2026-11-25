@@ -77,19 +77,6 @@ void configureRowReaderOptions(
     folly::Executor* ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions);
 
-/// Tests whether a file should be read based on partition key values and
-/// column statistics. Returns true if the file passes all filters, false
-/// if it can be skipped.
-bool testFilters(
-    const common::ScanSpec* scanSpec,
-    const dwio::common::Reader* reader,
-    const std::string& filePath,
-    const std::unordered_map<std::string, std::optional<std::string>>&
-        partitionKey,
-    const std::unordered_map<std::string, FileColumnHandlePtr>&
-        partitionKeysHandle,
-    bool asLocalTime);
-
 struct SpecialColumnNames {
   std::optional<std::string> rowIndex;
   std::optional<std::string> rowId;

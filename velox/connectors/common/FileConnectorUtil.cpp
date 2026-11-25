@@ -24,7 +24,6 @@
 #include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
 #include "velox/connectors/common/FileTableHandle.h"
-#include "velox/connectors/common/PartitionValue.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -253,128 +252,6 @@ void configureRowReaderOptions(
     rowReaderOptions.setNimbleScanFastPath(
         fileConfig->nimbleScanFastPath(sessionProperties));
   }
-}
-
-namespace {
-
-bool applyPartitionFilter(
-    const TypePtr& type,
-    const std::string& partitionValue,
-    bool isPartitionDateDaysSinceEpoch,
-    const common::Filter* filter,
-    bool asLocalTime) {
-  const auto value = PartitionValue::fromString(
-      partitionValue,
-      *type,
-      asLocalTime ? PartitionValue::TimestampMode::kLocalTime
-                  : PartitionValue::TimestampMode::kUtc,
-      isPartitionDateDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
-                                    : PartitionValue::DateMode::kIsoString);
-  return applyFilter(*filter, value);
-}
-
-template <TypeKind kind>
-bool testFilterTyped(const common::Filter* filter, const VectorPtr& vec) {
-  using T = typename TypeTraits<kind>::NativeType;
-  return applyFilter(*filter, vec->as<SimpleVector<T>>()->valueAt(0));
-}
-
-// Tests a filter against a non-null constant vector value (e.g., an
-// initial-default column missing from the data file).
-bool testFilterOnConstantVector(
-    const common::Filter* filter,
-    const VectorPtr& constantVec) {
-  VELOX_CHECK_EQ(constantVec->size(), 1);
-  VELOX_CHECK(!constantVec->isNullAt(0));
-  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      testFilterTyped, constantVec->typeKind(), filter, constantVec);
-}
-
-} // namespace
-
-bool testFilters(
-    const common::ScanSpec* scanSpec,
-    const dwio::common::Reader* reader,
-    const std::string& filePath,
-    const std::unordered_map<std::string, std::optional<std::string>>&
-        partitionKeys,
-    const std::unordered_map<std::string, FileColumnHandlePtr>&
-        partitionKeysHandle,
-    bool asLocalTime) {
-  const auto totalRows = reader->numberOfRows();
-  const auto& fileTypeWithId = reader->typeWithId();
-  const auto& rowType = reader->rowType();
-  for (const auto& child : scanSpec->children()) {
-    if (child->filter()) {
-      const auto& name = child->fieldName();
-      auto iter = partitionKeys.find(name);
-      // By design, the partition key columns for Iceberg tables are included in
-      // the data files to facilitate partition transform and partition
-      // evolution, so we need to test both cases.
-      //
-      // A constant decides the column even when the file carries it:
-      // 'fileTypeWithId' has no subtree for it, so there are no statistics.
-      if (child->isConstant() || !rowType->containsChild(name) ||
-          iter != partitionKeys.end()) {
-        if (iter != partitionKeys.end() && iter->second.has_value()) {
-          const auto handlesIter = partitionKeysHandle.find(name);
-          VELOX_CHECK(handlesIter != partitionKeysHandle.end());
-
-          // A later column may still exclude the split, so keep going.
-          if (!applyPartitionFilter(
-                  handlesIter->second->dataType(),
-                  iter->second.value(),
-                  handlesIter->second->isPartitionDateValueDaysSinceEpoch(),
-                  child->filter(),
-                  asLocalTime)) {
-            VLOG(1) << "Skipping " << filePath
-                    << " because the partition value failed the filter for "
-                       "column "
-                    << name;
-            return false;
-          }
-          continue;
-        }
-        // The value does not come from the file. Filter on the constant if
-        // there is one (an initial-default from schema evolution), otherwise
-        // treat the column as NULL. Nothing downstream re-checks it:
-        // testFilterOnConstant() accepts any non-null constant.
-        bool filterMatchedConstant = false;
-        if (child->isConstant()) {
-          auto constantVec = child->constantValue();
-          if (!constantVec->isNullAt(0)) {
-            if (!testFilterOnConstantVector(child->filter(), constantVec)) {
-              return false;
-            }
-            filterMatchedConstant = true;
-          }
-        }
-        if (!filterMatchedConstant && child->filter()->isDeterministic() &&
-            !child->filter()->testNull()) {
-          VLOG(1) << "Skipping " << filePath
-                  << " because the filter testNull() failed for column "
-                  << child->fieldName();
-          return false;
-        }
-      } else {
-        const auto& typeWithId = fileTypeWithId->childByName(name);
-        const auto columnStats = reader->columnStatistics(typeWithId->id());
-        if (columnStats != nullptr &&
-            !testFilter(
-                child->filter(),
-                columnStats.get(),
-                totalRows.value(),
-                typeWithId->type())) {
-          VLOG(1) << "Skipping " << filePath
-                  << " based on stats and filter for column "
-                  << child->fieldName();
-          return false;
-        }
-      }
-    }
-  }
-
-  return true;
 }
 
 namespace {

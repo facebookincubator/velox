@@ -86,7 +86,6 @@ class CudfEqualityDeleteFileReader {
   /// @param hiveConfig Hive configuration.
   /// @param ioStatistics IO statistics collector.
   /// @param ioStats IO stats tracker.
-  /// @param runtimeStats Runtime statistics for recording skipped bytes.
   /// @param connectorId Connector identifier.
   CudfEqualityDeleteFileReader(
       const velox_iceberg::IcebergDeleteFile& deleteFile,
@@ -99,7 +98,6 @@ class CudfEqualityDeleteFileReader {
       const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
       const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
       const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
-      ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
       const std::string& connectorId);
 
   /// Applies equality deletes to the output CudfVector by clearing the

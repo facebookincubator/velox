@@ -22,6 +22,7 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
@@ -557,26 +558,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsSplitRowRange) {
       "Split row ranges are only supported for Nimble, DWRF, ORC, Parquet and text files");
 }
 
-TEST_F(FileConnectorUtilTest, testFiltersNoFilters) {
-  auto rowType = ROW({"c0"}, {BIGINT()});
-  auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
-  auto filePath = writeDataFile(batch);
-  auto reader = makeReader(filePath);
-
-  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
-  scanSpec->addField("c0", 0);
-
-  EXPECT_TRUE(
-      connector::testFilters(
-          scanSpec.get(),
-          reader.get(),
-          filePath,
-          /*partitionKey=*/{},
-          /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false));
-}
-
-TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
+TEST_F(FileConnectorUtilTest, partitionAndConstantFiltersPartitionKeyPasses) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
@@ -604,16 +586,15 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyPasses) {
       };
 
   EXPECT_TRUE(
-      connector::testFilters(
-          scanSpec.get(),
-          reader.get(),
-          filePath,
+      FileSplitReader::testPartitionAndConstantFilters(
+          *scanSpec,
+          *reader->rowType(),
           partitionKeys,
           partitionKeysHandle,
           /*asLocalTime=*/false));
 }
 
-TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
+TEST_F(FileConnectorUtilTest, partitionAndConstantFiltersPartitionKeyFails) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
@@ -641,19 +622,20 @@ TEST_F(FileConnectorUtilTest, testFiltersPartitionKeyFails) {
       };
 
   EXPECT_FALSE(
-      connector::testFilters(
-          scanSpec.get(),
-          reader.get(),
-          filePath,
+      FileSplitReader::testPartitionAndConstantFilters(
+          *scanSpec,
+          *reader->rowType(),
           partitionKeys,
           partitionKeysHandle,
           /*asLocalTime=*/false));
 }
 
 // A constant decides the filter even when the data file carries the column.
-// The reader built from the scan spec has no 'typeWithId()' subtree for it, so
-// reading its statistics dereferences null.
-TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
+// common::testFilters skips the column: the reader built from the scan spec has
+// no 'typeWithId()' subtree for it.
+TEST_F(
+    FileConnectorUtilTest,
+    partitionAndConstantFiltersConstantOverridingFileColumn) {
   auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
 
@@ -673,10 +655,9 @@ TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
             std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
         readerOpts);
 
-    return connector::testFilters(
-        scanSpec.get(),
-        reader.get(),
-        filePath,
+    return FileSplitReader::testPartitionAndConstantFilters(
+        *scanSpec,
+        *reader->rowType(),
         /*partitionKeys=*/{},
         /*partitionKeysHandle=*/{},
         /*asLocalTime=*/false);
@@ -699,7 +680,9 @@ TEST_F(FileConnectorUtilTest, testFiltersConstantOverridingFileColumn) {
 // Every filtered partition key has to be tested, not just the first. Nothing
 // downstream re-checks them: testFilterOnConstant() accepts any non-null
 // constant.
-TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
+TEST_F(
+    FileConnectorUtilTest,
+    partitionAndConstantFiltersSecondPartitionKeyFails) {
   auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
   auto reader = makeReader(filePath);
@@ -735,16 +718,17 @@ TEST_F(FileConnectorUtilTest, testFiltersSecondPartitionKeyFails) {
       };
 
   EXPECT_FALSE(
-      connector::testFilters(
-          scanSpec.get(),
-          reader.get(),
-          filePath,
+      FileSplitReader::testPartitionAndConstantFilters(
+          *scanSpec,
+          *reader->rowType(),
           partitionKeys,
           partitionKeysHandle,
           /*asLocalTime=*/false));
 }
 
-TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
+TEST_F(
+    FileConnectorUtilTest,
+    partitionAndConstantFiltersNullPartitionKeyRejectsNotNull) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
@@ -772,16 +756,15 @@ TEST_F(FileConnectorUtilTest, testFiltersNullPartitionKeyRejectsNotNull) {
       };
 
   EXPECT_FALSE(
-      connector::testFilters(
-          scanSpec.get(),
-          reader.get(),
-          filePath,
+      FileSplitReader::testPartitionAndConstantFilters(
+          *scanSpec,
+          *reader->rowType(),
           partitionKeys,
           partitionKeysHandle,
           /*asLocalTime=*/false));
 }
 
-TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
+TEST_F(FileConnectorUtilTest, partitionAndConstantFiltersIntegerPartitionKey) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
@@ -805,10 +788,9 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
         partitionKeysHandle = {{"year", yearHandle}};
 
     EXPECT_TRUE(
-        connector::testFilters(
-            scanSpec.get(),
-            reader.get(),
-            filePath,
+        FileSplitReader::testPartitionAndConstantFilters(
+            *scanSpec,
+            *reader->rowType(),
             partitionKeys,
             partitionKeysHandle,
             /*asLocalTime=*/false));
@@ -827,17 +809,16 @@ TEST_F(FileConnectorUtilTest, testFiltersIntegerPartitionKey) {
         partitionKeysHandle = {{"year", yearHandle}};
 
     EXPECT_FALSE(
-        connector::testFilters(
-            scanSpec.get(),
-            reader.get(),
-            filePath,
+        FileSplitReader::testPartitionAndConstantFilters(
+            *scanSpec,
+            *reader->rowType(),
             partitionKeys,
             partitionKeysHandle,
             /*asLocalTime=*/false));
   }
 }
 
-TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
+TEST_F(FileConnectorUtilTest, partitionAndConstantFiltersMissingColumn) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto batch = makeNamedRowVector("c0", makeFlatIdentityVector<int64_t>(100));
   auto filePath = writeDataFile(batch);
@@ -855,10 +836,9 @@ TEST_F(FileConnectorUtilTest, testFiltersMissingColumn) {
           std::vector<std::string>{"someValue"}, false));
 
   EXPECT_FALSE(
-      connector::testFilters(
-          scanSpec.get(),
-          reader.get(),
-          filePath,
+      FileSplitReader::testPartitionAndConstantFilters(
+          *scanSpec,
+          *reader->rowType(),
           /*partitionKey=*/{},
           /*partitionKeysHandle=*/{},
           /*asLocalTime=*/false));

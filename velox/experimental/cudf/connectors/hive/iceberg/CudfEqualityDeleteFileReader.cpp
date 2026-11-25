@@ -50,7 +50,6 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
     const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
-    ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
     const std::string& connectorId)
     : equalityColumnNames_(equalityColumnNames) {
   VELOX_CHECK(
@@ -122,19 +121,6 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
-
-  if (!::facebook::velox::connector::testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit->filePath,
-          deleteSplit->partitionKeys,
-          {},
-          hiveConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
-    runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
-    numDeleteKeys_ = 0;
-    return;
-  }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
   ::facebook::velox::connector::configureRowReaderOptions(

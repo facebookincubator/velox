@@ -101,6 +101,28 @@ class FileSplitReader {
 
   virtual ~FileSplitReader() = default;
 
+  /// Returns false if no row of the file can pass the filters in 'scanSpec',
+  /// judging by the filtered columns whose values do not come from the file:
+  /// - a partition key with a value is tested on that value;
+  /// - a column with a constant value is tested on the constant;
+  /// - a partition key without a value, or a column missing from 'fileType',
+  ///   is tested as NULL.
+  /// Columns read from the file are left to common::testFilters.
+  ///
+  /// @param fileType The columns of the file.
+  /// @param partitionKeys Partition values of the split by column name.
+  /// @param partitionKeyHandles Handles of the partition key columns. Must
+  /// include every partition key with a value that has a filter.
+  /// @param asLocalTime Whether timestamp partition values are in local time.
+  static bool testPartitionAndConstantFilters(
+      const common::ScanSpec& scanSpec,
+      const RowType& fileType,
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitionKeys,
+      const std::unordered_map<std::string, FileColumnHandlePtr>&
+          partitionKeyHandles,
+      bool asLocalTime);
+
   void configureReaderOptions(
       std::shared_ptr<random::RandomSkipTracker> randomSkip);
 

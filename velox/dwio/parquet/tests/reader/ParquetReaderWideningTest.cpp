@@ -16,7 +16,6 @@
 
 #include <gmock/gmock.h>
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
@@ -785,14 +784,7 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcOverflow) {
           column->setProjectOut(projectOut);
           if (filter) {
             column->setFilter(filter->clone());
-            EXPECT_TRUE(
-                connector::testFilters(
-                    scanSpec.get(),
-                    reader.get(),
-                    "dates.parquet",
-                    {},
-                    {},
-                    false));
+            EXPECT_TRUE(common::testFilters(*scanSpec, *reader));
           }
           auto rowOptions = makeRowReaderOpts(readSchema);
           rowOptions.setScanSpec(scanSpec);

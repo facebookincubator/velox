@@ -15,7 +15,9 @@
  */
 
 #include "velox/dwio/common/ScanSpec.h"
+#include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gmock/gmock.h>
@@ -199,6 +201,80 @@ TEST_F(ScanSpecTest, testFilterOnConstant) {
         child.setFilter(std::make_shared<IsNotNull>());
       },
       false);
+}
+
+// Reader of a file with 100 rows and one BIGINT column 'c0', whose statistics
+// say it holds 0 through 99.
+class StatisticsOnlyReader : public dwio::common::Reader {
+ public:
+  std::optional<uint64_t> numberOfRows() const override {
+    return 100;
+  }
+
+  std::unique_ptr<dwio::common::ColumnStatistics> columnStatistics(
+      uint32_t /*index*/) const override {
+    return std::make_unique<dwio::common::IntegerColumnStatistics>(
+        /*valueCount=*/100,
+        /*hasNull=*/false,
+        /*rawSize=*/std::nullopt,
+        /*size=*/std::nullopt,
+        /*min=*/0,
+        /*max=*/99,
+        /*sum=*/std::nullopt);
+  }
+
+  const RowTypePtr& rowType() const override {
+    return rowType_;
+  }
+
+  const std::shared_ptr<const dwio::common::TypeWithId>& typeWithId()
+      const override {
+    return typeWithId_;
+  }
+
+  std::unique_ptr<dwio::common::RowReader> createRowReader(
+      const dwio::common::RowReaderOptions& /*options*/) const override {
+    VELOX_UNSUPPORTED();
+  }
+
+ private:
+  const RowTypePtr rowType_{ROW("c0", BIGINT())};
+  const std::shared_ptr<const dwio::common::TypeWithId> typeWithId_{
+      dwio::common::TypeWithId::create(rowType_)};
+};
+
+TEST_F(ScanSpecTest, testFilters) {
+  const StatisticsOnlyReader reader;
+
+  // The statistics decide a column read from the file.
+  {
+    ScanSpec scanSpec("<root>");
+    scanSpec.addField("c0", 0)->setFilter(
+        std::make_shared<BigintRange>(50, 150, false));
+    EXPECT_TRUE(testFilters(scanSpec, reader));
+  }
+  {
+    ScanSpec scanSpec("<root>");
+    scanSpec.addField("c0", 0)->setFilter(
+        std::make_shared<BigintRange>(100, 200, false));
+    EXPECT_FALSE(testFilters(scanSpec, reader));
+  }
+
+  // Columns whose values do not come from the file are skipped.
+  {
+    ScanSpec scanSpec("<root>");
+    auto* child = scanSpec.addField("c0", 0);
+    child->setConstantValue(
+        BaseVector::createConstant(BIGINT(), 150LL, 1, pool()));
+    child->setFilter(std::make_shared<BigintRange>(100, 200, false));
+    EXPECT_TRUE(testFilters(scanSpec, reader));
+  }
+  {
+    ScanSpec scanSpec("<root>");
+    scanSpec.addField("c1", 0)->setFilter(
+        std::make_shared<BigintRange>(100, 200, false));
+    EXPECT_TRUE(testFilters(scanSpec, reader));
+  }
 }
 
 // A child added after a snapshot was taken appears at the end of the next one.

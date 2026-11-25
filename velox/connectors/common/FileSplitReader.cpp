@@ -23,6 +23,7 @@
 #include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/dwio/common/ScanSpec.h"
 
 namespace facebook::velox::connector {
 
@@ -303,19 +304,117 @@ RowTypePtr FileSplitReader::getAdaptedRowType() const {
   return ROW(std::move(columnNames), std::move(columnTypes));
 }
 
+namespace {
+
+bool applyPartitionFilter(
+    const TypePtr& type,
+    const std::string& partitionValue,
+    bool isPartitionDateDaysSinceEpoch,
+    const common::Filter* filter,
+    bool asLocalTime) {
+  const auto value = PartitionValue::fromString(
+      partitionValue,
+      *type,
+      asLocalTime ? PartitionValue::TimestampMode::kLocalTime
+                  : PartitionValue::TimestampMode::kUtc,
+      isPartitionDateDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
+                                    : PartitionValue::DateMode::kIsoString);
+  return applyFilter(*filter, value);
+}
+
+template <TypeKind kind>
+bool testFilterTyped(const common::Filter* filter, const VectorPtr& vec) {
+  using T = typename TypeTraits<kind>::NativeType;
+  return applyFilter(*filter, vec->as<SimpleVector<T>>()->valueAt(0));
+}
+
+// Tests a filter against a non-null constant vector value (e.g., an
+// initial-default column missing from the data file).
+bool testFilterOnConstantVector(
+    const common::Filter* filter,
+    const VectorPtr& constantVec) {
+  VELOX_CHECK_EQ(constantVec->size(), 1);
+  VELOX_CHECK(!constantVec->isNullAt(0));
+  return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+      testFilterTyped, constantVec->typeKind(), filter, constantVec);
+}
+
+} // namespace
+
+// static
+bool FileSplitReader::testPartitionAndConstantFilters(
+    const common::ScanSpec& scanSpec,
+    const RowType& fileType,
+    const std::unordered_map<std::string, std::optional<std::string>>&
+        partitionKeys,
+    const std::unordered_map<std::string, FileColumnHandlePtr>&
+        partitionKeyHandles,
+    bool asLocalTime) {
+  for (const auto& child : scanSpec.children()) {
+    if (child->filter() == nullptr) {
+      continue;
+    }
+    const auto& name = child->fieldName();
+    const auto partitionIt = partitionKeys.find(name);
+    // By design, the partition key columns for Iceberg tables are included in
+    // the data files to facilitate partition transform and partition
+    // evolution, so a column can be both a partition key and a file column.
+    if (partitionIt == partitionKeys.end() && !child->isConstant() &&
+        fileType.containsChild(name)) {
+      continue;
+    }
+    if (partitionIt != partitionKeys.end() && partitionIt->second.has_value()) {
+      const auto handleIt = partitionKeyHandles.find(name);
+      VELOX_CHECK(handleIt != partitionKeyHandles.end());
+
+      // A later column may still exclude the split, so keep going.
+      if (!applyPartitionFilter(
+              handleIt->second->dataType(),
+              partitionIt->second.value(),
+              handleIt->second->isPartitionDateValueDaysSinceEpoch(),
+              child->filter(),
+              asLocalTime)) {
+        return false;
+      }
+      continue;
+    }
+    // The value does not come from the file. Filter on the constant if there
+    // is one (an initial-default from schema evolution), otherwise treat the
+    // column as NULL. Nothing downstream re-checks it: testFilterOnConstant()
+    // accepts any non-null constant.
+    bool filterMatchedConstant = false;
+    if (child->isConstant()) {
+      auto constantVec = child->constantValue();
+      if (!constantVec->isNullAt(0)) {
+        if (!testFilterOnConstantVector(child->filter(), constantVec)) {
+          return false;
+        }
+        filterMatchedConstant = true;
+      }
+    }
+    if (!filterMatchedConstant && child->filter()->isDeterministic() &&
+        !child->filter()->testNull()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool FileSplitReader::filterOnStats(
     dwio::common::RuntimeStats& runtimeStats) const {
-  if (testFilters(
-          scanSpec_.get(),
-          baseReader_.get(),
-          fileSplit_->filePath,
+  if (testPartitionAndConstantFilters(
+          *scanSpec_,
+          *baseReader_->rowType(),
           fileSplit_->partitionKeys,
           *partitionKeys_,
           fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+              connectorQueryCtx_->sessionProperties())) &&
+      common::testFilters(*scanSpec_, *baseReader_)) {
     ++runtimeStats.processedSplits;
     return true;
   }
+  VLOG(1) << "Skipping " << fileSplit_->filePath
+          << " based on partition values, constants or file statistics";
   ++runtimeStats.skippedSplits;
   runtimeStats.skippedSplitBytes += fileSplit_->length;
   return false;
