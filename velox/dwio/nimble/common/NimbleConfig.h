@@ -296,6 +296,16 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<bool> STRIPE_GROUP_SPARSE_LAYOUT;
 
+  /// Candidate encodings for "stream_major" stripe-group offsets, sizes and
+  /// stripe lists, in the "<EncodingName>=<factor>;..." format of
+  /// alpha.encodingselection.read.factors. Empty (default) keeps the writer's
+  /// own candidates.
+  /// EXPERIMENTAL: see
+  /// WriterOptions::experimentalStripeGroupEncodingLayoutReadFactors.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<const std::vector<std::pair<EncodingType, float>>>
+      STRIPE_GROUP_ENCODING_LAYOUT_READ_FACTORS;
+
   /// Minimum average chunks per stripe before chunk stats are written.
   /// Only consulted when nimble.chunk.index.enabled is true.
   static Entry<double> CHUNK_STATS_MIN_AVG_CHUNKS;

@@ -474,6 +474,30 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.stripe_group.sparse_layout",
     false);
 
+/* static */ Config::Entry<const std::vector<std::pair<EncodingType, float>>>
+    Config::STRIPE_GROUP_ENCODING_LAYOUT_READ_FACTORS(
+        "nimble.stripe_group.encoding_layout_read_factors",
+        {},
+        [](const std::vector<std::pair<EncodingType, float>>& readFactors) {
+          std::vector<std::string> parts;
+          std::transform(
+              readFactors.cbegin(),
+              readFactors.cend(),
+              std::back_inserter(parts),
+              [](const auto& readFactor) {
+                return fmt::format(
+                    "{}={}", toString(readFactor.first), readFactor.second);
+              });
+          return folly::join(";", parts);
+        },
+        [](const std::string& /* key */, const std::string& readFactorsConfig) {
+          if (readFactorsConfig.empty()) {
+            return std::vector<std::pair<EncodingType, float>>{};
+          }
+          return ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+              readFactorsConfig);
+        });
+
 /* static */ Config::Entry<double> Config::CHUNK_STATS_MIN_AVG_CHUNKS(
     "nimble.chunk.stats.min_avg_chunks",
     0);
