@@ -206,7 +206,6 @@ enum class ColumnAction { kNulls = 1, kLengths = 2, kFilter = 4, kValues = 8 };
 struct ColumnOp {
   static constexpr int32_t kNoPrerequisite = -1;
   static constexpr int32_t kNoOperand = -1;
-  static constexpr int32_t kAnyLevel = -1;
 
   // Is the op completed after this? If so, any dependent action can be
   // queued as soon as this is set.
@@ -222,14 +221,6 @@ struct ColumnOp {
   ColumnReader* reader{nullptr};
   // Vector completed by arrival of this. nullptr if no vector.
   WaveVector* waveVector{nullptr};
-
-  // True if the column contains multiple uncontiguous chunks.
-  bool hasMultiChunks{false};
-
-  // Set by ReadStream to coordinate the decoding of multiple streams. The
-  // FormatData should decode the current layer of encoding iff decodeLevel is
-  // equal to the current layer or kAnyLevel.
-  int32_t decodeLevel{kAnyLevel};
 
   // Host side result size. 0 for unconditional decoding. Can be buffer size for
   // passing rows, length/offset array etc.
@@ -250,50 +241,153 @@ struct ColumnOp {
   BufferId extraRowCountId{kNoBufferId};
 
   int32_t* hostResult{nullptr};
+
+  // Arrays and maps: the number of elements of the rows of each TB, written
+  // by device and read by host after a sync.
+  WaveBufferPtr totals;
 };
 
-/// Operations on leaf columns. This is specialized for each file format.
+/// Read of the rows of a column below an array or map. The rows are the
+/// elements of the enclosing array or map, from 0 to 'numRows'.
+struct NestedOp {
+  ColumnReader* reader{nullptr};
+  int32_t numRows{0};
+  // Device side row of each element in the stream of the enclosing array's
+  // elements.
+  const int32_t* elementRows{nullptr};
+  // Values and nulls of the elements. For a struct, the nulls.
+  WaveVector* vector{nullptr};
+  // Arrays and maps: see ColumnOp::totals.
+  WaveBufferPtr totals;
+};
+
+/// Role of a FormatData in the reader tree.
+enum class ColumnRole {
+  /// Values of a scalar column.
+  kValues,
+  /// Nulls of a struct, or what acts as the nulls of a struct, e.g. the
+  /// in-map flags of a key of a Nimble flat map.
+  kStructNulls,
+  /// Lengths of an array or map.
+  kLengths,
+};
+
+/// Host buffers of a column that are copied to the device once per split.
+/// The first stage() adds them to a SplitStaging. Later stage() calls add a
+/// dependency on that staging. The device addresses are known after the first
+/// staging is transferred.
+class StagedBuffers {
+ public:
+  /// Adds a buffer and returns its index.
+  int32_t add(const Staging& staging) {
+    buffers_.push_back({staging});
+    return static_cast<int32_t>(buffers_.size() - 1);
+  }
+
+  bool empty() const {
+    return buffers_.empty();
+  }
+
+  /// Adds the buffers to 'staging' on the first call. Otherwise adds a
+  /// dependency on the staging of the first call. Returns true on the first
+  /// call.
+  bool stage(SplitStaging& staging);
+
+  /// Sets 'pointer' to the device address of buffer 'index' plus 'offset'. If
+  /// the latest stage() added the buffers, registers 'pointer' to be patched
+  /// when 'staging' is transferred.
+  template <typename T>
+  void setPointer(
+      int32_t index,
+      T*& pointer,
+      int64_t offset,
+      SplitStaging& staging) const {
+    const auto& buffer = buffers_[index];
+    if (pending_) {
+      // NOLINTNEXTLINE(performance-no-int-to-ptr)
+      pointer = reinterpret_cast<T*>(offset);
+      staging.registerPointer(buffer.id, &pointer, false);
+    } else {
+      VELOX_CHECK_NOT_NULL(buffer.device);
+      pointer = reinterpret_cast<T*>(buffer.device + offset);
+    }
+  }
+
+  /// Device address of buffer 'index', nullptr before the first staging is
+  /// transferred.
+  char* deviceAddress(int32_t index) const {
+    return buffers_[index].device;
+  }
+
+ private:
+  struct Buffer {
+    Staging staging;
+    BufferId id{kNoBufferId};
+    char* device{nullptr};
+  };
+
+  std::vector<Buffer> buffers_;
+  bool staged_{false};
+  // True from the stage() that adds the buffers to the next stage().
+  bool pending_{false};
+  int32_t stagingId_{SplitStaging::kNoStaging};
+};
+
+/// Returns the index of the chunk of 'chunks' that contains 'row'. 'chunks'
+/// are in row order.
+int32_t chunkIndex(const std::vector<ChunkDesc>& chunks, int32_t row);
+
+/// Operations on the encoded data of a column. This is specialized for each
+/// file format. The format independent parts of making decode steps are here:
+/// the TBs of an op, the nulls of enclosing structs, reading lengths and
+/// struct nulls below the top level, and data made by prepare ops that lives
+/// as long as 'this'.
 class FormatData {
  public:
+  /// 'levels' are the FormatDatas of the nulls of the nullable structs between
+  /// the column and the enclosing array or map or the top level, outermost
+  /// first.
+  explicit FormatData(
+      ColumnRole role = ColumnRole::kValues,
+      std::vector<const FormatData*> levels = {});
+
   virtual ~FormatData() = default;
+
+  ColumnRole role() const {
+    return role_;
+  }
 
   virtual int32_t totalRows() const = 0;
 
   virtual bool hasNulls() const = 0;
 
-  /// Enqueues read of 'numRows' worth of null flags.  Returns the id of the
-  /// result area allocated from 'deviceStaging'.
-  virtual BufferId readNulls(
-      int32_t numRows,
-      ResultStaging& deviceStaging,
-      SplitStaging& stageing,
-      DecodePrograms& programs) {
-    VELOX_NYI();
+  /// True if hasNulls() is the same for the column in all parts of the file
+  /// that the reader tree of 'this' is not made for. If false, another
+  /// reader tree of the column, e.g. for the next stripe, may have nulls when
+  /// 'this' has none.
+  virtual bool isNullabilityStable() const {
+    return true;
   }
 
-  /// Sets how many TBs will be scheduled at a time for this column.
-  void setBlocks(int32_t numBlocks) {
-    VELOX_NYI();
+  /// Number of rows of the encoded data of 'this'. Differs from totalRows() in
+  /// a nullable struct, where the rows are the non-null rows of the struct,
+  /// and below an array or map, where the rows are elements.
+  virtual int32_t numEncodedRows() const {
+    return totalRows();
   }
 
-  /// Returns estimate of sequential instructions needed to decode one value.
-  /// Used to decide how many TBs to use for each column.
-  virtual float cost(const ColumnOp& op) {
-    return 10;
+  /// Device address of the data made by the prepare ops of 'this' in
+  /// griddize(). For struct nulls, this starts with the RankBitmap of non-null
+  /// rows. nullptr before griddize() or if there are no prepare ops.
+  const char* deviceAux() const {
+    return deviceAux_;
   }
 
-  /// Prepares a new batch of reads. The batch starts at 'startRiw', which is a
+  /// Prepares a new batch of reads. The batch starts at 'startRow', which is a
   /// row number in terms of the column of 'this'. The row number for a nested
   /// column is in terms of the column, not in terms of top level rows.
-  virtual void newBatch(int32_t startRow) = 0;
-
-  /// Returns the maximum level of encoding of all chunks of 'this'.
-  virtual int32_t maxDecodeLevel() const {
-    return maxDecodeLevel_;
-  }
-
-  virtual bool hasMultiChunks() const {
-    return false;
+  virtual void newBatch(int32_t startRow) {
+    currentRow_ = startRow;
   }
 
   /// Schedules operations for preparing the encoded data to be
@@ -318,9 +412,12 @@ class FormatData {
       DecodePrograms& program,
       ReadStream& stream) = 0;
 
-  /// Adds the next read of the column. If the column is a filter depending on
-  /// another filter, the previous filter is given on the first call. Updates
-  /// status of 'op'.
+  /// Adds the TBs that read the rows of 'op'. If the column is a filter
+  /// depending on another filter, the previous filter is given on the first
+  /// call. Updates status of 'op'. Stages the encoded data with stage() and
+  /// sets the format specific fields of each TB's step with setDecode(). For
+  /// an array or map, the step reads the lengths into the offsets and sizes of
+  /// op.waveVector and sets op.totals.
   virtual void startOp(
       ColumnOp& op,
       const ColumnOp* previousFilter,
@@ -328,9 +425,63 @@ class FormatData {
       ResultStaging& resultStaging,
       SplitStaging& staging,
       DecodePrograms& program,
-      ReadStream& stream) = 0;
+      ReadStream& stream);
+
+  /// Adds the TBs that read the rows of 'op' below an array or map. Values go
+  /// to op.vector. An array or map writes its element starts and sizes and
+  /// sets op.totals. A struct writes its nulls. Sets the format specific
+  /// fields of each TB's step with setNestedDecode().
+  virtual void startNestedOp(
+      NestedOp& op,
+      ResultStaging& deviceStaging,
+      SplitStaging& staging,
+      DecodePrograms& program,
+      ReadStream& stream);
 
  protected:
+  /// Adds the encoded data of 'this' to 'staging'. Called at the start of
+  /// startOp() and startNestedOp().
+  virtual void stage(
+      ResultStaging& /*deviceStaging*/,
+      SplitStaging& /*staging*/) {}
+
+  /// Type of the values that the steps of startOp() produce.
+  virtual WaveTypeKind stepKind() const = 0;
+
+  /// Sets the format specific fields of the step of TB 'blockIdx' of 'op'.
+  virtual void setDecode(
+      GpuDecode& step,
+      ColumnOp& op,
+      int32_t blockIdx,
+      SplitStaging& staging) = 0;
+
+  /// Sets the format specific fields of a TB of startNestedOp(), i.e. where
+  /// the encoded data is. The other fields are set by startNestedOp().
+  virtual void setNestedDecode(GpuDecode& /*step*/, SplitStaging& /*staging*/) {
+    VELOX_NYI("Columns below arrays and maps are not supported");
+  }
+
+  /// Sets the fields of 'column' for the nulls of the enclosing structs.
+  void setLevels(ColumnAccess& column) const;
+
+  /// Makes 'step' a kNested step that reads the lengths or struct nulls of
+  /// 'this' from the aux data.
+  void setNested(GpuDecode& step) const;
+
+  /// Allocates 'bytes' of device memory for the data made by prepare ops. It
+  /// is read by the ops of all batches of the split and lives as long as
+  /// 'this', not as long as the ReadStream that makes it.
+  void allocateAux(ReadStream& stream, int32_t bytes);
+
+  /// Returns the first chunk and the number of chunks of 'chunks' that a TB
+  /// reading rows 'firstRow' to 'lastRow' needs. Without enclosing struct
+  /// nulls, these are the chunks of the rows. Otherwise the rows depend on the
+  /// nulls and all chunks are needed.
+  std::pair<int32_t, int32_t> tbChunks(
+      const std::vector<ChunkDesc>& chunks,
+      int32_t firstRow,
+      int32_t lastRow) const;
+
   std::unique_ptr<GpuDecode> makeStep(
       ColumnOp& op,
       const ColumnOp* previousFilter,
@@ -349,13 +500,35 @@ class FormatData {
       int32_t blockIdx,
       int32_t numRows);
 
+  /// Makes a step of a prepare op that runs in one TB. If 'withFilter' is
+  /// true, the step has the filter of the column, e.g. for testing the
+  /// alphabet of a dictionary.
+  std::unique_ptr<GpuDecode> makePrepareStep(
+      ColumnOp& op,
+      bool withFilter,
+      ResultStaging& deviceStaging,
+      SplitStaging& splitStaging,
+      ReadStream& stream);
+
+  const ColumnRole role_;
+
+  /// The FormatDatas of the nulls of the enclosing nullable structs,
+  /// outermost first.
+  const std::vector<const FormatData*> levels_;
+
+  /// Offset in the aux data of the element starts and null flags of the rows
+  /// of an array or map. See nestedRows() in ColumnOps.cuh.
+  int32_t lengthsAux_{0};
+
+  /// Device address of the aux data. Set by allocateAux().
+  char* deviceAux_{nullptr};
+
+  // A format with a flat nulls bitmap stages it separately from the values.
   // Staging id for nulls.
   int32_t nullsStagingId_{SplitStaging::kNoStaging};
   // Id for nulls buffer. The nulls buffer has no address at time of scheduling
   // if nulls decode is in the same kernel as decoding.
   BufferId nullsBufferId_{kNoBufferId};
-  // id of last splitStaging 'this' depends on.
-  int32_t lastStagingId_{SplitStaging::kNoStaging};
 
   // First unaccessed row number relative to start of 'this'.
   int32_t currentRow_{0};
@@ -363,7 +536,9 @@ class FormatData {
   ColumnGridInfo grid_;
   bool griddized_{false};
 
-  int32_t maxDecodeLevel_{0};
+ private:
+  // Owns 'deviceAux_'.
+  WaveBufferPtr auxBuffer_;
 };
 
 class FormatParams {
@@ -390,9 +565,55 @@ class FormatParams {
     return stats_;
   }
 
+  /// Adds the nulls of a struct whose columns are made next.
+  void pushLevel(const FormatData* structNulls) {
+    levels_.push_back(structNulls);
+  }
+
+  void popLevel() {
+    levels_.pop_back();
+  }
+
+  /// The nulls of the nullable structs that enclose the next column,
+  /// outermost first.
+  const std::vector<const FormatData*>& levels() const {
+    return levels_;
+  }
+
+  /// Starts the columns below an array or map. Their rows are elements. The
+  /// nulls of structs above the array or map do not apply. 'lengths' is the
+  /// FormatData of the array or map.
+  void pushNested(const FormatData* lengths) {
+    nestedLevels_.push_back(std::move(levels_));
+    levels_.clear();
+    nestedLengths_.push_back(lengths);
+  }
+
+  void popNested() {
+    levels_ = std::move(nestedLevels_.back());
+    nestedLevels_.pop_back();
+    nestedLengths_.pop_back();
+  }
+
+  /// True if the next column is below an array or map.
+  bool isNested() const {
+    return !nestedLevels_.empty();
+  }
+
+  /// The FormatData of the lengths of the innermost array or map that encloses
+  /// the next column, nullptr at the top level.
+  const FormatData* nestedLengths() const {
+    return nestedLengths_.empty() ? nullptr : nestedLengths_.back();
+  }
+
  private:
   memory::MemoryPool& pool_;
   dwio::common::ColumnRuntimeStats& stats_;
+  std::vector<const FormatData*> levels_;
+  // 'levels_' of the columns above each enclosing array or map.
+  std::vector<std::vector<const FormatData*>> nestedLevels_;
+  // The FormatData of the lengths of each enclosing array or map.
+  std::vector<const FormatData*> nestedLengths_;
 };
 
 }; // namespace facebook::velox::wave

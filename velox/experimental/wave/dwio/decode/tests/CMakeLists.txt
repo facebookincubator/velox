@@ -29,3 +29,18 @@ target_link_libraries(
   Folly::folly
   fmt::fmt
 )
+
+add_executable(velox_wave_reader_kernel_test ReaderKernelTest.cpp)
+
+add_test(velox_wave_reader_kernel_test velox_wave_reader_kernel_test)
+
+target_link_libraries(
+  velox_wave_reader_kernel_test
+  velox_wave_decode
+  velox_wave_common
+  GTest::gmock
+  GTest::gtest
+  GTest::gtest_main
+  Folly::folly
+  fmt::fmt
+)

@@ -79,6 +79,9 @@ void WaveStats::add(const WaveStats& other) {
   waitTime += other.waitTime;
   transferWaitTime += other.transferWaitTime;
   stagingTime += other.stagingTime;
+  numReaderKernels += other.numReaderKernels;
+  numNewReaderKernels += other.numNewReaderKernels;
+  readerLaunchMicros += other.readerLaunchMicros;
 }
 
 void WaveStats::clear() {
@@ -128,13 +131,13 @@ AbstractOperand* pathToOperand(
   }
   common::Subfield field(std::move(path));
   const auto subfieldMap = threadSubfieldMap();
-  auto it = threadSubfieldMap()->find(field.toString());
+  auto it = subfieldMap->find(field.toString());
+  // The caller keeps using 'path', so it is moved back before returning.
+  path = std::move(field.path());
   if (it == subfieldMap->end()) {
     return nullptr;
   }
-  Value value(it->second.get());
-  auto valueIt = map.find(value);
-  path = std::move(field.path());
+  auto valueIt = map.find(Value(it->second.get()));
   if (valueIt == map.end()) {
     return nullptr;
   }

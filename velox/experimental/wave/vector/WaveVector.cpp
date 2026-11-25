@@ -15,12 +15,25 @@
  */
 
 #include "velox/experimental/wave/vector/WaveVector.h"
+
+#include <gflags/gflags.h>
+
 #include "velox/common/base/SimdUtil.h"
+#include "velox/experimental/wave/common/Cuda.h"
 #include "velox/experimental/wave/common/StringView.h"
+#include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
+DEFINE_int64(
+    wave_max_string_copy_bytes,
+    1LL << 30,
+    "Maximum bytes of device memory referenced by the strings of a vector "
+    "that are copied to host when making a Velox vector");
+
 namespace facebook::velox::wave {
+
+static_assert(sizeof(StringView) == sizeof(velox::StringView));
 
 template <TypeKind Kind>
 static int32_t kindSize() {
@@ -30,7 +43,6 @@ static int32_t kindSize() {
 int32_t waveTypeKindSize(WaveTypeKind waveKind) {
   TypeKind kind = static_cast<TypeKind>(waveKind);
   if (is_string_kind(kind)) {
-    // Wave StringView is 8, not 16 bytes.
     return sizeof(StringView);
   }
   if (kind == TypeKind::UNKNOWN) {
@@ -49,21 +61,27 @@ WaveVector::WaveVector(
       kind_(type_->kind()),
       arena_(&arena),
       children_(std::move(children)) {
-  switch (kind_) {
-    case TypeKind::ROW:
-      encoding_ = VectorEncoding::Simple::ROW;
-      break;
-    case TypeKind::ARRAY:
-      encoding_ = VectorEncoding::Simple::ARRAY;
-      break;
-    case TypeKind::MAP:
-      encoding_ = VectorEncoding::Simple::MAP;
-      break;
-    default:
-      VELOX_UNSUPPORTED("{}", kind_);
-  }
+  encoding_ = encodingOf(kind_);
+  VELOX_CHECK(
+      encoding_ != VectorEncoding::Simple::FLAT,
+      "Vector with children must be a ROW, ARRAY or MAP: {}",
+      kind_);
   if (!children_.empty()) {
     size_ = children_[0]->size();
+  }
+}
+
+// static
+VectorEncoding::Simple WaveVector::encodingOf(TypeKind kind) {
+  switch (kind) { // NOLINT(clang-diagnostic-switch-enum)
+    case TypeKind::ROW:
+      return VectorEncoding::Simple::ROW;
+    case TypeKind::ARRAY:
+      return VectorEncoding::Simple::ARRAY;
+    case TypeKind::MAP:
+      return VectorEncoding::Simple::MAP;
+    default:
+      return VectorEncoding::Simple::FLAT;
   }
 }
 
@@ -72,6 +90,7 @@ void WaveVector::resize(
     bool nullable,
     WaveBufferPtr* backing,
     int64_t* backingOffset) {
+  VELOX_CHECK_GE(size, 0);
   auto capacity = values_ ? values_->capacity() : 0;
   size_ = size;
 
@@ -88,7 +107,7 @@ void WaveVector::resize(
       values_ = arena_->allocateBytes(bytesNeeded);
     }
   }
-  if (nullable) {
+  if (nullable && bytesNeeded > 0) {
     nulls_ = values_->as<uint8_t>() + bytesNeeded - size;
   } else {
     nulls_ = nullptr;
@@ -104,12 +123,13 @@ void WaveVector::toOperand(Operand* operand) const {
     operand->indices = nullptr;
     return;
   }
+  operand->indexMask = ~0;
+  operand->indices = nullptr;
   if (encoding_ == VectorEncoding::Simple::FLAT) {
-    operand->indexMask = ~0;
     operand->base = values_->as<int64_t>();
-    operand->indices = nullptr;
   } else {
-    VELOX_UNSUPPORTED();
+    // A complex vector is written by readers, not by instructions.
+    operand->base = values_ ? values_->as<int64_t>() : nullptr;
   }
 }
 
@@ -183,6 +203,9 @@ int32_t WaveVector::alignment(const TypePtr& type) {
   switch (type->kind()) {
     case TypeKind::VARCHAR:
     case TypeKind::VARBINARY:
+    case TypeKind::ARRAY:
+    case TypeKind::MAP:
+    case TypeKind::ROW:
       return sizeof(void*);
     default:
       return type->cppSizeInBytes();
@@ -193,12 +216,152 @@ int32_t WaveVector::alignment(const TypePtr& type) {
 int64_t
 WaveVector::backingSize(const TypePtr& type, int32_t size, bool nullable) {
   int64_t bytes;
-  if (type->kind() == TypeKind::VARCHAR) {
+  if (type->kind() == TypeKind::VARCHAR ||
+      type->kind() == TypeKind::VARBINARY) {
     bytes = sizeof(StringView) * size;
+  } else if (type->kind() == TypeKind::ARRAY || type->kind() == TypeKind::MAP) {
+    // Offsets and sizes.
+    bytes = 2 * static_cast<int64_t>(sizeof(int32_t)) * size;
+  } else if (type->kind() == TypeKind::ROW) {
+    bytes = 0;
   } else {
     bytes = type->cppSizeInBytes() * size;
   }
   return bits::roundUp(bytes, sizeof(void*)) + (nullable ? size : 0);
+}
+
+BufferPtr WaveVector::veloxNulls(int32_t size) {
+  if (!nulls_) {
+    return nullptr;
+  }
+  auto nulls = BufferView<NoReleaser>::create(nulls_, size, NoReleaser());
+  toBits(
+      const_cast<uint64_t*>(nulls->as<uint64_t>()),
+      static_cast<int32_t>(nulls->capacity()));
+  return nulls;
+}
+
+VectorPtr WaveVector::stringsToVelox(
+    memory::MemoryPool* pool,
+    int32_t size,
+    const std::vector<bool>* selected) {
+  auto result =
+      BaseVector::create<FlatVector<velox::StringView>>(type_, size, pool);
+  auto* strings = values_->as<StringView>();
+  // Strings that are not inline point to device memory. The range of device
+  // memory that they reference is copied to host at once.
+  const char* low = nullptr;
+  const char* high = nullptr;
+  auto isSkipped = [&](int32_t i) {
+    return (selected && !(*selected)[i]) || (nulls_ && nulls_[i] == kNull);
+  };
+  for (auto i = 0; i < size; ++i) {
+    if (isSkipped(i) || strings[i].isInline()) {
+      continue;
+    }
+    const char* data = strings[i].data();
+    if (!low || data < low) {
+      low = data;
+    }
+    if (!high || data + strings[i].size() > high) {
+      high = data + strings[i].size();
+    }
+  }
+  const char* hostChars = nullptr;
+  if (low) {
+    VELOX_CHECK_LE(
+        high - low,
+        FLAGS_wave_max_string_copy_bytes,
+        "Strings of a vector reference too much device memory, likely corrupt "
+        "string views");
+    auto hostCopy = AlignedBuffer::allocate<char>(high - low, pool);
+    Stream stream;
+    stream.deviceToHostAsync(
+        hostCopy->asMutable<char>(), low, hostCopy->size());
+    stream.wait();
+    hostChars = hostCopy->as<char>();
+    result->addStringBuffer(hostCopy);
+  }
+  // The views have the layout of velox::StringView. Only the pointers of
+  // strings that are not inline change.
+  auto* rawValues = result->mutableRawValues();
+  for (auto i = 0; i < size; ++i) {
+    if (isSkipped(i)) {
+      result->setNull(i, true);
+      continue;
+    }
+    StringView string = strings[i];
+    if (!string.isInline()) {
+      string.setData(hostChars + (string.data() - low));
+    }
+    memcpy(&rawValues[i], &string, sizeof(string));
+  }
+  return result;
+}
+
+VectorPtr WaveVector::toVeloxBase(
+    memory::MemoryPool* pool,
+    int32_t size,
+    const std::vector<bool>* selected) {
+  if (size == 0) {
+    return BaseVector::create(type_, 0, pool);
+  }
+  switch (kind_) { // NOLINT(clang-diagnostic-switch-enum)
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+      return stringsToVelox(pool, size, selected);
+    case TypeKind::ARRAY:
+    case TypeKind::MAP: {
+      std::vector<VectorPtr> children;
+      children.reserve(type_->size());
+      for (auto i = 0; i < type_->size(); ++i) {
+        children.push_back(
+            i < children_.size()
+                ? children_[i]->toVeloxBase(pool, children_[i]->size())
+                : BaseVector::create(type_->childAt(i), 0, pool));
+      }
+      const auto bytes = static_cast<int32_t>(size * sizeof(int32_t));
+      auto offsets = VeloxWaveBufferView::create(values_, 0, bytes);
+      auto sizes = VeloxWaveBufferView::create(
+          values_,
+          static_cast<int64_t>(bits::roundUp(size_, kBlockSize)) *
+              static_cast<int64_t>(sizeof(int32_t)),
+          bytes);
+      VELOX_CHECK_EQ(children.size(), kind_ == TypeKind::ARRAY ? 1 : 2);
+      if (kind_ == TypeKind::ARRAY) {
+        return std::make_shared<ArrayVector>(
+            pool,
+            type_,
+            veloxNulls(size),
+            size,
+            std::move(offsets),
+            std::move(sizes),
+            children.at(0));
+      }
+      return std::make_shared<MapVector>(
+          pool,
+          type_,
+          veloxNulls(size),
+          size,
+          std::move(offsets),
+          std::move(sizes),
+          children.at(0),
+          children.at(1));
+    }
+    case TypeKind::ROW: {
+      std::vector<VectorPtr> children;
+      children.reserve(children_.size());
+      for (auto& child : children_) {
+        children.push_back(child->toVeloxBase(pool, size));
+      }
+      return std::make_shared<RowVector>(
+          pool, type_, veloxNulls(size), size, std::move(children));
+    }
+    default:
+      // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+          toVeloxTyped, kind_, size, pool, type_, values_, nulls_);
+  }
 }
 
 VectorPtr WaveVector::toVelox(
@@ -206,6 +369,9 @@ VectorPtr WaveVector::toVelox(
     int32_t numBlocks,
     const BlockStatus* status,
     const Operand* operand) {
+  if (!status || !operand) {
+    return toVeloxBase(pool, size_);
+  }
   auto operandIndices = operand->indices;
   // If there is a wrap, any row can be referenced, so the vector is
   // with size_ of WaveVector. If there is no wrap, it is mapped to
@@ -214,11 +380,6 @@ VectorPtr WaveVector::toVelox(
   int32_t filledSize = operandIndices
       ? size_
       : (kBlockSize * (numBlocks - 1)) + status[numBlocks - 1].numRows;
-  auto base = VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
-      toVeloxTyped, type_->kind(), filledSize, pool, type_, values_, nulls_);
-  if (!status || !operand) {
-    return base;
-  }
 
   // Translate the BlockStatus and indices in Operand to a host side dictionary
   // wrap.
@@ -235,7 +396,7 @@ VectorPtr WaveVector::toVelox(
         "If there is no indirection in Operand, vector size must be >= BlockStatus");
     // If all blocks except last are full we return base without wrap.
     if (isDenselyFilled(status, numBlocks)) {
-      return base;
+      return toVeloxBase(pool, filledSize);
     }
   }
   auto indices = AlignedBuffer::allocate<vector_size_t>(numActive, pool);
@@ -255,6 +416,13 @@ VectorPtr WaveVector::toVelox(
       fill += status[block].numRows;
     }
   }
+  // Rows that are not selected may never have been written. Strings must not
+  // follow their pointers.
+  std::vector<bool> selected(filledSize, false);
+  for (auto i = 0; i < numActive; ++i) {
+    selected[rawIndices[i]] = true;
+  }
+  auto base = toVeloxBase(pool, filledSize, &selected);
   return BaseVector::wrapInDictionary(
       BufferPtr(nullptr), indices, numActive, base);
 }

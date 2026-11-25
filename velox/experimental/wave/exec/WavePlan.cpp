@@ -209,11 +209,104 @@ int32_t functionCost(const Expr& expr) {
   return 1;
 }
 
+namespace {
+// Returns the subfield step of 'expr' if it is a struct field access or an
+// element_at of a map with a constant key, e.g. ".a" or "[12]", and sets
+// 'input' to the accessed expression. Returns nullopt otherwise.
+std::optional<std::string> subfieldStep(const Expr& expr, const Expr*& input) {
+  if (auto* reference = dynamic_cast<const exec::FieldReference*>(&expr)) {
+    if (reference->inputs().size() != 1) {
+      return std::nullopt;
+    }
+    input = reference->inputs()[0].get();
+    return "." + reference->name();
+  }
+  if (expr.name() != "element_at" || expr.inputs().size() != 2 ||
+      !expr.inputs()[0]->type()->isMap()) {
+    return std::nullopt;
+  }
+  auto* key = dynamic_cast<const exec::ConstantExpr*>(expr.inputs()[1].get());
+  if (!key || key->value()->isNullAt(0)) {
+    return std::nullopt;
+  }
+  input = expr.inputs()[0].get();
+  const auto& value = key->value();
+  switch (value->typeKind()) { // NOLINT(clang-diagnostic-switch-enum)
+    case TypeKind::INTEGER:
+      return fmt::format(
+          "[{}]", value->as<SimpleVector<int32_t>>()->valueAt(0));
+    case TypeKind::BIGINT:
+      return fmt::format(
+          "[{}]", value->as<SimpleVector<int64_t>>()->valueAt(0));
+    default:
+      return std::nullopt;
+  }
+}
+} // namespace
+
+AbstractOperand* FOLLY_NULLABLE
+CompileState::dereferenceOperand(const Expr& expr, Scope* scope) {
+  std::vector<std::string> steps;
+  const Expr* current = &expr;
+  for (;;) {
+    const Expr* input = nullptr;
+    auto step = subfieldStep(*current, input);
+    if (!step.has_value()) {
+      break;
+    }
+    steps.push_back(std::move(*step));
+    VELOX_CHECK_NOT_NULL(input);
+    current = input;
+  }
+  auto* base = dynamic_cast<const exec::FieldReference*>(current);
+  if (steps.empty() || !base || !base->inputs().empty()) {
+    return nullptr;
+  }
+  auto* baseOperand = exprToOperand(*current, scope);
+  VELOX_CHECK_NOT_NULL(baseOperand);
+  auto& segment = segments_[baseOperand->definingSegment];
+  if (segment.boundary != BoundaryType::kSource || segment.steps.empty() ||
+      segment.steps[0]->kind() != StepKind::kTableScan) {
+    return nullptr;
+  }
+  auto path = baseOperand->label;
+  for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
+    path += *it;
+  }
+  auto* subfield = toSubfield(path);
+  auto& scan = segment.steps[0]->as<TableScanStep>();
+  auto it = scan.defines.find(Value(subfield));
+  if (it != scan.defines.end()) {
+    return markUse(it->second);
+  }
+  auto* op = newOperand(expr.type(), path);
+  op->definingSegment = baseOperand->definingSegment;
+  op->sourceNullable = true;
+  op->needsStore = true;
+  scan.defines[Value(subfield)] = op;
+  scan.results.push_back(op);
+  segment.topLevelDefined.push_back(op);
+  return markUse(op);
+}
+
 AbstractOperand* CompileState::exprToOperand(const Expr& expr, Scope* scope) {
   auto value = toValue(expr);
   auto op = scope->findValue(value);
   if (op) {
     return op;
+  }
+  if (auto* field = dynamic_cast<const exec::FieldReference*>(&expr);
+      field && !field->inputs().empty()) {
+    auto* result = dereferenceOperand(expr, scope);
+    VELOX_CHECK_NOT_NULL(
+        result,
+        "Only struct fields of scan columns are supported: {}",
+        expr.toString());
+    return result;
+  }
+  if (auto* result = dereferenceOperand(expr, scope)) {
+    // A map element with a constant key read from a scan column.
+    return result;
   }
   if (auto* field = dynamic_cast<const exec::FieldReference*>(&expr)) {
     auto subfield = toSubfield(field->name());

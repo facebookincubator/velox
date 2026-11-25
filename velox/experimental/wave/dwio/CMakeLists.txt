@@ -17,3 +17,7 @@ add_subdirectory(decode)
 add_library(velox_wave_dwio ColumnReader.cpp FormatData.cpp ReadStream.cpp StructColumnReader.cpp)
 
 target_link_libraries(velox_wave_dwio Folly::folly fmt::fmt xsimd)
+
+add_library(velox_wave_split_reader StripedSplitReader.cpp)
+
+target_link_libraries(velox_wave_split_reader velox_wave_dwio velox_wave_exec)

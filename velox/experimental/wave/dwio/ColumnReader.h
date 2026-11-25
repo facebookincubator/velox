@@ -43,12 +43,21 @@ class ColumnReader {
             scanSpec,
             operand ? operand->id : kNoOperand)),
         scanSpec_(&scanSpec) {
-    if (operand) {
+    if (operand && formatData_->isNullabilityStable()) {
       operand->notNull = !formatData_->hasNulls();
     }
   }
 
   virtual ~ColumnReader() = default;
+
+  /// Returns the operand of a column that is not a struct: none below an
+  /// array or map, otherwise the operand that 'defines' has for 'path'.
+  static AbstractOperand* scalarOperand(
+      const DefinesMap& defines,
+      std::vector<std::unique_ptr<common::Subfield::PathElement>>& path,
+      const FormatParams& params) {
+    return params.isNested() ? nullptr : pathToOperand(defines, path);
+  }
 
   const common::ScanSpec& scanSpec() const {
     return *scanSpec_;
@@ -56,6 +65,12 @@ class ColumnReader {
 
   const std::vector<ColumnReader*>& children() const {
     return children_;
+  }
+
+  /// True for an array or map. Its children are read for the elements of
+  /// the selected rows after the sizes of the rows are known.
+  virtual bool isRepeated() const {
+    return false;
   }
 
   bool hasNonNullFilter() const;
@@ -66,6 +81,10 @@ class ColumnReader {
 
   AbstractOperand* operand() const {
     return operand_;
+  }
+
+  const TypePtr& requestedType() const {
+    return requestedType_;
   }
 
   /// Initializes 'op' for the column of 'this'. The op is made once and used
@@ -126,6 +145,12 @@ class ReadStream : public Executable {
       FileInfo& fileInfo,
       const OperandSet* firstColumns = nullptr);
 
+  /// Keeps 'use' while 'this' exists. A split reader frees the data of a
+  /// stripe when no ReadStream keeps the stripe's 'use'.
+  void setStripeUse(std::shared_ptr<void> use) {
+    stripeUse_ = std::move(use);
+  }
+
   void setNullable(const AbstractOperand& op, bool nullable) {
     waveStream->setNullable(op, nullable);
   }
@@ -153,6 +178,17 @@ class ReadStream : public Executable {
     return filtersDone_;
   }
 
+  /// Arena for buffers that the host reads after a sync, like the element
+  /// counts of arrays.
+  GpuArena& arena() {
+    return waveStream->arena();
+  }
+
+  /// Arena for device only buffers.
+  GpuArena& deviceArena() {
+    return waveStream->deviceArena();
+  }
+
   StructColumnReader* reader() const {
     return reader_;
   }
@@ -160,7 +196,8 @@ class ReadStream : public Executable {
  private:
   // Computes starting points for multiple TBs per column if more rows are
   // needed than is good per TB.
-  void makeGrid(Stream* stream);
+  // Returns true if it launched prepare ops on 'stream'.
+  bool makeGrid(Stream* stream);
 
   // Sets consistent blockStatus and temp across 'programs_'. If 'stream is
   // given, prefetches BlockStatus on device on 'stream'.
@@ -194,7 +231,29 @@ class ReadStream : public Executable {
 
   void initializeResultNulls(Stream& stream);
 
+  // Reads the elements of the arrays and maps that are not below an array or
+  // map, level by level.
+  void readNested(Stream* stream);
+
+  // Adds the ops for 'op' and the columns below it to 'programs_'. Appends
+  // the ops of arrays and maps to 'arrays'.
+  void addNestedOps(NestedOp op, std::vector<NestedOp>& arrays);
+
+  // Makes the vector for 'numRows' rows of 'reader' below an array or map,
+  // with the vectors of the fields of a struct.
+  std::unique_ptr<WaveVector> makeNestedVector(
+      const ColumnReader& reader,
+      int32_t numRows);
+
+  // Transfers the staging and launches 'programs_' for nested columns.
+  void launchNested(Stream* stream);
+
   StructColumnReader* reader_;
+  std::shared_ptr<void> stripeUse_;
+  // The readers below 'reader_' in depth first order.
+  std::vector<ColumnReader*> allReaders_;
+  // The readers in 'allReaders_' that have no children.
+  std::vector<ColumnReader*> leaves_;
   std::vector<AbstractOperand*> abstractOperands_;
 
   // Offset in top level rows from start of split.
@@ -242,11 +301,11 @@ class ReadStream : public Executable {
   bool inited_{false};
   FileInfo fileInfo_;
 
-  // Keep track of which level of encodings we are decoding for. This is
-  // necessary when you decode multiple streams together and want them to be
-  // fully decoded in the same kernel launch in order to implement filters.
-  int32_t decodeLevel_{0};
   bool filtersCompacted_{false};
+
+  // Element rows of arrays and maps. Live until the kernels that read them
+  // complete.
+  std::vector<WaveBufferPtr> nestedBuffers_;
 };
 
 } // namespace facebook::velox::wave

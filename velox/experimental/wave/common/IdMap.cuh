@@ -18,29 +18,13 @@
 
 #include "velox/experimental/wave/common/IdMap.h"
 
-#include "velox/experimental/wave/common/StringView.cuh"
-
 namespace facebook::velox::wave {
 
 template <typename T, typename H>
 __device__ void IdMap<T, H>::clearTable() {
-  for (int i = threadIdx.x; i < capacity_; i += blockDim.x) {
-    values_[i] = kEmptyMarker;
+  for (auto i = threadIdx.x; i < capacity_; i += blockDim.x) {
     ids_[i] = 0;
   }
-}
-
-template <typename T, typename H>
-__device__ T IdMap<T, H>::casValue(T* address, T compare, T val) {
-  if constexpr (std::is_same_v<T, StringView>) {
-    return address->cas(compare, val);
-  } else if constexpr (sizeof(T) == 8) {
-    using ULL = unsigned long long;
-    return atomicCAS((ULL*)address, (ULL)compare, (ULL)val);
-  } else {
-    return atomicCAS(address, compare, val);
-  }
-  __builtin_unreachable();
 }
 
 template <typename T, typename H>
@@ -66,29 +50,42 @@ __device__ void IdMap<T, H>::ensureIdReady(
 }
 
 template <typename T, typename H>
-__device__ int32_t IdMap<T, H>::makeId(T value) {
-  if (value == kEmptyMarker) {
-    if (emptyId_ <= 0) {
-      if (atomicCAS(const_cast<int*>(&emptyId_), 0, -1) == 0) {
-        storeNewId(&emptyId_);
-      }
-      ensureIdReady(&emptyId_, -1);
+__device__ T IdMap<T, H>::loadValue(int32_t i) const {
+  // The value may have been written by another SM after this SM cached it.
+  if constexpr (sizeof(T) % sizeof(uint64_t) == 0) {
+    T value;
+    auto* words = reinterpret_cast<volatile const uint64_t*>(&values_[i]);
+    auto* result = reinterpret_cast<uint64_t*>(&value);
+    for (auto w = 0; w < sizeof(T) / sizeof(uint64_t); ++w) {
+      result[w] = words[w];
     }
-    return emptyId_;
+    return value;
+  } else {
+    return *reinterpret_cast<volatile const T*>(&values_[i]);
   }
+}
+
+template <typename T, typename H>
+__device__ int32_t IdMap<T, H>::makeId(T value) {
   auto mask = capacity_ - 1;
   auto maxEntries = capacity_ - capacity_ / 4;
+  volatile int32_t* ids = ids_;
   for (auto i = H()(value) & mask;; i = (i + 1) & mask) {
     if (lastId_ > maxEntries) {
       return -1;
     }
-    if (values_[i] == kEmptyMarker &&
-        casValue(&values_[i], kEmptyMarker, value) == kEmptyMarker) {
-      storeNewId(&ids_[i]);
+    // A slot is claimed by its id word. The claiming thread writes the value
+    // and then the id. Values of any size work without atomics on them.
+    if (ids[i] == 0 &&
+        atomicCAS(const_cast<int32_t*>(&ids[i]), 0, kClaimed) == 0) {
+      values_[i] = value;
+      __threadfence();
+      storeNewId(&ids[i]);
     }
-    if (values_[i] == value) {
-      ensureIdReady(&ids_[i], 0);
-      return ids_[i];
+    ensureIdReady(&ids[i], kClaimed);
+    __threadfence();
+    if (loadValue(i) == value) {
+      return ids[i];
     }
   }
 }

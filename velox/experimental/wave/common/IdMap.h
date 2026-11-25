@@ -40,7 +40,7 @@ class IdMap {
 
  private:
 #ifdef __NVCC__
-  __device__ static T casValue(T* address, T compare, T val);
+  __device__ T loadValue(int32_t i) const;
 
   __device__ void storeNewId(volatile int32_t* id);
 
@@ -52,11 +52,12 @@ class IdMap {
       volatile const int32_t* id,
       int32_t placeholder);
 #endif
-  static constexpr T kEmptyMarker = {};
+  // Id of a slot whose value is being written.
+  static constexpr int32_t kClaimed = -1;
   int capacity_;
   T* values_;
+  // 0 for an empty slot.
   int32_t* ids_;
-  volatile int emptyId_;
   volatile int lastId_;
 };
 
@@ -77,7 +78,6 @@ void IdMap<T, H>::init(int capacity, T* values, int32_t* ids) {
   capacity_ = capacity;
   values_ = values;
   ids_ = ids;
-  emptyId_ = 0;
   lastId_ = 0;
 }
 

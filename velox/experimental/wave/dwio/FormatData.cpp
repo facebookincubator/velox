@@ -264,35 +264,230 @@ std::unique_ptr<GpuDecode> FormatData::makeStep(
     step->resultNulls = op.waveVector->nulls()
         ? op.waveVector->nulls() + blockIdx * rowsPerBlock
         : nullptr;
-
-    if (previousFilter) {
-      if (previousFilter->deviceResult) {
-        // This is when the previous filter is in the previous kernel and its
-        // device side result is allocated.
-        step->rows = previousFilter->deviceResult + blockIdx * rowsPerBlock;
-      } else {
-        step->rows = reinterpret_cast<int32_t*>(
-            blockIdx * rowsPerBlock * sizeof(int32_t));
-        deviceStaging.registerPointer(
-            previousFilter->deviceResultId, &step->rows, false);
-      }
-    }
-    if (op.reader->scanSpec().filter()) {
-      if (blockIdx == 0) {
-        op.deviceResultId =
-            deviceStaging.reserve(op.rows.size() * sizeof(int32_t));
-        deviceStaging.registerPointer(
-            op.deviceResultId, &step->resultRows, true);
-        deviceStaging.registerPointer(
-            op.deviceResultId, &op.deviceResult, true);
-      } else {
-        step->resultRows = reinterpret_cast<int32_t*>(
-            blockIdx * rowsPerBlock * sizeof(int32_t));
-        deviceStaging.registerPointer(
-            op.deviceResultId, &step->resultRows, false);
-      }
+  }
+  // A filter that produces no values still needs the rows passing the
+  // previous filter and records the rows passing itself.
+  if (previousFilter) {
+    if (previousFilter->deviceResult) {
+      // This is when the previous filter is in the previous kernel and its
+      // device side result is allocated.
+      step->rows = previousFilter->deviceResult + blockIdx * rowsPerBlock;
+    } else {
+      // NOLINTBEGIN(performance-no-int-to-ptr)
+      step->rows =
+          reinterpret_cast<int32_t*>(blockIdx * rowsPerBlock * sizeof(int32_t));
+      // NOLINTEND(performance-no-int-to-ptr)
+      deviceStaging.registerPointer(
+          previousFilter->deviceResultId, &step->rows, false);
     }
   }
+  if (op.reader->scanSpec().filter()) {
+    if (blockIdx == 0) {
+      op.deviceResultId = deviceStaging.reserve(
+          static_cast<int32_t>(op.rows.size() * sizeof(int32_t)));
+      deviceStaging.registerPointer(op.deviceResultId, &step->resultRows, true);
+      deviceStaging.registerPointer(op.deviceResultId, &op.deviceResult, true);
+    } else {
+      // NOLINTBEGIN(performance-no-int-to-ptr)
+      step->resultRows =
+          reinterpret_cast<int32_t*>(blockIdx * rowsPerBlock * sizeof(int32_t));
+      // NOLINTEND(performance-no-int-to-ptr)
+      deviceStaging.registerPointer(
+          op.deviceResultId, &step->resultRows, false);
+    }
+  }
+  return step;
+}
+
+bool StagedBuffers::stage(SplitStaging& staging) {
+  if (buffers_.empty()) {
+    return false;
+  }
+  if (staged_) {
+    pending_ = false;
+    staging.addDependency(stagingId_);
+    return false;
+  }
+  staged_ = true;
+  pending_ = true;
+  for (auto& buffer : buffers_) {
+    buffer.id = staging.add(buffer.staging);
+    staging.registerPointer(buffer.id, &buffer.device, true);
+  }
+  stagingId_ = staging.id();
+  return true;
+}
+
+int32_t chunkIndex(const std::vector<ChunkDesc>& chunks, int32_t row) {
+  auto it = std::upper_bound(
+      chunks.begin(), chunks.end(), row, [](int32_t row, const auto& chunk) {
+        return row < chunk.firstRow;
+      });
+  VELOX_CHECK(it != chunks.begin());
+  return static_cast<int32_t>(it - chunks.begin() - 1);
+}
+
+FormatData::FormatData(ColumnRole role, std::vector<const FormatData*> levels)
+    : role_(role), levels_(std::move(levels)) {
+  VELOX_CHECK_LE(
+      levels_.size(), kMaxLevels, "Too many nested nullable structs");
+}
+
+void FormatData::startOp(
+    ColumnOp& op,
+    const ColumnOp* previousFilter,
+    ResultStaging& deviceStaging,
+    ResultStaging& /*resultStaging*/,
+    SplitStaging& splitStaging,
+    DecodePrograms& program,
+    ReadStream& stream) {
+  stage(deviceStaging, splitStaging);
+  const auto rowsPerBlock = FLAGS_wave_reader_rows_per_tb;
+  const auto numRows = static_cast<int32_t>(op.rows.size());
+  const int32_t numBlocks = bits::divRoundUp(numRows, rowsPerBlock);
+  VELOX_CHECK_LT(numBlocks, 256 * 256, "Overflow 16 bit block number");
+  if (numBlocks > 1) {
+    VELOX_CHECK(griddized_);
+  }
+  for (auto blockIdx = 0; blockIdx < numBlocks; ++blockIdx) {
+    auto step = makeStep(
+        op,
+        previousFilter,
+        deviceStaging,
+        splitStaging,
+        stream,
+        stepKind(),
+        blockIdx);
+    setDecode(*step, op, blockIdx, splitStaging);
+    if (role_ == ColumnRole::kLengths) {
+      // The element starts and sizes of the top level rows of the TB.
+      if (blockIdx == 0) {
+        op.totals = stream.arena().allocate<int32_t>(numBlocks);
+      }
+      setNested(*step);
+      auto& column = step->column();
+      column.offsets = op.waveVector->offsets() + blockIdx * rowsPerBlock;
+      column.sizes = op.waveVector->sizes() + blockIdx * rowsPerBlock;
+      column.totals = op.totals->as<int32_t>();
+      column.numResults =
+          bits::roundUp(numRows, kBlockSize) - blockIdx * rowsPerBlock;
+    }
+    op.isFinal = true;
+    std::vector<std::unique_ptr<GpuDecode>>* steps;
+    // Programs are parallel after filters.
+    if (stream.filtersDone() || !previousFilter) {
+      program.programs.emplace_back();
+      steps = &program.programs.back();
+    } else {
+      VELOX_CHECK_LT(blockIdx, static_cast<int32_t>(program.programs.size()));
+      steps = &program.programs[blockIdx];
+    }
+    steps->push_back(std::move(step));
+  }
+}
+
+void FormatData::startNestedOp(
+    NestedOp& op,
+    ResultStaging& deviceStaging,
+    SplitStaging& staging,
+    DecodePrograms& program,
+    ReadStream& /*stream*/) {
+  if (role_ == ColumnRole::kStructNulls && !op.vector->nulls()) {
+    // The struct and the structs above it up to the array have no nulls.
+    return;
+  }
+  stage(deviceStaging, staging);
+  const int32_t rowsPerBlock = FLAGS_wave_reader_rows_per_tb;
+  const int32_t numBlocks = bits::divRoundUp(op.numRows, rowsPerBlock);
+  const auto kind = stepKind();
+  const auto kindSize =
+      role_ == ColumnRole::kValues ? waveTypeKindSize(kind) : sizeof(int32_t);
+  for (auto blockIdx = 0; blockIdx < numBlocks; ++blockIdx) {
+    const int32_t firstRow = blockIdx * rowsPerBlock;
+    const int32_t numRows = std::min(rowsPerBlock, op.numRows - firstRow);
+    auto step = std::make_unique<GpuDecode>();
+    step->numRowsPerThread = bits::divRoundUp(numRows, kBlockSize);
+    step->gridNumRowsPerThread = rowsPerBlock / kBlockSize;
+    step->nthBlock = blockIdx;
+    step->nullMode = NullMode::kDenseNonNull;
+    step->baseRow = firstRow;
+    step->maxRow = firstRow + numRows;
+    step->dataType = kind;
+    step->resultNulls =
+        op.vector->nulls() ? op.vector->nulls() + firstRow : nullptr;
+    setNestedDecode(*step, staging);
+    auto& column = step->column();
+    setLevels(column);
+    column.elementRows = op.elementRows;
+    column.numResults = op.numRows - firstRow;
+    if (role_ == ColumnRole::kValues) {
+      step->step =
+          kindSize == 4 ? DecodeStep::kSelective32 : DecodeStep::kSelective64;
+      step->result = op.vector->values<char>() + kindSize * firstRow;
+    } else {
+      setNested(*step);
+      if (role_ == ColumnRole::kLengths) {
+        column.offsets = op.vector->offsets() + firstRow;
+        column.sizes = op.vector->sizes() + firstRow;
+        column.totals = op.totals->as<int32_t>();
+      }
+    }
+    program.programs.emplace_back();
+    program.programs.back().push_back(std::move(step));
+  }
+}
+
+void FormatData::setLevels(ColumnAccess& column) const {
+  column.numLevels = static_cast<int32_t>(levels_.size());
+  for (auto i = 0; i < levels_.size(); ++i) {
+    column.levelAux[i] = levels_[i]->deviceAux();
+    VELOX_CHECK_NOT_NULL(column.levelAux[i]);
+    column.levelRows[i] = levels_[i]->numEncodedRows();
+  }
+}
+
+void FormatData::setNested(GpuDecode& step) const {
+  auto& column = step.column();
+  step.step = DecodeStep::kNested;
+  column.isStruct = role_ == ColumnRole::kStructNulls;
+  column.streamRows = numEncodedRows();
+  column.aux = deviceAux_;
+  if (role_ == ColumnRole::kLengths) {
+    column.aux += lengthsAux_;
+  }
+}
+
+void FormatData::allocateAux(ReadStream& stream, int32_t bytes) {
+  auxBuffer_ = stream.deviceArena().allocate<char>(bytes);
+  deviceAux_ = auxBuffer_->as<char>();
+}
+
+std::pair<int32_t, int32_t> FormatData::tbChunks(
+    const std::vector<ChunkDesc>& chunks,
+    int32_t firstRow,
+    int32_t lastRow) const {
+  if (!levels_.empty()) {
+    return {0, static_cast<int32_t>(chunks.size())};
+  }
+  const auto first = chunkIndex(chunks, firstRow);
+  return {first, chunkIndex(chunks, lastRow) - first + 1};
+}
+
+std::unique_ptr<GpuDecode> FormatData::makePrepareStep(
+    ColumnOp& op,
+    bool withFilter,
+    ResultStaging& deviceStaging,
+    SplitStaging& splitStaging,
+    ReadStream& stream) {
+  if (withFilter) {
+    return makeAlphabetStep(
+        op, deviceStaging, splitStaging, stream, WaveTypeKind::BIGINT, 0, 1);
+  }
+  auto step = std::make_unique<GpuDecode>();
+  step->numRowsPerThread = 1;
+  step->gridNumRowsPerThread = FLAGS_wave_reader_rows_per_tb / kBlockSize;
+  step->nullMode = NullMode::kDenseNonNull;
+  step->dataType = WaveTypeKind::BIGINT;
   return step;
 }
 

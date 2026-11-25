@@ -56,7 +56,11 @@ class WaveVector {
 
   // Constructs a vector. Resize can be used to create buffers for a given size.
   WaveVector(const TypePtr& type, GpuArena& arena, bool notNull = false)
-      : type_(type), kind_(type_->kind()), arena_(&arena), notNull_(notNull) {}
+      : type_(type),
+        kind_(type_->kind()),
+        encoding_(encodingOf(kind_)),
+        arena_(&arena),
+        notNull_(notNull) {}
 
   WaveVector(
       const TypePtr& type,
@@ -105,6 +109,26 @@ class WaveVector {
     return *children_[index];
   }
 
+  int32_t numChildren() const {
+    return static_cast<int32_t>(children_.size());
+  }
+
+  /// Sets the elements of an array, the keys and values of a map or the
+  /// fields of a struct.
+  void setChildren(std::vector<std::unique_ptr<WaveVector>> children) {
+    children_ = std::move(children);
+  }
+
+  /// Start of the elements of each row of an array or map in its children.
+  int32_t* offsets() {
+    return values_->as<int32_t>();
+  }
+
+  /// Number of elements of each row of an array or map.
+  int32_t* sizes() {
+    return values_->as<int32_t>() + bits::roundUp(size_, kBlockSize);
+  }
+
   template <typename T>
   T* values() {
     return values_->as<T>();
@@ -131,6 +155,26 @@ class WaveVector {
   std::string toString() const;
 
  private:
+  static VectorEncoding::Simple encodingOf(TypeKind kind);
+
+  // Returns a Velox vector of the first 'size' rows. If 'selected' is given,
+  // only the rows set in it are read. The others may never have been
+  // written.
+  VectorPtr toVeloxBase(
+      memory::MemoryPool* pool,
+      int32_t size,
+      const std::vector<bool>* selected = nullptr);
+
+  // Returns a view on the null flags of the first 'size' rows as a bitmap.
+  // The flags are converted to bits in place.
+  BufferPtr veloxNulls(int32_t size);
+
+  // Returns a Velox vector of strings with the bytes copied from device.
+  VectorPtr stringsToVelox(
+      memory::MemoryPool* pool,
+      int32_t size,
+      const std::vector<bool>* selected);
+
   // Type of the content.
   TypePtr type_;
   TypeKind kind_;
@@ -146,8 +190,10 @@ class WaveVector {
 
   vector_size_t size_{0};
 
-  // Values array, cast to pod type or StringView. If there are nulls, the null
-  // flags are in this buffer after the values, starting at 'null_'
+  // Values array, cast to pod type or StringView. For an array or map, the
+  // offsets followed by the sizes, each rounded up to kBlockSize entries. If
+  // there are nulls, the null flags are in this buffer after the values,
+  // starting at 'null_'
   WaveBufferPtr values_;
 
   // Nulls, points to the tail of 'values'. nullptr if no nulls.
