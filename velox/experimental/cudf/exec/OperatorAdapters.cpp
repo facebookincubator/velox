@@ -68,19 +68,17 @@ bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
          }) != nullptr;
 }
 
-// Returns why cuDF cannot run 'planNode', or std::nullopt if it can, by the
-// definition of its node type in CudfPlanNodeDefinitions.cpp. The plan
-// rewriter asks the same definition. 'queryCtx' and 'pool' may be null for a
-// node type whose rules evaluate no expression.
-std::optional<std::string> planNodeUnsupportedReason(
+// Returns whether cuDF can run 'planNode' in the session of 'queryCtx', and
+// logs the reason when it cannot. Asks the same function as the plan rewriter.
+bool planNodeCanRunOnGpu(
     const core::PlanNodePtr& planNode,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool) {
-  const auto* lowering = cudf_velox::detail::findCudfPlanNodeLowering(planNode);
-  if (lowering == nullptr) {
-    return fmt::format("No cuDF plan node for {}", planNode->name());
+    const core::QueryCtx& queryCtx) {
+  if (auto reason =
+          cudf_velox::detail::cudfUnsupportedReason(planNode, queryCtx)) {
+    LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
+    return false;
   }
-  return lowering->unsupportedReason(planNode, queryCtx, pool);
+  return true;
 }
 
 // Returns the cuDF operator that runs 'planNode'. Builds the cuDF plan node
@@ -233,11 +231,23 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     auto projectPlanNode =
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
+    // The fused cuDF operator implements the Filter and Project nodes that the
+    // definitions list. A subclass they do not list may add behaviour that it
+    // would drop.
+    const auto& filterPlanNode = filterProjectOp->filterNode();
+    if ((filterPlanNode != nullptr &&
+         cudf_velox::detail::findCudfPlanNodeLowering(filterPlanNode) ==
+             nullptr) ||
+        (projectPlanNode != nullptr &&
+         cudf_velox::detail::findCudfPlanNodeLowering(projectPlanNode) ==
+             nullptr)) {
+      LOG_FALLBACK(
+          "FilterProject has a Filter or Project with no cuDF plan node, PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
     if (auto reason = cudf_velox::detail::filterProjectUnsupportedReason(
-            filterProjectOp->filterNode().get(),
-            projectPlanNode.get(),
-            ctx->task->queryCtx().get(),
-            op->pool())) {
+            filterPlanNode, projectPlanNode, *ctx->task->queryCtx())) {
       LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
       return false;
     }
@@ -309,9 +319,7 @@ class AggregationAdapter : public OperatorAdapter {
       return false;
     }
 
-    if (auto reason = planNodeUnsupportedReason(
-            planNode, ctx->task->queryCtx().get(), op->pool())) {
-      LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
+    if (!planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx())) {
       return false;
     }
     return true;
@@ -364,9 +372,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
-    if (auto reason = planNodeUnsupportedReason(
-            planNode, ctx->task->queryCtx().get(), op->pool())) {
-      LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
+    if (!planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx())) {
       return false;
     }
 
@@ -481,9 +487,7 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
-    if (auto reason = planNodeUnsupportedReason(
-            planNode, ctx->task->queryCtx().get(), op->pool())) {
-      LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
+    if (!planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx())) {
       return false;
     }
 
@@ -586,9 +590,10 @@ class OrderByAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     return std::dynamic_pointer_cast<const core::OrderByNode>(planNode) !=
-        nullptr;
+        nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx());
   }
 
   bool acceptsGpuInput() const override {
@@ -622,8 +627,10 @@ class TopNAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
-    return std::dynamic_pointer_cast<const core::TopNNode>(planNode) != nullptr;
+      exec::DriverCtx* ctx) const override {
+    return std::dynamic_pointer_cast<const core::TopNNode>(planNode) !=
+        nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx());
   }
 
   bool acceptsGpuInput() const override {
@@ -657,14 +664,13 @@ class TopNRowNumberAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto node =
         std::dynamic_pointer_cast<const core::TopNRowNumberNode>(planNode);
     if (!node) {
       return false;
     }
-    if (auto reason = planNodeUnsupportedReason(planNode, nullptr, nullptr)) {
-      LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
+    if (!planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx())) {
       return false;
     }
     return true;
@@ -701,9 +707,10 @@ class LimitAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     return std::dynamic_pointer_cast<const core::LimitNode>(planNode) !=
-        nullptr;
+        nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx());
   }
 
   bool acceptsGpuInput() const override {
@@ -737,7 +744,7 @@ class LocalPartitionAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* op,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     std::optional<std::string> reason;
@@ -746,7 +753,8 @@ class LocalPartitionAdapter : public OperatorAdapter {
     } else if (!localPartitionPlanNode) {
       reason = "planNode is not LocalPartitionNode";
     } else {
-      reason = planNodeUnsupportedReason(planNode, nullptr, nullptr);
+      reason = cudf_velox::detail::cudfUnsupportedReason(
+          planNode, *ctx->task->queryCtx());
       if (!reason.has_value() &&
           subtreeHasUnsupportedType(localPartitionPlanNode)) {
         reason = "source types are unsupported by cuDF";
@@ -806,14 +814,15 @@ class LocalExchangeAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     std::optional<std::string> reason;
     if (!localPartitionPlanNode) {
       reason = "planNode is not LocalPartitionNode";
     } else {
-      reason = planNodeUnsupportedReason(planNode, nullptr, nullptr);
+      reason = cudf_velox::detail::cudfUnsupportedReason(
+          planNode, *ctx->task->queryCtx());
       if (!reason.has_value() &&
           subtreeHasUnsupportedType(localPartitionPlanNode)) {
         reason = "source types are unsupported by cuDF";
@@ -859,9 +868,10 @@ class AssignUniqueIdAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     return std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(
-               planNode) != nullptr;
+               planNode) != nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx());
   }
 
   bool acceptsGpuInput() const override {
@@ -935,14 +945,13 @@ class MarkDistinctAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto node =
         std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode);
     if (!node) {
       return false;
     }
-    if (auto reason = planNodeUnsupportedReason(planNode, nullptr, nullptr)) {
-      LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
+    if (!planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx())) {
       return false;
     }
     return true;
@@ -979,9 +988,10 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     return std::dynamic_pointer_cast<const core::EnforceSingleRowNode>(
-               planNode) != nullptr;
+               planNode) != nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx());
   }
 
   bool acceptsGpuInput() const override {
@@ -1062,10 +1072,11 @@ class LocalMergeAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     return planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
         nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx()) &&
         !subtreeHasUnsupportedType(planNode);
   }
 
@@ -1145,14 +1156,13 @@ class WindowAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     auto windowNode =
         std::dynamic_pointer_cast<const core::WindowNode>(planNode);
     if (!windowNode) {
       return false;
     }
-    if (auto reason = planNodeUnsupportedReason(planNode, nullptr, nullptr)) {
-      LOG_FALLBACK("{}, PlanNode id: {}", *reason, planNode->id());
+    if (!planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx())) {
       return false;
     }
     return true;
@@ -1189,9 +1199,10 @@ class GroupIdAdapter : public OperatorAdapter {
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
       const core::PlanNodePtr& planNode,
-      exec::DriverCtx* /*ctx*/) const override {
+      exec::DriverCtx* ctx) const override {
     return std::dynamic_pointer_cast<const core::GroupIdNode>(planNode) !=
-        nullptr;
+        nullptr &&
+        planNodeCanRunOnGpu(planNode, *ctx->task->queryCtx());
   }
 
   bool acceptsGpuInput() const override {

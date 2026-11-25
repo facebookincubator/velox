@@ -33,7 +33,6 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 using Mode = CudfPlanRewriter::ExecutionMode;
-std::atomic<uint64_t> nextRewriterId{0};
 
 struct RewriteResult {
   core::PlanNodePtr node;
@@ -465,12 +464,7 @@ std::shared_ptr<core::QueryCtx> requireQueryCtx(
 class Rewriter {
  public:
   explicit Rewriter(const CudfPlanRewriter::Config& config)
-      : config_(config),
-        queryCtx_(requireQueryCtx(config)),
-        pool_(queryCtx_->pool()->addLeafChild(
-            fmt::format(
-                "cudf-plan-rewriter-{}",
-                nextRewriterId.fetch_add(1, std::memory_order_relaxed)))) {}
+      : config_(config), queryCtx_(requireQueryCtx(config)) {}
 
   core::PlanNodePtr rewrite(const core::PlanNodePtr& root) {
     VELOX_USER_CHECK_NOT_NULL(root);
@@ -619,11 +613,7 @@ class Rewriter {
     if (auto reason = unsupportedTypeReason(node)) {
       return reason;
     }
-    const auto* lowering = detail::findCudfPlanNodeLowering(node);
-    if (lowering == nullptr) {
-      return fmt::format("{} has no cuDF implementation", node->name());
-    }
-    return lowering->unsupportedReason(node, queryCtx_.get(), pool_.get());
+    return detail::cudfUnsupportedReason(node, *queryCtx_);
   }
 
   // Returns the GPU rewrite of 'node', for which unsupportedReason() has no
@@ -666,8 +656,8 @@ class Rewriter {
 
     auto reason = unsupportedTypeReason(project);
     if (!reason.has_value()) {
-      reason = detail::filterProjectUnsupportedReason(
-          filter.get(), project.get(), queryCtx_.get(), pool_.get());
+      reason =
+          detail::filterProjectUnsupportedReason(filter, project, *queryCtx_);
     }
     if (!reason.has_value()) {
       return {
@@ -783,7 +773,6 @@ class Rewriter {
   uint64_t nextId_{0};
   const CudfPlanRewriter::Config& config_;
   const std::shared_ptr<core::QueryCtx> queryCtx_;
-  const std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 } // namespace

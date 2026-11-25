@@ -43,15 +43,12 @@ namespace facebook::velox::cudf_velox::detail {
 
 /// How one type of core plan node becomes a cuDF plan node.
 struct CudfPlanNodeLowering {
-  /// Returns why cuDF cannot run 'node', or std::nullopt if it can. The plan
-  /// rewriter and the cuDF driver adapter both ask here, so the two place
-  /// nodes the same way. Whether cuDF supports the input and output types of
-  /// 'node' is a separate check that is the same for every node:
-  /// isTypeSupportedByCudf().
+  /// Returns why 'node' cannot become its cuDF plan node, or std::nullopt.
+  /// Covers the rules the constructor of the cuDF plan node throws for, and
+  /// what lowering does not carry over. Does not cover the rules that need
+  /// the session; cudfUnsupportedReason() adds those.
   std::optional<std::string> (*unsupportedReason)(
-      const core::PlanNodePtr& node,
-      core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool);
+      const core::PlanNodePtr& node);
 
   /// Returns the cuDF plan node that runs 'node', with the ID and output type
   /// of 'node' and with 'sources' in place of its sources. Does not rewrite
@@ -85,15 +82,26 @@ std::shared_ptr<const TCudfNode> lowerInPlace(const core::PlanNodePtr& node) {
   return lowered;
 }
 
-/// Returns why cuDF cannot run 'filter', 'project', or 'project' over 'filter'
-/// as one CudfFilterProjectNode, or std::nullopt if it can. One of the two may
-/// be null. LocalPlanner fuses a Filter followed by a Project into one
-/// operator, so the pair is decided together.
+/// Returns why cuDF cannot run the core plan node 'node' with the session
+/// settings of 'queryCtx', or std::nullopt if it can. The plan rewriter and
+/// the cuDF driver adapter both ask here, so the two place nodes the same way.
+/// Asks, in order: whether 'node' has a lowering, the unsupportedReason() of
+/// that lowering, and CudfPlanNode::unsupportedReasonForSession() of the cuDF
+/// plan node that 'node' lowers to. Whether cuDF supports the input and output
+/// types of 'node' is a separate check that is the same for every node:
+/// isTypeSupportedByCudf().
+std::optional<std::string> cudfUnsupportedReason(
+    const core::PlanNodePtr& node,
+    const core::QueryCtx& queryCtx);
+
+/// Same for 'filter', 'project', or 'project' over 'filter' as one
+/// CudfFilterProjectNode. One of the two may be null. LocalPlanner fuses a
+/// Filter followed by a Project into one operator, so the pair is decided
+/// together.
 std::optional<std::string> filterProjectUnsupportedReason(
-    const core::FilterNode* filter,
-    const core::ProjectNode* project,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool);
+    const std::shared_ptr<const core::FilterNode>& filter,
+    const std::shared_ptr<const core::ProjectNode>& project,
+    const core::QueryCtx& queryCtx);
 
 /// Returns the CudfFilterProjectNode over 'source' that runs 'filter',
 /// 'project', or 'project' over 'filter'. One of the two may be null. The
@@ -104,17 +112,6 @@ std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project,
     core::PlanNodePtr source);
-
-/// Returns why cuDF cannot run the built-in cuDF plan node 'node' with the
-/// session settings of 'queryCtx', such as a cast whose result depends on the
-/// session time zone. Returns std::nullopt if it can, and for any other node.
-/// These are the rules of CudfPlanNodeLowering::unsupportedReason() that need
-/// 'queryCtx' and 'pool'. The constructor of the node has already checked the
-/// rest.
-std::optional<std::string> cudfPlanNodeUnsupportedReason(
-    const core::PlanNodePtr& node,
-    core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool);
 
 /// Returns the operator that runs the cuDF plan node 'node'. Returns nullptr
 /// for any other node, and for the joins and local exchanges, whose operators

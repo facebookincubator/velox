@@ -274,6 +274,63 @@ TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+// A full, semi or anti join applies its filter only as a cuDF AST. A filter
+// that cannot run as one keeps the join on the CPU.
+TEST_F(HashJoinTest, joinThatNeedsAstFilterStaysOnCpu) {
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3}),
+       makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_k", "u_pattern"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.allowCpuFallback = true;
+  SCOPE_EXIT {
+    config.allowCpuFallback = false;
+  };
+
+  // Only (2, banana) matches a build row and passes the filter, against
+  // (2, ban%). A full join adds the other three rows of each side.
+  for (const auto& [joinType, numRows] :
+       std::vector<std::pair<core::JoinType, int64_t>>{
+           {core::JoinType::kLeftSemiFilter, 1},
+           {core::JoinType::kAnti, 3},
+           {core::JoinType::kFull, 7}}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    core::PlanNodeId joinId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .hashJoin(
+                {"k"},
+                {"u_k"},
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                "t_val LIKE u_pattern",
+                {"k"},
+                joinType)
+            .capturePlanNodeId(joinId)
+            .partialAggregation({}, {"count(*)"})
+            .finalAggregation()
+            .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+    facebook::velox::test::assertEqualVectors(
+        makeRowVector({makeFlatVector<int64_t>({numRows})}), result);
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.planNodeId == joinId) {
+          EXPECT_EQ(op.operatorType.find("Cudf"), std::string::npos)
+              << op.operatorType;
+        }
+      }
+    }
+  }
+}
+
 TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
   auto probe = makeNamedRowVector("k", makeFlatVector<int32_t>({1, 2, 2, 3}));
   auto build = makeNamedRowVector("u_k", makeFlatVector<int32_t>({2, 2, 3, 4}));

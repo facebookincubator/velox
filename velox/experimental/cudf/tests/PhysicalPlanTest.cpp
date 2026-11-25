@@ -646,6 +646,39 @@ TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
       localPartition(std::make_shared<exec::RoundRobinPartitionFunctionSpec>()),
       nullptr);
 
+  // The window rules are the ones the rewriter applies to a core::WindowNode.
+  auto window = [&](core::CallTypedExprPtr call, Orders orders) {
+    using Bound = core::WindowNode::BoundType;
+    core::WindowNode::Function function{
+        std::move(call),
+        {core::WindowNode::WindowType::kRows,
+         Bound::kUnboundedPreceding,
+         nullptr,
+         Bound::kCurrentRow,
+         nullptr},
+        /*ignoreNulls=*/false};
+    return std::make_shared<CudfWindowNode>(
+        "window",
+        source,
+        ROW({"k", "w"}, BIGINT()),
+        Keys{},
+        Keys{key},
+        std::move(orders),
+        std::vector<core::WindowNode::Function>{std::move(function)},
+        /*inputsSorted=*/false);
+  };
+  auto windowCall = [](const std::string& name) {
+    return std::make_shared<core::CallTypedExpr>(
+        BIGINT(), std::vector<core::TypedExprPtr>{}, name);
+  };
+  VELOX_ASSERT_USER_THROW(
+      window(windowCall("ntile"), {core::kAscNullsLast}),
+      "Unsupported window function: ntile");
+  VELOX_ASSERT_USER_THROW(
+      window(windowCall("row_number"), {}),
+      "Window must have one sorting order per sorting key: 1 keys, 0 orders");
+  EXPECT_NE(window(windowCall("row_number"), {core::kAscNullsLast}), nullptr);
+
   VELOX_ASSERT_THROW(source->serialize(), "is not serializable");
   VELOX_ASSERT_THROW(
       orderBy({key}, {core::kAscNullsLast})->serialize(),

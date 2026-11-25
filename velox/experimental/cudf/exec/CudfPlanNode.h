@@ -56,6 +56,18 @@ class CudfPlanNode : public core::PlanNode {
   /// its ID, dynamic type, expressions, and declared output schema.
   virtual core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const = 0;
+
+  /// Returns why this node cannot run with the session settings of
+  /// 'queryCtx', or std::nullopt if it can. For example, a cast from VARCHAR
+  /// cannot run on cuDF under legacy_cast. The constructor of a node checks
+  /// the rules that need no session, so this covers the rest. The plan
+  /// rewriter, the cuDF driver adapter and validateCudfPlan() all ask here,
+  /// and the operators do not decide again. A plan is valid for the session
+  /// it is checked with, which has to be the one the task runs with.
+  virtual std::optional<std::string> unsupportedReasonForSession(
+      const core::QueryCtx& /*queryCtx*/) const {
+    return std::nullopt;
+  }
 };
 
 /// Supplies representation and rebuilding support for nodes owned by another
@@ -86,13 +98,12 @@ void unregisterCudfPlanNodeDescriptor(const std::string& name);
 /// sink has no output and is independent of the requested task representation.
 ///
 /// Checks that both ends of every edge agree on Velox or cuDF vectors. Also
-/// checks that cuDF can run each built-in cuDF plan node with the session
-/// settings of 'queryCtx': for example, a cast from TIMESTAMP to VARCHAR
-/// cannot run on cuDF when the session adjusts timestamps to its time zone.
-/// Pass the QueryCtx that the task will run with.
+/// asks each cuDF plan node whether it can run with the session settings of
+/// 'queryCtx', through CudfPlanNode::unsupportedReasonForSession(). Pass the
+/// QueryCtx that the task will run with.
 void validateCudfPlan(
     const core::PlanNodePtr& plan,
-    core::QueryCtx& queryCtx,
+    const core::QueryCtx& queryCtx,
     VectorRepresentation taskOutput = VectorRepresentation::kVelox);
 
 namespace detail {

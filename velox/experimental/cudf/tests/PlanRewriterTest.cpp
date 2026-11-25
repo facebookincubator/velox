@@ -669,6 +669,14 @@ TEST_F(PlanRewriterTest, subclassOfCoreNodeStaysOnCpu) {
   auto limit = std::make_shared<CustomLimitNode>("limit", 0, 2, false, values);
   EXPECT_EQ(rewriteToCudfPlan(limit), limit);
 
+  // The driver adapter leaves its operator on the CPU too.
+  {
+    auto adapted = execute(limit, /*useDriverAdapter=*/true);
+    EXPECT_TRUE(adapted.operators.contains("Limit"));
+    EXPECT_FALSE(adapted.operators.contains("CudfLimit"));
+    EXPECT_EQ(adapted.results->size(), 2);
+  }
+
   // The Project still runs on the GPU, but not fused with the Filter.
   auto filter = PlanBuilder().values({input_}).filter("c0 > 1").planNode();
   core::PlanNodePtr customFilter = std::make_shared<CustomFilterNode>(
@@ -681,6 +689,13 @@ TEST_F(PlanRewriterTest, subclassOfCoreNodeStaysOnCpu) {
   ASSERT_NE(project, nullptr);
   ASSERT_TRUE(project->sources()[0]->is<CudfFromVeloxNode>());
   EXPECT_EQ(project->sources()[0]->sources()[0], customFilter);
+
+  // The driver adapter does not fuse the custom Filter into a cuDF operator.
+  {
+    auto adapted = execute(plan, /*useDriverAdapter=*/true);
+    EXPECT_TRUE(adapted.operators.contains("FilterProject"));
+    EXPECT_FALSE(adapted.operators.contains("CudfFilterProject"));
+  }
 }
 
 TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {

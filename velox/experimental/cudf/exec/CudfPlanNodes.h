@@ -61,6 +61,7 @@ class CudfUnaryPlanNode : public CudfPlanNode {
 /// execution unit.
 class CudfFilterProjectNode : public CudfUnaryPlanNode {
  public:
+  /// Throws if unsupportedReason() has a reason for the node.
   CudfFilterProjectNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
@@ -69,15 +70,19 @@ class CudfFilterProjectNode : public CudfUnaryPlanNode {
       std::optional<core::PlanNodeId> projectNodeId,
       core::TypedExprPtr filter,
       std::vector<core::TypedExprPtr> projections,
-      bool lazyDereference)
-      : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
-        filterNodeId_(std::move(filterNodeId)),
-        projectNodeId_(std::move(projectNodeId)),
-        filter_(std::move(filter)),
-        projections_(std::move(projections)),
-        lazyDereference_(lazyDereference) {
-    VELOX_CHECK(filter_ || projectNodeId_);
-  }
+      bool lazyDereference);
+
+  /// Returns why cuDF cannot run 'filter' followed by 'projections' over an
+  /// input of 'inputType', whatever the session, or std::nullopt. 'filter' is
+  /// null when there is no filter.
+  static std::optional<std::string> unsupportedReason(
+      const RowTypePtr& inputType,
+      const core::TypedExprPtr& filter,
+      const std::vector<core::TypedExprPtr>& projections);
+
+  /// Whether cuDF can evaluate the filter and the projections.
+  std::optional<std::string> unsupportedReasonForSession(
+      const core::QueryCtx& queryCtx) const override;
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -144,6 +149,11 @@ class CudfAggregationNode : public CudfUnaryPlanNode {
       std::vector<core::AggregationNode::Aggregate> aggregates,
       std::vector<TypePtr> intermediateTypes,
       bool ignoreNullKeys);
+
+  /// Whether cuDF implements the aggregates for this step and can evaluate
+  /// their inputs and the grouping keys.
+  std::optional<std::string> unsupportedReasonForSession(
+      const core::QueryCtx& queryCtx) const override;
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -226,6 +236,16 @@ class CudfHashJoinNode : public CudfPlanNode {
         VectorRepresentation::kCudf,
         {}};
   }
+
+  /// Whether cuDF can evaluate the join filter, and as a cuDF AST if
+  /// filterRequiresAst().
+  std::optional<std::string> unsupportedReasonForSession(
+      const core::QueryCtx& queryCtx) const override;
+
+  /// True for the join types whose filter CudfHashJoinProbe applies only as a
+  /// cuDF AST over both sides: full, semi and anti joins. The other join types
+  /// can also evaluate the filter over the joined rows.
+  bool filterRequiresAst() const;
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -338,6 +358,10 @@ class CudfNestedLoopJoinNode : public CudfPlanNode {
         VectorRepresentation::kCudf,
         {}};
   }
+
+  /// Whether cuDF can evaluate the join condition.
+  std::optional<std::string> unsupportedReasonForSession(
+      const core::QueryCtx& queryCtx) const override;
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {
@@ -857,6 +881,7 @@ class CudfGroupIdNode : public CudfUnaryPlanNode {
 /// is already sorted on the partition keys and then the sorting keys.
 class CudfWindowNode : public CudfUnaryPlanNode {
  public:
+  /// Throws if unsupportedReason() has a reason for the window.
   CudfWindowNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
@@ -865,13 +890,18 @@ class CudfWindowNode : public CudfUnaryPlanNode {
       std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
       std::vector<core::SortOrder> sortingOrders,
       std::vector<core::WindowNode::Function> windowFunctions,
-      bool inputsSorted)
-      : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
-        partitionKeys_(std::move(partitionKeys)),
-        sortingKeys_(std::move(sortingKeys)),
-        sortingOrders_(std::move(sortingOrders)),
-        windowFunctions_(std::move(windowFunctions)),
-        inputsSorted_(inputsSorted) {}
+      bool inputsSorted);
+
+  /// Returns why cuDF cannot run a window with these keys and functions over
+  /// an input of 'inputType', or std::nullopt if it can. Defined in
+  /// CudfWindow.cpp, beside the frame and type helpers that it shares with the
+  /// operator.
+  static std::optional<std::string> unsupportedReason(
+      const RowTypePtr& inputType,
+      const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys,
+      const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
+      const std::vector<core::SortOrder>& sortingOrders,
+      const std::vector<core::WindowNode::Function>& windowFunctions);
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {

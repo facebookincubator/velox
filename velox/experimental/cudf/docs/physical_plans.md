@@ -23,13 +23,14 @@ auto physicalPlan = CudfPlanRewriter::rewrite(cpuPlan, config);
 Engines that construct complete physical plans directly do not need the
 rewriter. They can call `validateCudfPlan(plan, *queryCtx)` before creating the
 task. This checks representation boundaries, source arity, node IDs, conversion
-types, and terminal output. It also checks that cuDF can run each built-in cuDF
-plan node with the session settings of that QueryCtx: the expressions of a
-filter or projection, the filter of a join, and the functions of an
-aggregation. For example, cuDF cannot run a cast from VARCHAR under
-`legacy_cast`. Pass the QueryCtx that the task runs with, because a plan that
-is valid for one session can give wrong results under another. It does not
-validate the state layout of an aggregation.
+types, and terminal output. It also asks each cuDF plan node whether it can run
+with the session settings of that QueryCtx: the expressions of a filter or
+projection, the filter of a join, and the functions of an aggregation. For
+example, cuDF cannot run a cast from VARCHAR under `legacy_cast`. Pass the
+QueryCtx that the task runs with, because a plan that is valid for one session
+can give wrong results under another. The operators do not repeat this check,
+so an engine that builds its own plan has to call it. It does not validate the
+state layout of an aggregation.
 
 The rewriter preserves supported GPU execution for aggregation, filter/project,
 hash and nested-loop joins, sorting, limits, top-N, top-N row number, window,
@@ -66,20 +67,28 @@ LocalPlanner has fixed the driver counts.
 `CudfPlanNodeDefinitions.cpp` has one definition for each built-in node. A
 definition says up to three things about its node:
 
-- `unsupportedReason`: why cuDF cannot run a given core plan node, if it
-  cannot.
+- `unsupportedReason`: why a given core plan node cannot become the cuDF plan
+  node, if it cannot.
 - `lower`: how to build the cuDF plan node from the core plan node and its
   sources, which the caller has already rewritten.
 - The operator that runs the cuDF plan node, or `createOperator` when
   creating it takes more than the node.
 
-A rule that depends only on the fields of the cuDF plan node, such as the join
-type, is a static `unsupportedReason()` of the node class. The constructor of
-the node throws for the same reason, so a plan that an engine builds from cuDF
-plan nodes cannot skip it. The definition calls it and adds the rules that need
-the session settings of the query, such as whether cuDF can evaluate an
-expression. `validateCudfPlan` applies those session rules to the cuDF plan
-node, through the same function.
+Whether cuDF can run a node is decided by the cuDF plan node, at two points:
+
+- The constructor throws for what cuDF cannot run in any session, such as an
+  unsupported join type or window function. Where the plan rewriter needs the
+  reason without an exception, the rule is also a static `unsupportedReason()`
+  of the node class.
+- `unsupportedReasonForSession(queryCtx)` returns why the node cannot run with
+  the session settings of a `QueryCtx`, such as an expression that cuDF
+  evaluates differently under `legacy_cast`.
+
+The plan rewriter, the cuDF driver adapter and `validateCudfPlan` all build the
+cuDF plan node and ask it. The cuDF operators do not decide again: what remains
+in them are internal checks and limits that depend on the data. The definition
+keeps only what the cuDF plan node cannot know, because lowering does not carry
+it over, such as the masks of a MarkDistinct.
 
 The rewriter and the cuDF driver adapter start from a core plan node and use
 the first two. `CudfPlanNodeTranslator` starts from a cuDF plan node and uses

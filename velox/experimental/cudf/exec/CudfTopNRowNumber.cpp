@@ -128,12 +128,6 @@ std::unique_ptr<cudf::column> makeLimitMask(
 
 } // namespace
 
-bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
-  return !CudfTopNRowNumberNode::unsupportedReason(
-              node.rankFunction(), node.partitionKeys(), node.sortingKeys())
-              .has_value();
-}
-
 CudfTopNRowNumber::CudfTopNRowNumber(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,

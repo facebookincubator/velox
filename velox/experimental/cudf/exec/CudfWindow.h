@@ -70,15 +70,6 @@ class CudfWindow : public CudfOperatorBase {
       exec::DriverCtx* driverCtx,
       const std::shared_ptr<const CudfWindowNode>& windowNode);
 
-  /// Returns true if every window function and frame in the plan node is
-  /// supported by CudfWindow. On failure, @p reason is populated with a
-  /// human-readable explanation when a non-null pointer is provided.
-  static bool canRunOnGPU(const core::WindowNode& windowNode);
-
-  static bool canRunOnGPU(
-      const core::WindowNode& windowNode,
-      std::string* reason);
-
   /// Returns true if the window function is supported by CudfWindow.
   static bool isSupportedWindowFunction(
       const std::string& baseName,

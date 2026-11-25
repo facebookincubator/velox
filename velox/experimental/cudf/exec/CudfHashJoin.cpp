@@ -512,14 +512,6 @@ void CudfHashJoinProbe::initialize() {
     useAstFilter_ = false;
   }
 
-  // Validate AST filtering for this join type now to avoid run-time error.
-  if (joinNode_->isRightSemiFilterJoin() || joinNode_->isLeftSemiFilterJoin() ||
-      joinNode_->isAntiJoin()) {
-    VELOX_CHECK(
-        useAstFilter_,
-        "AST expression evaluation must be enabled for semi-filter and anti joins.");
-  }
-
   // Create a reusable evaluator for the filter column. This is expensive to
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
@@ -533,11 +525,23 @@ void CudfHashJoinProbe::initialize() {
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
   // cannot use AST-based filtering and must fall back to filterEvaluator_.
-  if (hasNonAstSubexprSpanningBothSides(
-          optimizedFilter, probeType_, buildType_)) {
+  const bool spansBothSides = hasNonAstSubexprSpanningBothSides(
+      optimizedFilter, probeType_, buildType_);
+  if (spansBothSides) {
     VLOG(1) << "Filter expression spans both join sides, using "
                "filterEvaluator_ instead of AST";
     useAstFilter_ = false;
+  }
+
+  // CudfHashJoinNode::unsupportedReasonForSession() keeps such a join off
+  // cuDF, so this holds for a plan that was checked with the session it runs
+  // in.
+  VELOX_CHECK(
+      useAstFilter_ || !joinNode_->filterRequiresAst(),
+      "The filter of this join type must run as a cuDF AST: {}",
+      core::JoinTypeName::toName(joinNode_->joinType()));
+
+  if (spansBothSides) {
     return;
   }
 

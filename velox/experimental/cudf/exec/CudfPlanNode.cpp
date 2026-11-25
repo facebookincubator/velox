@@ -13,20 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/exec/CudfAggregation.h"
+#include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfPlanNode.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/AstExpressionUtils.h"
+#include "velox/experimental/cudf/expression/AstUtils.h"
+#include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
+#include "velox/common/memory/Memory.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/HashPartitionFunction.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/expression/ExprOptimizer.h"
 
 #include <folly/String.h>
 
 #include <algorithm>
-#include <atomic>
 #include <functional>
 #include <mutex>
 #include <typeinfo>
@@ -159,6 +164,154 @@ void unregisterCudfPlanNodeDescriptor(const std::string& name) {
   std::lock_guard lock(descriptorMutex);
   std::erase_if(
       descriptors, [&](const auto& entry) { return entry.first == name; });
+}
+
+namespace {
+
+// What a session rule needs to fold the constants of an expression: a QueryCtx
+// and a memory pool. The QueryCtx of the caller is const, so folding runs on a
+// private one with the same QueryConfig. The folded constants are freed with
+// this object.
+class FoldingContext {
+ public:
+  explicit FoldingContext(const core::QueryCtx& queryCtx)
+      : queryCtx_(
+            core::QueryCtx::create(
+                nullptr,
+                core::QueryConfig{queryCtx.queryConfig().rawConfigsCopy()})),
+        pool_(memory::memoryManager()->addLeafPool()) {}
+
+  core::QueryCtx* queryCtx() const {
+    return queryCtx_.get();
+  }
+
+  memory::MemoryPool* pool() const {
+    return pool_.get();
+  }
+
+ private:
+  const std::shared_ptr<core::QueryCtx> queryCtx_;
+  const std::shared_ptr<memory::MemoryPool> pool_;
+};
+
+} // namespace
+
+CudfFilterProjectNode::CudfFilterProjectNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr source,
+    RowTypePtr outputType,
+    std::optional<core::PlanNodeId> filterNodeId,
+    std::optional<core::PlanNodeId> projectNodeId,
+    core::TypedExprPtr filter,
+    std::vector<core::TypedExprPtr> projections,
+    bool lazyDereference)
+    : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+      filterNodeId_(std::move(filterNodeId)),
+      projectNodeId_(std::move(projectNodeId)),
+      filter_(std::move(filter)),
+      projections_(std::move(projections)),
+      lazyDereference_(lazyDereference) {
+  VELOX_CHECK(filter_ || projectNodeId_);
+  const auto unsupported =
+      unsupportedReason(sources_[0]->outputType(), filter_, projections_);
+  VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
+}
+
+// static
+std::optional<std::string> CudfFilterProjectNode::unsupportedReason(
+    const RowTypePtr& inputType,
+    const core::TypedExprPtr& filter,
+    const std::vector<core::TypedExprPtr>& projections) {
+  // cuDF sizes an expression result from an input column. Over a zero-column
+  // input a filter has nothing to evaluate against, and only constant
+  // projections, which CudfFilterProject fills to the row count of each batch,
+  // can run.
+  if (inputType->size() != 0) {
+    return std::nullopt;
+  }
+  if (filter != nullptr) {
+    return "FilterProject filter over a zero-column input";
+  }
+  if (!std::all_of(
+          projections.begin(), projections.end(), [&](const auto& projection) {
+            return isConstantProjectionOverZeroColumns(inputType, projection);
+          })) {
+    return "FilterProject non-constant projection over a zero-column input";
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> CudfFilterProjectNode::unsupportedReasonForSession(
+    const core::QueryCtx& queryCtx) const {
+  const FoldingContext folding(queryCtx);
+  if (filter_ != nullptr &&
+      !canExprRunOnGpu(filter_, folding.queryCtx(), folding.pool())) {
+    return "FilterProject filter cannot be evaluated by cuDF";
+  }
+  for (const auto& projection : projections_) {
+    if (!canExprRunOnGpu(projection, folding.queryCtx(), folding.pool())) {
+      return "FilterProject projections cannot be evaluated by cuDF";
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> CudfAggregationNode::unsupportedReasonForSession(
+    const core::QueryCtx& queryCtx) const {
+  const FoldingContext folding(queryCtx);
+  if (canBeEvaluatedByCudf(
+          step_,
+          groupingKeys_,
+          aggregates_,
+          sources_[0].get(),
+          folding.queryCtx(),
+          folding.pool())) {
+    return std::nullopt;
+  }
+  return "Aggregation cannot be evaluated by cuDF";
+}
+
+std::optional<std::string> CudfHashJoinNode::unsupportedReasonForSession(
+    const core::QueryCtx& queryCtx) const {
+  if (filter_ == nullptr) {
+    return std::nullopt;
+  }
+  const FoldingContext folding(queryCtx);
+  if (!canJoinFilterRunOnGpu(filter_, folding.queryCtx(), folding.pool())) {
+    return "HashJoin join filter cannot be evaluated by cuDF";
+  }
+  if (!filterRequiresAst()) {
+    return std::nullopt;
+  }
+  // The operator builds the AST from the folded filter.
+  const auto folded =
+      expression::optimize(filter_, folding.queryCtx(), folding.pool());
+  if (containsAstUnsupportedType(folded) ||
+      hasNonAstSubexprSpanningBothSides(
+          folded, sources_[0]->outputType(), sources_[1]->outputType())) {
+    return fmt::format(
+        "HashJoin filter cannot run as a cuDF AST, which this join type needs: {}",
+        core::JoinTypeName::toName(joinType_));
+  }
+  return std::nullopt;
+}
+
+bool CudfHashJoinNode::filterRequiresAst() const {
+  return isFullJoin() || isLeftSemiFilterJoin() || isRightSemiFilterJoin() ||
+      isLeftSemiProjectJoin() || isAntiJoin();
+}
+
+std::optional<std::string> CudfNestedLoopJoinNode::unsupportedReasonForSession(
+    const core::QueryCtx& queryCtx) const {
+  if (joinCondition_ == nullptr) {
+    return std::nullopt;
+  }
+  const FoldingContext folding(queryCtx);
+  if (canJoinFilterRunOnGpu(
+          joinCondition_, folding.queryCtx(), folding.pool())) {
+    return std::nullopt;
+  }
+  return "NestedLoopJoin filter cannot be evaluated by cuDF";
 }
 
 void CudfFilterProjectNode::addDetails(std::stringstream& stream) const {
@@ -487,6 +640,30 @@ CudfTopNRowNumberNode::CudfTopNRowNumberNode(
   VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
 }
 
+CudfWindowNode::CudfWindowNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr source,
+    RowTypePtr outputType,
+    std::vector<core::FieldAccessTypedExprPtr> partitionKeys,
+    std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<core::SortOrder> sortingOrders,
+    std::vector<core::WindowNode::Function> windowFunctions,
+    bool inputsSorted)
+    : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+      partitionKeys_(std::move(partitionKeys)),
+      sortingKeys_(std::move(sortingKeys)),
+      sortingOrders_(std::move(sortingOrders)),
+      windowFunctions_(std::move(windowFunctions)),
+      inputsSorted_(inputsSorted) {
+  const auto unsupported = unsupportedReason(
+      inputType(),
+      partitionKeys_,
+      sortingKeys_,
+      sortingOrders_,
+      windowFunctions_);
+  VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
+}
+
 // static
 std::optional<std::string> CudfLocalPartitionNode::unsupportedReason(
     const core::LocalPartitionNode& node) {
@@ -621,16 +798,9 @@ core::PlanNodePtr rebuildCustomCudfPlanNode(
 
 void validateCudfPlan(
     const core::PlanNodePtr& plan,
-    core::QueryCtx& queryCtx,
+    const core::QueryCtx& queryCtx,
     VectorRepresentation taskOutput) {
   VELOX_USER_CHECK_NOT_NULL(plan);
-  // Checking an expression folds its constants, which allocates. Child pools
-  // of one parent need distinct names.
-  static std::atomic<uint64_t> nextValidationId{0};
-  const auto pool = queryCtx.pool()->addLeafChild(
-      fmt::format(
-          "cudf-plan-validation-{}",
-          nextValidationId.fetch_add(1, std::memory_order_relaxed)));
   using Output = std::optional<VectorRepresentation>;
   std::unordered_set<core::PlanNodeId> ids;
   std::function<Output(const core::PlanNodePtr&)> visit =
@@ -639,7 +809,7 @@ void validateCudfPlan(
         ids.insert(node->id()).second,
         "Duplicate plan node ID: {}",
         node->id());
-    const auto traits = detail::cudfPlanNodeTraits(node, queryCtx);
+    const auto traits = cudf_velox::detail::cudfPlanNodeTraits(node, queryCtx);
     VELOX_USER_CHECK_EQ(
         traits.inputs.size(),
         node->sources().size(),
@@ -673,13 +843,14 @@ void validateCudfPlan(
           node->id(),
           node->sources()[0]->outputType()->toString());
     }
-    if (auto reason = detail::cudfPlanNodeUnsupportedReason(
-            node, &queryCtx, pool.get())) {
-      VELOX_USER_FAIL(
-          "cuDF cannot run plan node {} ({}): {}",
-          node->name(),
-          node->id(),
-          *reason);
+    if (const auto* cudfNode = dynamic_cast<const CudfPlanNode*>(node.get())) {
+      if (auto reason = cudfNode->unsupportedReasonForSession(queryCtx)) {
+        VELOX_USER_FAIL(
+            "cuDF cannot run plan node {} ({}): {}",
+            node->name(),
+            node->id(),
+            *reason);
+      }
     }
     if (traits.outputSource) {
       VELOX_USER_CHECK_LT(*traits.outputSource, outputs.size());
