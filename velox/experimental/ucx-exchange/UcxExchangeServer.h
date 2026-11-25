@@ -24,6 +24,8 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <string_view>
 #include <tuple>
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/EnumDefine.h"
@@ -64,7 +66,15 @@ class UcxExchangeServer
 
   void process() override;
 
-  void close() override;
+  /// Releases the destination, since its consumer is gone, and closes. Called
+  /// on the Communicator thread.
+  void onEndpointClosed(std::string_view reason) override;
+
+  /// Cancels the outstanding requests, unbinds from the producer task's entry
+  /// and unregisters from the Communicator and the endpoint. Decides nothing
+  /// about the destination. Called on the Communicator thread. A second call
+  /// does nothing.
+  void close();
 
   std::string toString();
 
@@ -87,11 +97,21 @@ class UcxExchangeServer
   /// @return A shared pointer to itself.
   std::shared_ptr<UcxExchangeServer> getSelfPtr();
 
+  // Holds a send's buffer until the send completes, and its status.
+  struct MetaSendContext;
+  struct DataSendContext;
+
   /// @brief Sends metadata and data to the connected receiver.
   void sendData();
 
-  /// @brief Completion handler after data has been sent.
-  void sendComplete(ucs_status_t status, std::shared_ptr<void> arg);
+  // Acts on the statuses that the completions of the current sends recorded.
+  // Called by process() in WaitingForSendComplete, with no lock held.
+  void onSendsCompleted();
+
+  // Reports a send that did not complete with UCS_OK to the entry, by its
+  // cause, and fails the producer task if the entry says so. Called by
+  // process() with no lock held.
+  void onSendFailed(ucs_status_t status);
 
   /// @brief Completion handler for intra-node transfer after source retrieves
   /// data.
@@ -124,12 +144,22 @@ class UcxExchangeServer
   /// How the output queue ended the channel. Sent in the end message once
   /// 'dataPtr_' is null. Protected by dataMutex_.
   ChannelOutcome endOutcome_;
-  /// Protects dataPtr_. Must be recursive because sendData() holds the lock
-  /// when calling tagSend(), and for small messages UCX completes inline via
-  /// its fast-completion path, firing the sendComplete() callback on the same
-  /// thread while the lock is still held.
-  std::recursive_mutex dataMutex_;
+  // Protects dataPtr_, which the getData() callback sets on another thread.
+  // UCX can complete a send inline, inside the tagSend() that sendData()
+  // calls with this lock held, so send completions never take it.
+  std::mutex dataMutex_;
   std::atomic<bool> closed_{false};
+
+  // Set when the destination was Released, by a kStop step or the entry's
+  // onReleased callback, either of which may run on any thread. process()
+  // then cancels the outstanding requests and stops.
+  std::atomic<bool> released_{false};
+
+  // The current sends: the metadata or end message, and the chunk's data. A
+  // null 'dataContext_' while WaitingForSendComplete means the end message is
+  // the only send. Touched on the Communicator thread only.
+  std::shared_ptr<MetaSendContext> metaContext_;
+  std::shared_ptr<DataSendContext> dataContext_;
 
   /// Future for intra-node transfer - signaled when source retrieves data.
   std::future<void> intraNodeRetrieveFuture_;

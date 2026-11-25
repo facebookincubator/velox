@@ -252,6 +252,20 @@ void UcxExchangeSource::close() {
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
+void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
+  if (!closed_.load(std::memory_order_acquire) && !atEnd_) {
+    std::string errorMsg = fmt::format(
+        "Connection to producer closed before it sent all its data, host {}:{}, task {}: {}",
+        host_,
+        port_,
+        partitionKey_.toString(),
+        reason);
+    VLOG(0) << errorMsg;
+    queue_->setError(errorMsg);
+  }
+  close();
+}
+
 void UcxExchangeSource::resumeFromBackpressure() {
   bool expected = true;
   if (backpressureActive_.compare_exchange_strong(

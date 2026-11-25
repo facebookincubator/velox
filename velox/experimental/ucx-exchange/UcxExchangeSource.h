@@ -99,6 +99,11 @@ class UcxExchangeSource
   /// once it received enough data.
   void close();
 
+  /// Fails the consumer with the endpoint's close 'reason' unless the stream
+  /// ended or the source closed, then closes. Called on the Communicator
+  /// thread.
+  void onEndpointClosed(std::string_view reason) override;
+
   /// @brief Marks this source as registered with the exchange queue.
   /// Must be called after addSourceLocked() increments numSources_ for this
   /// source. Without this, deliverEndMarker() will not enqueue the nullptr
