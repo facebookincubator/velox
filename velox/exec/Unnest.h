@@ -70,15 +70,14 @@ class Unnest : public Operator {
     // Invokes a function on each row represented by the RowRange.
     // @param func The function to call for each row. 'row' is the current row
     // number in the '[start, start + size)' range, 'start' is the row number to
-    // start processing, and 'size' is the number of rows to process..
+    // start processing, and 'size' is the number of rows to process. Taken as
+    // a template parameter so that it inlines into the per-row loop.
     // @param rawMaxSizes Used to compute the end of each row.
     // @param firstInnerRowStart The index to start processing the first row.
     // Same with Unnest member firstInnerRowStart_.
+    template <typename Func>
     void forEachRow(
-        const std::function<void(
-            vector_size_t /*row*/,
-            vector_size_t /*start*/,
-            vector_size_t /*size*/)>& func,
+        Func&& func,
         const vector_size_t* rawMaxSizes,
         vector_size_t firstInnerRowStart) const;
 

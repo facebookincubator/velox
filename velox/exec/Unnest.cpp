@@ -514,11 +514,9 @@ bool Unnest::isFinished() {
   return noMoreInput_ && input_ == nullptr;
 }
 
+template <typename Func>
 void Unnest::RowRange::forEachRow(
-    const std::function<void(
-        vector_size_t /*row*/,
-        vector_size_t /*start*/,
-        vector_size_t /*size*/)>& func,
+    Func&& func,
     const vector_size_t* rawMaxSizes,
     vector_size_t firstInnerRowStart) const {
   // Process the first row.
