@@ -179,11 +179,16 @@ FileDataSource::FileDataSource(
     // These columns must be loaded eagerly (not lazily) so the filter
     // can evaluate before lazy columns are accessed.
     folly::F14FastSet<std::string> remainingFilterColumns;
+    const auto fieldsReadForAllPassingRows =
+        remainingFilterExpr->fieldsReadForAllPassingRows();
     for (auto& input : remainingFilterExpr->distinctFields()) {
       remainingFilterColumns.insert(input->field());
       auto it = columnNames.find(input->field());
       if (it != columnNames.end()) {
-        if (shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
+        if (std::find(
+                fieldsReadForAllPassingRows.begin(),
+                fieldsReadForAllPassingRows.end(),
+                input) == fieldsReadForAllPassingRows.end()) {
           multiReferencedFields_.push_back(it->second);
         }
         continue;

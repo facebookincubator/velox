@@ -863,10 +863,15 @@ void HiveIndexSource::initRemainingFilter(
   for (int i = 0; i < readColumnNames.size(); ++i) {
     columnNames[readColumnNames[i]] = i;
   }
+  const auto fieldsReadForAllPassingRows =
+      remainingFilterExpr->fieldsReadForAllPassingRows();
   for (const auto* input : remainingFilterExpr->distinctFields()) {
     auto it = columnNames.find(input->field());
     if (it != columnNames.end()) {
-      if (connector::shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
+      if (std::find(
+              fieldsReadForAllPassingRows.begin(),
+              fieldsReadForAllPassingRows.end(),
+              input) == fieldsReadForAllPassingRows.end()) {
         remainingEagerlyLoadFields_.push_back(it->second);
       }
       continue;
