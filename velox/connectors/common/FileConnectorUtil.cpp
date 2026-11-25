@@ -38,26 +38,6 @@
 
 namespace facebook::velox::connector {
 
-FormatScopedConfigs makeFormatScopedConfigs(
-    const FileConfig& fileConfig,
-    const config::ConfigBase& sessionProperties,
-    dwio::common::FileFormat fileFormat) {
-  VELOX_CHECK_NE(
-      fileFormat,
-      dwio::common::FileFormat::UNKNOWN,
-      "Cannot build format-specific configs for unknown file format");
-
-  auto connectorConfig = fileConfig.config()->rawConfigsWithPrefix(
-      fmt::format(
-          "{}{}",
-          fileConfig.connectorConfigPrefix(),
-          dwio::common::formatConfigPrefix(fileFormat, ".")));
-  return {
-      config::ConfigBase(std::move(connectorConfig)),
-      config::ConfigBase(sessionProperties.rawConfigsWithPrefix(
-          dwio::common::formatConfigPrefix(fileFormat, "_")))};
-}
-
 namespace {
 
 void validateColumnMappingMode(
@@ -189,8 +169,8 @@ void configureReaderOptions(
     return;
   }
 
-  auto formatScopedConfigs = makeFormatScopedConfigs(
-      *fileConfig, *sessionProperties, fileSplit->fileFormat);
+  auto formatScopedConfigs = fileConfig->formatScopedConfigs(
+      fileSplit->fileFormat, *sessionProperties);
   readerOptions.setFormatSpecificOptions(
       dwio::common::getReaderFactory(fileSplit->fileFormat)
           ->createFormatOptions(

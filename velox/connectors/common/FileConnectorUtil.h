@@ -19,11 +19,11 @@
 #include <folly/Executor.h>
 #include <folly/container/F14Map.h>
 
-#include "velox/common/caching/FileHandle.h"
 #include "velox/common/config/Config.h"
 #include "velox/connectors/Connector.h"
-#include "velox/dwio/common/BufferedInput.h"
-#include "velox/dwio/common/Reader.h"
+#include "velox/dwio/common/MetadataFilter.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/common/ScanSpec.h"
 
 namespace facebook::velox::connector {
 
@@ -33,16 +33,6 @@ class FileTableHandle;
 using FileTableHandlePtr = std::shared_ptr<const FileTableHandle>;
 class FileConfig;
 struct FileConnectorSplit;
-
-struct FormatScopedConfigs {
-  config::ConfigBase connectorConfig;
-  config::ConfigBase sessionProperties;
-};
-
-FormatScopedConfigs makeFormatScopedConfigs(
-    const FileConfig& fileConfig,
-    const config::ConfigBase& sessionProperties,
-    dwio::common::FileFormat fileFormat);
 
 /// Configures reader options for reading a data file. This is the generic
 /// version that does not apply serde (serialization/deserialization) options.

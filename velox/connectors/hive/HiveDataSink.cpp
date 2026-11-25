@@ -415,8 +415,8 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
       connectorQueryCtx_->adjustTimestampToTimezone();
   options->maxTargetFileSizeBytes =
       (isBucketed() || sortWrite()) ? 0 : maxTargetFileBytes_;
-  auto formatScopedConfigs = connector::makeFormatScopedConfigs(
-      *hiveConfig_, *connectorSessionProperties, writerFactory_->fileFormat());
+  auto formatScopedConfigs = hiveConfig_->formatScopedConfigs(
+      writerFactory_->fileFormat(), *connectorSessionProperties);
   auto sessionFormatOptions = writerFactory_->createFormatOptions(
       formatScopedConfigs.connectorConfig,
       formatScopedConfigs.sessionProperties);
