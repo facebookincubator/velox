@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/buffer/Buffer.h"
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
@@ -74,6 +75,7 @@ struct DecodingStats;
 
 namespace facebook::nimble {
 
+class DecodedStringBuffers;
 class EncodingBufferPool;
 class SharedDictionaryAlphabet;
 
@@ -258,6 +260,31 @@ class Encoding {
     /// reads and costs more per read. Both settings return the same values, and
     /// reads stay thread safe. Other encodings ignore it.
     bool cacheEncodingView{false};
+
+    /// Gives the cached views created with these options buffers that they
+    /// share to decode strings into, such as the views of the chunks of one
+    /// stream. Their strings then lie in a few buffers instead of at least
+    /// one for each view, so that a caller that keeps the strings it reads by
+    /// holding their buffers, instead of copying them, holds and frees fewer
+    /// buffers. The views do not own it: the caller keeps it alive while the
+    /// views exist. It is not thread-safe, so the caller must not read the
+    /// views that share it at once. The buffers it gives out stay valid while
+    /// a caller holds them. When null, each view decodes into buffers of its
+    /// own. Cached FSST views decode into them the chunks of rows that they
+    /// cache, and the rows of a read given an addStringBuffer that they decode
+    /// for that read alone. Other encodings ignore it.
+    DecodedStringBuffers* decodedStringBuffers{nullptr};
+
+    /// Points to the buffer that holds the bytes that the views created with
+    /// these options read, such as the stream or the decompressed chunk that
+    /// an encoding lies in. A view whose string values point into those bytes
+    /// passes the buffer to the addStringBuffer of its reads, so that a caller
+    /// that holds it keeps the values valid. The views do not own it: the
+    /// caller keeps it alive while the views exist. When null, such a view
+    /// copies its values for those reads instead. A view creates the views of
+    /// its nested encodings, which lie in the same bytes, with the same
+    /// buffer. Other encodings ignore it.
+    velox::Buffer* inputStringBuffer{nullptr};
   };
 
   static constexpr int kEncodingTypeOffset =

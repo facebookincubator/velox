@@ -17,7 +17,7 @@
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 #include "velox/connectors/common/BufferedInputBuilder.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -86,12 +86,13 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics_);
   deleteReaderOpts.setMetadataIoStats(ioStatistics_);
-  connector::configureReaderOptions(
+  connector::FileSplitReader::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx,
-      deleteFileSchema,
       deleteSplit_,
+      deleteFileSchema,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       deleteReaderOpts);
 
   const FileHandleKey fileHandleKey{
@@ -128,15 +129,16 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  connector::configureRowReaderOptions(
-      {},
+  connector::FileSplitReader::configureRowReaderOptions(
+      nullptr,
+      nullptr,
+      deleteSplit_,
       scanSpec,
       nullptr,
       deleteFileSchema,
-      deleteSplit_,
       nullptr,
-      nullptr,
-      nullptr,
+      {},
+      /*serdeParameters=*/{},
       deleteRowReaderOpts);
 
   deleteRowReader_.reset();

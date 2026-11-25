@@ -436,7 +436,8 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
-    streamReader_->setStreams(streams, decodingOptions);
+    streamReader_->setStreams(
+        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, decodingOptions);
     // Release the views before the stripe's streams go away.
     SCOPE_EXIT {
       streamReader_->reset();

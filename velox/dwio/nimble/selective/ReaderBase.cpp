@@ -152,6 +152,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   return std::shared_ptr<ReaderBase>(new ReaderBase(
       std::move(input),
       std::move(tablet),
+      /*sharedTablet=*/false,
       randomSkip,
       scanSpec,
       nimbleSchema,
@@ -181,6 +182,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   return std::shared_ptr<ReaderBase>(new ReaderBase(
       std::move(input),
       std::move(tablet),
+      /*sharedTablet=*/true,
       randomSkip,
       scanSpec,
       cachedTablet->nimbleSchema(),
@@ -192,6 +194,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
 ReaderBase::ReaderBase(
     std::unique_ptr<velox::dwio::common::BufferedInput> input,
     std::shared_ptr<TabletReader> tablet,
+    bool sharedTablet,
     const std::shared_ptr<velox::random::RandomSkipTracker>& randomSkip,
     const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
     std::shared_ptr<const Type> nimbleSchema,
@@ -209,8 +212,8 @@ ReaderBase::ReaderBase(
         if (lazyFileStats) {
           return {};
         }
-        auto statsSection =
-            tablet_->loadOptionalSection(std::string(kVectorizedStatsSection));
+        auto statsSection = tablet_->loadOptionalSection(
+            std::string(kVectorizedStatsSection), /*keepCache=*/sharedTablet);
         if (!statsSection.has_value()) {
           return {};
         }
@@ -225,8 +228,8 @@ ReaderBase::ReaderBase(
         if (!lazyFileStats) {
           return nullptr;
         }
-        auto statsSection =
-            tablet_->loadOptionalSection(std::string(kVectorizedStatsSection));
+        auto statsSection = tablet_->loadOptionalSection(
+            std::string(kVectorizedStatsSection), /*keepCache=*/sharedTablet);
         if (!statsSection.has_value()) {
           return nullptr;
         }

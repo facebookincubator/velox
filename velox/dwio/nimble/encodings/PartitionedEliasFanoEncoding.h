@@ -769,7 +769,10 @@ std::optional<uint64_t> PartitionedEliasFanoEncoding<T>::estimateSize(
         lastPartitionStart = start;
         minBase = std::min<uint64_t>(minBase, values[start]);
         maxBase = std::max<uint64_t>(maxBase, values[start]);
-        return planner.totalBytes().has_value();
+        // The partition count only grows, so once the partitions average
+        // fewer than kMinRowsPerPartition rows the input declines below.
+        return planner.totalBytes().has_value() &&
+            values.size() >= uint64_t{kMinRowsPerPartition} * numPartitions;
       });
   const auto groupBytes = planner.totalBytes();
   // Fewer than two partitions decline in favor of plain EliasFano, which

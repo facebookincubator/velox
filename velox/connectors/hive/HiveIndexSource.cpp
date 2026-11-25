@@ -21,7 +21,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/FileDataSource.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/FileIndexReader.h"
@@ -986,11 +985,10 @@ void HiveIndexSource::init(
 std::shared_ptr<common::ScanSpec> HiveIndexSource::buildScanSpec(
     const std::unordered_map<std::string, std::optional<std::string>>*
         partitionValues) {
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       readerOutputType_,
       projectedSubfields_,
       filters_,
-      /*indexColumns=*/{},
       tableHandle_->dataColumns(),
       partitionKeyHandles_,
       /*infoColumns=*/{},

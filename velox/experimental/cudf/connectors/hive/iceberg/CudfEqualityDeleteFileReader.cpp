@@ -24,7 +24,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -86,12 +86,13 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   dwio::common::ReaderOptions deleteReaderOpts(pool_);
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  ::facebook::velox::connector::configureReaderOptions(
+  ::facebook::velox::connector::FileSplitReader::configureReaderOptions(
       hiveConfig,
       connectorQueryCtx,
-      deleteFileSchema,
       deleteSplit,
+      deleteFileSchema,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       deleteReaderOpts);
 
   const FileHandleKey fileHandleKey{
@@ -123,15 +124,16 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  ::facebook::velox::connector::configureRowReaderOptions(
-      {},
+  ::facebook::velox::connector::FileSplitReader::configureRowReaderOptions(
+      nullptr,
+      nullptr,
+      deleteSplit,
       scanSpec,
       nullptr,
       deleteFileSchema,
-      deleteSplit,
       nullptr,
-      nullptr,
-      nullptr,
+      {},
+      /*serdeParameters=*/{},
       deleteRowReaderOpts);
 
   auto deleteRowReader = deleteReader->createRowReader(deleteRowReaderOpts);

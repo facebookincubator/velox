@@ -16,11 +16,13 @@
 
 #include "velox/connectors/common/FileSplitReader.h"
 
+#include <fmt/format.h>
+#include <folly/Conv.h>
+
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/common/ScanSpec.h"
@@ -113,25 +115,23 @@ FileSplitReader::FileSplitReader(
   baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
 }
 
-void FileSplitReader::setRemainingFilterColumns(
-    const folly::F14FastSet<std::string>& columns) {
-  baseRowReaderOpts_.setRemainingFilterColumns(columns);
-}
-
-void FileSplitReader::configureReaderOptions(
-    std::shared_ptr<velox::random::RandomSkipTracker> randomSkip) {
+void FileSplitReader::initialize(
+    std::shared_ptr<velox::random::RandomSkipTracker> randomSkip,
+    const folly::F14FastSet<std::string>& remainingFilterColumns) {
   configureBaseReaderOptions();
   baseReaderOpts_.setRandomSkip(std::move(randomSkip));
   baseReaderOpts_.setScanSpec(scanSpec_);
-  baseReaderOpts_.setFileFormat(fileSplit_->fileFormat);
+  baseRowReaderOpts_.setRemainingFilterColumns(remainingFilterColumns);
 }
 
 void FileSplitReader::configureBaseReaderOptions() {
-  connector::configureReaderOptions(
+  configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
-      tableHandle_,
       fileSplit_,
+      tableHandle_->dataColumns(),
+      /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       baseReaderOpts_);
 }
 
@@ -454,15 +454,16 @@ void FileSplitReader::createRowReader(
 void FileSplitReader::configureBaseRowReaderOptions(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     RowTypePtr rowType) {
-  connector::configureRowReaderOptions(
-      tableHandle_->tableParameters(),
+  configureRowReaderOptions(
+      fileConfig_,
+      connectorQueryCtx_,
+      fileSplit_,
       scanSpec_,
       std::move(metadataFilter),
       std::move(rowType),
-      fileSplit_,
-      fileConfig_,
-      connectorQueryCtx_->sessionProperties(),
       ioExecutor_,
+      tableHandle_->tableParameters(),
+      /*serdeParameters=*/{},
       baseRowReaderOpts_);
 }
 
@@ -534,6 +535,279 @@ void FileSplitReader::setPartitionValue(
           connectorQueryCtx_->sessionProperties()),
       it->second->isPartitionDateValueDaysSinceEpoch());
   spec->setConstantValue(constant);
+}
+
+namespace {
+
+void validateColumnMappingMode(
+    dwio::common::ColumnMappingMode mode,
+    dwio::common::FileFormat fileFormat) {
+  // kParquetFieldId is format-specific: it matches requested columns against
+  // physical Parquet schema field_id metadata. Other readers don't have that
+  // metadata, so reject it at split setup time instead of letting a later
+  // reader path interpret it as a generic field-id or name/position mode.
+  VELOX_USER_CHECK(
+      mode != dwio::common::ColumnMappingMode::kParquetFieldId ||
+          fileFormat == dwio::common::FileFormat::PARQUET,
+      "Column mapping mode {} is not supported for file format {}",
+      mode,
+      fileFormat);
+}
+
+uint8_t parseDelimiter(const std::string& delim) {
+  for (char const& ch : delim) {
+    if (!std::isdigit(ch)) {
+      return delim[0];
+    }
+  }
+  return stoi(delim);
+}
+
+std::unique_ptr<dwio::common::SerDeOptions> parseSerdeParameters(
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    const std::unordered_map<std::string, std::string>& tableParameters) {
+  auto fieldIt = serdeParameters.find(dwio::common::SerDeOptions::kFieldDelim);
+  if (fieldIt == serdeParameters.end()) {
+    fieldIt = serdeParameters.find("serialization.format");
+  }
+  auto collectionIt =
+      serdeParameters.find(dwio::common::SerDeOptions::kCollectionDelim);
+  if (collectionIt == serdeParameters.end()) {
+    // For collection delimiter, Hive 1.x, 2.x uses "colelction.delim", but
+    // Hive 3.x uses "collection.delim".
+    // See: https://issues.apache.org/jira/browse/HIVE-16922)
+    collectionIt = serdeParameters.find("colelction.delim");
+  }
+  auto mapKeyIt =
+      serdeParameters.find(dwio::common::SerDeOptions::kMapKeyDelim);
+
+  auto escapeCharIt =
+      serdeParameters.find(dwio::common::SerDeOptions::kEscapeChar);
+
+  auto nullStringIt = tableParameters.find(
+      dwio::common::TableParameter::kSerializationNullFormat);
+
+  if (fieldIt == serdeParameters.end() &&
+      collectionIt == serdeParameters.end() &&
+      mapKeyIt == serdeParameters.end() &&
+      escapeCharIt == serdeParameters.end() &&
+      nullStringIt == tableParameters.end()) {
+    return nullptr;
+  }
+
+  uint8_t fieldDelim = '\1';
+  uint8_t collectionDelim = '\2';
+  uint8_t mapKeyDelim = '\3';
+  // Treat an empty value as absent so parseDelimiter never sees "".
+  if (fieldIt != serdeParameters.end() && !fieldIt->second.empty()) {
+    fieldDelim = parseDelimiter(fieldIt->second);
+  }
+  if (collectionIt != serdeParameters.end() && !collectionIt->second.empty()) {
+    collectionDelim = parseDelimiter(collectionIt->second);
+  }
+  if (mapKeyIt != serdeParameters.end() && !mapKeyIt->second.empty()) {
+    mapKeyDelim = parseDelimiter(mapKeyIt->second);
+  }
+
+  // If escape character is specified then we use it, unless it is empty - in
+  // which case we default to '\\'.
+  // If escape character is not specified (not in the map) we turn escaping off.
+  // Logic is based on apache hive java code:
+  // https://github.com/apache/hive/blob/3f6f940af3f60cc28834268e5d7f5612e3b13c30/serde/src/java/org/apache/hadoop/hive/serde2/lazy/LazySerDeParameters.java#L105-L108
+  uint8_t escapeChar = '\\';
+  const bool hasEscapeChar = (escapeCharIt != serdeParameters.end());
+  if (hasEscapeChar) {
+    if (!escapeCharIt->second.empty()) {
+      // If delim is convertible to uint8_t then we use it as character code,
+      // otherwise we use the 1st character of the string.
+      escapeChar = folly::tryTo<uint8_t>(escapeCharIt->second)
+                       .value_or(escapeCharIt->second[0]);
+    }
+  }
+
+  auto serDeOptions = hasEscapeChar
+      ? std::make_unique<dwio::common::SerDeOptions>(
+            fieldDelim, collectionDelim, mapKeyDelim, escapeChar, true)
+      : std::make_unique<dwio::common::SerDeOptions>(
+            fieldDelim, collectionDelim, mapKeyDelim);
+  if (nullStringIt != tableParameters.end()) {
+    serDeOptions->nullString = nullStringIt->second;
+  }
+  return serDeOptions;
+}
+
+dwio::common::ColumnMappingMode sessionColumnMappingMode(
+    const FileConfig& fileConfig,
+    const config::ConfigBase* sessionProperties) {
+  return fileConfig.useColumnNames(sessionProperties)
+      ? dwio::common::ColumnMappingMode::kName
+      : dwio::common::ColumnMappingMode::kPosition;
+}
+
+} // namespace
+
+// static
+void FileSplitReader::configureReaderOptions(
+    const std::shared_ptr<const FileConfig>& fileConfig,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const RowTypePtr& fileSchema,
+    const std::unordered_map<std::string, std::string>& tableParameters,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    dwio::common::ReaderOptions& readerOptions) {
+  auto sessionProperties = connectorQueryCtx->sessionProperties();
+  VELOX_CHECK_NOT_NULL(sessionProperties, "Session properties are null");
+  readerOptions.setLoadQuantum(fileConfig->loadQuantum(sessionProperties));
+  readerOptions.setMaxCoalesceBytes(
+      fileConfig->maxCoalescedBytes(sessionProperties));
+  readerOptions.setMaxCoalesceDistance(
+      fileConfig->maxCoalescedDistanceBytes(sessionProperties));
+  readerOptions.setFileColumnNamesReadAsLowerCase(
+      fileConfig->isFileColumnNamesReadAsLowerCase(sessionProperties));
+  readerOptions.setAllowEmptyFile(true);
+  const auto columnMappingMode = fileSplit->columnMappingMode.value_or(
+      sessionColumnMappingMode(*fileConfig, sessionProperties));
+  validateColumnMappingMode(columnMappingMode, fileSplit->fileFormat);
+  readerOptions.setColumnMappingMode(columnMappingMode);
+  readerOptions.setFileSchema(fileSchema);
+  readerOptions.setFilePreloadThreshold(fileConfig->filePreloadThreshold());
+  readerOptions.setPrefetchRowGroups(fileConfig->prefetchRowGroups());
+  readerOptions.setCacheable(fileSplit->cacheable);
+  const auto& sessionTzName = connectorQueryCtx->sessionTimezone();
+  if (!sessionTzName.empty()) {
+    const auto timezone = tz::locateZone(sessionTzName);
+    readerOptions.setSessionTimezone(timezone);
+  }
+  readerOptions.setAdjustTimestampToTimezone(
+      connectorQueryCtx->adjustTimestampToTimezone());
+  // Prefer connector session property (FileConfig). Fall back to
+  // ConnectorQueryCtx (threaded from QueryConfig) for backward compatibility
+  // with callers that set it as a query config.
+  if (sessionProperties->valueExists(
+          FileConfig::kSelectiveNimbleReaderEnabledSession)) {
+    readerOptions.setSelectiveNimbleReaderEnabled(
+        fileConfig->selectiveNimbleReaderEnabled(sessionProperties));
+  } else {
+    readerOptions.setSelectiveNimbleReaderEnabled(
+        connectorQueryCtx->selectiveNimbleReaderEnabled());
+  }
+  readerOptions.setNimbleDirectBufferedInputEnabled(
+      fileConfig->nimbleDirectBufferedInputEnabled(sessionProperties));
+  readerOptions.setNimbleLazyFileStats(
+      fileConfig->nimbleLazyFileStats(sessionProperties));
+  readerOptions.setCacheMetadata(
+      fileConfig->cacheMetadata(sessionProperties) && fileSplit->cacheable);
+  readerOptions.setPinMetadata(fileConfig->pinMetadata(sessionProperties));
+  readerOptions.setCacheIndex(
+      fileConfig->cacheIndex(sessionProperties) && fileSplit->cacheable);
+  readerOptions.setPinIndex(fileConfig->pinIndex(sessionProperties));
+
+  // Set footer speculative IO size based on file format.
+  switch (fileSplit->fileFormat) {
+    case dwio::common::FileFormat::DWRF:
+    case dwio::common::FileFormat::ORC:
+      readerOptions.setFooterSpeculativeIoSize(
+          fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+    case dwio::common::FileFormat::PARQUET:
+      break;
+    case dwio::common::FileFormat::NIMBLE:
+      readerOptions.setFooterSpeculativeIoSize(
+          fileConfig->nimbleFooterSpeculativeIoSize(sessionProperties));
+      break;
+    default:
+      // Use ORC default for unknown formats.
+      readerOptions.setFooterSpeculativeIoSize(
+          fileConfig->orcFooterSpeculativeIoSize(sessionProperties));
+      break;
+  }
+
+  if (readerOptions.fileFormat() != dwio::common::FileFormat::UNKNOWN) {
+    VELOX_CHECK_EQ(
+        readerOptions.fileFormat(),
+        fileSplit->fileFormat,
+        "All splits of a data source must have the same file format");
+  } else {
+    readerOptions.setFileFormat(fileSplit->fileFormat);
+    // Serde options apply only on the first call, which sets the format.
+    if (auto serDeOptions =
+            parseSerdeParameters(serdeParameters, tableParameters)) {
+      readerOptions.setSerDeOptions(*serDeOptions);
+    }
+  }
+
+  if (!dwio::common::hasReaderFactory(fileSplit->fileFormat)) {
+    readerOptions.setFormatSpecificOptions(nullptr);
+    return;
+  }
+
+  auto formatScopedConfigs = fileConfig->formatScopedConfigs(
+      fileSplit->fileFormat, *sessionProperties);
+  readerOptions.setFormatSpecificOptions(
+      dwio::common::getReaderFactory(fileSplit->fileFormat)
+          ->createFormatOptions(
+              formatScopedConfigs.connectorConfig,
+              formatScopedConfigs.sessionProperties));
+}
+
+// static
+void FileSplitReader::configureRowReaderOptions(
+    const std::shared_ptr<const FileConfig>& fileConfig,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<common::ScanSpec>& scanSpec,
+    std::shared_ptr<common::MetadataFilter> metadataFilter,
+    const RowTypePtr& requestedType,
+    folly::Executor* const ioExecutor,
+    const std::unordered_map<std::string, std::string>& tableParameters,
+    const std::unordered_map<std::string, std::string>& serdeParameters,
+    dwio::common::RowReaderOptions& rowReaderOptions) {
+  auto skipRowsIt =
+      tableParameters.find(dwio::common::TableParameter::kSkipHeaderLineCount);
+  if (skipRowsIt != tableParameters.end()) {
+    rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
+  }
+  rowReaderOptions.setSerdeParameters(serdeParameters);
+  rowReaderOptions.setScanSpec(scanSpec);
+  rowReaderOptions.setIOExecutor(ioExecutor);
+  rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
+  rowReaderOptions.setRequestedType(requestedType);
+  rowReaderOptions.range(fileSplit->start, fileSplit->length);
+  if (fileSplit->splitRowRange.has_value()) {
+    VELOX_CHECK(
+        fileSplit->fileFormat == dwio::common::FileFormat::NIMBLE ||
+            fileSplit->fileFormat == dwio::common::FileFormat::DWRF ||
+            fileSplit->fileFormat == dwio::common::FileFormat::ORC ||
+            fileSplit->fileFormat == dwio::common::FileFormat::PARQUET ||
+            fileSplit->fileFormat == dwio::common::FileFormat::TEXT,
+        "Split row ranges are only supported for Nimble, DWRF, ORC, Parquet and text files: {}",
+        fileSplit->toString());
+    rowReaderOptions.setSplitRowRange(fileSplit->splitRowRange);
+  }
+  if (fileConfig && connectorQueryCtx) {
+    const auto* sessionProperties = connectorQueryCtx->sessionProperties();
+    rowReaderOptions.setTimestampPrecision(
+        static_cast<TimestampPrecision>(
+            fileConfig->readTimestampUnit(sessionProperties)));
+    rowReaderOptions.setPreserveFlatMapsInMemory(
+        fileConfig->preserveFlatMapsInMemory(sessionProperties));
+    rowReaderOptions.setParallelUnitLoadCount(
+        fileConfig->parallelUnitLoadCount(sessionProperties));
+    rowReaderOptions.setIndexEnabled(
+        fileConfig->indexEnabled(sessionProperties));
+    rowReaderOptions.setLazyColumnIo(
+        fileConfig->nimbleLazyColumnIo(sessionProperties));
+    rowReaderOptions.setCollectColumnCpuMetrics(
+        fileConfig->readerCollectColumnCpuMetrics(sessionProperties));
+    rowReaderOptions.setNimbleFsstDecodeRepeatedPayloads(
+        fileConfig->nimbleFsstDecodeRepeatedPayloads(sessionProperties));
+    rowReaderOptions.setNimblePreserveDictionaryEncoding(
+        fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
+    rowReaderOptions.setNimbleDictionaryAwareReads(
+        fileConfig->nimbleDictionaryAwareReads(sessionProperties));
+    rowReaderOptions.setNimbleScanFastPath(
+        fileConfig->nimbleScanFastPath(sessionProperties));
+  }
 }
 
 } // namespace facebook::velox::connector

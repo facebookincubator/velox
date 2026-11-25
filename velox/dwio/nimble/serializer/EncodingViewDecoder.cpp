@@ -18,7 +18,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <limits>
+#include <span>
+#include <vector>
 
 #include <folly/ScopeGuard.h>
 
@@ -29,18 +32,22 @@
 namespace facebook::nimble {
 namespace {
 
-// Copies selected strings into tracked storage that can outlive the decoder.
-void retainStringContent(
+// Copies the selected strings into one new buffer, which it adds to
+// 'stringBuffers', so that they stay valid after the decoder is gone.
+void copyStringContent(
     const void* notNulls,
     uint32_t count,
     velox::memory::MemoryPool* pool,
-    void* values,
+    void* outputValues,
     std::vector<velox::BufferPtr>& stringBuffers) {
-  auto* source = static_cast<std::string_view*>(values);
+  auto* source = static_cast<std::string_view*>(outputValues);
+  const auto selected = [&](uint32_t row) {
+    return notNulls == nullptr ||
+        velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), row);
+  };
   uint64_t totalBytes{0};
   for (uint32_t i{0}; i < count; ++i) {
-    if (notNulls == nullptr ||
-        velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), i)) {
+    if (selected(i)) {
       totalBytes += source[i].size();
     }
   }
@@ -53,13 +60,10 @@ void retainStringContent(
   auto* rawBuffer = buffer->asMutable<char>();
   NIMBLE_CHECK_NOT_NULL(rawBuffer);
   for (uint32_t i{0}; i < count; ++i) {
-    if (notNulls != nullptr &&
-        !velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), i)) {
+    if (!selected(i)) {
       continue;
     }
-    if (!source[i].empty()) {
-      std::copy(source[i].cbegin(), source[i].cend(), rawBuffer);
-    }
+    std::copy(source[i].cbegin(), source[i].cend(), rawBuffer);
     source[i] = std::string_view{rawBuffer, source[i].size()};
     rawBuffer += source[i].size();
   }
@@ -85,15 +89,16 @@ uint32_t countRows(std::span<const RowRange> ranges) {
   return static_cast<uint32_t>(numRows);
 }
 
-template <typename ReadFunction>
+// Reads with readFunction, then, for strings, keeps them valid with
+// retainFunction, which takes the output nulls, or nullptr when no row is null.
+template <typename ReadFunction, typename RetainFunction>
 uint32_t readSelected(
     uint32_t numRows,
     DataType dataType,
-    velox::memory::MemoryPool* pool,
     void* output,
     const std::function<void*()>& getOutputNulls,
-    std::vector<velox::BufferPtr>& stringBuffers,
-    ReadFunction readFunction) {
+    ReadFunction readFunction,
+    RetainFunction retainFunction) {
   if (numRows == 0) {
     return 0;
   }
@@ -116,17 +121,205 @@ uint32_t readSelected(
 
   const auto numNonNulls = readFunction(setNull);
   if (dataType == DataType::String) {
-    // TODO: Avoid this copy when EncodingView can transfer an ownership handle
-    // for its encoded bytes to the output vector.
-    retainStringContent(outputNulls, numRows, pool, output, stringBuffers);
+    retainFunction(outputNulls);
   }
   return numNonNulls;
+}
+
+#ifndef NDEBUG
+// Checks that each selected non-empty string that a read wrote to
+// 'outputValues' lies in one of 'buffers', the buffers that the views passed to
+// vouch for the strings they returned. Finding the buffer of each string costs
+// as much as the lookup that the views spare the read, so only debug builds
+// check.
+void checkStringsInBuffers(
+    const void* notNulls,
+    uint32_t count,
+    std::span<const velox::BufferPtr> buffers,
+    const void* outputValues) {
+  const auto* values = static_cast<const std::string_view*>(outputValues);
+  const std::less<const char*> less;
+  for (uint32_t i{0}; i < count; ++i) {
+    if (values[i].empty() ||
+        (notNulls != nullptr &&
+         !velox::bits::isBitSet(static_cast<const uint8_t*>(notNulls), i))) {
+      continue;
+    }
+    const bool held =
+        std::any_of(buffers.begin(), buffers.end(), [&](const auto& buffer) {
+          const auto* begin = buffer->template as<char>();
+          return !less(values[i].data(), begin) &&
+              !less(
+                  begin + buffer->size(), values[i].data() + values[i].size());
+        });
+    NIMBLE_DCHECK(
+        held,
+        "A view must pass buffers that hold every string it returns: output {}",
+        i);
+  }
+}
+#endif
+
+} // namespace
+
+namespace detail {
+
+// Collects the buffers that hold the strings of a read that holds them instead
+// of copying them, such as a scan: the buffers that the views of the chunks
+// pass to the addStringBuffer of their reads, which hold every non-empty string
+// that the reads return. The decoder keeps one for its reads, and resets it
+// after each.
+class StringRetainer {
+ public:
+  StringRetainer() = default;
+
+  ~StringRetainer() = default;
+
+  // addBuffer_ points to this object, so it must not move.
+  StringRetainer(const StringRetainer&) = delete;
+  StringRetainer& operator=(const StringRetainer&) = delete;
+  StringRetainer(StringRetainer&&) = delete;
+  StringRetainer& operator=(StringRetainer&&) = delete;
+
+  // Returns the addStringBuffer that a read passes to the reads of the views.
+  const std::function<void(velox::BufferPtr)>& addBuffer() const {
+    return addBuffer_;
+  }
+
+  // Returns the buffers that the views passed since the last reset().
+  const std::vector<velox::BufferPtr>& buffers() const {
+    return buffers_;
+  }
+
+  // Moves the buffers that the views passed since the last reset() to
+  // 'buffers'.
+  void retain(std::vector<velox::BufferPtr>& buffers) {
+    buffers.insert(
+        buffers.end(),
+        std::make_move_iterator(buffers_.begin()),
+        std::make_move_iterator(buffers_.end()));
+  }
+
+  // Drops the buffers of the last read, keeping the capacity of the list.
+  void reset() {
+    buffers_.clear();
+  }
+
+ private:
+  // Keeps each buffer once, since the views of several chunks can pass the
+  // same shared buffer.
+  const std::function<void(velox::BufferPtr)> addBuffer_{
+      [this](velox::BufferPtr buffer) {
+        NIMBLE_CHECK_NOT_NULL(buffer, "A view must not pass a null buffer");
+        NIMBLE_CHECK_GT(
+            buffer->size(), 0, "A view must not pass an empty buffer");
+        if (std::find(buffers_.begin(), buffers_.end(), buffer) ==
+            buffers_.end()) {
+          buffers_.emplace_back(std::move(buffer));
+        }
+      }};
+
+  // The buffers that the views passed to addBuffer_, each once.
+  std::vector<velox::BufferPtr> buffers_;
+};
+
+} // namespace detail
+
+namespace {
+
+// Returns the addStringBuffer that a read passes to the reads of the views:
+// that of 'retainer', or none when it is null, for a read that copies its
+// strings, so that the views need not pass buffers.
+const std::function<void(velox::BufferPtr)>& addStringBufferOf(
+    const detail::StringRetainer* retainer) {
+  static const std::function<void(velox::BufferPtr)> kNoAddStringBuffer;
+  return retainer == nullptr ? kNoAddStringBuffer : retainer->addBuffer();
+}
+
+// Keeps the selected strings that a read wrote to 'outputValues' valid after
+// the decoder is gone: holds the buffers that 'retainer' collected, or copies
+// every string when it is null, as for a sparse read.
+void retainStrings(
+    const void* notNulls,
+    uint32_t count,
+    velox::memory::MemoryPool* pool,
+    detail::StringRetainer* retainer,
+    void* outputValues,
+    std::vector<velox::BufferPtr>& stringBuffers) {
+  if (retainer == nullptr) {
+    copyStringContent(notNulls, count, pool, outputValues, stringBuffers);
+    return;
+  }
+#ifndef NDEBUG
+  checkStringsInBuffers(notNulls, count, retainer->buffers(), outputValues);
+#endif
+  retainer->retain(stringBuffers);
+}
+
+// Checks that 'bufferHolder' holds all of the bytes of 'chunk'.
+void checkHoldsChunk(
+    const velox::Buffer& bufferHolder,
+    std::string_view chunk) {
+  const std::less<const char*> less;
+  const auto* begin = bufferHolder.as<char>();
+  NIMBLE_USER_CHECK(
+      !less(chunk.data(), begin),
+      "A chunk buffer holder must not start after its chunk");
+  NIMBLE_USER_CHECK(
+      !less(begin + bufferHolder.size(), chunk.data() + chunk.size()),
+      "A chunk buffer holder must not end before its chunk");
+}
+
+// Creates the view of each of 'chunks' with 'encodingViewFactory', which it
+// passes the chunk and the buffer that holds it: the chunk's entry of
+// 'chunkBufferHolders', or null when that is empty. Appends each view, with
+// that buffer and the stream row where its chunk ends, to 'boundChunks', which
+// must be empty.
+void bindChunks(
+    std::span<const std::string_view> chunks,
+    std::span<const velox::BufferPtr> chunkBufferHolders,
+    const EncodingViewDecoder::EncodingViewFactory& encodingViewFactory,
+    std::vector<detail::BoundChunk>& boundChunks) {
+  NIMBLE_CHECK(boundChunks.empty(), "Chunks must be bound to an empty list");
+  if (!chunkBufferHolders.empty()) {
+    NIMBLE_USER_CHECK_EQ(
+        chunkBufferHolders.size(),
+        chunks.size(),
+        "Chunk buffer holders must align with the chunks");
+  }
+  static const velox::BufferPtr kNoBufferHolder;
+  uint32_t endRow{0};
+  for (size_t i{0}; i < chunks.size(); ++i) {
+    const auto chunk = chunks[i];
+    const auto& bufferHolder =
+        chunkBufferHolders.empty() ? kNoBufferHolder : chunkBufferHolders[i];
+    if (bufferHolder != nullptr) {
+      checkHoldsChunk(*bufferHolder, chunk);
+    }
+    auto encodingView = encodingViewFactory(chunk, bufferHolder);
+    NIMBLE_CHECK_NOT_NULL(encodingView);
+    // @lint-ignore NULLSAFECLANG nullable-dereference
+    const auto& view = *encodingView;
+    if (!boundChunks.empty()) {
+      NIMBLE_CHECK_FILE_EQ(
+          view.dataType(),
+          boundChunks.front().view->dataType(),
+          "Encoding chunks of a stream must store the same data type");
+    }
+    NIMBLE_CHECK_FILE_LE(
+        view.rowCount(),
+        std::numeric_limits<uint32_t>::max() - endRow,
+        "Stream rows must fit in uint32_t");
+    endRow += view.rowCount();
+    boundChunks.push_back({bufferHolder, std::move(encodingView), endRow});
+  }
 }
 
 } // namespace
 
 EncodingViewDecoder::EncodingViewDecoder(
     std::span<const std::string_view> chunks,
+    std::span<const velox::BufferPtr> chunkBufferHolders,
     velox::memory::MemoryPool* pool,
     velox::BufferPool* bufferPool,
     const EncodingViewFactory& encodingViewFactory)
@@ -135,11 +328,14 @@ EncodingViewDecoder::EncodingViewDecoder(
   NIMBLE_CHECK(
       encodingViewFactory_ != nullptr,
       "EncodingViewDecoder requires an EncodingView factory");
-  rebind(chunks, bufferPool);
+  rebind(chunks, chunkBufferHolders, bufferPool);
 }
+
+EncodingViewDecoder::~EncodingViewDecoder() = default;
 
 void EncodingViewDecoder::rebind(
     std::span<const std::string_view> chunks,
+    std::span<const velox::BufferPtr> chunkBufferHolders,
     velox::BufferPool* bufferPool) {
   release();
   bufferPool_ = bufferPool;
@@ -148,30 +344,73 @@ void EncodingViewDecoder::rebind(
   SCOPE_FAIL {
     release();
   };
-  uint32_t endRow{0};
-  for (const auto chunk : chunks) {
-    auto encodingView = encodingViewFactory_(chunk);
-    NIMBLE_CHECK_NOT_NULL(encodingView);
-    // @lint-ignore NULLSAFECLANG nullable-dereference
-    const auto& view = *encodingView;
-    if (!chunks_.empty()) {
-      NIMBLE_CHECK_FILE_EQ(
-          view.dataType(),
-          dataType(),
-          "Encoding chunks of a stream must store the same data type");
-    }
-    NIMBLE_CHECK_FILE_LE(
-        view.rowCount(),
-        std::numeric_limits<uint32_t>::max() - endRow,
-        "Stream rows must fit in uint32_t");
-    endRow += view.rowCount();
-    chunks_.push_back({std::move(encodingView), endRow});
-  }
+  bindChunks(chunks, chunkBufferHolders, encodingViewFactory_, chunks_);
 }
 
 void EncodingViewDecoder::release() {
   chunks_.clear();
   nextRow_ = 0;
+}
+
+bool EncodingViewDecoder::holdsStringBuffers(
+    uint32_t numSelectedRows,
+    uint32_t firstRow,
+    uint32_t lastRow) const {
+  // A read must select at least one in this many of the rows of the chunks it
+  // spans to hold their buffers instead of copying its values.
+  constexpr uint64_t kMaxSpannedRowsPerSelectedRow{4};
+
+  // The rows from firstRow to lastRow are fewer than the rows of the chunks
+  // they span, so this skips looking up the chunks of a sparse read.
+  if (numSelectedRows * kMaxSpannedRowsPerSelectedRow <
+      static_cast<uint64_t>(lastRow - firstRow) + 1) {
+    return false;
+  }
+  const uint64_t numSpannedRows = chunks_[findChunkIndex(lastRow)].endRow -
+      chunkStartRow(findChunkIndex(firstRow));
+  return numSelectedRows * kMaxSpannedRowsPerSelectedRow >= numSpannedRows;
+}
+
+// @lint-ignore CLANGTIDY facebook-hte-NullableReturn
+detail::StringRetainer* EncodingViewDecoder::stringRetainer(
+    uint32_t numSelectedRows,
+    uint32_t firstRow,
+    uint32_t lastRow) {
+  if (!holdsStringBuffers(numSelectedRows, firstRow, lastRow)) {
+    return nullptr;
+  }
+  if (stringRetainer_ == nullptr) {
+    stringRetainer_ = std::make_unique<detail::StringRetainer>();
+  }
+  return stringRetainer_.get();
+}
+
+// @lint-ignore CLANGTIDY facebook-hte-NullableReturn
+detail::StringRetainer* EncodingViewDecoder::stringRetainer(
+    DataType dataType,
+    std::span<const uint32_t> rows) {
+  if (dataType != DataType::String || rows.empty()) {
+    return nullptr;
+  }
+
+  // The rows can come in any order. Sorted rows give their lowest and highest
+  // without a search.
+  const auto [first, last] = std::is_sorted(rows.begin(), rows.end())
+      ? std::pair{rows.begin(), rows.end() - 1}
+      : std::minmax_element(rows.begin(), rows.end());
+  return stringRetainer(static_cast<uint32_t>(rows.size()), *first, *last);
+}
+
+// @lint-ignore CLANGTIDY facebook-hte-NullableReturn
+detail::StringRetainer* EncodingViewDecoder::stringRetainer(
+    DataType dataType,
+    std::span<const RowRange> ranges,
+    uint32_t numRows) {
+  if (dataType != DataType::String || numRows == 0) {
+    return nullptr;
+  }
+  return stringRetainer(
+      numRows, ranges.front().startRow, ranges.back().endRow - 1);
 }
 
 uint32_t EncodingViewDecoder::next(
@@ -317,14 +556,25 @@ uint32_t EncodingViewDecoder::read(
       this->dataType(),
       dataType,
       "EncodingView data type does not match FieldReader");
+  const auto numRows = static_cast<uint32_t>(rows.size());
+  auto* retainer = stringRetainer(dataType, rows);
+  SCOPE_EXIT {
+    if (retainer != nullptr) {
+      retainer->reset();
+    }
+  };
   return readSelected(
-      static_cast<uint32_t>(rows.size()),
+      numRows,
       dataType,
-      pool_,
       output,
       getOutputNulls,
-      stringBuffers,
-      [&](const auto& setNull) { return readRows(rows, setNull, output); });
+      [&](const auto& setNull) {
+        return readRows(rows, setNull, addStringBufferOf(retainer), output);
+      },
+      [&](const void* outputNulls) {
+        retainStrings(
+            outputNulls, numRows, pool_, retainer, output, stringBuffers);
+      });
 }
 
 uint32_t EncodingViewDecoder::read(
@@ -338,23 +588,34 @@ uint32_t EncodingViewDecoder::read(
       this->dataType(),
       dataType,
       "EncodingView data type does not match FieldReader");
+  auto* retainer = stringRetainer(dataType, ranges, numRows);
+  SCOPE_EXIT {
+    if (retainer != nullptr) {
+      retainer->reset();
+    }
+  };
   return readSelected(
       numRows,
       dataType,
-      pool_,
       output,
       getOutputNulls,
-      stringBuffers,
-      [&](const auto& setNull) { return readRanges(ranges, setNull, output); });
+      [&](const auto& setNull) {
+        return readRanges(ranges, setNull, addStringBufferOf(retainer), output);
+      },
+      [&](const void* outputNulls) {
+        retainStrings(
+            outputNulls, numRows, pool_, retainer, output, stringBuffers);
+      });
 }
 
 uint32_t EncodingViewDecoder::readRows(
     std::span<const uint32_t> rows,
     const std::function<void(uint32_t)>& setNull,
+    const std::function<void(velox::BufferPtr)>& addStringBuffer,
     void* output) {
   // A single chunk starts at stream row zero, so its rows are the stream rows.
   if (chunks_.size() == 1) {
-    return chunks_.front().view->read(rows, setNull, output);
+    return chunks_.front().view->read(rows, setNull, addStringBuffer, output);
   }
 
   const auto valueWidth = decodedValueWidth(dataType());
@@ -384,6 +645,7 @@ uint32_t EncodingViewDecoder::readRows(
         [&setNull, outputOffset](uint32_t index) {
           setNull(outputOffset + index);
         },
+        addStringBuffer,
         static_cast<char*>(output) +
             static_cast<size_t>(outputOffset) * valueWidth);
   }
@@ -393,10 +655,11 @@ uint32_t EncodingViewDecoder::readRows(
 uint32_t EncodingViewDecoder::readRanges(
     std::span<const RowRange> ranges,
     const std::function<void(uint32_t)>& setNull,
+    const std::function<void(velox::BufferPtr)>& addStringBuffer,
     void* output) {
   // A single chunk starts at stream row zero, so its rows are the stream rows.
   if (chunks_.size() == 1) {
-    return chunks_.front().view->read(ranges, setNull, output);
+    return chunks_.front().view->read(ranges, setNull, addStringBuffer, output);
   }
 
   const auto valueWidth = decodedValueWidth(dataType());
@@ -437,6 +700,7 @@ uint32_t EncodingViewDecoder::readRanges(
         [&setNull, chunkOutputOffset](uint32_t index) {
           setNull(chunkOutputOffset + index);
         },
+        addStringBuffer,
         static_cast<char*>(output) +
             static_cast<size_t>(chunkOutputOffset) * valueWidth);
   }
@@ -447,7 +711,7 @@ size_t EncodingViewDecoder::findChunkIndex(uint32_t row) const {
   NIMBLE_CHECK_LT(row, numRows(), "Read rows must be within the stream");
   return static_cast<size_t>(
       std::ranges::upper_bound(
-          chunks_, row, std::ranges::less{}, &Chunk::endRow) -
+          chunks_, row, std::ranges::less{}, &detail::BoundChunk::endRow) -
       chunks_.begin());
 }
 

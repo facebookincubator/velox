@@ -19,12 +19,10 @@ add_executable(
   HiveIndexSourceUtilsTest.cpp
   HiveBucketPruningTest.cpp
   FileConnectorSplitTest.cpp
-  FileConnectorUtilTest.cpp
   FileHandleTest.cpp
   HiveConfigTest.cpp
   HiveDataSinkTest.cpp
   HiveConnectorTest.cpp
-  HiveConnectorUtilTest.cpp
   HiveConnectorSerDeTest.cpp
   HivePartitionFunctionTest.cpp
   HivePartitionNameTest.cpp

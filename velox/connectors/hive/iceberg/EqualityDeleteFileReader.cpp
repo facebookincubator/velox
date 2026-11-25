@@ -18,7 +18,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -203,12 +203,13 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  connector::configureReaderOptions(
+  connector::FileSplitReader::configureReaderOptions(
       fileConfig,
       connectorQueryCtx,
-      deleteFileSchema,
       deleteSplit,
+      deleteFileSchema,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       deleteReaderOpts);
 
   const FileHandleKey fileHandleKey{
@@ -232,15 +233,16 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  connector::configureRowReaderOptions(
-      {},
+  connector::FileSplitReader::configureRowReaderOptions(
+      nullptr,
+      nullptr,
+      deleteSplit,
       scanSpec,
       nullptr,
       deleteFileSchema,
-      deleteSplit,
       nullptr,
-      nullptr,
-      nullptr,
+      {},
+      /*serdeParameters=*/{},
       deleteRowReaderOpts);
 
   auto deleteRowReader = deleteReader->createRowReader(deleteRowReaderOpts);

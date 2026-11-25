@@ -25,7 +25,6 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/common/FileConnectorSplit.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/FileScanState.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/common/FileTableHandle.h"
@@ -64,6 +63,20 @@ struct FileScanBatchEvent : public core::ScanBatchEvent {
 
 class FileConfig;
 
+/// Names of the special columns a scan produces from the reader's row positions
+/// rather than from file data. Each is unset when the scan doesn't produce it.
+struct SpecialColumnNames {
+  /// BIGINT row number in the file.
+  std::optional<std::string> rowIndex;
+
+  /// ROW of 5 fields identifying the row, whose first field is the row number.
+  std::optional<std::string> rowId;
+
+  /// ROW(BIGINT, INTEGER) describing the range of rows each batch was read
+  /// from.
+  std::optional<std::string> readRange;
+};
+
 /// Base class for file-based data sources that read from columnar file formats
 /// (ORC, Parquet, etc.) using FileSplitReader. Provides the common scan
 /// pipeline: column resolution, filter extraction, scan spec construction,
@@ -88,6 +101,37 @@ class FileDataSource : public DataSource {
   static constexpr std::string_view kNumRamRead{io::kNumRamRead};
   static constexpr std::string_view kRamReadBytes{io::kRamReadBytes};
   static constexpr std::string_view kReadGapBytes{io::kReadGapBytes};
+
+  /// Creates the ScanSpec for reading data from files: which columns to read
+  /// and what filters to apply. Handles regular data columns, partition key
+  /// columns (values from the file path), synthesized columns (e.g. $path,
+  /// $bucket) and special columns (row index, row ID, read range).
+  ///
+  /// @param rowType Columns to project in the output.
+  /// @param outputSubfields Subfields to read for each column, for pruning
+  /// nested data.
+  /// @param subfieldFilters Filters to apply during the scan.
+  /// @param dataColumns All columns in the data file. Gives the types of
+  /// columns that have filters but are not projected.
+  /// @param partitionKeys Partition key columns, which are not read from the
+  /// file.
+  /// @param infoColumns Synthesized columns such as $path.
+  /// @param specialColumns Names of the special columns.
+  /// @param disableStatsBasedFilterReorder Disables reordering filters based on
+  /// statistics.
+  /// @param pool Memory pool for allocations while building the ScanSpec.
+  static std::shared_ptr<common::ScanSpec> makeScanSpec(
+      const RowTypePtr& rowType,
+      const folly::F14FastMap<
+          std::string,
+          std::vector<const common::Subfield*>>& outputSubfields,
+      const common::SubfieldFilters& subfieldFilters,
+      const RowTypePtr& dataColumns,
+      const std::unordered_map<std::string, FileColumnHandlePtr>& partitionKeys,
+      const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns,
+      const SpecialColumnNames& specialColumns,
+      bool disableStatsBasedFilterReorder,
+      memory::MemoryPool* pool);
 
   FileDataSource(
       const RowTypePtr& outputType,
