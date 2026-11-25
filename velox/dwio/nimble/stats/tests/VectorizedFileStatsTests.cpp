@@ -27,6 +27,9 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -510,6 +513,41 @@ void expectLazyStatsMatchEager(
   EXPECT_EQ(lazyStats->logicalSize(eagerStats.size()), std::nullopt);
 }
 
+// Round-trips row, map, key and value stats of a single MAP(VARCHAR, DOUBLE)
+// column whose file type is 'nimbleType'.
+void verifyMapStatsRoundTrip(
+    const velox::RowTypePtr& schema,
+    const std::shared_ptr<const Type>& nimbleType,
+    velox::memory::MemoryPool& pool) {
+  // Schema order: row, map, key (string), value (double)
+  ColumnStatistics rowStat(1000, 0, 30000, 15000);
+  ColumnStatistics mapStat(900, 50, 25000, 12500);
+  StringStatistics keyStat(4000, 0, 20000, 10000, "key_a", "key_z");
+  FloatingPointStatistics valueStat(4000, 500, 32000, 16000, 0.0, 100.0);
+
+  std::vector<ColumnStatistics*> originalStats{
+      &rowStat, &mapStat, &keyStat, &valueStat};
+
+  VectorizedFileStats fileStats(originalStats, &pool);
+  nimble::Buffer buffer(pool);
+  auto serialized = fileStats.serialize(buffer);
+
+  auto deserialized = VectorizedFileStats::deserialize(serialized, pool);
+  auto roundTrippedStats = deserialized->toColumnStatistics(schema, nimbleType);
+  ASSERT_EQ(roundTrippedStats.size(), 4);
+
+  expectColumnStatisticsEqual(rowStat, *roundTrippedStats[0]);
+  expectColumnStatisticsEqual(mapStat, *roundTrippedStats[1]);
+
+  auto* actualKeyStat = roundTrippedStats[2]->as<StringStatistics>();
+  ASSERT_NE(actualKeyStat, nullptr);
+  expectStringStatisticsEqual(keyStat, *actualKeyStat);
+
+  auto* actualValueStat = roundTrippedStats[3]->as<FloatingPointStatistics>();
+  ASSERT_NE(actualValueStat, nullptr);
+  expectFloatingPointStatisticsEqual(valueStat, *actualValueStat);
+}
+
 } // namespace
 
 // Test 4: Round-trip tests with schema-based conversion that check statistic
@@ -658,35 +696,31 @@ TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithMap) {
   // Create a schema with a map type
   auto schema =
       velox::ROW({{"map_col", velox::MAP(velox::VARCHAR(), velox::DOUBLE())}});
-  auto nimbleType = convertToNimbleType(*schema);
+  verifyMapStatsRoundTrip(schema, convertToNimbleType(*schema), *leafPool_);
+}
 
-  // Schema order: row, map, key (string), value (double)
-  ColumnStatistics rowStat(1000, 0, 30000, 15000);
-  ColumnStatistics mapStat(900, 50, 25000, 12500);
-  StringStatistics keyStat(4000, 0, 20000, 10000, "key_a", "key_z");
-  FloatingPointStatistics valueStat(4000, 500, 32000, 16000, 0.0, 100.0);
+TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithHybridFlatMap) {
+  auto schema =
+      velox::ROW({{"map_col", velox::MAP(velox::VARCHAR(), velox::DOUBLE())}});
+  // The builder views the group keys, so they outlive it.
+  const std::vector<std::string> groupKeys{"key_a"};
+  const std::vector<std::string> defaultKeys;
+  SchemaBuilder builder{leafPool_.get()};
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  hybridMap->addGroup(
+      7, groupKeys, builder.createScalarTypeBuilder(ScalarKind::Double));
+  hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      defaultKeys,
+      builder.createScalarTypeBuilder(ScalarKind::Double));
+  root->addChild("map_col", hybridMap);
 
-  std::vector<ColumnStatistics*> originalStats{
-      &rowStat, &mapStat, &keyStat, &valueStat};
-
-  VectorizedFileStats fileStats(originalStats, leafPool_.get());
-  nimble::Buffer buffer(*leafPool_);
-  auto serialized = fileStats.serialize(buffer);
-
-  auto deserialized = VectorizedFileStats::deserialize(serialized, *leafPool_);
-  auto roundTrippedStats = deserialized->toColumnStatistics(schema, nimbleType);
-  ASSERT_EQ(roundTrippedStats.size(), 4);
-
-  expectColumnStatisticsEqual(rowStat, *roundTrippedStats[0]);
-  expectColumnStatisticsEqual(mapStat, *roundTrippedStats[1]);
-
-  auto* actualKeyStat = roundTrippedStats[2]->as<StringStatistics>();
-  ASSERT_NE(actualKeyStat, nullptr);
-  expectStringStatisticsEqual(keyStat, *actualKeyStat);
-
-  auto* actualValueStat = roundTrippedStats[3]->as<FloatingPointStatistics>();
-  ASSERT_NE(actualValueStat, nullptr);
-  expectFloatingPointStatisticsEqual(valueStat, *actualValueStat);
+  verifyMapStatsRoundTrip(
+      schema,
+      SchemaReader::getSchema(builder.schemaNodes(), leafPool_.get()),
+      *leafPool_);
 }
 
 TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithNulloptMinMax) {

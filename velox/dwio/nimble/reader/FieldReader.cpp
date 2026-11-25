@@ -18,6 +18,7 @@
 #include <velox/type/StringView.h>
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <numeric>
 #include <optional>
 
@@ -5849,6 +5850,40 @@ using HybridFlatMapKey = std::
 constexpr velox::vector_size_t kAbsentHybridFlatMapValueIndex =
     std::numeric_limits<velox::vector_size_t>::max();
 
+// Returns what readers produce for a value subtree without streams. A ROW
+// writes its nulls stream only when it holds a null, so its values are not
+// null, and its fields are built the same way. Every other subtree without
+// streams holds only nulls. For example, ROW(a BIGINT) gives non-null rows
+// whose `a` is null.
+//
+// The writer drops every stream that has nothing to store, so a missing stream
+// means something different in each branch:
+// - ROW: its nulls stream marks the null rows. Without it, no row is null, so
+//   this returns non-null rows and builds each field the same way.
+// - Scalar, ARRAY or MAP: its streams hold the non-null values. Without them,
+//   every value is null, so this returns a null constant.
+//
+// Example with values of type ROW(a BIGINT):
+// - With streams: {a: 5} and null write a ROW nulls stream [not null, null]
+//   and an `a` data stream [5], which the value reader decodes.
+// - Without streams: {a: null} and {a: null} write no stream. This returns two
+//   non-null rows (ROW branch) whose `a` is a null constant (other branch).
+velox::VectorPtr createValuesWithoutStreams(
+    const velox::TypePtr& type,
+    velox::vector_size_t size,
+    velox::memory::MemoryPool* pool) {
+  if (type->kind() != velox::TypeKind::ROW) {
+    return velox::BaseVector::createNullConstant(type, size, pool);
+  }
+  std::vector<velox::VectorPtr> fields;
+  fields.reserve(type->size());
+  for (const auto& fieldType : type->asRow().children()) {
+    fields.push_back(createValuesWithoutStreams(fieldType, size, pool));
+  }
+  return std::make_shared<velox::RowVector>(
+      pool, type, /*nulls=*/nullptr, size, std::move(fields));
+}
+
 template <typename T>
 class HybridFlatMapGroupReader {
   using DecodedKey = HybridFlatMapKey<T>;
@@ -5889,6 +5924,9 @@ class HybridFlatMapGroupReader {
           const auto rowCount = decoder->remainingRows();
           values.resize(rowCount);
           if (rowCount > 0) {
+            // Decoders take an empty vector and add the buffers that back the
+            // decoded strings.
+            std::vector<velox::BufferPtr> stringBuffers;
             decoder->next(
                 rowCount,
                 values.data(),
@@ -5897,8 +5935,12 @@ class HybridFlatMapGroupReader {
                       "Hybrid FlatMap {} stream must not contain nulls.",
                       streamName);
                 },
-                scratchBuffers_,
+                stringBuffers,
                 /*scatterOutputBitmap=*/nullptr);
+            scratchBuffers_.insert(
+                scratchBuffers_.end(),
+                std::make_move_iterator(stringBuffers.begin()),
+                std::make_move_iterator(stringBuffers.end()));
           }
           NIMBLE_CHECK_FILE_EQ(
               decoder->remainingRows(),
@@ -6015,8 +6057,8 @@ class HybridFlatMapGroupReader {
 
     NIMBLE_CHECK_NOT_NULL(valueReader_, "Missing hybrid FlatMap value reader.");
     if (!hasValueStreams) {
-      values_ = velox::BaseVector::createNullConstant(
-          valueReader_->type(), numValues, pool_);
+      values_ =
+          createValuesWithoutStreams(valueReader_->type(), numValues, pool_);
     } else {
       co_await valueReader_->co_next(
           numValues, values_, /*scatterBitmap=*/nullptr);
@@ -6566,11 +6608,12 @@ class HybridFlatMapFieldReaderFactory final : public FieldReaderFactory {
       auto hasValueStreams = std::move(parameters.hasValueStreams);
       if (!hasValueStreams) {
         // Standalone readers have a fixed decoder map, so infer stream
-        // presence from its offsets. Deserializer supplies the batch-aware
-        // callback because it reuses decoders across batches.
+        // presence from its non-null decoders. Deserializer supplies the
+        // batch-aware callback because it reuses decoders across batches.
         const bool valueStreamsPresent = visitPresenceStreamOffsets(
-            *group.valueType,
-            [&](offset_size offset) { return decoders.contains(offset); });
+            *group.valueType, [&](offset_size offset) {
+              return hasDecoderStream(offset, decoders);
+            });
         hasValueStreams = [valueStreamsPresent]() {
           return valueStreamsPresent;
         };

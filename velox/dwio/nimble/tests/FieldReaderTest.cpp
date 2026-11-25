@@ -996,6 +996,13 @@ TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
           .expectedMaps = {"{1: null}", "{}"},
       },
       {
+          .name = "inMapAndValues",
+          .keyPresence = std::nullopt,
+          .inMap = std::vector<uint8_t>{true, false},
+          .values = std::vector<int64_t>{100},
+          .expectedMaps = {"{1: 100}", "{}"},
+      },
+      {
           .name = "keyPresenceOnly",
           .keyPresence = std::vector<uint8_t>{true},
           .inMap = std::nullopt,
@@ -1012,31 +1019,42 @@ TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
   };
 
   velox::test::VectorMaker vectorMaker{pool_.get()};
-  for (const auto& testCase : testCases) {
-    SCOPED_TRACE(testCase.name);
-    folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
-    if (testCase.keyPresence.has_value()) {
-      decoders[group.keyPresenceDescriptor.offset()] =
-          std::make_unique<BoolDecoder>(*testCase.keyPresence);
-    }
-    if (testCase.inMap.has_value()) {
-      decoders[group.inMapDescriptor.offset()] =
-          std::make_unique<BoolDecoder>(*testCase.inMap);
-    }
-    if (testCase.values.has_value()) {
-      decoders[valueOffset] =
-          std::make_unique<TestDecoder<int64_t>>(*testCase.values);
-    }
-    auto reader = factory->createReader(decoders);
-    velox::VectorPtr output;
-    folly::coro::blockingWait(reader->co_next(2, output));
-    const auto expected = vectorMaker.rowVector(
-        {"features"},
-        {vectorMaker.mapVectorFromJson<int32_t, int64_t>(
-            testCase.expectedMaps)});
-    ASSERT_EQ(output->size(), expected->size());
-    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
-      EXPECT_TRUE(expected->equalValueAt(output.get(), row, row));
+  // BatchReader keeps a null decoder for each requested stream that is absent
+  // from the stripe, while other callers leave the stream out of the map.
+  for (const bool absentStreamsAsNull : {false, true}) {
+    SCOPED_TRACE(
+        absentStreamsAsNull ? "absentStreamsAsNull" : "absentStreamsOmitted");
+    for (const auto& testCase : testCases) {
+      SCOPED_TRACE(testCase.name);
+      folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+      if (absentStreamsAsNull) {
+        for (const auto offset : streamOffsets) {
+          decoders[offset] = nullptr;
+        }
+      }
+      if (testCase.keyPresence.has_value()) {
+        decoders[group.keyPresenceDescriptor.offset()] =
+            std::make_unique<BoolDecoder>(*testCase.keyPresence);
+      }
+      if (testCase.inMap.has_value()) {
+        decoders[group.inMapDescriptor.offset()] =
+            std::make_unique<BoolDecoder>(*testCase.inMap);
+      }
+      if (testCase.values.has_value()) {
+        decoders[valueOffset] =
+            std::make_unique<TestDecoder<int64_t>>(*testCase.values);
+      }
+      auto reader = factory->createReader(decoders);
+      velox::VectorPtr output;
+      folly::coro::blockingWait(reader->co_next(2, output));
+      const auto expected = vectorMaker.rowVector(
+          {"features"},
+          {vectorMaker.mapVectorFromJson<int32_t, int64_t>(
+              testCase.expectedMaps)});
+      ASSERT_EQ(output->size(), expected->size());
+      for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+        EXPECT_TRUE(expected->equalValueAt(output.get(), row, row));
+      }
     }
   }
 }
