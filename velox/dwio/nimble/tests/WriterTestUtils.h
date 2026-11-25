@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -44,9 +45,13 @@ struct ChunkSizeResults {
 // Reads back every stream of every stripe from `reader` and asserts that chunk
 // raw sizes stay within [minStreamChunkRawSize, maxStreamChunkRawSize] (modulo
 // a tolerance and string-value edge cases), returning per-stream chunk counts.
+// When `chunkCountsPerStripe` is set, it receives the chunk count of every
+// stream present in each stripe, keyed by stream offset.
 ChunkSizeResults validateChunkSize(
     nimble::BatchReader& reader,
     uint64_t minStreamChunkRawSize,
-    uint64_t maxStreamChunkRawSize);
+    uint64_t maxStreamChunkRawSize,
+    std::vector<folly::F14FastMap<uint32_t, uint32_t>>* chunkCountsPerStripe =
+        nullptr);
 
 } // namespace facebook
