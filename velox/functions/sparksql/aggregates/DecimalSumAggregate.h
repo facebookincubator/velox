@@ -23,9 +23,7 @@ namespace facebook::velox::functions::aggregate::sparksql {
 /// @tparam TInputType The raw input data type.
 /// @tparam TSumType The type of sum in the output of partial aggregation or the
 /// final output type of final aggregation.
-/// @tparam ResultPrecision The precision of the result type, used for checking
-/// overflow.
-template <typename TInputType, typename TSumType, uint8_t ResultPrecision>
+template <typename TInputType, typename TSumType>
 class DecimalSumAggregate {
  public:
   using InputType = Row<TInputType>;
@@ -44,15 +42,30 @@ class DecimalSumAggregate {
   /// default-null behavior is disabled.
   static constexpr bool default_null_behavior_ = false;
 
-  static bool toIntermediate(
+  /// Reads the result precision, used to check for overflow.
+  void initialize(
+      core::AggregationNode::Step /*step*/,
+      const std::vector<TypePtr>& /*argTypes*/,
+      const TypePtr& resultType) {
+    // The result type of a partial aggregation is the intermediate ROW type,
+    // whose first child is the sum.
+    const auto& sumType =
+        resultType->isRow() ? resultType->childAt(0) : resultType;
+    resultPrecision_ = getDecimalPrecisionScale(*sumType).first;
+  }
+
+  static void toIntermediate(
       exec::out_type<Row<TSumType, bool>>& out,
       exec::optional_arg_type<TInputType> in) {
     if (in.has_value()) {
       out.copy_from(std::make_tuple(static_cast<TSumType>(in.value()), false));
     } else {
-      out.copy_from(std::make_tuple(static_cast<TSumType>(0), true));
+      fillEmptyIntermediate(out);
     }
-    return true;
+  }
+
+  static void fillEmptyIntermediate(exec::out_type<IntermediateType>& out) {
+    out.copy_from(std::make_tuple(static_cast<TSumType>(0), true));
   }
 
   /// This struct stores the sum of input values, overflow during accumulation,
@@ -66,6 +79,9 @@ class DecimalSumAggregate {
     std::optional<int128_t> sum{0};
     int64_t overflow{0};
     bool isEmpty{true};
+    // Copy of the result precision, so writing a result needs no pointer to
+    // the function. Fits in the padding after 'isEmpty'.
+    uint8_t resultPrecision;
 
     static constexpr bool is_aligned_ = true;
 
@@ -73,7 +89,8 @@ class DecimalSumAggregate {
 
     explicit AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        DecimalSumAggregate<TInputType, TSumType, ResultPrecision>* /*fn*/) {}
+        DecimalSumAggregate<TInputType, TSumType>* fn)
+        : resultPrecision{fn->resultPrecision_} {}
 
     std::optional<int128_t> computeFinalResult() const {
       if (!sum.has_value()) {
@@ -82,7 +99,7 @@ class DecimalSumAggregate {
       auto const adjustedSum =
           DecimalUtil::adjustSumForOverflow(sum.value(), overflow);
       if (adjustedSum.has_value() &&
-          DecimalUtil::valueInPrecisionRange(adjustedSum, ResultPrecision)) {
+          DecimalUtil::valueInPrecisionRange(adjustedSum, resultPrecision)) {
         return adjustedSum;
       } else {
         // Found overflow during computing adjusted sum.
@@ -90,7 +107,7 @@ class DecimalSumAggregate {
       }
     }
 
-    bool addInput(
+    FOLLY_ALWAYS_INLINE bool addInput(
         HashStringAllocator* /*allocator*/,
         exec::optional_arg_type<TInputType> data) {
       if (!data.has_value()) {
@@ -178,6 +195,12 @@ class DecimalSumAggregate {
       }
     }
   };
+
+  static_assert(sizeof(AccumulatorType) == 48);
+
+ private:
+  // The result precision, set by initialize().
+  uint8_t resultPrecision_{0};
 };
 
 } // namespace facebook::velox::functions::aggregate::sparksql

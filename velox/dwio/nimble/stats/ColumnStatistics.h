@@ -163,7 +163,8 @@ class FloatingPointStatistics : public ColumnStatistics {
       uint64_t logicalSize,
       uint64_t physicalSize,
       std::optional<double> min,
-      std::optional<double> max);
+      std::optional<double> max,
+      bool hasNanValues = false);
 
   std::optional<double> getMin() const;
   std::optional<double> getMax() const;
@@ -178,6 +179,7 @@ class FloatingPointStatistics : public ColumnStatistics {
 
   std::optional<double> min_;
   std::optional<double> max_;
+  bool hasNanValues_{false};
 };
 
 // Deduplicated column statistics wraps a base ColumnStatistics and adds
@@ -320,6 +322,9 @@ class FloatingPointStatisticsCollector : public StatisticsCollector {
  private:
   // Helper to access stats_ as FloatingPointStatistics
   FloatingPointStatistics* floatingPointStats();
+
+  // Sets hasNanValues_ and clears both bounds.
+  void setHasNanValues();
 };
 
 class StringStatisticsCollector : public StatisticsCollector {

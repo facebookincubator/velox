@@ -678,10 +678,10 @@ TEST_F(IcebergChangelogE2ETest, dynamicFilterOnSnapshotIdApplied) {
   auto buildVector =
       makeRowVector({"build_snapshotid"}, {makeFlatVector<int64_t>({100})});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  exec::test::PlanBuilder builder;
   core::PlanNodeId changelogScanId;
 
-  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+  auto plan = builder.newPlan()
                   .startTableScan()
                   .connectorId(test::kIcebergConnectorId)
                   .outputType(changelogOutputType_)
@@ -690,12 +690,8 @@ TEST_F(IcebergChangelogE2ETest, dynamicFilterOnSnapshotIdApplied) {
                   .endTableScan()
                   .capturePlanNodeId(changelogScanId)
                   .hashJoin(
-                      {"snapshotid"},
-                      {"build_snapshotid"},
-                      exec::test::PlanBuilder(planNodeIdGenerator)
-                          .values({buildVector})
-                          .planNode(),
-                      /*filter=*/"",
+                      "snapshotid = build_snapshotid",
+                      builder.newPlan().values(buildVector).planNode(),
                       {"snapshotid"})
                   .planNode();
 
@@ -737,12 +733,12 @@ TEST_F(IcebergChangelogE2ETest, mergedDynamicFiltersOnSnapshotId) {
   auto build2 =
       makeRowVector({"b2_snapshotid"}, {makeFlatVector<int64_t>({200, 300})});
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  exec::test::PlanBuilder builder;
   core::PlanNodeId changelogScanId;
 
   // Two chained joins on snapshotid with no build-side output columns, so
   // canReplaceWithDynamicFilter_ fires on both and both filters are pushed.
-  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+  auto plan = builder.newPlan()
                   .startTableScan()
                   .connectorId(test::kIcebergConnectorId)
                   .outputType(changelogOutputType_)
@@ -751,20 +747,12 @@ TEST_F(IcebergChangelogE2ETest, mergedDynamicFiltersOnSnapshotId) {
                   .endTableScan()
                   .capturePlanNodeId(changelogScanId)
                   .hashJoin(
-                      {"snapshotid"},
-                      {"b1_snapshotid"},
-                      exec::test::PlanBuilder(planNodeIdGenerator)
-                          .values({build1})
-                          .planNode(),
-                      /*filter=*/"",
+                      "snapshotid = b1_snapshotid",
+                      builder.newPlan().values(build1).planNode(),
                       {"snapshotid"})
                   .hashJoin(
-                      {"snapshotid"},
-                      {"b2_snapshotid"},
-                      exec::test::PlanBuilder(planNodeIdGenerator)
-                          .values({build2})
-                          .planNode(),
-                      /*filter=*/"",
+                      "snapshotid = b2_snapshotid",
+                      builder.newPlan().values(build2).planNode(),
                       {"snapshotid"})
                   .planNode();
 

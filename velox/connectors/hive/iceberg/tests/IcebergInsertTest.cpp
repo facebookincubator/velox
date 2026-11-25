@@ -20,9 +20,9 @@
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldMetadata.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/vector/BaseVector.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -45,11 +45,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 
@@ -70,11 +66,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
       const RowTypePtr& rowType,
       const std::vector<std::shared_ptr<connector::ConnectorSplit>>& splits,
       const RowVectorPtr& expected) {
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(
         {expected});
   }
@@ -83,7 +75,9 @@ class IcebergInsertTest : public test::IcebergTestBase {
       const RowTypePtr& rowType,
       const std::string& outputPath,
       const std::vector<std::string>& insertedColumns,
-      const std::unordered_map<std::string, std::string>& writeDefaults) {
+      const std::unordered_map<std::string, std::string>& writeDefaults,
+      const std::unordered_map<std::string, std::string>& serdeParameters =
+          {}) {
     std::vector<IcebergColumnHandlePtr> columnHandles;
     columnHandles.reserve(rowType->size());
     for (auto i = 0; i < rowType->size(); ++i) {
@@ -97,7 +91,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
       columnHandles.push_back(
           std::make_shared<const IcebergColumnHandle>(
               name,
-              FileColumnHandle::ColumnType::kRegular,
+              connector::FileColumnHandle::ColumnType::kRegular,
               type,
               field,
               /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -114,7 +108,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
         fileFormat_,
         /*partitionSpec=*/nullptr,
         common::CompressionKind::CompressionKind_ZSTD,
-        /*serdeParameters=*/std::unordered_map<std::string, std::string>{},
+        serdeParameters,
         IcebergInsertTableHandle::WriteKind::kData,
         /*existingDeletionVectors=*/
         std::unordered_map<
@@ -218,12 +212,37 @@ TEST_F(IcebergInsertTest, singleColumnPartition) {
       ASSERT_TRUE(taskJson.count("partitionDataJson") > 0);
     }
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
+  }
+}
+
+TEST_F(IcebergInsertTest, flatLayoutKeepsPartitionValues) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto rowType = ROW({{"id", BIGINT()}, {"value", VARCHAR()}});
+  const auto vectors = createTestData(
+      rowType, /*numBatches=*/2, /*rowsPerBatch=*/50, /*nullRatio=*/0.0);
+  const std::vector<test::PartitionField> partitionFields = {
+      {0, TransformType::kIdentity, std::nullopt},
+  };
+
+  const auto commitTasks = createDataSinkAndAppendData(
+                               vectors,
+                               outputDirectory->getPath(),
+                               partitionFields,
+                               /*includePartitionPaths=*/false)
+                               ->close();
+
+  ASSERT_GT(commitTasks.size(), 1);
+  const auto files = listFiles(outputDirectory->getPath());
+  ASSERT_EQ(files.size(), commitTasks.size());
+  for (const auto& file : files) {
+    EXPECT_EQ(
+        std::filesystem::path(file).parent_path(),
+        std::filesystem::path(outputDirectory->getPath()));
+  }
+  for (const auto& task : commitTasks) {
+    EXPECT_TRUE(folly::parseJson(task).count("partitionDataJson"));
   }
 }
 
@@ -334,11 +353,7 @@ TEST_F(IcebergInsertTest, partitionMultiColumns) {
     ASSERT_EQ(commitTasks.size(), vectorSize);
     ASSERT_EQ(splits.size(), commitTasks.size());
 
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
   }
 }
@@ -390,12 +405,7 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
     EXPECT_EQ(files.size(), commitTasks.size());
 
     auto splits = createSplitsForDirectory(outputPath);
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
-                    .outputType(rowType)
-                    .endTableScan()
-                    .planNode();
+    auto plan = makeIcebergTableScanPlan(rowType);
     exec::test::AssertQueryBuilder(plan).splits(splits).assertResults(vectors);
 
     return files.size();
@@ -753,13 +763,13 @@ TEST_F(IcebergInsertTest, writeDefaultPartitionedTable) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "id",
-          FileColumnHandle::ColumnType::kPartitionKey,
+          connector::FileColumnHandle::ColumnType::kPartitionKey,
           BIGINT(),
           parquet::ParquetFieldId{1, {}}));
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "country",
-          FileColumnHandle::ColumnType::kRegular,
+          connector::FileColumnHandle::ColumnType::kRegular,
           VARCHAR(),
           parquet::ParquetFieldId{2, {}},
           /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -880,7 +890,7 @@ TEST_F(IcebergInsertTest, writeDefaultMixedCaseColumnName) {
 TEST_F(IcebergInsertTest, columnHandleToStringIncludesWriteDefault) {
   auto col = std::make_shared<IcebergColumnHandle>(
       "country",
-      FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       VARCHAR(),
       parquet::ParquetFieldId{3, {}},
       /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -904,7 +914,7 @@ TEST_F(IcebergInsertTest, writeDefaultOnPartitionColumn) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "region",
-          FileColumnHandle::ColumnType::kPartitionKey,
+          connector::FileColumnHandle::ColumnType::kPartitionKey,
           VARCHAR(),
           parquet::ParquetFieldId{1, {}},
           /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -915,7 +925,7 @@ TEST_F(IcebergInsertTest, writeDefaultOnPartitionColumn) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "value",
-          FileColumnHandle::ColumnType::kRegular,
+          connector::FileColumnHandle::ColumnType::kRegular,
           BIGINT(),
           parquet::ParquetFieldId{2, {}}));
 
@@ -1008,6 +1018,78 @@ TEST_F(IcebergInsertTest, writeDefaultMultipleBatches) {
                 "DEFAULT",
                 "DEFAULT",
                 "DEFAULT"})}));
+}
+
+TEST_F(IcebergInsertTest, timestampAndTimestampTzFooterAnnotations) {
+  fileFormat_ = dwio::common::FileFormat::PARQUET;
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto dataPath = outputDirectory->getPath();
+
+  // Iceberg timestamptz maps to TIMESTAMP() while timestamp (without time zone)
+  // maps to TIMESTAMP_UTC().
+  auto rowType = ROW({"ts_tz", "ts_ntz"}, {TIMESTAMP(), TIMESTAMP_UTC()});
+
+  std::unordered_map<std::string, std::string> serdeParameters = {
+      {std::string(parquet::ParquetConfig::kWriterSerdeTimestampTimezone),
+       "UTC"}};
+
+  auto handle = makeWriteDefaultHandle(
+      rowType,
+      dataPath,
+      /*insertedColumns=*/{},
+      /*writeDefaults=*/{},
+      serdeParameters);
+
+  auto batch = makeRowVector(
+      rowType->names(),
+      {makeFlatVector<Timestamp>({Timestamp(1000, 0)}),
+       makeFlatVector<Timestamp>({Timestamp(2000, 0)}, TIMESTAMP_UTC())});
+
+  auto commitTasks = writeThroughHandle(rowType, handle, {batch});
+  ASSERT_FALSE(commitTasks.empty());
+
+  const auto task = folly::parseJson(commitTasks[0]);
+  const auto filePath = task["path"].asString();
+
+  parquet::ParquetReader reader(
+      std::make_unique<dwio::common::BufferedInput>(
+          std::make_shared<LocalReadFile>(filePath), *opPool_),
+      dwio::common::ReaderOptions(opPool_.get()));
+
+  const auto typeWithId =
+      std::static_pointer_cast<const parquet::ParquetTypeWithId>(
+          reader.typeWithId());
+  ASSERT_NE(typeWithId, nullptr);
+
+  const auto tsTzCol =
+      std::static_pointer_cast<const parquet::ParquetTypeWithId>(
+          typeWithId->childByName("ts_tz"));
+  ASSERT_NE(tsTzCol, nullptr);
+  ASSERT_TRUE(tsTzCol->logicalType_.has_value());
+  ASSERT_EQ(
+      tsTzCol->logicalType_->getType(),
+      parquet::thrift::LogicalType::Type::TIMESTAMP);
+  EXPECT_TRUE(*tsTzCol->logicalType_->get_TIMESTAMP().isAdjustedToUTC());
+  EXPECT_EQ(
+      tsTzCol->logicalType_->get_TIMESTAMP().unit()->getType(),
+      parquet::thrift::TimeUnit::Type::MICROS);
+
+  const auto tsNtzCol =
+      std::static_pointer_cast<const parquet::ParquetTypeWithId>(
+          typeWithId->childByName("ts_ntz"));
+  ASSERT_NE(tsNtzCol, nullptr);
+  ASSERT_TRUE(tsNtzCol->logicalType_.has_value());
+  ASSERT_EQ(
+      tsNtzCol->logicalType_->getType(),
+      parquet::thrift::LogicalType::Type::TIMESTAMP);
+  EXPECT_FALSE(*tsNtzCol->logicalType_->get_TIMESTAMP().isAdjustedToUTC());
+  EXPECT_EQ(
+      tsNtzCol->logicalType_->get_TIMESTAMP().unit()->getType(),
+      parquet::thrift::TimeUnit::Type::MICROS);
+
+  auto splits = createSplitsForDirectory(dataPath);
+  ASSERT_EQ(splits.size(), 1U);
+  readFromIcebergTable(rowType, splits, batch);
 }
 
 #endif

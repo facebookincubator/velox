@@ -349,16 +349,6 @@ class Expr {
     isMultiplyReferenced_ = true;
   }
 
-  /// True if this is a special form where the next argument will always be
-  /// evaluated on a subset of the rows for which the previous one was
-  /// evaluated.  This is true of AND and no other at this time.  This implies
-  /// that lazies can be loaded on first use and not before starting evaluating
-  /// the form.  This is so because a subsequent use will never access rows that
-  /// were not in scope for the previous one.
-  virtual bool evaluatesArgumentsOnNonIncreasingSelection() const {
-    return false;
-  }
-
   std::vector<common::Subfield> extractSubfields() const;
 
   virtual void extractSubfieldsImpl(
@@ -389,6 +379,14 @@ class Expr {
   const std::vector<FieldReference*>& distinctFields() const {
     return distinctFields_;
   }
+
+  /// When this expression is evaluated as a filter, returns the fields in
+  /// distinctFields() that it reads for every row that passes. A lazy vector
+  /// for one of these fields is therefore loaded for all passing rows. A field
+  /// outside this set may be read for only some of them, e.g. a field used in
+  /// one branch of an IF, so a caller that also outputs it must load it before
+  /// evaluation.
+  std::vector<FieldReference*> fieldsReadForAllPassingRows() const;
 
   static bool isSameFields(
       const std::vector<FieldReference*>& fields1,
@@ -599,6 +597,16 @@ class Expr {
       VectorPtr& result);
 
  protected:
+  /// True if this is a special form where the next argument will always be
+  /// evaluated on a subset of the rows for which the previous one was
+  /// evaluated.  This is true of AND and no other at this time.  This implies
+  /// that lazies can be loaded on first use and not before starting evaluating
+  /// the form.  This is so because a subsequent use will never access rows that
+  /// were not in scope for the previous one.
+  virtual bool evaluatesArgumentsOnNonIncreasingSelection() const {
+    return false;
+  }
+
   void appendInputs(std::stringstream& stream) const;
 
   void appendInputsSql(
@@ -868,6 +876,10 @@ class ExprSet {
   /// used by memory arbitration to reclaim memory.
   void clearCache();
 
+  /// Releases the results of shared subexpressions computed for the current
+  /// batch, which are valid only within that batch.
+  void clearSharedSubexprs();
+
   core::ExecCtx* execCtx() const {
     return execCtx_;
   }
@@ -924,8 +936,6 @@ class ExprSet {
       bool excludeSpecialForm = false) const;
 
  protected:
-  void clearSharedSubexprs();
-
   /// Initializes adaptive CPU sampling state on the EvalCtx. Sets
   /// sampling flags, max overhead percentage, and measures CpuWallTimer
   /// overhead once per ExprSet.

@@ -35,6 +35,7 @@
 #include "velox/type/fbhive/HiveTypeParser.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 using namespace ::testing;
 using namespace facebook::velox::common::testutil;
@@ -509,95 +510,6 @@ TEST_F(E2EWriterTest, e2e) {
   dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 1, 1, config);
 }
 
-// Disabled because test is failing in continuous runs T193531984.
-TEST_F(E2EWriterTest, DISABLED_disableLinearHeuristics) {
-  const size_t batchCount = 100;
-  size_t batchSize = 3000;
-
-  HiveTypeParser parser;
-  auto type = parser.parse(
-      "struct<"
-      "bool_val:boolean,"
-      "byte_val:tinyint,"
-      "short_val:smallint,"
-      "int_val:int,"
-      "long_val:bigint,"
-      "float_val:float,"
-      "double_val:double,"
-      "string_val:string,"
-      "binary_val:binary,"
-      "timestamp_val:timestamp,"
-      "array_val:array<float>,"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>," /* this is column 12 */
-      "map_val:map<bigint,map<string, int>>," /* this is column 13 */
-      "struct_val:struct<a:float,b:double>"
-      ">");
-
-  auto batches = dwrf::E2EWriterTestUtil::generateBatches(
-      type, batchCount, batchSize, /*seed=*/1411367325, *leafPool_);
-
-  auto config = std::make_shared<dwrf::Config>();
-  config->set(dwrf::Config::ROW_INDEX_STRIDE, static_cast<uint32_t>(1000));
-  config->set(dwrf::Config::FLATTEN_MAP, true);
-  config->set(
-      dwrf::Config::MAP_FLAT_COLS,
-      {12, 13}); /* this is the second and third map */
-  config->set<uint64_t>(dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN, 64UL);
-  config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 25UL * 1024 * 1024);
-
-  // default mode writer
-  dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 3, 3, config);
-
-  // disable linear heuristics
-  config->set(dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS, false);
-  dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 2, 3, config);
-}
-
-// Beside writing larger files, this test also uses regular maps only.
-// Disabled because test is failing in continuous runs T193531984.
-TEST_F(E2EWriterTest, DISABLED_disableLinearHeuristicsLargeAnalytics) {
-  const size_t batchCount = 500;
-  size_t batchSize = 3000;
-
-  HiveTypeParser parser;
-  auto type = parser.parse(
-      "struct<"
-      "bool_val:boolean,"
-      "byte_val:tinyint,"
-      "short_val:smallint,"
-      "int_val:int,"
-      "long_val:bigint,"
-      "float_val:float,"
-      "double_val:double,"
-      "string_val:string,"
-      "binary_val:binary,"
-      "timestamp_val:timestamp,"
-      "array_val:array<float>,"
-      "map_val:map<int,double>,"
-      "map_val:map<bigint,double>," /* this is column 12 */
-      "map_val:map<bigint,map<string, int>>," /* this is column 13 */
-      "struct_val:struct<a:float,b:double>"
-      ">");
-
-  auto batches = dwrf::E2EWriterTestUtil::generateBatches(
-      type, batchCount, batchSize, /*seed=*/1411367325, *leafPool_);
-
-  auto config = std::make_shared<dwrf::Config>();
-  config->set<uint64_t>(dwrf::Config::COMPRESSION_BLOCK_SIZE_MIN, 64UL);
-  config->set<uint64_t>(dwrf::Config::STRIPE_SIZE, 25UL * 1024 * 1024);
-
-  // default mode writer
-  dwrf::E2EWriterTestUtil::testWriter(
-      *leafPool_, type, batches, 10, 10, config);
-
-  // disable linear heuristics
-  config->set(dwrf::Config::LINEAR_STRIPE_SIZE_HEURISTICS, false);
-  // When disabling linear heuristics, avg stripe size goes up to ~33MB from
-  // ~25MB.
-  dwrf::E2EWriterTestUtil::testWriter(*leafPool_, type, batches, 8, 8, config);
-}
-
 TEST_F(E2EWriterTest, flatMapDictionaryEncoding) {
   const size_t batchCount = 4;
   // Start with a size larger than stride to cover splitting into
@@ -921,6 +833,86 @@ TEST_F(E2EWriterTest, flatMapEmpty) {
       1,
       config,
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(false));
+}
+
+TEST_F(E2EWriterTest, flatMapVectorIntoMapColumn) {
+  VectorMaker maker(leafPool_.get());
+  auto map = maker.mapVector(
+      {0, 2, 2, 4, 4, 5},
+      maker.flatVector<int64_t>({1, 2, 1, 3, 2, 1, 2, 3}),
+      maker.arrayVectorNullable<int64_t>({
+          {{1, 2}},
+          {{3}},
+          std::nullopt,
+          {{4, std::nullopt, 6}},
+          {std::vector<std::optional<int64_t>>{}},
+          {{7}},
+          {{8}},
+          {{9}},
+      }),
+      {1});
+  auto flatMap = FlatMapVector::fromMapVector(*map);
+  ASSERT_EQ(flatMap->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(flatMap->numDistinctKeys(), 3);
+  const auto type = ROW({"m"}, MAP(BIGINT(), ARRAY(BIGINT())));
+
+  auto testRoundTrip = [&](const VectorPtr& input,
+                           const VectorPtr& expected,
+                           bool flatColumn) {
+    auto config = std::make_shared<dwrf::Config>();
+    if (flatColumn) {
+      config->set(dwrf::Config::FLATTEN_MAP, true);
+      config->set<const std::vector<uint32_t>>(
+          dwrf::Config::MAP_FLAT_COLS, {0});
+    }
+    auto sink = std::make_unique<MemorySink>(
+        1024 * 1024, dwio::common::FileSink::Options{.pool = leafPool_.get()});
+    auto* sinkPtr = sink.get();
+    dwio::common::WriterOptions options;
+    options.formatSpecificOptions =
+        std::make_shared<dwrf::DwrfWriterOptions>(config);
+    options.schema = type;
+    options.memoryPool = rootPool_.get();
+    dwrf::Writer writer{std::move(sink), options};
+    writer.write(maker.rowVector({"m"}, {input}));
+    writer.close();
+
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    auto reader = createReader(*sinkPtr, readerOptions);
+    auto rowReader = reader->createRowReader(RowReaderOptions{});
+    auto* dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
+    ASSERT_EQ(reader->getNumberOfStripes(), 1);
+    bool preload{true};
+    auto stripeMetadata = dwrfRowReader->fetchStripe(0, preload);
+    std::optional<dwrf::proto::ColumnEncoding_Kind> mapEncoding;
+    for (int32_t i = 0; i < stripeMetadata->footer->columnEncodingSize(); ++i) {
+      auto encoding = stripeMetadata->footer->columnEncodingDwrf(i);
+      if (encoding.node() == 1) {
+        mapEncoding = encoding.kind();
+      }
+    }
+    ASSERT_TRUE(mapEncoding.has_value());
+    ASSERT_EQ(
+        mapEncoding.value() ==
+            dwrf::proto::ColumnEncoding_Kind::ColumnEncoding_Kind_MAP_FLAT,
+        flatColumn);
+
+    VectorPtr result = BaseVector::create(type, 0, leafPool_.get());
+    ASSERT_TRUE(rowReader->next(100, result));
+    auto resultMap = result->as<RowVector>()->childAt(0);
+    ASSERT_EQ(resultMap->encoding(), VectorEncoding::Simple::MAP);
+    assertEqualVectors(expected, resultMap);
+    ASSERT_FALSE(rowReader->next(100, result));
+  };
+
+  testRoundTrip(flatMap, map, false);
+  testRoundTrip(flatMap, map, true);
+
+  auto indices = makeIndicesInReverse(map->size(), leafPool_.get());
+  testRoundTrip(
+      BaseVector::wrapInDictionary(nullptr, indices, map->size(), flatMap),
+      BaseVector::wrapInDictionary(nullptr, indices, map->size(), map),
+      false);
 }
 
 TEST_F(E2EWriterTest, flatMapConfigSingleColumn) {

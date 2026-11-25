@@ -297,6 +297,7 @@ TEST(DuckParserTest, expressions) {
   // Arithmetic operators.
   EXPECT_EQ("plus(1,0)", parseExpr("1 + 0")->toString());
   EXPECT_EQ("minus(1,0)", parseExpr("1 - 0")->toString());
+  EXPECT_EQ("negate(\"c0\")", parseExpr("-c0")->toString());
   EXPECT_EQ("multiply(1,0)", parseExpr("1 * 0")->toString());
   EXPECT_EQ("divide(1,0)", parseExpr("1 / 0")->toString());
   EXPECT_EQ("mod(1,0)", parseExpr("1 % 0")->toString());
@@ -436,6 +437,29 @@ TEST(DuckParserTest, cast) {
   EXPECT_EQ(
       "cast(\"c0\" as ROW<a:BIGINT,b:REAL,c:VARCHAR>)",
       parseExpr("cast(c0 as struct(a bigint, b real, c varchar))")->toString());
+}
+
+// A cast of a parameter is a placeholder of the cast's type.
+TEST(DuckParserTest, placeholder) {
+  auto expr = parseExpr("a + ?2::BIGINT");
+  EXPECT_EQ("plus(\"a\",?2)", expr->toString());
+  const auto* placeholder = expr->inputs()[1]->as<core::PlaceholderExpr>();
+  ASSERT_NE(placeholder, nullptr);
+  EXPECT_EQ(2, placeholder->position());
+  EXPECT_EQ(*BIGINT(), *placeholder->type());
+
+  EXPECT_EQ("?1 AS x", parseExpr("cast(?1 as varchar) AS x")->toString());
+  EXPECT_EQ("?3", parseExpr("$3::BIGINT")->toString());
+
+  VELOX_ASSERT_THROW(
+      parseExpr("a + ?1"),
+      "A placeholder needs a type, such as ?1::BIGINT: ?1");
+
+  // The cast declares the type of the bound value and converts nothing, so
+  // TRY_CAST has no failure to turn into NULL.
+  VELOX_ASSERT_THROW(
+      parseExpr("try_cast(?1 as bigint)"),
+      "TRY_CAST of a placeholder is not supported: ?1");
 }
 
 TEST(DuckParserTest, castToJson) {

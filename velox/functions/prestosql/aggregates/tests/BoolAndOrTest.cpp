@@ -52,39 +52,44 @@ TEST_P(BoolAndOrTest, basic) {
   const auto partialAgg = fmt::format("{}(c1)", veloxName);
 
   // Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      {partialAgg},
-      fmt::format("SELECT {}(c1::TINYINT) FROM tmp", duckDbName));
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({partialAgg})
+      .assertResults(
+          fmt::format("SELECT {}(c1::TINYINT) FROM tmp", duckDbName));
 
   // Group by aggregation.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).project({"c0 % 10", "c1"});
-      },
-      {"p0"},
-      {partialAgg},
-      fmt::format(
-          "SELECT c0 % 10, {}(c1::TINYINT) FROM tmp GROUP BY 1", duckDbName));
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 10", "c1"}); })
+      .groupBy({"p0"})
+      .aggregates({partialAgg})
+      .assertResults(
+          fmt::format(
+              "SELECT c0 % 10, {}(c1::TINYINT) FROM tmp GROUP BY 1",
+              duckDbName));
 
   // Encodings: use filter to wrap aggregation inputs in a dictionary.
-  testAggregations(
-      [&](auto& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
-      },
-      {"p0"},
-      {partialAgg},
-      fmt::format(
-          "SELECT c0 % 11, {}(c1::TINYINT) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
-          duckDbName));
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
+      })
+      .groupBy({"p0"})
+      .aggregates({partialAgg})
+      .assertResults(
+          fmt::format(
+              "SELECT c0 % 11, {}(c1::TINYINT) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1",
+              duckDbName));
 
-  testAggregations(
-      [&](auto& builder) { builder.values(vectors).filter("c0 % 2 = 0"); },
-      {},
-      {partialAgg},
-      fmt::format(
-          "SELECT {}(c1::TINYINT) FROM tmp WHERE c0 % 2 = 0", duckDbName));
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+      .aggregates({partialAgg})
+      .assertResults(
+          fmt::format(
+              "SELECT {}(c1::TINYINT) FROM tmp WHERE c0 % 2 = 0", duckDbName));
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

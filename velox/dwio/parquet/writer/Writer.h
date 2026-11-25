@@ -144,7 +144,14 @@ struct ParquetWriterOptions : public dwio::common::FormatSpecificOptions {
   std::optional<int64_t> dataPageSize;
   std::optional<int64_t> dictionaryPageSizeLimit;
   std::optional<uint64_t> rowGroupSizeBytes;
+  /// Maximum number of rows in a row group.
+  std::optional<uint64_t> rowGroupRows;
   std::optional<bool> enableDictionary;
+  /// Controls the level of Parquet size statistics written by the Arrow bridge.
+  /// NONE disables size statistics; COLUMN_CHUNK writes column-chunk
+  /// statistics; PAGE_AND_COLUMN_CHUNK also writes per-page statistics.
+  /// Page-level statistics require enableWritePageIndex to be enabled.
+  std::optional<arrow::SizeStatisticsLevel> sizeStatisticsLevel;
   /// Controls how DECIMAL values are stored by the Writer.
   /// - If unset, the Writer defaults to storing as integer (true),
   /// using INT32/INT64 for short DECIMAL precisions; higher precisions are

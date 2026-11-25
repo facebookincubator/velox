@@ -29,7 +29,8 @@ inline SerializationVersion validateVersion(uint8_t versionByte) {
           version == SerializationVersion::kLegacySerialization ||
           version == SerializationVersion::kTablet ||
           version == SerializationVersion::kSerialization ||
-          version == SerializationVersion::kProjection,
+          version == SerializationVersion::kProjection ||
+          version == SerializationVersion::kBlob,
       "Unsupported version {}",
       versionByte);
   return version;
@@ -98,6 +99,15 @@ SerializationHeader readSerializationHeader(const char*& pos, const char* end) {
 
   header.rowCount = varint::readVarint32(&pos);
   header.flags = readHeaderFlags(pos, header.version);
+
+  if (header.version == SerializationVersion::kBlob) {
+    NIMBLE_CHECK_FILE_GE(end - pos, 1, "Truncated header (blob compression)");
+    header.blobCompression = static_cast<CompressionType>(*pos++);
+    NIMBLE_CHECK_FILE(
+        isSupportedBlobCompression(header.blobCompression),
+        "Unsupported kBlob blob compression: {}",
+        header.blobCompression);
+  }
 
   return header;
 }

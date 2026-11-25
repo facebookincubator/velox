@@ -62,6 +62,8 @@ jobs:
         id: changes
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
           PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
@@ -72,7 +74,7 @@ jobs:
           if [[ "$JOB_TRIGGER" == "pull_request" ]]; then
             source .github/scripts/gh-api-retry.sh
             merge_base_commit=$(gh_api -q '.merge_base_commit.sha' \
-              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+              /repos/$REPO/compare/$REPO_OWNER:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
 
             range="$merge_base_commit..$HEAD_SHA"
@@ -111,9 +113,9 @@ jobs:
     needs: get-changes
     # Always runs — this is the selective-build consumer pre-approval
     # (cmake-targets non-empty -> targeted) and the full coverage post-
-    # approval / on push (cmake-targets empty -> full build). The repo
+    # approval / on push (cmake-targets empty -> full build). The fork
     # check prevents errors when forks fast-forward their main branch.
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
@@ -124,7 +126,6 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       cudf_SOURCE: BUNDLED
       CUDA_VERSION: '12.9'
-      faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
       # Empty when full mode (or when the plan emitted no targets);
       # space-separated cmake target names when running selective.
@@ -215,15 +216,20 @@ jobs:
           BUILD_PROFILE=adapters USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           EXTRA_CMAKE_FLAGS=("${CMAKE_FLAGS[@]}")
           if [[ "${USE_CLANG}" = "true" ]]; then
-             scripts/setup-centos9.sh install_clang15; export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15; CUDA_FLAGS="-ccbin /usr/lib64/llvm15/bin/clang++-15";
+             # Build with the Clang that CentOS ships, with its OpenMP runtime,
+             # which vector search (FAISS) needs. EPEL's clang15 has none.
+             scripts/setup-centos9.sh install_clang_with_openmp; export CC=clang; export CXX=clang++; CUDA_FLAGS="-ccbin $(command -v clang++)";
           fi
           source /opt/rh/gcc-toolset-14/enable
           g++ --version
           # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
-          # after sourcing GCC14.
+          # after sourcing GCC14. Keep Clang for the Clang build.
+          if [[ "${USE_CLANG}" != "true" ]]; then
+            export CC=gcc CXX=g++
+          fi
           # Empty TARGETS = full build (push, approved review, sticky).
           # Non-empty = selective build of the requested targets.
-          CC=gcc CXX=g++ make release \
+          make release \
             EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" \
             TARGETS="$BUILD_TARGETS" \
             2>&1 | tee /tmp/build-output.log
@@ -247,7 +253,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -577,7 +583,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
     # Runs in both modes. It is the only Linux debug build, and
     # DEBUG_ONLY_TEST tests run only in debug builds.
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -679,14 +685,6 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
-          # Mirror the adapters and fedora-debug jobs: build FAISS from
-          # source instead of resolving the system-installed package.
-          # The system FAISS config (/usr/local/share/faiss/faiss-config.cmake)
-          # sets the link interface of the imported `faiss` target to
-          # include OpenMP::OpenMP_CXX without ever calling
-          # find_package(OpenMP) to define it, so a SYSTEM resolution
-          # fails the configure.
-          faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
@@ -761,7 +759,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -869,7 +867,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:fedora
     # Gated on is-full-mode so this build-only job runs only after the PR
     # is approved (or on push to main).
-    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
+    if: ${{ inputs.is-full-mode && !github.event.repository.fork }}
     name: Fedora debug
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -938,7 +936,6 @@ jobs:
         id: build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
-          faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
@@ -955,7 +952,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -1003,9 +1000,9 @@ jobs:
     # adapters job. Like ubuntu-debug / fedora-debug, the sanitizer
     # build is part of the post-approval / on-push full-coverage suite
     # (catches memory and UB issues that the release build masks). The
-    # repo check prevents errors when forks fast-forward their main
+    # fork check prevents errors when forks fast-forward their main
     # branch.
-    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
+    if: ${{ inputs.is-full-mode && !github.event.repository.fork }}
     runs-on: 32-core-ubuntu
     container:
       image: ghcr.io/facebookincubator/velox-dev:adapters
@@ -1018,7 +1015,6 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
-      faiss_SOURCE: BUNDLED
     outputs:
       build-outcome: ${{ steps.build.outcome }}
       build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
@@ -1136,7 +1132,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:

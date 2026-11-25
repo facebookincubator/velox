@@ -31,7 +31,8 @@
 namespace facebook::velox {
 namespace dwio::common {
 class ColumnStatistics;
-}
+class Reader;
+} // namespace dwio::common
 namespace common {
 
 /// Describes the filtering and value extraction for a
@@ -55,6 +56,7 @@ class ScanSpec {
     kRegular, // Read from file or constant
     kRowIndex, // Row number in the file starting from 0
     kComposite, // A struct with all children not read from file
+    kReadRange, // ROW<offset, length> of the current read's file rows
   };
 
   /// Convert ColumnType to its string name representation.
@@ -631,13 +633,26 @@ void ScanSpec::visit(const Type& type, F&& f) {
   }
 }
 
-/// Returns false if no value from a range defined by stats can pass the
-/// filter. True, otherwise.
+/// Returns false if no value in the range described by 'stats' can pass
+/// 'filter'. True, otherwise.
+///
+/// @param totalRows Number of rows 'stats' covers, such as a file, stride,
+/// row group or chunk. Compared with the number of non-null values in 'stats'
+/// to tell whether the column has nulls.
+/// @param type Type of the column. Selects the kind of statistics to read
+/// min and max from. Decimal columns always return true: their min and max
+/// may be stored in several physical types that the statistics can't load.
 bool testFilter(
     const common::Filter* filter,
     dwio::common::ColumnStatistics* stats,
     uint64_t totalRows,
     const TypePtr& type);
+
+/// Returns false if the file statistics in 'reader' show that no row of the
+/// file can pass the filters in 'scanSpec'. Tests only the top-level columns
+/// the file carries. Skips columns with a constant value: their values do not
+/// come from the file.
+bool testFilters(const ScanSpec& scanSpec, const dwio::common::Reader& reader);
 
 } // namespace common
 } // namespace facebook::velox

@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/stats/ColumnStatistics.h"
 
+#include <cmath>
 #include <optional>
 #include <utility>
 
@@ -25,23 +26,8 @@ namespace facebook::nimble {
 
 namespace {
 
-template <typename T>
-void addFloatingPointValuesScalar(
-    std::optional<double>& min,
-    std::optional<double>& max,
-    std::span<T> values) {
-  if (UNLIKELY(!min.has_value())) {
-    min = static_cast<double>(values.front());
-  }
-  if (UNLIKELY(!max.has_value())) {
-    max = static_cast<double>(values.front());
-  }
-
-  for (const auto& value : values) {
-    auto current = static_cast<double>(value);
-    min = min > current ? std::make_optional(current) : min;
-    max = max < current ? std::make_optional(current) : max;
-  }
+bool isNan(const std::optional<double>& bound) {
+  return bound.has_value() && std::isnan(*bound);
 }
 
 } // namespace
@@ -106,14 +92,14 @@ ColumnStatistics::toCommonStatistics() const {
       const auto* fpStats = as<const FloatingPointStatistics>();
       NIMBLE_DCHECK(
           fpStats != nullptr, "Failed to cast to FloatingPointStatistics");
+      std::optional<double> min;
+      std::optional<double> max;
+      if (!isNan(fpStats->getMin()) && !isNan(fpStats->getMax())) {
+        min = fpStats->getMin();
+        max = fpStats->getMax();
+      }
       return std::make_unique<velox::dwio::common::DoubleColumnStatistics>(
-          valueCount,
-          hasNull,
-          rawSize,
-          size,
-          fpStats->getMin(),
-          fpStats->getMax(),
-          std::nullopt);
+          valueCount, hasNull, rawSize, size, min, max, std::nullopt);
     }
     case StatType::STRING: {
       const auto* strStats = as<const StringStatistics>();
@@ -208,10 +194,12 @@ FloatingPointStatistics::FloatingPointStatistics(
     uint64_t logicalSize,
     uint64_t physicalSize,
     std::optional<double> min,
-    std::optional<double> max)
+    std::optional<double> max,
+    bool hasNanValues)
     : ColumnStatistics(valueCount, nullCount, logicalSize, physicalSize),
       min_{std::move(min)},
-      max_{std::move(max)} {}
+      max_{std::move(max)},
+      hasNanValues_{hasNanValues} {}
 
 std::optional<double> FloatingPointStatistics::getMin() const {
   return min_;
@@ -232,7 +220,8 @@ std::unique_ptr<ColumnStatistics> FloatingPointStatistics::clone() const {
       getLogicalSize(),
       getPhysicalSize(),
       getMin(),
-      getMax());
+      getMax(),
+      hasNanValues_);
 }
 
 DeduplicatedColumnStatistics::DeduplicatedColumnStatistics(
@@ -460,6 +449,13 @@ FloatingPointStatisticsCollector::floatingPointStats() {
   return static_cast<FloatingPointStatistics*>(stats_.get());
 }
 
+void FloatingPointStatisticsCollector::setHasNanValues() {
+  auto* stats = floatingPointStats();
+  stats->hasNanValues_ = true;
+  stats->min_.reset();
+  stats->max_.reset();
+}
+
 template <typename T>
 void FloatingPointStatisticsCollector::addValues(std::span<T> values) {
   static_assert(std::is_floating_point_v<T>);
@@ -470,9 +466,12 @@ void FloatingPointStatisticsCollector::addValues(std::span<T> values) {
   }
 
   auto* stats = floatingPointStats();
+  if (stats->hasNanValues_) {
+    return;
+  }
   const auto minMax = findMinMax(values);
   if (!minMax.has_value()) {
-    addFloatingPointValuesScalar(stats->min_, stats->max_, values);
+    setHasNanValues();
     return;
   }
   const auto min = static_cast<double>(minMax->min);
@@ -499,6 +498,13 @@ void FloatingPointStatisticsCollector::merge(const StatisticsCollector& other) {
   if (otherStats->getType() == StatType::FLOATING_POINT) {
     const auto* otherFloatStats = otherStats->as<FloatingPointStatistics>();
     auto* stats = floatingPointStats();
+    if (stats->hasNanValues_) {
+      return;
+    }
+    if (otherFloatStats->hasNanValues_) {
+      setHasNanValues();
+      return;
+    }
     if (otherFloatStats->getMin().has_value()) {
       if (!stats->min_.has_value() ||
           *otherFloatStats->getMin() < *stats->min_) {

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/Portability.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include <utility>
@@ -45,13 +46,12 @@ using namespace facebook::velox;
 using index::ClusterIndexConfigBuilder;
 
 using E2EFilterTestParams =
-    std::tuple<bool, bool, bool, bool, bool, bool, bool, bool>;
+    std::tuple<bool, bool, bool, bool, bool, bool, bool>;
 
 struct E2EFilterTestParam {
   bool indexEnabled;
   bool skipConstantFlatMapInMapStreams;
   bool enableChunkIndex;
-  bool stringDecoderZeroCopy;
   bool pinMetadata;
   bool enableCache;
   bool nimblePreserveDictionaryEncoding;
@@ -61,19 +61,17 @@ struct E2EFilterTestParam {
       : indexEnabled{std::get<0>(t)},
         skipConstantFlatMapInMapStreams{std::get<1>(t)},
         enableChunkIndex{std::get<2>(t)},
-        stringDecoderZeroCopy{std::get<3>(t)},
-        pinMetadata{std::get<4>(t)},
-        enableCache{std::get<5>(t)},
-        nimblePreserveDictionaryEncoding{std::get<6>(t)},
-        scanFastPath{std::get<7>(t)} {}
+        pinMetadata{std::get<3>(t)},
+        enableCache{std::get<4>(t)},
+        nimblePreserveDictionaryEncoding{std::get<5>(t)},
+        scanFastPath{std::get<6>(t)} {}
 
   std::string debugString() const {
     return fmt::format(
-        "index_{}_skipConstantInMap_{}_chunkIndex_{}_stringDecoderZeroCopy_{}_pinMetadata_{}_cache_{}_nimblePreserveDict_{}",
+        "index_{}_skipConstantInMap_{}_chunkIndex_{}_pinMetadata_{}_cache_{}_nimblePreserveDict_{}",
         indexEnabled,
         skipConstantFlatMapInMapStreams,
         enableChunkIndex,
-        stringDecoderZeroCopy,
         pinMetadata,
         enableCache,
         nimblePreserveDictionaryEncoding);
@@ -163,10 +161,17 @@ class E2EFilterTest
   void setUpRowReaderOptions(
       dwio::common::RowReaderOptions& opts,
       const std::shared_ptr<dwio::common::ScanSpec>& spec) override {
+    // Struct columns written as flat maps are read back as structs.
+    for (const auto& [name, _] : flatMapColumns_) {
+      auto* childSpec = spec->childByName(name);
+      if (childSpec != nullptr && rowType_->findChild(name)->isRow()) {
+        childSpec->setFlatMapAsStruct(true);
+      }
+    }
+
     opts.setScanSpec(spec);
     opts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
     opts.setIndexEnabled(indexEnabled());
-    opts.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
     opts.setNimbleScanFastPath(param().scanFastPath);
     opts.setNimblePreserveDictionaryEncoding(
         param().nimblePreserveDictionaryEncoding);
@@ -327,6 +332,11 @@ class E2EFilterTest
     // the minimum chunk size threshold. Without this, small writes get merged
     // into a single chunk regardless of the flush policy.
     options.minStreamChunkRawSize = 0;
+    if (typedLanesCompression_.has_value()) {
+      options.compressionOptions = *typedLanesCompression_;
+      options.fixedBitWidthTypedLanes = true;
+      options.fixedBitWidthTypedLanesMinValues = 0;
+    }
 
     // Force a specific encoding via layout tree, or use biased factors.
     if (forcedEncodingType_.has_value()) {
@@ -362,10 +372,12 @@ class E2EFilterTest
       // Use custom encoding factors if set.
       // Capture by value to avoid dangling reference.
       auto factors = encodingFactors_.value();
-      options.encodingSelectionPolicyCreator = [factors](DataType dataType) {
-        ManualEncodingSelectionPolicyFactory factory(factors);
-        return factory.createPolicy(dataType);
-      };
+      auto compression = typedLanesCompression_.value_or(CompressionOptions{});
+      options.encodingSelectionPolicyCreator =
+          [factors, compression](DataType dataType) {
+            ManualEncodingSelectionPolicyFactory factory(factors, compression);
+            return factory.createPolicy(dataType);
+          };
     }
 
     auto i = 0;
@@ -645,10 +657,9 @@ class E2EFilterTest
     scanSpec->addAllChildFields(*type);
     velox::dwio::common::RowReaderOptions rowReaderOptions;
     rowReaderOptions.setScanSpec(scanSpec);
-    rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
     rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
-        param().stringDecoderZeroCopy);
+        param().nimblePreserveDictionaryEncoding);
     auto rowReader = reader->createRowReader(rowReaderOptions);
 
     auto result = BaseVector::create(type, 0, leafPool_.get());
@@ -660,7 +671,7 @@ class E2EFilterTest
       totalRows += rowResult->size();
 
       auto stringChild = rowResult->childAt(0)->loadedVector();
-      if (param().stringDecoderZeroCopy) {
+      if (param().nimblePreserveDictionaryEncoding) {
         ASSERT_EQ(stringChild->encoding(), VectorEncoding::Simple::DICTIONARY)
             << "Expected DICTIONARY encoding for string column";
       }
@@ -685,6 +696,53 @@ class E2EFilterTest
   // EncodingLayoutTree that forces every scalar column to use this encoding.
   // Takes precedence over encodingFactors_.
   std::optional<EncodingType> forcedEncodingType_;
+
+  // When set, writeToMemory turns typed lanes on with a floor of 0 and
+  // compresses with these options (the encoding selection policy too).
+  std::optional<CompressionOptions> typedLanesCompression_;
+
+  // integerBiasedFixedBitWidth's columns: short_val over 10 bits, int_val over
+  // 17 bits and long_val over 20 bits, FixedBitWidth favored, with nulls.
+  void testIntegerBiasedFixedBitWidth() {
+    testWithTypes(
+        "short_val:smallint,"
+        "int_val:int,"
+        "long_val:bigint",
+        [&]() {
+          makeIntDistribution<int16_t>(
+              "short_val",
+              /*min=*/10,
+              /*max=*/1000,
+              /*repeats=*/1,
+              /*rareFrequency=*/0,
+              /*rareMin=*/0,
+              /*rareMax=*/0,
+              /*keepNulls=*/false);
+          makeIntDistribution<int32_t>(
+              "int_val",
+              /*min=*/100,
+              /*max=*/100000,
+              /*repeats=*/1,
+              /*rareFrequency=*/0,
+              /*rareMin=*/0,
+              /*rareMax=*/0,
+              /*keepNulls=*/false);
+          makeIntDistribution<int64_t>(
+              "long_val",
+              /*min=*/1000,
+              /*max=*/1000000,
+              /*repeats=*/1,
+              /*rareFrequency=*/0,
+              /*rareMin=*/0,
+              /*rareMax=*/0,
+              /*keepNulls=*/false);
+        },
+        /*wrapInStruct=*/false,
+        {"short_val", "int_val", "long_val"},
+        /*numCombinations=*/20,
+        /*withRecursiveNulls=*/true,
+        biasedEncodingFactors(EncodingType::FixedBitWidth));
+  }
 
   // Cache infrastructure (only initialized when enableCache is true).
   std::shared_ptr<memory::MallocAllocator> allocator_;
@@ -879,44 +937,20 @@ TEST_P(E2EFilterTest, integer) {
 
 // Biased variant that forces FixedBitWidth encoding selection.
 TEST_P(E2EFilterTest, integerBiasedFixedBitWidth) {
-  testWithTypes(
-      "short_val:smallint,"
-      "int_val:int,"
-      "long_val:bigint",
-      [&]() {
-        makeIntDistribution<int16_t>(
-            "short_val",
-            /*min=*/10,
-            /*max=*/1000,
-            /*repeats=*/1,
-            /*rareFrequency=*/0,
-            /*rareMin=*/0,
-            /*rareMax=*/0,
-            /*keepNulls=*/false);
-        makeIntDistribution<int32_t>(
-            "int_val",
-            /*min=*/100,
-            /*max=*/100000,
-            /*repeats=*/1,
-            /*rareFrequency=*/0,
-            /*rareMin=*/0,
-            /*rareMax=*/0,
-            /*keepNulls=*/false);
-        makeIntDistribution<int64_t>(
-            "long_val",
-            /*min=*/1000,
-            /*max=*/1000000,
-            /*repeats=*/1,
-            /*rareFrequency=*/0,
-            /*rareMin=*/0,
-            /*rareMax=*/0,
-            /*keepNulls=*/false);
-      },
-      /*wrapInStruct=*/false,
-      {"short_val", "int_val", "long_val"},
-      /*numCombinations=*/20,
-      /*withRecursiveNulls=*/true,
-      biasedEncodingFactors(EncodingType::FixedBitWidth));
+  testIntegerBiasedFixedBitWidth();
+}
+
+// The same columns with typed lanes on (floor 0) and OpenZL, which reads the
+// payload's data type, so the FixedBitWidth chunks, the ones nested under nulls
+// included, are typed lanes: short_val as 16-bit full-width lanes, int_val as
+// 32-bit full-width lanes and long_val as 32-bit narrow lanes. Covers filtered,
+// sparse-row and skip() reads of typed lanes.
+TEST_P(E2EFilterTest, integerBiasedFixedBitWidthTypedLanes) {
+  typedLanesCompression_ = CompressionOptions{
+      .compressionType = CompressionType::OpenZL,
+      .openzlMinCompressionSize = 0,
+  };
+  testIntegerBiasedFixedBitWidth();
 }
 
 // Biased variant that forces BlockBitPacking encoding selection.
@@ -1423,10 +1457,6 @@ TEST_P(E2EFilterTest, stringDictionary) {
 }
 
 TEST_P(E2EFilterTest, fsstStringFilterPushdown) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "FSST string decoding requires zero-copy string decoder.";
-  }
-
   useForcedFsstEncoding_ = true;
   testWithTypes(
       "string_val:string,"
@@ -1913,14 +1943,19 @@ TEST_P(E2EFilterTest, filterStruct) {
       kNumCombinations);
 }
 
-// Enable once the writer support struct as flat map.
-TEST_P(E2EFilterTest, DISABLED_flatMapAsStruct) {
+// Struct columns are written as flat maps keyed by field name and read back as
+// structs.
+TEST_P(E2EFilterTest, flatMapAsStruct) {
   constexpr auto kColumns =
       "long_val:bigint,"
       "long_vals:struct<v1:bigint,v2:bigint,v3:bigint>,"
       "struct_vals:struct<nested1:struct<v1:bigint, v2:float>,nested2:struct<v1:bigint, v2:float>>";
   flatMapColumns_ = {{"long_vals", {}}, {"struct_vals", {}}};
-  testWithTypes(kColumns, [] {}, false, {"long_val"}, 10);
+  int numCombinations = 10;
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
+  testWithTypes(kColumns, [] {}, false, {"long_val"}, numCombinations);
 }
 
 TEST_P(E2EFilterTest, flatMapScalar) {
@@ -1934,11 +1969,9 @@ TEST_P(E2EFilterTest, flatMapScalar) {
     dataSetBuilder_->makeMapStringValues(common::Subfield("string_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
   testWithTypes(
       kColumns, customize, false, {"long_val", "long_vals"}, numCombinations);
 }
@@ -1953,11 +1986,9 @@ TEST_P(E2EFilterTest, flatMapComplexNoRecursiveNulls) {
     dataSetBuilder_->makeUniformMapKeys(common::Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif
@@ -1980,11 +2011,9 @@ TEST_P(E2EFilterTest, flatMapComplex) {
     dataSetBuilder_->makeUniformMapKeys(common::Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif
@@ -2155,7 +2184,6 @@ INSTANTIATE_TEST_SUITE_P(
         testing::Bool(),
         testing::Bool(),
         testing::Bool(),
-        testing::Bool(),
         testing::Values(false)),
     [](const ::testing::TestParamInfo<E2EFilterTestParams>& info) {
       return E2EFilterTestParam{info.param}.debugString();
@@ -2171,7 +2199,6 @@ INSTANTIATE_TEST_SUITE_P(
         /*indexEnabled=*/testing::Bool(),
         /*skipConstantFlatMapInMapStreams=*/testing::Bool(),
         /*enableChunkIndex=*/testing::Bool(),
-        /*stringDecoderZeroCopy=*/testing::Values(true),
         /*pinMetadata=*/testing::Values(false),
         /*enableCache=*/testing::Values(false),
         /*nimblePreserveDictionaryEncoding=*/testing::Values(false),
@@ -2200,7 +2227,6 @@ class PrefixEncodingE2ETest : public E2EFilterTest {
     opts.setIndexEnabled(false);
     // PrefixEncoding requires string buffer optimization for correct
     // string_view lifecycle management in readWithVisitor.
-    opts.setStringDecoderZeroCopy(true);
     opts.setNimblePreserveDictionaryEncoding(
         param().nimblePreserveDictionaryEncoding);
   }
@@ -2263,7 +2289,6 @@ INSTANTIATE_TEST_SUITE_P(
     PrefixEncodingE2ETests,
     PrefixEncodingE2ETest,
     testing::Combine(
-        testing::Bool(),
         testing::Bool(),
         testing::Bool(),
         testing::Bool(),
@@ -2767,10 +2792,9 @@ TEST_P(E2EFilterTest, fuzzMainlyConstantDictionaryVector) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
-      param().stringDecoderZeroCopy);
+      param().nimblePreserveDictionaryEncoding);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   auto result = BaseVector::create(type, 0, leafPool_.get());
@@ -2884,10 +2908,9 @@ TEST_P(E2EFilterTest, fuzzRleDictionaryVector) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
-      param().stringDecoderZeroCopy);
+      param().nimblePreserveDictionaryEncoding);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   auto result = BaseVector::create(type, 0, leafPool_.get());
@@ -2964,7 +2987,6 @@ TEST_P(E2EFilterTest, constantStringDictionaryVector) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
       param().nimblePreserveDictionaryEncoding);
@@ -3034,7 +3056,6 @@ TEST_P(E2EFilterTest, constantStringWithNullsDictionaryVector) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
       param().nimblePreserveDictionaryEncoding);
@@ -3441,7 +3462,6 @@ INSTANTIATE_TEST_SUITE_P(
         E2EFilterTestParams{/*indexEnabled=*/false,
                             /*skipConstantFlatMapInMapStreams=*/false,
                             /*enableChunkIndex=*/false,
-                            /*stringDecoderZeroCopy=*/false,
                             /*pinMetadata=*/false,
                             /*enableCache=*/false,
                             /*nimblePreserveDictionaryEncoding=*/false,
@@ -3449,7 +3469,6 @@ INSTANTIATE_TEST_SUITE_P(
         E2EFilterTestParams{/*indexEnabled=*/false,
                             /*skipConstantFlatMapInMapStreams=*/false,
                             /*enableChunkIndex=*/false,
-                            /*stringDecoderZeroCopy=*/false,
                             /*pinMetadata=*/false,
                             /*enableCache=*/true,
                             /*nimblePreserveDictionaryEncoding=*/false,
@@ -3538,10 +3557,9 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithDifferentAlphabets) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(
-      param().stringDecoderZeroCopy);
+      param().nimblePreserveDictionaryEncoding);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   // Read with batch size (1000) > chunk size (200), forcing cross-chunk reads.
@@ -3553,7 +3571,7 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithDifferentAlphabets) {
     totalRows += rowResult->size();
 
     auto stringChild = rowResult->childAt(0)->loadedVector();
-    if (param().stringDecoderZeroCopy) {
+    if (param().nimblePreserveDictionaryEncoding) {
       ASSERT_EQ(stringChild->encoding(), VectorEncoding::Simple::DICTIONARY)
           << "Expected DICTIONARY encoding for string column, got "
           << stringChild->encoding();
@@ -3683,7 +3701,6 @@ TEST_P(E2EFilterTest, reactiveEncodingFallbackOutputRowsBias) {
           std::make_unique<velox::common::BytesValues>(accepted, false));
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -3812,7 +3829,6 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithFilter) {
           std::make_unique<velox::common::BytesValues>(accepted, false));
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -3843,8 +3859,8 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithFilter) {
 // resultNulls() returns a stale buffer instead of the fresh nullsInReadRange_,
 // corrupting filterDictionaryIndices output.
 TEST_P(E2EFilterTest, filterOnlyDictionaryStringColumn) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   auto type = ROW({"filter_col", "select_col"}, {VARCHAR(), VARCHAR()});
@@ -3922,7 +3938,6 @@ TEST_P(E2EFilterTest, filterOnlyDictionaryStringColumn) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -3942,8 +3957,8 @@ TEST_P(E2EFilterTest, filterOnlyDictionaryStringColumn) {
 // struct-level incomingNulls. The crash is specific to aggregation-like access
 // patterns where the struct is loaded lazily at the top level.
 TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStruct) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   constexpr size_t kTotalRows = 20000;
@@ -4048,7 +4063,6 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStruct) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -4083,8 +4097,8 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStruct) {
 // table's page_info schema, and simulates the aggregation access pattern
 // where count(struct.field) accesses only one child of the struct.
 TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStructMultiChild) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   constexpr size_t kTotalRows = 20000;
@@ -4230,7 +4244,6 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStructMultiChild) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -4260,8 +4273,8 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStructMultiChild) {
 // is skipped because abandonDictionary=true. The flat continuation only
 // filters the remaining rows, so the dict portion passes unfiltered.
 TEST_P(E2EFilterTest, filterOnlyDictAbandonDropsFilter) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   auto type = ROW({"filter_col", "select_col"}, {VARCHAR(), VARCHAR()});
@@ -4361,7 +4374,6 @@ TEST_P(E2EFilterTest, filterOnlyDictAbandonDropsFilter) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -4384,10 +4396,8 @@ TEST_P(E2EFilterTest, filterOnlyDictAbandonDropsFilter) {
 // crashing with "Failed to read chunk header". The fix checks the null bitmap
 // to verify all remaining rows are null before skipping the chunk load.
 TEST_P(E2EFilterTest, dictionaryChunkExhaustedAllNullTail) {
-  if (!param().stringDecoderZeroCopy ||
-      !param().nimblePreserveDictionaryEncoding) {
-    GTEST_SKIP()
-        << "Dictionary path requires stringDecoderZeroCopy and nimblePreserveDict";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   // 20,000 rows with only 20 struct-non-null. All non-null values are the
@@ -4465,7 +4475,6 @@ TEST_P(E2EFilterTest, dictionaryChunkExhaustedAllNullTail) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -4497,10 +4506,8 @@ TEST_P(E2EFilterTest, dictionaryChunkExhaustedAllNullTail) {
 // Exercises an indexed skip that consumes the final dictionary chunk before
 // an all-null nested-string range is materialized.
 TEST_P(E2EFilterTest, dictionaryStringAllNullRangeAfterStreamEnd) {
-  if (!param().stringDecoderZeroCopy ||
-      !param().nimblePreserveDictionaryEncoding) {
-    GTEST_SKIP()
-        << "Dictionary path requires stringDecoderZeroCopy and nimblePreserveDict";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDict";
   }
 
   constexpr size_t kBatchSize = 50'000;
@@ -4616,7 +4623,6 @@ TEST_P(E2EFilterTest, dictionaryStringAllNullRangeAfterStreamEnd) {
               kTotalRows - 1, kTotalRows - 1, /*nullAllowed=*/false));
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -4691,10 +4697,8 @@ RowVectorPtr makeSparseDictStructBatch(
 // non-tail-specific counterpart to dictionaryChunkExhaustedAllNullTail: the gap
 // sits *between* two chunks, and non-nulls are spread across read batches.
 TEST_P(E2EFilterTest, dictionaryChunkGapBetweenChunks) {
-  if (!param().stringDecoderZeroCopy ||
-      !param().nimblePreserveDictionaryEncoding) {
-    GTEST_SKIP()
-        << "Dictionary path requires stringDecoderZeroCopy and nimblePreserveDict";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   constexpr size_t kRowsPerWrite = 10000;
@@ -4761,7 +4765,6 @@ TEST_P(E2EFilterTest, dictionaryChunkGapBetweenChunks) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -4814,10 +4817,8 @@ TEST_P(E2EFilterTest, dictionaryChunkGapBetweenChunks) {
 // padded values -> Trivial), forcing the reactive dictionary->flat abandon on
 // crossing into it. Covers the all-null gap/tail load decision under abandon.
 TEST_P(E2EFilterTest, dictionaryChunkGapWithAbandon) {
-  if (!param().stringDecoderZeroCopy ||
-      !param().nimblePreserveDictionaryEncoding) {
-    GTEST_SKIP()
-        << "Dictionary path requires stringDecoderZeroCopy and nimblePreserveDict";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   constexpr size_t kRowsPerWrite = 10000;
@@ -4890,7 +4891,6 @@ TEST_P(E2EFilterTest, dictionaryChunkGapWithAbandon) {
   scanSpec->addAllChildFields(*type);
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -5056,7 +5056,6 @@ TEST_P(E2EFilterTest, crossChunkEncodingChangeWithFilter) {
           std::make_unique<velox::common::BytesValues>(accepted, false));
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -5084,8 +5083,8 @@ TEST_P(E2EFilterTest, crossChunkEncodingChangeWithFilter) {
 // must drop the null rows while filtering the dict portion before it is
 // expanded to flat.
 TEST_P(E2EFilterTest, crossChunkAbandonWithNullsAndFilter) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   auto type = ROW({"filter_col", "select_col"}, {VARCHAR(), VARCHAR()});
@@ -5186,7 +5185,6 @@ TEST_P(E2EFilterTest, crossChunkAbandonWithNullsAndFilter) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -5204,8 +5202,8 @@ TEST_P(E2EFilterTest, crossChunkAbandonWithNullsAndFilter) {
 // column is also read out, so the abandon path must produce correctly filtered
 // values (not just the right count) once the dict portion is expanded to flat.
 TEST_P(E2EFilterTest, crossChunkAbandonProjectedDictFilter) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   auto type = ROW({"string_val", "long_val"}, {VARCHAR(), BIGINT()});
@@ -5293,7 +5291,6 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedDictFilter) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -5319,8 +5316,8 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedDictFilter) {
 // is also read out. The non-null-accepting filter must drop nulls, filter the
 // dict portion, and expand it to flat with the output null bitmap realigned.
 TEST_P(E2EFilterTest, crossChunkAbandonProjectedNullableDictFilter) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   auto type = ROW({"string_val", "long_val"}, {VARCHAR(), BIGINT()});
@@ -5413,7 +5410,6 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedNullableDictFilter) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -5443,8 +5439,8 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedNullableDictFilter) {
 // on the abandon path with isDense=false — exercising the sparse null source
 // and the sparse rows[0, numValues_) mapping without subranging `rows`.
 TEST_P(E2EFilterTest, crossChunkAbandonSparseDictFilter) {
-  if (!param().stringDecoderZeroCopy) {
-    GTEST_SKIP() << "Dictionary path requires stringDecoderZeroCopy";
+  if (!param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP() << "Dictionary path requires nimblePreserveDictionaryEncoding";
   }
 
   auto type = ROW({"k", "str"}, {BIGINT(), VARCHAR()});
@@ -5538,7 +5534,6 @@ TEST_P(E2EFilterTest, crossChunkAbandonSparseDictFilter) {
 
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(true);
   rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -5633,7 +5628,6 @@ TEST_P(E2EFilterTest, isNullFilterWithNullableDictionary) {
       ->setFilter(std::make_unique<velox::common::IsNull>());
   velox::dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setScanSpec(scanSpec);
-  rowReaderOptions.setStringDecoderZeroCopy(param().stringDecoderZeroCopy);
   rowReaderOptions.setNimbleScanFastPath(param().scanFastPath);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 

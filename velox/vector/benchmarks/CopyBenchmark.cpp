@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
@@ -343,8 +345,8 @@ BENCHMARK_MULTI(copyStructNonContiguous) {
   test::VectorMaker vectorMaker{pool.get()};
   constexpr vector_size_t kSize = 2'000;
   std::vector<VectorPtr> children = {
-      vectorMaker.flatVector<int64_t>(kSize, folly::identity),
-      vectorMaker.flatVector<float>(kSize, folly::identity),
+      vectorMaker.flatVector<int64_t>(kSize, std::identity{}),
+      vectorMaker.flatVector<float>(kSize, std::identity{}),
   };
   auto source = vectorMaker.rowVector(children);
   auto target = BaseVector::create(source->type(), kSize / 2, pool.get());

@@ -133,7 +133,7 @@ TEST_F(OperatorTraceTest, emptyTrace) {
   std::string planNodeId;
   auto traceDirPath = TempDirectoryPath::create();
   auto plan = PlanBuilder()
-                  .values({input})
+                  .values(input)
                   .filter("a > 0")
                   .singleAggregation({"a"}, {"count(1)"})
                   .capturePlanNodeId(planNodeId)
@@ -278,21 +278,19 @@ TEST_F(OperatorTraceTest, traceMetadata) {
   }
 
   const auto outputDir = TempDirectoryPath::create();
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId traceNodeId;
   const auto planNode =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
-              {"c0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator)
+              "c0 = u0 AND c0 < 135",
+              builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
                   .planNode(),
-              "c0 < 135",
               {"c0", "c1", "c2"},
               core::JoinType::kInner)
           .capturePlanNodeId(traceNodeId)
@@ -346,18 +344,16 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
   const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
 
   const auto outputDir = TempDirectoryPath::create();
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId traceNodeId;
-  const auto planNode = PlanBuilder(planNodeIdGenerator)
+  const auto planNode = builder.newPlan()
                             .values(rows, false)
                             .hashJoin(
-                                {"c0"},
-                                {"u0"},
-                                PlanBuilder(planNodeIdGenerator)
+                                "c0 = u0",
+                                builder.newPlan()
                                     .values(rows, true)
                                     .project({"c0 AS u0", "c1 AS u1"})
                                     .planNode(),
-                                "",
                                 {"c0", "c1"},
                                 core::JoinType::kInner)
                             .capturePlanNodeId(traceNodeId)
@@ -372,6 +368,7 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       // Named by isCredentialConfigKey() rather than recorded by a write.
       // Every name on that list is covered, so dropping one from it fails
       // here.
+      {"cat_token", secret},
       {"metagen_key", secret},
       {"model_api_key", secret},
       {"crypto_auth_tokens_metagen", secret},
@@ -425,6 +422,8 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsCredentials) {
       testing::UnorderedElementsAre(
           std::pair<const std::string, std::string>{
               credentialKey, std::string(kRedactedConfigValue)},
+          std::pair<const std::string, std::string>{
+              "cat_token", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
               "metagen_key", std::string(kRedactedConfigValue)},
           std::pair<const std::string, std::string>{
@@ -620,9 +619,11 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   // constant expression, so a key given in SQL reaches the trace file inside
   // the serialized plan rather than as a config entry.
   const std::string secret{"sql-options-key-do-not-leak-4c7f1a"};
+  const std::string catSecret{"sql-options-cat-do-not-leak-9b2e5d"};
   const auto optionsJson = fmt::format(
-      R"({{"metagen_key":"{}","inference_backend":"metagen","max_tokens":64}})",
-      secret);
+      R"({{"metagen_key":"{}","cat_token":"{}","inference_backend":"metagen","max_tokens":64}})",
+      secret,
+      catSecret);
 
   const auto rowType = ROW({"c0", "c1"}, BIGINT());
   const std::vector<RowVectorPtr> rows{vectorFuzzer_.fuzzRow(rowType, 2)};
@@ -647,9 +648,10 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   const auto metaFile = fileSystem->openFileForRead(metaFilePath);
   const auto rawMetadata = metaFile->pread(0, metaFile->size());
   EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(secret)));
+  EXPECT_THAT(rawMetadata, testing::Not(testing::HasSubstr(catSecret)));
   EXPECT_THAT(
       rawMetadata, testing::HasSubstr(std::string(kRedactedConfigValue)));
-  // Non-credential options survive; only the key is replaced.
+  // Non-credential options survive; only the credentials are replaced.
   EXPECT_THAT(rawMetadata, testing::HasSubstr("inference_backend"));
 
   // Replay reads the plan block back. Constructing the reader deserializes it,
@@ -659,10 +661,10 @@ TEST_F(OperatorTraceTest, traceMetadataRedactsPlanNodeCredentials) {
   const auto replayedPlan = reader.queryPlan();
   ASSERT_NE(replayedPlan, nullptr);
   EXPECT_EQ(replayedPlan->id(), traceNodeId);
-  // The secret does not come back on a round trip either.
-  EXPECT_THAT(
-      folly::toJson(replayedPlan->serialize()),
-      testing::Not(testing::HasSubstr(secret)));
+  // The secrets do not come back on a round trip either.
+  const auto replayedJson = folly::toJson(replayedPlan->serialize());
+  EXPECT_THAT(replayedJson, testing::Not(testing::HasSubstr(secret)));
+  EXPECT_THAT(replayedJson, testing::Not(testing::HasSubstr(catSecret)));
 }
 
 TEST_F(OperatorTraceTest, task) {
@@ -676,21 +678,19 @@ TEST_F(OperatorTraceTest, task) {
     rows.push_back(vectorFuzzer_.fuzzRow(rowType, 2));
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId hashJoinNodeId;
   const auto planNode =
-      PlanBuilder(planNodeIdGenerator)
+      builder.newPlan()
           .values(rows, false)
           .project({"c0", "c1", "c2"})
           .hashJoin(
-              {"c0"},
-              {"u0"},
-              PlanBuilder(planNodeIdGenerator)
+              "c0 = u0 AND c0 < 135",
+              builder.newPlan()
                   .values(rows, true)
                   .singleAggregation({"c0", "c1"}, {"min(c2)"})
                   .project({"c0 AS u0", "c1 AS u1", "a0 AS u2"})
                   .planNode(),
-              "c0 < 135",
               {"c0", "c1", "c2"},
               core::JoinType::kInner)
           .capturePlanNodeId(hashJoinNodeId)
@@ -1069,8 +1069,7 @@ TEST_F(OperatorTraceTest, traceSplitRoundTrip) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1136,8 +1135,7 @@ TEST_F(OperatorTraceTest, traceSplitPartial) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1225,8 +1223,7 @@ TEST_F(OperatorTraceTest, traceSplitCorrupted) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);
@@ -1349,22 +1346,18 @@ TEST_F(OperatorTraceTest, hashJoin) {
   for (const auto& testData : testSettings) {
     SCOPED_TRACE(testData.debugString());
     const auto outputDir = TempDirectoryPath::create();
-    const auto planNodeIdGenerator{
-        std::make_shared<core::PlanNodeIdGenerator>()};
+    PlanBuilder builder;
     core::PlanNodeId hashJoinNodeId;
-    const auto planNode = PlanBuilder(planNodeIdGenerator)
-                              .values(probeInput, false)
-                              .hashJoin(
-                                  {"c0"},
-                                  {"u0"},
-                                  PlanBuilder(planNodeIdGenerator)
-                                      .values(buildInput, true)
-                                      .planNode(),
-                                  "c0 < 135",
-                                  {"c0", "c1", "c2"},
-                                  core::JoinType::kInner)
-                              .capturePlanNodeId(hashJoinNodeId)
-                              .planNode();
+    const auto planNode =
+        builder.newPlan()
+            .values(probeInput, false)
+            .hashJoin(
+                "c0 = u0 AND c0 < 135",
+                builder.newPlan().values(buildInput, true).planNode(),
+                {"c0", "c1", "c2"},
+                core::JoinType::kInner)
+            .capturePlanNodeId(hashJoinNodeId)
+            .planNode();
     const auto testDir = TempDirectoryPath::create();
     const auto traceRoot =
         fmt::format("{}/{}", testDir->getPath(), "traceRoot");
@@ -1486,8 +1479,7 @@ TEST_F(OperatorTraceTest, hiveConnectorId) {
   const auto fs = filesystems::getFileSystem(testDir->getPath(), nullptr);
   std::vector<std::shared_ptr<TempFilePath>> splitFiles;
   for (int i = 0; i < numSplits; ++i) {
-    auto filePath = TempFilePath::create();
-    writeToFile(filePath->getPath(), vectors);
+    auto filePath = writeToFile(vectors);
     splitFiles.push_back(std::move(filePath));
   }
   auto splits = makeHiveConnectorSplits(splitFiles);

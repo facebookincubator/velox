@@ -23,17 +23,19 @@ namespace facebook::velox::aggregate::prestosql {
 
 /// Registers the vector_index_pack aggregate:
 ///
-///   (cluster_id BIGINT, cluster_centroid ARRAY(REAL), metric VARCHAR)
-///       -> VARBINARY
+///   (cluster_id BIGINT, cluster_centroid ARRAY(REAL), metric VARCHAR,
+///    num_clusters BIGINT, dimension BIGINT) -> VECTOR_INDEX
 ///
 /// Packs cluster centroids into a codec: a kFlat local index over the
 /// centroids, with each cluster's id as its centroid's id (see
 /// LocalVectorIndex).
-///  - Cluster ids must be 0 to n - 1, each once.
-///  - Cluster centroids must all have the same, non-zero length.
-///  - Cluster centroids must not contain null, NaN or infinite elements.
-///  - Rows with a null cluster_id or cluster_centroid are ignored.
+///  - Cluster ids must be 0 to n - 1, each once, and n at most
+///    'num_clusters'.
+///  - Cluster centroids must have 'dimension' elements, none null, NaN or
+///    infinite, and not all zeros.
+///  - A null cluster_id or cluster_centroid fails the aggregation.
 ///  - 'metric' is a constant: 'cosine'.
+///  - 'num_clusters' and 'dimension' are positive constants.
 void registerVectorIndexPackAggregate(
     const std::vector<std::string>& names,
     bool withCompanionFunctions,

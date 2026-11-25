@@ -64,6 +64,19 @@ table StreamMajorStripeGroup {
   /// Deprecated: per-stream checksums are stored in stream trailers
   /// (FileProperties.stream_trailer). Never reuse this slot.
   stream_checksums:EncodedStream (deprecated);
+  /// Each stream's stripe list: the stripes of the group where the stream has
+  /// data (a non-zero size), in strictly ascending order. Present only in a
+  /// group with the sparse layout, where each stream holds offsets and sizes
+  /// only for the stripes in its list. For a group of 4 stripes where stream 7 has
+  /// data only in stripes 1 and 3:
+  ///   stream_stripes[7] = [1, 3]
+  ///   stream_offsets[7] = [offset in stripe 1, offset in stripe 3]
+  ///   stream_sizes[7]   = [size in stripe 1, size in stripe 3]
+  /// An entry without data omits its array. A stream with data in every stripe
+  /// omits its stripe list. A stream with data in no stripe omits all three
+  /// arrays. A reader that predates this field fails on such a group, unless
+  /// every stream has data in every stripe, which it then reads correctly.
+  stream_stripes:[EncodedStream];
 }
 
 table MetadataSection {

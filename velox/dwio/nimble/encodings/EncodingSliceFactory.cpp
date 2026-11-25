@@ -24,7 +24,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
@@ -34,16 +34,21 @@
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
+#include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingTypeDispatch.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 namespace facebook::nimble {
@@ -247,8 +252,62 @@ std::string_view sliceBlockBitPacking(
   NIMBLE_RETURN_BY_NUMERIC_DATA_TYPE(
       dataType,
       T,
-      BlockBitPackingEncoding<T>::slice(
+      deprecated::BlockBitPackingEncoding<T>::slice(
           encoded, offset, length, buffer, options));
+}
+
+std::string_view sliceBlockBitPackingV2(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_NUMERIC_DATA_TYPE(
+      dataType,
+      T,
+      BlockBitPackingV2Encoding<T>::slice(
+          encoded, offset, length, buffer, options));
+}
+
+std::string_view sliceVarint(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  switch (dataType) {
+    case DataType::Int32:
+      return VarintEncoding<int32_t>::slice(
+          encoded, offset, length, buffer, options);
+    case DataType::Uint32:
+      return VarintEncoding<uint32_t>::slice(
+          encoded, offset, length, buffer, options);
+    case DataType::Int64:
+      return VarintEncoding<int64_t>::slice(
+          encoded, offset, length, buffer, options);
+    case DataType::Uint64:
+      return VarintEncoding<uint64_t>::slice(
+          encoded, offset, length, buffer, options);
+    case DataType::Float:
+      return VarintEncoding<float>::slice(
+          encoded, offset, length, buffer, options);
+    case DataType::Double:
+      return VarintEncoding<double>::slice(
+          encoded, offset, length, buffer, options);
+    case DataType::Undefined:
+    case DataType::Int8:
+    case DataType::Uint8:
+    case DataType::Int16:
+    case DataType::Uint16:
+    case DataType::Bool:
+    case DataType::String:
+    default:
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Varint encoding only supports 4 and 8 byte numeric types, got {}.",
+          dataType);
+  }
 }
 
 std::string_view sliceEliasFano(
@@ -262,6 +321,47 @@ std::string_view sliceEliasFano(
       dataType,
       T,
       EliasFanoEncoding<T>::slice(encoded, offset, length, buffer, options));
+}
+
+std::string_view sliceSequence(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      dataType,
+      T,
+      SequenceEncoding<T>::slice(encoded, offset, length, buffer, options));
+}
+
+std::string_view slicePartitionedEliasFano(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      dataType,
+      T,
+      PartitionedEliasFanoEncoding<T>::slice(
+          encoded, offset, length, buffer, options));
+}
+
+std::string_view sliceReversed(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
+  NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
+      dataType,
+      T,
+      ReversedEncoding<T>::slice(encoded, offset, length, buffer, options));
 }
 
 std::string_view slicePFOR(
@@ -359,11 +459,9 @@ std::string_view EncodingSliceFactory::slice(
     Buffer& buffer,
     const Encoding::Options& options) {
   const auto encodingType = EncodingPrefix::encodingType(encoded);
-  const auto rowCount =
+  const uint32_t rowCount =
       EncodingPrefix::readRowCount(encoded, options.useVarintRowCount);
-  NIMBLE_CHECK_LE(offset, rowCount);
-  NIMBLE_CHECK_LE(length, rowCount - offset);
-  NIMBLE_CHECK_GT(length, 0, "Cannot slice zero rows.");
+  EncodingPrefix::checkSliceRange(rowCount, offset, length);
   if (offset == 0 && length == rowCount &&
       encodingType != EncodingType::SharedDictionary) {
     return buffer.writeString(encoded);
@@ -389,8 +487,20 @@ std::string_view EncodingSliceFactory::slice(
     case EncodingType::BlockBitPacking:
       return sliceBlockBitPacking(
           encoded, dataType, offset, length, buffer, options);
+    case EncodingType::BlockBitPackingV2:
+      return sliceBlockBitPackingV2(
+          encoded, dataType, offset, length, buffer, options);
+    case EncodingType::Varint:
+      return sliceVarint(encoded, dataType, offset, length, buffer, options);
     case EncodingType::EliasFano:
       return sliceEliasFano(encoded, dataType, offset, length, buffer, options);
+    case EncodingType::PartitionedEliasFano:
+      return slicePartitionedEliasFano(
+          encoded, dataType, offset, length, buffer, options);
+    case EncodingType::Sequence:
+      return sliceSequence(encoded, dataType, offset, length, buffer, options);
+    case EncodingType::Reversed:
+      return sliceReversed(encoded, dataType, offset, length, buffer, options);
     case EncodingType::PFOR:
       return slicePFOR(encoded, dataType, offset, length, buffer, options);
     case EncodingType::SimdForBitpack:

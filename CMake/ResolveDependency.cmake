@@ -39,7 +39,15 @@ set(CMAKE_TLS_VERIFY true)
 
 macro(velox_build_dependency dependency_name)
   string(TOLOWER ${dependency_name} dependency_name_lower)
+  # A dependency built from source gets Velox's flags without -Werror and
+  # -Werror=<warning>. Its warnings are not ours to fix, so a new compiler or
+  # warning flag must not fail the build on them.
+  set(velox_saved_cxx_flags_${dependency_name} "${CMAKE_CXX_FLAGS}")
+  string(REPLACE " " ";" velox_dependency_cxx_flags "${CMAKE_CXX_FLAGS}")
+  list(FILTER velox_dependency_cxx_flags EXCLUDE REGEX "^-Werror(=.*)?$")
+  list(JOIN velox_dependency_cxx_flags " " CMAKE_CXX_FLAGS)
   include(${dependency_name_lower})
+  set(CMAKE_CXX_FLAGS "${velox_saved_cxx_flags_${dependency_name}}")
 endmacro()
 
 # * Macro to resolve third-party dependencies.

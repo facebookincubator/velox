@@ -17,6 +17,7 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <thread>
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -115,6 +116,46 @@ TEST_F(RuntimeMetricsTest, mergeCounter) {
   VELOX_ASSERT_THROW(
       rm.merge(RuntimeCounter(1, RuntimeCounter::Unit::kNanos)),
       "Unit mismatch for runtime stat");
+}
+
+// A wall timer adds its scope's time, in nanoseconds, to the thread's writer
+// once, and nothing without a writer.
+TEST_F(RuntimeMetricsTest, wallTimer) {
+  {
+    RuntimeStatWallTimer timer{"test.nowriter"};
+  }
+
+  ConcurrentRuntimeStatWriter collector;
+  RuntimeStatWriterScopeGuard guard(&collector);
+  {
+    RuntimeStatWallTimer timer{"test.wall"};
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  const auto stats = collector.runtimeStats();
+  ASSERT_EQ(stats.size(), 1);
+  const auto& metric = stats.at("test.wall");
+  EXPECT_EQ(metric.unit, RuntimeCounter::Unit::kNanos);
+  EXPECT_EQ(metric.count, 1);
+  EXPECT_GE(metric.sum, 1'000'000);
+}
+
+// A wall timer given a writer adds to that writer, not the thread's.
+TEST_F(RuntimeMetricsTest, wallTimerWithWriter) {
+  ConcurrentRuntimeStatWriter threadWriter;
+  RuntimeStatWriterScopeGuard guard(&threadWriter);
+
+  ConcurrentRuntimeStatWriter writer;
+  {
+    RuntimeStatWallTimer timer{writer, "test.wall"};
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_TRUE(threadWriter.runtimeStats().empty());
+  const auto stats = writer.runtimeStats();
+  ASSERT_EQ(stats.size(), 1);
+  const auto& metric = stats.at("test.wall");
+  EXPECT_EQ(metric.unit, RuntimeCounter::Unit::kNanos);
+  EXPECT_EQ(metric.count, 1);
+  EXPECT_GE(metric.sum, 1'000'000);
 }
 
 class SetThreadLocalRuntimeStatTest : public testing::Test {};

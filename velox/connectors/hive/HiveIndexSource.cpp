@@ -21,13 +21,14 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/hive/FileDataSource.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileDataSource.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/FileIndexReader.h"
-#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/HiveIndexSourceUtils.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/LazyVector.h"
 
@@ -35,12 +36,12 @@ namespace facebook::velox::connector::hive {
 namespace {
 
 // Checks that a HiveColumnHandle is a regular column type.
-void checkColumnHandleIsRegular(const FileColumnHandle& handle) {
+void checkColumnHandleIsRegular(const connector::FileColumnHandle& handle) {
   VELOX_CHECK_EQ(
       handle.columnType(),
-      FileColumnHandle::ColumnType::kRegular,
+      connector::FileColumnHandle::ColumnType::kRegular,
       "Expected regular column, got {} for column {}",
-      FileColumnHandle::columnTypeName(handle.columnType()),
+      connector::FileColumnHandle::columnTypeName(handle.columnType()),
       handle.name());
 }
 
@@ -843,7 +844,7 @@ void HiveIndexSource::initRemainingFilter(
     std::vector<TypePtr>& readColumnTypes) {
   VELOX_CHECK_NULL(remainingFilterExprSet_);
   double sampleRate = tableHandle_->sampleRate();
-  auto remainingFilter = extractFiltersFromRemainingFilter(
+  auto remainingFilter = exec::ExprToSubfieldFilterParser::extractFilters(
       tableHandle_->remainingFilter(),
       expressionEvaluator_,
       filters_,
@@ -863,10 +864,15 @@ void HiveIndexSource::initRemainingFilter(
   for (int i = 0; i < readColumnNames.size(); ++i) {
     columnNames[readColumnNames[i]] = i;
   }
+  const auto fieldsReadForAllPassingRows =
+      remainingFilterExpr->fieldsReadForAllPassingRows();
   for (const auto* input : remainingFilterExpr->distinctFields()) {
     auto it = columnNames.find(input->field());
     if (it != columnNames.end()) {
-      if (shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
+      if (std::find(
+              fieldsReadForAllPassingRows.begin(),
+              fieldsReadForAllPassingRows.end(),
+              input) == fieldsReadForAllPassingRows.end()) {
         remainingEagerlyLoadFields_.push_back(it->second);
       }
       continue;
@@ -880,7 +886,7 @@ void HiveIndexSource::initRemainingFilter(
 
   remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
   for (auto& subfield : remainingFilterSubfields_) {
-    const auto& name = getColumnName(subfield);
+    const auto& name = subfield.baseName();
     auto it = projectedSubfields_.find(name);
     if (it != projectedSubfields_.end()) {
       // Some subfields of the column are already projected out, we append
@@ -922,7 +928,7 @@ void HiveIndexSource::init(
   for (const auto& handle : tableHandle_->filterColumnHandles()) {
     auto it = columnHandles.find(handle->name());
     if (it != columnHandles.end()) {
-      checkColumnHandleConsistent(*handle, *it->second);
+      handle->checkConsistentWith(*it->second);
       continue;
     }
     checkColumnHandleIsRegular(*handle);
@@ -947,7 +953,7 @@ void HiveIndexSource::init(
 
     for (auto& subfield : handle->requiredSubfields()) {
       VELOX_USER_CHECK_EQ(
-          getColumnName(subfield),
+          subfield.baseName(),
           handle->name(),
           "Required subfield does not match column name");
       projectedSubfields_[handle->name()].push_back(&subfield);
@@ -957,9 +963,7 @@ void HiveIndexSource::init(
 
   if (hiveConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx_->sessionProperties())) {
-    checkColumnNameLowerCase(outputType_);
-    checkColumnNameLowerCase(tableHandle_->subfieldFilters(), {});
-    checkColumnNameLowerCase(tableHandle_->remainingFilter());
+    tableHandle_->checkColumnNamesLowerCase(*outputType_);
   }
 
   for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {
@@ -982,7 +986,7 @@ void HiveIndexSource::init(
 std::shared_ptr<common::ScanSpec> HiveIndexSource::buildScanSpec(
     const std::unordered_map<std::string, std::optional<std::string>>*
         partitionValues) {
-  auto scanSpec = makeScanSpec(
+  auto scanSpec = connector::makeScanSpec(
       readerOutputType_,
       projectedSubfields_,
       filters_,
@@ -1023,7 +1027,7 @@ void HiveIndexSource::setPartitionValue(
       "ColumnHandle is missing for partition key {}",
       partitionKey);
   const auto type = it->second->dataType();
-  const auto constant = newConstantFromString(
+  const auto constant = connector::newConstantFromString(
       type,
       value,
       pool_,
@@ -1134,12 +1138,13 @@ void HiveIndexSource::createSplitGroup(
     const auto& partitionValue =
         extractPartitionValue(split, cond.partitionColumnName);
     const auto& handle = partitionKeyHandles_.at(cond.partitionColumnName);
-    group.partitionValues.emplace_back(newConstantFromString(
-        handle->dataType(),
-        partitionValue,
-        pool_,
-        readTimestampAsLocal,
-        cond.isPartitionDateValueDaysSinceEpoch));
+    group.partitionValues.emplace_back(
+        connector::newConstantFromString(
+            handle->dataType(),
+            partitionValue,
+            pool_,
+            readTimestampAsLocal,
+            cond.isPartitionDateValueDaysSinceEpoch));
   }
 
   // Store splits for lazy reader creation on first access.
@@ -1352,43 +1357,47 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
   if (ioStatistics_) {
     const auto& read = ioStatistics_->read();
     if (read.count() > 0) {
-      stats[std::string(FileDataSource::kStorageReadBytes)] = RuntimeMetric(
-          static_cast<int64_t>(read.sum()),
-          read.count(),
-          static_cast<int64_t>(read.min()),
-          static_cast<int64_t>(read.max()),
-          RuntimeCounter::Unit::kBytes);
+      stats[std::string(connector::FileDataSource::kStorageReadBytes)] =
+          RuntimeMetric(
+              static_cast<int64_t>(read.sum()),
+              read.count(),
+              static_cast<int64_t>(read.min()),
+              static_cast<int64_t>(read.max()),
+              RuntimeCounter::Unit::kBytes);
     }
     const auto& ramHit = ioStatistics_->ramHit();
     if (ramHit.count() > 0) {
-      stats[std::string(FileDataSource::kNumRamRead)] =
+      stats[std::string(connector::FileDataSource::kNumRamRead)] =
           RuntimeMetric(static_cast<int64_t>(ramHit.count()));
-      stats[std::string(FileDataSource::kRamReadBytes)] = RuntimeMetric(
-          static_cast<int64_t>(ramHit.sum()),
-          ramHit.count(),
-          static_cast<int64_t>(ramHit.min()),
-          static_cast<int64_t>(ramHit.max()),
-          RuntimeCounter::Unit::kBytes);
+      stats[std::string(connector::FileDataSource::kRamReadBytes)] =
+          RuntimeMetric(
+              static_cast<int64_t>(ramHit.sum()),
+              ramHit.count(),
+              static_cast<int64_t>(ramHit.min()),
+              static_cast<int64_t>(ramHit.max()),
+              RuntimeCounter::Unit::kBytes);
     }
     const auto& ssdRead = ioStatistics_->ssdRead();
     if (ssdRead.count() > 0) {
-      stats[std::string(FileDataSource::kNumLocalRead)] =
+      stats[std::string(connector::FileDataSource::kNumLocalRead)] =
           RuntimeMetric(static_cast<int64_t>(ssdRead.count()));
-      stats[std::string(FileDataSource::kLocalReadBytes)] = RuntimeMetric(
-          static_cast<int64_t>(ssdRead.sum()),
-          ssdRead.count(),
-          static_cast<int64_t>(ssdRead.min()),
-          static_cast<int64_t>(ssdRead.max()),
-          RuntimeCounter::Unit::kBytes);
+      stats[std::string(connector::FileDataSource::kLocalReadBytes)] =
+          RuntimeMetric(
+              static_cast<int64_t>(ssdRead.sum()),
+              ssdRead.count(),
+              static_cast<int64_t>(ssdRead.min()),
+              static_cast<int64_t>(ssdRead.max()),
+              RuntimeCounter::Unit::kBytes);
     }
     const auto& readGap = ioStatistics_->readGap();
     if (readGap.count() > 0) {
-      stats[std::string(FileDataSource::kReadGapBytes)] = RuntimeMetric(
-          static_cast<int64_t>(readGap.sum()),
-          readGap.count(),
-          static_cast<int64_t>(readGap.min()),
-          static_cast<int64_t>(readGap.max()),
-          RuntimeCounter::Unit::kBytes);
+      stats[std::string(connector::FileDataSource::kReadGapBytes)] =
+          RuntimeMetric(
+              static_cast<int64_t>(readGap.sum()),
+              readGap.count(),
+              static_cast<int64_t>(readGap.min()),
+              static_cast<int64_t>(readGap.max()),
+              RuntimeCounter::Unit::kBytes);
     }
   }
 
@@ -1537,10 +1546,6 @@ RowVectorPtr HiveIndexSource::projectOutput(
     vector_size_t numRows,
     const BufferPtr& remainingIndices,
     const RowVectorPtr& rowVector) {
-  if (outputType_->size() == 0) {
-    return exec::wrap(numRows, remainingIndices, rowVector);
-  }
-
   std::vector<VectorPtr> outputColumns;
   outputColumns.reserve(outputType_->size());
   for (int i = 0; i < outputType_->size(); ++i) {

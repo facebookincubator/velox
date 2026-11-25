@@ -16,8 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -30,12 +30,13 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
     uint64_t splitOffset,
-    const std::string& connectorId)
+    const std::string& connectorId,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : deleteFile_(deleteFile),
       baseFilePath_(baseFilePath),
       fileHandleFactory_(fileHandleFactory),
@@ -85,7 +86,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics_);
   deleteReaderOpts.setMetadataIoStats(ioStatistics_);
-  configureReaderOptions(
+  connector::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx,
       deleteFileSchema,
@@ -96,14 +97,18 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   const FileHandleKey fileHandleKey{
       .filename = deleteFile_.filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-  auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
-  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
+  FileProperties fileProperties;
+  fileProperties.fileReadOps = fileReadOps;
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory_->generate(fileHandleKey, &fileProperties);
+  auto deleteFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
       ioStatistics_,
       ioStats_,
-      executor_);
+      executor_,
+      fileReadOps);
 
   auto deleteReader =
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
@@ -113,14 +118,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // 1) the delete file doesn't contain the base file that is being read; 2) The
   // delete file does not contain the positions in the current batch for the
   // base file.
-  if (!testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit_->filePath,
-          deleteSplit_->partitionKeys,
-          {},
-          fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+  if (!common::testFilters(*scanSpec, *deleteReader)) {
     // We only count the number of base splits skipped as skippedSplits runtime
     // statistics in Velox.  Skipped delta split is only counted as skipped
     // bytes.
@@ -130,7 +128,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  configureRowReaderOptions(
+  connector::configureRowReaderOptions(
       {},
       scanSpec,
       nullptr,

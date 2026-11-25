@@ -33,94 +33,6 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
   std::vector<RowVectorPtr>
   makeVectors(const RowTypePtr& rowType, vector_size_t size, int numVectors);
 
-  /// Generates a variety of logically equivalent plans to compute aggregations
-  /// using combinations of partial, final, single, and intermediate
-  /// aggregations with and without local exchanges. Runs all these plans and
-  /// verifies results against DuckDB.
-  ///
-  /// The following plans are generated:
-  ///     - partial -> final
-  ///     - single
-  ///     - partial -> intermediate -> final
-  ///     - partial -> local exchange -> final
-  ///     - partial -> local exchange -> intermediate -> local exchange -> final
-  ///
-  /// Example:
-  ///     testAggregations(
-  ///         [&](PlanBuilder& builder) {
-  ///             builder
-  ///                 .values(vectors)
-  ///                 .project({"c0 % 10 AS c0_mod_10", "c1"});
-  ///         },
-  ///      {"c0_mod_10"},
-  ///      {"sum(c1)"},
-  ///      "SELECT c0 % 10, sum(c1) FROM tmp GROUP BY 1");
-  ///
-  /// @param makeSource A function taking a reference to PlanBuilder and
-  /// building up the plan all the way up to the aggregation.
-  /// @param groupingKeys A list of grouping keys. May be empty.
-  /// @param aggregates A list of aggregates to compute.
-  /// @param duckDbSql An equivalent DuckDB SQL query.
-  /// @param config Optional configuration properties to use when evaluating
-  /// aggregations.
-  void testAggregations(
-      std::function<void(exec::test::PlanBuilder&)> makeSource,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::string& duckDbSql,
-      const std::unordered_map<std::string, std::string>& config = {});
-
-  /// Same as above, but allows to specify a set of projections to apply after
-  /// the aggregation.
-  void testAggregations(
-      std::function<void(exec::test::PlanBuilder&)> makeSource,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& postAggregationProjections,
-      std::function<std::shared_ptr<exec::Task>(
-          exec::test::AssertQueryBuilder& builder)> assertResults,
-      const std::unordered_map<std::string, std::string>& config = {});
-
-  /// Convenience version that allows to specify input data instead of a
-  /// function to build Values plan node.
-  void testAggregations(
-      const std::vector<RowVectorPtr>& data,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::string& duckDbSql,
-      const std::unordered_map<std::string, std::string>& config = {});
-
-  /// Convenience version that allows to specify input data instead of a
-  /// function to build Values plan node.
-  void testAggregations(
-      const std::vector<RowVectorPtr>& data,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& postAggregationProjections,
-      const std::string& duckDbSql,
-      const std::unordered_map<std::string, std::string>& config = {});
-
-  /// Convenience version that allows to specify input data instead of a
-  /// function to build Values plan node, and the expected result instead of a
-  /// DuckDB SQL query to validate the result.
-  void testAggregations(
-      const std::vector<RowVectorPtr>& data,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<RowVectorPtr>& expectedResult,
-      const std::unordered_map<std::string, std::string>& config = {});
-
-  /// Convenience version that allows to specify input data instead of a
-  /// function to build Values plan node, and the expected result instead of a
-  /// DuckDB SQL query to validate the result.
-  void testAggregations(
-      const std::vector<RowVectorPtr>& data,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& postAggregationProjections,
-      const std::vector<RowVectorPtr>& expectedResult,
-      const std::unordered_map<std::string, std::string>& config = {});
-
   /// Ensure the function is working in streaming use case.  Create a first
   /// aggregation function, add the rawInput1, then extract the accumulator,
   /// read the accumulator to second function, and continue to add rawInput2 to
@@ -132,123 +44,163 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::vector<VectorPtr>& rawInput2,
       const std::unordered_map<std::string, std::string>& config = {});
 
-  // Given a list of aggregation expressions, test their equivalent plans using
-  // companion functions. For example, suppose we have the following arguments
-  // where c0 and c1 are double colummns.
-  //   aggregates = {"avg(c0), avg(c1)"}
-  //   groupingKeys = {"g0"},
-  //   postAggregationProjections = {},
-  // construct and test aggregation plans for a query consisting the following
-  // operations:
-  //   a0, a1 = avg_partial(c0), avg_partial(c1) group by g0, k1
-  //   a0, a1 = avg_merge(a0), avg_merge(a1) group by g0
-  //   g0, c0, c1 = g0, avg_extract_double(a0), avg_extract_double(a1)
-  // Note that we intentionally add an additional grouping key k1 at the
-  // avg_partial operation so that the following avg_merge operation will have
-  // multiple values to merge for each g0 group.
-  // This config is used in Aggregate parameter core::QueryConfig.
-  void testAggregationsWithCompanion(
-      const std::vector<RowVectorPtr>& data,
-      const std::function<void(exec::test::PlanBuilder&)>&
-          preAggregationProcessing,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
-      const std::vector<std::string>& postAggregationProjections,
-      const std::string& duckDbSql,
-      const std::unordered_map<std::string, std::string>& config = {});
+  /// Which companion plans AggregationTester::withCompanion() runs.
+  enum class CompanionPlans {
+    /// No companion plans.
+    kNone,
+    /// The plans that end with the '_extract', '_merge_extract' and '_merge'
+    /// companions.
+    kAll,
+    /// Only the plans that end with the '_merge' companion, which compare
+    /// partial states. For functions whose '_extract' and '_merge_extract'
+    /// companions cannot resolve their result type from the intermediate type
+    /// alone, such as Spark's decimal avg.
+    kMergeOnly,
+  };
 
-  void testAggregationsWithCompanion(
-      const std::vector<RowVectorPtr>& data,
-      const std::function<void(exec::test::PlanBuilder&)>&
-          preAggregationProcessing,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
-      const std::vector<std::string>& postAggregationProjections,
-      const std::vector<RowVectorPtr>& expectedResult,
-      const std::unordered_map<std::string, std::string>& config = {});
+  /// Runs an aggregation through the plans that AggregationTestBase generates
+  /// and checks that they all produce the same results. Set the input, the
+  /// aggregation and the options, then call one of the assert methods:
+  ///
+  ///   AggregationTester(*this)
+  ///       .inputs(vectors)
+  ///       .groupBy({"c0"})
+  ///       .aggregates({"sum(c1)"})
+  ///       .withCompanion()
+  ///       .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY 1");
+  ///
+  /// The plans combine partial, final, single and intermediate aggregations,
+  /// with and without local exchanges and spilling. The checks also add raw
+  /// input after intermediate results (streaming), extract results twice from
+  /// the same accumulators (incremental), and read the input from files.
+  class AggregationTester {
+   public:
+    using AssertResults = std::function<std::shared_ptr<exec::Task>(
+        exec::test::AssertQueryBuilder&)>;
 
-  void testAggregationsWithCompanion(
-      const std::vector<RowVectorPtr>& data,
-      const std::function<void(exec::test::PlanBuilder&)>&
-          preAggregationProcessing,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
-      const std::vector<std::string>& postAggregationProjections,
-      std::function<std::shared_ptr<exec::Task>(
-          exec::test::AssertQueryBuilder&)> assertResults,
-      const std::unordered_map<std::string, std::string>& config = {});
+    explicit AggregationTester(AggregationTestBase& test) : test_{test} {}
 
-  // Split the input into 2 files then read the input from files.  Can reveal
-  // bugs in string life cycle management.
-  void testReadFromFiles(
-      std::function<void(exec::test::PlanBuilder&)> makeSource,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& postAggregationProjections,
-      std::function<std::shared_ptr<exec::Task>(
-          exec::test::AssertQueryBuilder&)> assertResults,
-      const std::unordered_map<std::string, std::string>& config = {});
+    /// The input batches of the aggregation.
+    AggregationTester& inputs(std::vector<RowVectorPtr> inputs) {
+      inputs_ = std::move(inputs);
+      return *this;
+    }
 
-  void testReadFromFiles(
-      const std::vector<RowVectorPtr>& data,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::vector<RowVectorPtr>& expectedResult,
-      const std::unordered_map<std::string, std::string>& config = {}) {
-    testReadFromFiles(
-        [&](auto& planBuilder) { planBuilder.values(data); },
-        groupingKeys,
-        aggregates,
-        {},
-        [&](auto& assertBuilder) {
-          return assertBuilder.assertResults({expectedResult});
-        },
-        config);
-  }
+    /// The input of the aggregation, as a single batch.
+    AggregationTester& inputs(RowVectorPtr input) {
+      inputs_ = {std::move(input)};
+      return *this;
+    }
 
-  /// Generates a variety of logically equivalent plans to compute aggregations
-  /// using combinations of partial, final, single, and intermediate
-  /// aggregations with and without local exchanges. Runs all these plans and
-  /// verifies they all fail with the specified error message.
-  void testFailingAggregations(
-      const std::vector<RowVectorPtr>& data,
-      const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates,
-      const std::string& expectedMessage,
-      const std::unordered_map<std::string, std::string>& config = {});
+    /// Adds plan nodes between the input and the aggregation, such as a
+    /// projection that computes the grouping keys.
+    AggregationTester& preAggregation(
+        std::function<void(exec::test::PlanBuilder&)> preAggregation) {
+      preAggregation_ = std::move(preAggregation);
+      return *this;
+    }
 
-  void disableTestStreaming() {
-    testStreaming_ = false;
-  }
+    AggregationTester& groupBy(std::vector<std::string> groupingKeys) {
+      groupingKeys_ = std::move(groupingKeys);
+      return *this;
+    }
 
-  void enableTestStreaming() {
-    testStreaming_ = true;
-  }
+    AggregationTester& aggregates(std::vector<std::string> aggregates) {
+      aggregates_ = std::move(aggregates);
+      return *this;
+    }
 
-  void disableTestIncremental() {
-    testIncremental_ = false;
-  }
+    /// Projections to apply to the result of the aggregation.
+    AggregationTester& project(std::vector<std::string> projections) {
+      projections_ = std::move(projections);
+      return *this;
+    }
 
-  void enableTestIncremental() {
-    testIncremental_ = true;
-  }
+    /// Sets a query configuration property for every plan.
+    AggregationTester& config(
+        const std::string& key,
+        const std::string& value) {
+      config_[key] = value;
+      return *this;
+    }
 
-  /// Whether testStreaming should be called in testAggregations.
-  bool testStreaming_{true};
+    /// Also runs the plans that compute the aggregates with their companion
+    /// functions: '_partial', '_merge', '_merge_extract' and '_extract'. These
+    /// plans group the partial step by an extra key 'k0', so that the merge
+    /// step has several values to merge for each group. 'plans' selects which
+    /// of them run; each call overrides the previous one.
+    AggregationTester& withCompanion(
+        CompanionPlans plans = CompanionPlans::kAll) {
+      companionPlans_ = plans;
+      return *this;
+    }
 
-  /// Whether testIncrementalAggregation should be called in testAggregations.
-  bool testIncremental_{true};
+    /// Skips the check that adds raw input to accumulators after intermediate
+    /// results.
+    AggregationTester& disableStreaming() {
+      streaming_ = false;
+      return *this;
+    }
+
+    /// Skips the check that extracting results twice from the same accumulators
+    /// gives the same results.
+    AggregationTester& disableIncremental() {
+      incremental_ = false;
+      return *this;
+    }
+
+    /// Checks the results against an equivalent DuckDB query over a table 'tmp'
+    /// that the test created from the input.
+    void assertResults(const std::string& duckDbSql);
+
+    /// Checks the results against 'expected'.
+    void assertResults(const std::vector<RowVectorPtr>& expected);
+
+    /// Checks the results against 'expected', a single batch.
+    void assertResults(const RowVectorPtr& expected);
+
+    /// Checks the results with 'assertResults', which runs the query.
+    void assertResults(const AssertResults& assertResults);
+
+    /// Checks that every plan fails with an error that contains 'message'.
+    void assertError(const std::string& message);
+
+   private:
+    // Runs the plans and checks their results with 'assertResults'.
+    void run(const AssertResults& assertResults);
+
+    // Adds the input and the pre-aggregation nodes to 'builder'.
+    void addSource(exec::test::PlanBuilder& builder) const;
+
+    // Returns the argument types of each aggregate, as the aggregation over the
+    // input resolves them.
+    std::vector<std::vector<TypePtr>> aggregateArgTypes() const;
+
+    AggregationTestBase& test_;
+    std::vector<RowVectorPtr> inputs_;
+    std::function<void(exec::test::PlanBuilder&)> preAggregation_;
+    std::vector<std::string> groupingKeys_;
+    std::vector<std::string> aggregates_;
+    std::vector<std::string> projections_;
+    std::unordered_map<std::string, std::string> config_;
+    CompanionPlans companionPlans_{CompanionPlans::kNone};
+    bool streaming_{true};
+    bool incremental_{true};
+  };
 
  private:
   // Test streaming use case where raw inputs are added after intermediate
   // results. Return the result of aggregates if successful.
+  //
+  // When 'projections' is not empty, compares the results after applying
+  // 'projections' to them. The companion plans use it to compare intermediate
+  // results after the extract companion, since equal intermediate results may
+  // differ in form, as KLL sketches do.
   RowVectorPtr validateStreamingInTestAggregations(
       const std::function<void(exec::test::PlanBuilder&)>& makeSource,
       const std::vector<std::string>& aggregates,
-      const std::unordered_map<std::string, std::string>& config);
+      const std::unordered_map<std::string, std::string>& config,
+      const std::vector<std::string>& projections = {});
 
   VectorPtr testStreaming(
       const std::string& functionName,
@@ -268,7 +220,23 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::vector<std::string>& aggregates,
       const std::unordered_map<std::string, std::string>& config = {});
 
-  void testAggregationsImpl(
+  // Runs the plans and checks of AggregationTester over the input that
+  // 'makeSource' builds. 'streaming' and 'incremental' enable the checks of
+  // the same names.
+  void testAggregations(
+      std::function<void(exec::test::PlanBuilder&)> makeSource,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& postAggregationProjections,
+      std::function<std::shared_ptr<exec::Task>(
+          exec::test::AssertQueryBuilder&)> assertResults,
+      const std::unordered_map<std::string, std::string>& config,
+      bool streaming,
+      bool incremental);
+
+  // Writes the input to files and runs the plans over a scan of them. Can
+  // reveal bugs in string life cycle management.
+  void testReadFromFiles(
       std::function<void(exec::test::PlanBuilder&)> makeSource,
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
@@ -276,6 +244,56 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       std::function<std::shared_ptr<exec::Task>(
           exec::test::AssertQueryBuilder&)> assertResults,
       const std::unordered_map<std::string, std::string>& config);
+
+  // Runs the plans and checks that each fails with an error that contains
+  // 'expectedMessage'.
+  void testFailingAggregations(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::string& expectedMessage,
+      const std::unordered_map<std::string, std::string>& config,
+      bool streaming);
+
+  // Input and companion aggregates that the companion plans are built from.
+  // Defined in the .cpp.
+  struct CompanionPlanInputs;
+
+  // Runs the companion plans that end with the extract companion, including
+  // the streaming check, and checks their results with 'assertResults'.
+  void testCompanionExtract(
+      const CompanionPlanInputs& inputs,
+      const std::vector<std::string>& postAggregationProjections,
+      const std::function<std::shared_ptr<exec::Task>(
+          exec::test::AssertQueryBuilder&)>& assertResults,
+      const std::unordered_map<std::string, std::string>& config,
+      bool streaming);
+
+  // Runs the companion plans that end with the merge_extract companion and
+  // checks their results with 'assertResults'.
+  void testCompanionMergeExtract(
+      const CompanionPlanInputs& inputs,
+      const std::vector<std::string>& postAggregationProjections,
+      const std::function<std::shared_ptr<exec::Task>(
+          exec::test::AssertQueryBuilder&)>& assertResults,
+      const std::unordered_map<std::string, std::string>& config);
+
+  // Runs the companion plans that end with the merge companion: partial merges
+  // with and without abandoning partial aggregation, which compare partial
+  // states.
+  void testCompanionMerge(
+      const CompanionPlanInputs& inputs,
+      const std::unordered_map<std::string, std::string>& config);
+
+  void testAggregationsImpl(
+      std::function<void(exec::test::PlanBuilder&)> makeSource,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::vector<std::string>& postAggregationProjections,
+      std::function<std::shared_ptr<exec::Task>(
+          exec::test::AssertQueryBuilder&)> assertResults,
+      const std::unordered_map<std::string, std::string>& config,
+      bool streaming);
 
   void testStreamingAggregationsImpl(
       std::function<void(exec::test::PlanBuilder&)> makeSource,
@@ -287,8 +305,8 @@ class AggregationTestBase : public exec::test::OperatorTestBase {
       const std::unordered_map<std::string, std::string>& config);
 };
 
-/// Runs 'name' over a single group of ('values', 'comparisons') in a row laid
-/// out by hand, and returns the variable-length size the aggregate tracked for
+/// Runs 'name' over a single group of ('values', 'comparisons') in a row of a
+/// RowContainer, and returns the variable-length size the aggregate tracked for
 /// that row. Zero means the aggregate never moved the row size counter, which
 /// for an accumulator holding out-of-line bytes is the bug this measures.
 uint32_t aggregateAndReadRowSize(

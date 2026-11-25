@@ -586,8 +586,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     }
     rowsToCopy.updateBounds();
 
-    SelectivityVector rowsToKeep(size);
-    rowsToKeep.deselect(rowsToCopy);
+    auto rowsToKeep = rowsToCopy.complement(size);
 
     // Copy from row N to N - 10 for N >= 0 and from row N to N for N < 10;
     std::vector<vector_size_t> toSourceRow(size);
@@ -846,7 +845,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
   void testSerialization(VectorPtr source) {
     // Serialization functions expect loaded vectors.
     source = BaseVector::loadedVectorShared(source);
-    auto sourceRow = makeRowVector({"c"}, {source});
+    auto sourceRow = makeNamedRowVector("c", source);
     auto sourceRowType = asRowType(sourceRow->type());
 
     VectorStreamGroup even(pool(), nullptr);
@@ -1532,6 +1531,264 @@ TEST_F(VectorTest, wrapInConstant) {
   constArrayVector = std::dynamic_pointer_cast<ConstantVector<ComplexType>>(
       BaseVector::wrapInConstant(size, 22, lazyOverArray));
   EXPECT_FALSE(constArrayVector->valueVector()->isLazy());
+}
+
+namespace {
+// Returns the string buffer of 'vector' that holds the bytes of 'row'.
+const Buffer* stringBufferAt(
+    const FlatVector<StringView>& vector,
+    vector_size_t row) {
+  const char* data = vector.valueAt(row).data();
+  for (const auto& buffer : vector.stringBuffers()) {
+    if (data >= buffer->as<char>() &&
+        data < buffer->as<char>() + buffer->size()) {
+      return buffer.get();
+    }
+  }
+  return nullptr;
+}
+
+// Returns the string buffer of the string constant 'vector'.
+const Buffer* stringBufferOf(const VectorPtr& vector) {
+  return vector->as<ConstantVector<StringView>>()->getStringBuffer().get();
+}
+
+// Returns the value of the string constant 'vector'.
+std::string valueOf(const VectorPtr& vector) {
+  return vector->as<ConstantVector<StringView>>()->valueAt(0).str();
+}
+} // namespace
+
+TEST_F(VectorTest, wrapInConstantSharesLargeStrings) {
+  const std::string large(
+      FlatVector<StringView>::kMaxStringSizeForReuse + 1, 'a');
+  auto flat = makeFlatVector<std::string>({large});
+  const Buffer* sourceBuffer = stringBufferAt(*flat, 0);
+  ASSERT_NE(sourceBuffer, nullptr);
+
+  // A large value shares the source's string buffer.
+  EXPECT_EQ(
+      stringBufferOf(BaseVector::wrapInConstant(10, 0, flat)), sourceBuffer);
+
+  // The value stays readable after the source is released.
+  {
+    VectorPtr constant;
+    {
+      auto source = makeFlatVector<std::string>({large});
+      constant = BaseVector::wrapInConstant(10, 0, source);
+      ASSERT_EQ(stringBufferOf(constant), stringBufferAt(*source, 0));
+    }
+    EXPECT_EQ(valueOf(constant), large);
+  }
+
+  // Reusing the source for new strings leaves the constant's bytes intact.
+  {
+    VectorPtr source = makeFlatVector<std::string>({large});
+    auto constant = BaseVector::wrapInConstant(10, 0, source);
+    BaseVector::prepareForReuse(source, 1);
+    const std::string replacement(large.size(), 'z');
+    source->asFlatVector<StringView>()->set(0, StringView(replacement));
+    EXPECT_EQ(valueOf(constant), large);
+  }
+
+  // A lazy vector that loads into a dictionary shares the buffer under the
+  // dictionary.
+  {
+    auto lazyDictionary = wrapInLazyDictionary(flat);
+    lazyDictionary->loadedVector();
+    auto constant = std::make_shared<ConstantVector<StringView>>(
+        pool(), 10, 0, lazyDictionary);
+    EXPECT_EQ(stringBufferOf(constant), sourceBuffer);
+  }
+
+  // A constant over a lazy vector that is not loaded yet shares the buffer
+  // once the lazy vector loads.
+  {
+    auto lazy = std::make_shared<LazyVector>(
+        pool(),
+        VARCHAR(),
+        flat->size(),
+        std::make_unique<test::SimpleVectorLoader>(
+            [&](RowSet /*rows*/) { return flat; }));
+    auto constant =
+        std::make_shared<ConstantVector<StringView>>(pool(), 10, 0, lazy);
+    ASSERT_TRUE(lazy->isLazy() && !lazy->isLoaded());
+    constant->loadedVector();
+    EXPECT_EQ(stringBufferOf(constant), sourceBuffer);
+    EXPECT_EQ(valueOf(constant), large);
+  }
+
+  // A value no longer than the size of a reusable string buffer is copied.
+  {
+    const std::string longest(
+        FlatVector<StringView>::kMaxStringSizeForReuse, 'c');
+    auto source = makeFlatVector<std::string>({longest});
+    auto constant = BaseVector::wrapInConstant(10, 0, source);
+    EXPECT_NE(stringBufferOf(constant), stringBufferAt(*source, 0));
+    EXPECT_EQ(valueOf(constant), longest);
+  }
+
+  // A value is shared only if it fills at least half of its buffer, so the
+  // constant keeps alive at most twice the bytes of a copy. Readers pack many
+  // rows' strings into one buffer.
+  {
+    const std::string packedValue(
+        FlatVector<StringView>::kMaxStringSizeForReuse + 32, 'p');
+    auto makeSource = [&](size_t bufferBytes) {
+      auto buffer = AlignedBuffer::allocate<char>(
+          bufferBytes, pool(), std::nullopt, /*allocateExact=*/true);
+      std::memcpy(
+          buffer->asMutable<char>(), packedValue.data(), packedValue.size());
+      auto source = makeFlatVector<StringView>(1);
+      source->setNoCopy(
+          0,
+          StringView(
+              buffer->as<char>(), static_cast<int32_t>(packedValue.size())));
+      source->addStringBuffer(buffer);
+      return source;
+    };
+
+    auto halfFull =
+        makeSource(2 * packedValue.size() - AlignedBuffer::kAlignment);
+    ASSERT_EQ(halfFull->stringBuffers()[0]->capacity(), 2 * packedValue.size());
+    auto constant = BaseVector::wrapInConstant(10, 0, halfFull);
+    EXPECT_EQ(stringBufferOf(constant), halfFull->stringBuffers()[0].get());
+
+    auto lessThanHalfFull = makeSource(2 * packedValue.size());
+    ASSERT_GT(
+        lessThanHalfFull->stringBuffers()[0]->capacity(),
+        2 * packedValue.size());
+    constant = BaseVector::wrapInConstant(10, 0, lessThanHalfFull);
+    EXPECT_NE(
+        stringBufferOf(constant), lessThanHalfFull->stringBuffers()[0].get());
+    EXPECT_EQ(valueOf(constant), packedValue);
+  }
+
+  // A constant in another memory pool copies the value.
+  {
+    auto otherPool = rootPool_->addLeafChild("other");
+    auto constant = std::make_shared<ConstantVector<StringView>>(
+        otherPool.get(), 10, 0, flat);
+    EXPECT_NE(stringBufferOf(constant), sourceBuffer);
+    EXPECT_EQ(stringBufferOf(constant)->pool(), otherPool.get());
+    EXPECT_EQ(valueOf(constant), large);
+  }
+
+  // A value outside the source's string buffers is copied.
+  {
+    auto external = makeFlatVector<StringView>(1);
+    external->setNoCopy(0, StringView(large));
+    auto constant = BaseVector::wrapInConstant(10, 0, external);
+    EXPECT_NE(stringBufferOf(constant), nullptr);
+    EXPECT_NE(
+        constant->as<ConstantVector<StringView>>()->valueAt(0).data(),
+        large.data());
+  }
+
+  // A view has no memory pool, so its bytes are copied.
+  {
+    struct NoopReleaser {
+      void addRef() const {}
+      void release() const {}
+    };
+    auto view = BufferView<NoopReleaser>::create(
+        reinterpret_cast<const uint8_t*>(large.data()),
+        large.size(),
+        NoopReleaser{});
+    auto viewed = makeFlatVector<StringView>(1);
+    viewed->setNoCopy(0, StringView(large));
+    viewed->addStringBuffer(view);
+    auto constant = BaseVector::wrapInConstant(10, 0, viewed);
+    EXPECT_NE(stringBufferOf(constant), view.get());
+    EXPECT_EQ(valueOf(constant), large);
+  }
+}
+
+TEST_F(VectorTest, copyConstantSharesStringBufferInSamePool) {
+  // A constant holds just its value and never reuses its buffer, so a constant
+  // made from it shares the buffer at any size when both are in the same pool.
+  const std::string value(100, 'a');
+  auto constant = std::make_shared<ConstantVector<StringView>>(
+      pool(), 10, false, VARCHAR(), StringView(value));
+  const Buffer* buffer = stringBufferOf(constant);
+  ASSERT_NE(buffer, nullptr);
+
+  auto copy = constant->copy(pool(), 4);
+  EXPECT_EQ(copy->size(), 4);
+  EXPECT_EQ(stringBufferOf(copy), buffer);
+  EXPECT_EQ(valueOf(copy), value);
+  EXPECT_EQ(stringBufferOf(constant->slice(0, 4)), buffer);
+  EXPECT_EQ(stringBufferOf(BaseVector::wrapInConstant(5, 3, constant)), buffer);
+
+  // A lazy vector that loads into the constant shares its buffer too.
+  auto lazy = std::make_shared<LazyVector>(
+      pool(),
+      VARCHAR(),
+      10,
+      std::make_unique<test::SimpleVectorLoader>(
+          [&](RowSet /*rows*/) { return constant; }));
+  auto overLazy =
+      std::make_shared<ConstantVector<StringView>>(pool(), 10, 1, lazy);
+  overLazy->loadedVector();
+  EXPECT_EQ(stringBufferOf(overLazy), buffer);
+  EXPECT_EQ(valueOf(overLazy), value);
+
+  // In another pool the value is copied into that pool.
+  auto otherPool = rootPool_->addLeafChild("copy");
+  auto otherCopy = constant->copy(otherPool.get(), 4);
+  EXPECT_NE(stringBufferOf(otherCopy), buffer);
+  EXPECT_EQ(stringBufferOf(otherCopy)->pool(), otherPool.get());
+  EXPECT_EQ(valueOf(otherCopy), value);
+
+  // Null and inline values have no buffer to share.
+  auto null = std::make_shared<ConstantVector<StringView>>(
+      pool(), 10, true, VARCHAR(), StringView());
+  EXPECT_TRUE(null->copy(pool(), 4)->isNullAt(0));
+  auto inlined = std::make_shared<ConstantVector<StringView>>(
+      pool(), 10, false, VARCHAR(), StringView("inline"));
+  auto inlineCopy = inlined->copy(pool(), 4);
+  EXPECT_EQ(stringBufferOf(inlineCopy), nullptr);
+  EXPECT_EQ(valueOf(inlineCopy), "inline");
+}
+
+TEST_F(VectorTest, wrapInConstantLargeStringMemory) {
+  constexpr int kNumConstants = 20;
+
+  auto bytesUsedByConstants = [&](const std::string& value) {
+    auto flat = makeFlatVector<std::string>({value});
+    const auto before = pool()->usedBytes();
+    std::vector<VectorPtr> constants;
+    constants.reserve(kNumConstants);
+    for (auto i = 0; i < kNumConstants; ++i) {
+      constants.push_back(BaseVector::wrapInConstant(1'000, 0, flat));
+    }
+    return pool()->usedBytes() - before;
+  };
+
+  const std::string copied(FlatVector<StringView>::kMaxStringSizeForReuse, 'a');
+  EXPECT_GE(bytesUsedByConstants(copied), kNumConstants * copied.size());
+  const std::string shared(copied.size() + 1, 'a');
+  EXPECT_LT(bytesUsedByConstants(shared), shared.size());
+}
+
+TEST_F(VectorTest, transferOrCopyToCopiesSharedConstantValue) {
+  auto otherPool = rootPool_->addLeafChild("transfer");
+
+  // A constant that shares its source's string buffer copies only its own value
+  // when transferred, and the source keeps its buffer.
+  const std::string other(200, 'b');
+  const std::string large(
+      FlatVector<StringView>::kMaxStringSizeForReuse + 1, 'c');
+  auto source = makeFlatVector<std::string>({other, large});
+  const auto constant = BaseVector::wrapInConstant(10, 1, source);
+  const Buffer* sourceBuffer = stringBufferAt(*source, 1);
+  ASSERT_EQ(stringBufferOf(constant), sourceBuffer);
+
+  constant->transferOrCopyTo(otherPool.get());
+  EXPECT_EQ(sourceBuffer->pool(), pool());
+  EXPECT_EQ(stringBufferOf(constant)->pool(), otherPool.get());
+  EXPECT_EQ(stringBufferOf(constant)->size(), large.size());
+  EXPECT_EQ(valueOf(constant), large);
 }
 
 TEST_F(VectorTest, rowResize) {
@@ -2283,7 +2540,7 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
       std::make_unique<TestingLoader>(makeFlatIdentityVector<int64_t>(size)));
   lazy->loadedVector();
   EXPECT_TRUE(lazy->isLoaded());
-  auto dict = wrapInDictionary(makeIndices(size, folly::identity), size, lazy);
+  auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
 }
@@ -2615,6 +2872,58 @@ TEST_F(VectorTest, arraySliceMutability) {
 TEST_F(VectorTest, mapSliceMutability) {
   testArrayOrMapSliceMutability(
       std::dynamic_pointer_cast<MapVector>(createMap(vectorSize_, false)));
+}
+
+TEST_F(VectorTest, rowSliceOverShortChild) {
+  // Rows 2 to 5 are null, so the child only covers rows 0 and 1. Its offsets
+  // and sizes buffers have room for 6 rows, and the entries past row 1 point
+  // past its elements, as in a buffer kept after the vector shrank.
+  auto offsets = allocateOffsets(6, pool());
+  auto sizes = allocateSizes(6, pool());
+  auto* rawOffsets = offsets->asMutable<vector_size_t>();
+  auto* rawSizes = sizes->asMutable<vector_size_t>();
+  rawOffsets[1] = 2;
+  rawSizes[0] = 2;
+  rawSizes[1] = 1;
+  std::fill(rawOffsets + 2, rawOffsets + 6, 3);
+  std::fill(rawSizes + 2, rawSizes + 6, 2);
+  auto child = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(BIGINT()),
+      nullptr,
+      2,
+      offsets,
+      sizes,
+      makeFlatVector<int64_t>({1, 2, 3}));
+  auto row = std::make_shared<RowVector>(
+      pool(),
+      ROW("a", ARRAY(BIGINT())),
+      makeNulls({false, false, true, true, true, true}),
+      6,
+      std::vector<VectorPtr>{child});
+  row->validate({});
+
+  {
+    SCOPED_TRACE("Slice that ends past the child");
+    auto slice = row->slice(1, 4);
+    slice->validate({});
+    auto expected = makeRowVector(
+        {"a"}, {makeArrayVector<int64_t>({{3}, {}, {}, {}})}, [](auto index) {
+          return index > 0;
+        });
+    test::assertEqualVectors(expected, slice);
+  }
+
+  {
+    SCOPED_TRACE("Slice that starts past the child");
+    auto slice = row->slice(3, 3);
+    slice->validate({});
+    auto expected = makeRowVector(
+        {"a"}, {makeArrayVector<int64_t>({{}, {}, {}})}, [](auto /*row*/) {
+          return true;
+        });
+    test::assertEqualVectors(expected, slice);
+  }
 }
 
 // Demonstrates incorrect usage of the memory pool. The pool is destroyed

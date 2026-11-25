@@ -301,8 +301,28 @@ if(${VELOX_ENABLE_DUCKDB})
 endif()
 
 if(VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE)
+  # On macOS, OpenMP and BLAS for FAISS come from Homebrew, which installs
+  # them outside the default search paths.
+  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    foreach(formula libomp openblas)
+      execute_process(
+        COMMAND brew --prefix ${formula}
+        RESULT_VARIABLE BREW_RESULT
+        OUTPUT_VARIABLE BREW_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      if(BREW_RESULT EQUAL 0 AND EXISTS "${BREW_PREFIX}")
+        list(APPEND CMAKE_PREFIX_PATH "${BREW_PREFIX}")
+      endif()
+    endforeach()
+  endif()
+  # The installed FAISS package links OpenMP::OpenMP_CXX without defining it,
+  # so the target must exist in this scope before FAISS is resolved.
+  find_package(OpenMP REQUIRED)
   velox_set_source(faiss)
-  velox_resolve_dependency(faiss)
+  # FAISS 1.11.0 does not install faiss/impl/zerocopy_io.h, which the vector
+  # index includes.
+  velox_resolve_dependency(faiss 1.12.0)
   if(NOT TARGET FAISS::faiss)
     add_library(FAISS::faiss ALIAS faiss)
   endif()
@@ -315,9 +335,43 @@ if(DEFINED ENV{INSTALL_PREFIX})
   include_directories(BEFORE "$ENV{INSTALL_PREFIX}/include")
 endif()
 
+# Homebrew's unversioned openssl formula is OpenSSL 4, which Folly at
+# FB_OS_VERSION and the bundled gRPC do not build against. On macOS, default to
+# Homebrew's OpenSSL 3 unless the caller already chose an OpenSSL root, as a
+# CMake variable or in the environment.
+if(APPLE AND NOT OPENSSL_ROOT_DIR AND "$ENV{OPENSSL_ROOT_DIR}" STREQUAL "")
+  find_program(VELOX_BREW_EXECUTABLE brew)
+  if(VELOX_BREW_EXECUTABLE)
+    execute_process(
+      COMMAND ${VELOX_BREW_EXECUTABLE} --prefix openssl@3
+      RESULT_VARIABLE VELOX_BREW_OPENSSL3_RESULT
+      OUTPUT_VARIABLE VELOX_BREW_OPENSSL3_PREFIX
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    if(VELOX_BREW_OPENSSL3_RESULT EQUAL 0 AND IS_DIRECTORY "${VELOX_BREW_OPENSSL3_PREFIX}")
+      message(STATUS "Using Homebrew OpenSSL 3 from ${VELOX_BREW_OPENSSL3_PREFIX}")
+      set(OPENSSL_ROOT_DIR "${VELOX_BREW_OPENSSL3_PREFIX}")
+    else()
+      message(
+        WARNING
+        "Homebrew openssl@3 was not found. Folly at FB_OS_VERSION and the bundled gRPC do not build against OpenSSL 4; run scripts/setup-macos.sh or set OPENSSL_ROOT_DIR."
+      )
+    endif()
+  endif()
+endif()
+
 # We look for OpenSSL here to cache the result enforce the version across our
 # dependencies.
 find_package(OpenSSL REQUIRED)
+
+if(APPLE)
+  # Folly::folly_deps exports $(brew --prefix)/include (for libevent) ahead of
+  # the OpenSSL include directory. With Homebrew's OpenSSL 4 linked there, Velox
+  # sources that include <openssl/*.h> would compile against OpenSSL 4 headers
+  # while linking the OpenSSL found above, so put its headers first.
+  include_directories(SYSTEM ${OPENSSL_INCLUDE_DIR})
+endif()
 
 if(
   VELOX_ENABLE_CCACHE
@@ -458,6 +512,16 @@ if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
+# C++14 sized deallocation is on by default in GCC but not in Clang before 19.
+# Headers such as s2geometry's port.h call ::operator delete(ptr, size).
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsized-deallocation")
+endif()
+
+# Folly's exception tracer records the stack of a throw inside a coroutine by
+# walking frame pointers, and crashes if a frame on the way omits them.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
+
 # Under Ninja, we are able to designate certain targets large enough to require
 # restricted parallelism.
 if("${MAX_HIGH_MEM_JOBS}")
@@ -474,47 +538,27 @@ endif()
 if(ENABLE_ALL_WARNINGS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-range-loop-analysis \
+      KNOWN_WARNINGS
+      "-Wno-unused \
+         -Wno-unused-parameter \
+         -Wno-sign-compare \
+         -Wno-ignored-qualifiers \
+         -Wno-range-loop-analysis \
          -Wno-mismatched-tags \
          -Wno-nullability-completeness"
     )
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-implicit-fallthrough \
-         -Wno-class-memaccess \
-         -Wno-comment \
-         -Wno-int-in-bool-context \
-         -Wno-redundant-move \
-         -Wno-array-bounds \
-         -Wno-maybe-uninitialized \
-         -Wno-unused-result \
-         -Wno-format-overflow \
-         -Wno-strict-aliasing"
+    set(VELOX_GCC_WARNING_FLAGS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CMake/GccWarningFlags.txt")
+    file(STRINGS "${VELOX_GCC_WARNING_FLAGS_FILE}" VELOX_GCC_WARNING_FLAGS REGEX "^-")
+    set_property(
+      DIRECTORY
+      APPEND
+      PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELOX_GCC_WARNING_FLAGS_FILE}"
     )
-    # Avoid compiler bug for GCC 12.2.1
-    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
-    endif()
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
-    endif()
+    list(JOIN VELOX_GCC_WARNING_FLAGS " " VELOX_GCC_WARNING_FLAGS)
+    string(APPEND CMAKE_CXX_FLAGS " ${VELOX_GCC_WARNING_FLAGS}")
   endif()
-
-  set(
-    KNOWN_WARNINGS
-    "-Wno-unused \
-       -Wno-unused-parameter \
-       -Wno-sign-compare \
-       -Wno-ignored-qualifiers \
-       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
-  )
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
@@ -694,7 +738,7 @@ if(
 endif()
 
 velox_set_source(simdjson)
-velox_resolve_dependency(simdjson 4.1.0)
+velox_resolve_dependency(simdjson 4.3.0)
 
 # libxml2 backs the Spark XPath functions and is only needed when Spark
 # functions are enabled.
@@ -852,7 +896,29 @@ include_directories(.)
 # Adding this down here prevents warnings in dependencies from stopping the
 # build
 if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # The file lists the only GCC warnings that fail the build and explains
+    # how they were chosen.
+    set(VELOX_GCC_FATAL_WARNINGS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CMake/GccFatalWarnings.txt")
+    file(STRINGS "${VELOX_GCC_FATAL_WARNINGS_FILE}" VELOX_GCC_FATAL_WARNINGS REGEX "^[^#]")
+    set_property(
+      DIRECTORY
+      APPEND
+      PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELOX_GCC_FATAL_WARNINGS_FILE}"
+    )
+    include(CheckCXXCompilerFlag)
+    foreach(warning IN LISTS VELOX_GCC_FATAL_WARNINGS)
+      # GCC rejects -Werror= for a warning it does not know, and newer GCC
+      # releases add warnings to this list.
+      string(MAKE_C_IDENTIFIER "VELOX_GCC_HAS_WERROR_${warning}" supported)
+      check_cxx_compiler_flag("-Werror=${warning}" ${supported})
+      if(${supported})
+        string(APPEND CMAKE_CXX_FLAGS " -Werror=${warning}")
+      endif()
+    endforeach()
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  endif()
 endif()
 
 # Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
@@ -863,7 +929,7 @@ if(
 )
   set(
     CMAKE_CXX_FLAGS
-    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -fno-omit-frame-pointer -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
+    "${CMAKE_CXX_FLAGS} -O1 -fsanitize=address -fsanitize=undefined -DVELOX_ENABLE_ASAN_UBSAN_SANITIZERS"
   )
   # Skip alignment errors and member access check for now.
   # https://github.com/facebookincubator/velox/issues/15811
@@ -927,6 +993,17 @@ if(VELOX_ENABLE_NIMBLE)
     set(VELOX_OPENZL_LIBRARIES OpenZL::openzl OpenZL::openzl_cpp)
   else()
     set(VELOX_OPENZL_LIBRARIES openzl openzl_cpp)
+  endif()
+endif()
+
+# Warnings that Velox holds its own code to but not its dependencies. Compile
+# options added here reach only targets defined from this point on, so they
+# skip every dependency resolved above. They come after CMAKE_CXX_FLAGS on the
+# command line, so they override the GCC suppression of implicit-fallthrough.
+if(ENABLE_ALL_WARNINGS)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wimplicit-fallthrough>)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wunreachable-code-break>)
   endif()
 endif()
 

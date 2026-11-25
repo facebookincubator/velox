@@ -350,7 +350,7 @@ void AggregationFuzzer::go() {
       std::vector<std::string> names;
 
       auto groupingKeys = generateKeys("g", names, types);
-      auto input = generateInputData(names, types, std::nullopt);
+      auto input = generateInputData(names, types, std::nullopt, groupingKeys);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 
@@ -417,7 +417,8 @@ void AggregationFuzzer::go() {
         groupingKeys = generateKeys("g", argNames, argTypes);
       }
 
-      auto input = generateInputData(argNames, argTypes, signature);
+      auto input =
+          generateInputData(argNames, argTypes, signature, groupingKeys);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 
@@ -522,11 +523,11 @@ void makeAlternativePlansWithValues(
     sourceInputs[i % numSources].push_back(inputVectors[i]);
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<core::PlanNodePtr> sources;
   for (const auto& sourceInput : sourceInputs) {
-    sources.push_back(PlanBuilder(planNodeIdGenerator)
-                          .values({sourceInput})
+    sources.push_back(builder.newPlan()
+                          .values(sourceInput)
                           .projectExpressions(projections)
                           .partialAggregation(groupingKeys, aggregates, masks)
                           .planNode());
@@ -538,7 +539,7 @@ void makeAlternativePlansWithValues(
 // TableScan and reused.  Don't run these tests when TSAN is enabled to avoid
 // the false negatives.
 #ifndef TSAN_BUILD
-  plans.push_back(PlanBuilder(planNodeIdGenerator)
+  plans.push_back(builder.newPlan()
                       .localPartition(groupingKeys, sources)
                       .finalAggregation()
                       .planNode());
@@ -630,18 +631,18 @@ void makeStreamingPlansWithValues(
     sourceInputs[i % numSources].push_back(inputVectors[i]);
   }
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   std::vector<core::PlanNodePtr> sources;
   for (const auto& sourceInput : sourceInputs) {
     sources.push_back(
-        PlanBuilder(planNodeIdGenerator)
-            .values({sourceInput})
+        builder.newPlan()
+            .values(sourceInput)
             .projectExpressions(projections)
             .orderBy(groupingKeys, false)
             .partialStreamingAggregation(groupingKeys, aggregates, masks)
             .planNode());
   }
-  plans.push_back(PlanBuilder(planNodeIdGenerator)
+  plans.push_back(builder.newPlan()
                       .localMerge(groupingKeys, sources)
                       .finalAggregation()
                       .planNode());
@@ -741,7 +742,7 @@ bool AggregationFuzzer::verifyAggregation(
 
   // Alternate between using Values and TableScan node.
 
-  const auto inputRowType = asRowType(input[0]->type());
+  const auto inputRowType = input[0]->rowType();
   if (isTableScanSupported(inputRowType) && vectorFuzzer_.coinToss(0.5)) {
     auto splits = makeSplits(input, directory->getPath(), writerPool_);
 
@@ -869,7 +870,7 @@ bool AggregationFuzzer::verifySortedAggregation(
   }
 
   std::shared_ptr<TempDirectoryPath> directory;
-  const auto inputRowType = asRowType(input[0]->type());
+  const auto inputRowType = input[0]->rowType();
   if (isTableScanSupported(inputRowType)) {
     directory = TempDirectoryPath::create();
     auto splits = makeSplits(input, directory->getPath(), writerPool_);
@@ -1167,7 +1168,7 @@ bool AggregationFuzzer::verifyDistinctAggregation(
   // Alternate between using Values and TableScan node.
 
   std::shared_ptr<TempDirectoryPath> directory;
-  const auto inputRowType = asRowType(input[0]->type());
+  const auto inputRowType = input[0]->rowType();
   if (isTableScanSupported(inputRowType) && vectorFuzzer_.coinToss(0.5)) {
     directory = TempDirectoryPath::create();
     auto splits = makeSplits(input, directory->getPath(), writerPool_);

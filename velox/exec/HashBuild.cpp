@@ -19,11 +19,13 @@
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/exec/HashBuildStatNames.h"
 #include "velox/exec/HashTableCache.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/VectorHasher.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -67,7 +69,6 @@ HashBuild::HashBuild(
       nullAware_{joinNode_->isNullAware()},
       nullAsValue_{joinNode_->isNullAsValue()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
-      dropDuplicates_(joinNode_->canDropDuplicates()),
       vectorHasherMaxNumDistinct_(
           driverCtx->queryConfig().joinBuildVectorHasherMaxNumDistinct()),
       abandonHashBuildDedupMinRows_(
@@ -95,7 +96,32 @@ HashBuild::HashBuild(
     keyChannels_.emplace_back(channel);
   }
 
+  stateCleared_ = false;
+}
+
+void HashBuild::initialize() {
+  Operator::initialize();
+
+  // Compile only when duplicate eligibility depends on the filter's determinism
+  // and referenced columns, or an anti join needs its null-propagation
+  // properties. Null-aware semi joins with filters must keep duplicates
+  // regardless of the filter.
+  std::unique_ptr<ExprSet> filter;
+  if (joinNode_->filter() != nullptr &&
+      (isAntiJoin(joinType_) ||
+       (!nullAware_ &&
+        (isLeftSemiFilterJoin(joinType_) ||
+         isLeftSemiProjectJoin(joinType_))))) {
+    filter = std::make_unique<ExprSet>(
+        std::vector<core::TypedExprPtr>{joinNode_->filter()},
+        operatorCtx_->execCtx());
+  }
+  dropDuplicates_ =
+      canDropDuplicates(filter != nullptr ? filter->expr(0).get() : nullptr);
+
   // Identify the non-key build side columns and make a decoder for each.
+  const auto& inputType = joinNode_->sources()[1]->outputType();
+  const auto numKeys = keyChannels_.size();
   const int32_t numDependents = inputType->size() - numKeys;
   if (!dropDuplicates_) {
     if (numDependents > 0) {
@@ -116,13 +142,8 @@ HashBuild::HashBuild(
     }
   }
 
-  tableType_ = hashJoinTableType(joinNode_);
-
-  stateCleared_ = false;
-}
-
-void HashBuild::initialize() {
-  Operator::initialize();
+  tableType_ =
+      hashJoinTableType(joinNode_->rightKeys(), inputType, dropDuplicates_);
 
   if (setupCachedHashTable()) {
     return;
@@ -133,9 +154,35 @@ void HashBuild::initialize() {
   setupTable();
   setupSpiller();
 
-  if (isAntiJoin(joinType_) && joinNode_->filter()) {
-    setupFilterForAntiJoins(keyChannelMap_);
+  if (isAntiJoin(joinType_) && filter != nullptr) {
+    setupFilterForAntiJoins(*filter->expr(0), keyChannelMap_);
   }
+}
+
+bool HashBuild::canDropDuplicates(const Expr* filter) const {
+  // Counting joins fold duplicates into a per-key count.
+  if (isCountingJoin(joinType_)) {
+    return true;
+  }
+  // Other probe-only joins only need to know whether a probe row has a match.
+  if (!isProbeOnlyJoin(joinType_)) {
+    return false;
+  }
+  if (joinNode_->filter() == nullptr) {
+    return true;
+  }
+  if (nullAware_ || !filter->isDeterministic()) {
+    return false;
+  }
+  // A filter that reads no build column gives the same result for every build
+  // row with the same key.
+  const auto& buildType = joinNode_->sources()[1]->outputType();
+  for (const auto* field : filter->distinctFields()) {
+    if (buildType->containsChild(field->field())) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool HashBuild::setupCachedHashTable() {
@@ -257,15 +304,24 @@ void HashBuild::setupTable() {
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
       joinNode_->isRightSemiProjectJoin() || joinNode_->isRightAntiJoin()) {
     // Do not ignore null keys. kRightAnti must retain null keys: a null-keyed
-    // build row never matches and is always returned.
+    // build row never matches and is always returned. A row stores 0 in the
+    // slot of a null key, and the bloom filter takes that 0, which only lets
+    // probe rows with key 0 through the scan. A full join emits the probe rows
+    // that match nothing, and null-aware and null-as-value joins read the probe
+    // rows with null keys, so none of them can filter its probe side.
+    const bool filtersProbe =
+        !joinNode_->isFullJoin() && !nullAware_ && !nullAsValue_;
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
-        true, // allowDuplicates
-        true, // hasProbedFlag
-        false, // hasCountFlag
-        queryConfig.minTableRowsForParallelJoinBuild(),
-        tableMemoryPool());
+        tableMemoryPool(),
+        {.allowDuplicates = true,
+         .hasProbedFlag = true,
+         .minTableSizeForParallelJoinBuild =
+             queryConfig.minTableRowsForParallelJoinBuild(),
+         .bloomFilterMaxSize = filtersProbe
+             ? queryConfig.hashProbeBloomFilterPushdownMaxSize()
+             : 0});
   } else {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
@@ -276,22 +332,25 @@ void HashBuild::setupTable() {
       table_ = HashTable<false>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates_, // allowDuplicates
-          needProbedFlag, // hasProbedFlag
-          hasCountFlag,
-          queryConfig.minTableRowsForParallelJoinBuild(),
-          tableMemoryPool());
+          tableMemoryPool(),
+          {.allowDuplicates = !dropDuplicates_,
+           .hasProbedFlag = needProbedFlag,
+           .hasCountFlag = hasCountFlag,
+           .minTableSizeForParallelJoinBuild =
+               queryConfig.minTableRowsForParallelJoinBuild()});
     } else {
       // Ignore null keys
       table_ = HashTable<true>::createForJoin(
           std::move(keyHashers),
           dependentTypes,
-          !dropDuplicates_, // allowDuplicates
-          needProbedFlag, // hasProbedFlag
-          hasCountFlag,
-          queryConfig.minTableRowsForParallelJoinBuild(),
           tableMemoryPool(),
-          queryConfig.hashProbeBloomFilterPushdownMaxSize());
+          {.allowDuplicates = !dropDuplicates_,
+           .hasProbedFlag = needProbedFlag,
+           .hasCountFlag = hasCountFlag,
+           .minTableSizeForParallelJoinBuild =
+               queryConfig.minTableRowsForParallelJoinBuild(),
+           .bloomFilterMaxSize =
+               queryConfig.hashProbeBloomFilterPushdownMaxSize()});
     }
   }
   analyzeKeys_ = table_->hashMode() != BaseHashTable::HashMode::kHash;
@@ -339,7 +398,7 @@ void HashBuild::setupSpiller(SpillPartition* spillPartition) {
         numPartitionBits;
     // Disable spilling if exceeding the max spill level and the query might run
     // out of memory if the restored partition still can't fit in memory.
-    if (FOLLY_UNLIKELY(config->exceedSpillLevelLimit(startPartitionBit))) {
+    if (config->exceedSpillLevelLimit(startPartitionBit)) [[unlikely]] {
       RECORD_METRIC_VALUE(kMetricMaxSpillLevelExceededCount);
       LOG(WARNING) << "Exceeded spill level limit: " << config->maxSpillLevel
                    << ", and disable spilling for memory pool: "
@@ -385,17 +444,15 @@ RowTypePtr HashBuild::inputType() const {
 }
 
 void HashBuild::setupFilterForAntiJoins(
+    const Expr& filter,
     const folly::F14FastMap<column_index_t, column_index_t>& keyChannelMap) {
   VELOX_DCHECK(
       std::is_sorted(dependentChannels_.begin(), dependentChannels_.end()));
 
-  ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
-  VELOX_DCHECK_EQ(exprs.exprs().size(), 1);
-  const auto& expr = exprs.expr(0);
-  filterPropagatesNulls_ = expr->propagatesNulls();
+  filterPropagatesNulls_ = filter.propagatesNulls();
   if (filterPropagatesNulls_) {
     const auto inputType = joinNode_->sources()[1]->outputType();
-    for (const auto& field : expr->distinctFields()) {
+    for (const auto& field : filter.distinctFields()) {
       const auto index = inputType->getChildIdxIfExists(field->field());
       if (!index.has_value()) {
         continue;
@@ -549,25 +606,10 @@ void HashBuild::addInput(RowVectorPtr input) {
     abandonHashBuildDedup();
   }
 
-  if (analyzeKeys_ && hashes_.size() < activeRows_.end()) {
-    hashes_.resize(activeRows_.end());
-  }
-
-  // As long as analyzeKeys is true, we keep running the keys through
-  // the Vectorhashers so that we get a possible mapping of the keys
-  // to small ints for array or normalized key. When mayUseValueIds is
-  // false for the first time we stop. We do not retain the value ids
-  // since the final ones will only be known after all data is
-  // received.
-  for (auto& hasher : hashers) {
-    // TODO: Load only for active rows, except if right/full outer join.
-    if (analyzeKeys_) {
-      hasher->computeValueIds(activeRows_, hashes_);
-      analyzeKeys_ = hasher->mayUseValueIds();
-    }
+  if (analyzeKeys_) {
+    analyzeKeys_ = table_->analyzeKeys(activeRows_);
   }
   auto rows = table_->rows();
-  auto nextOffset = rows->nextOffset();
   FlatVector<bool>* spillProbedFlagVector{nullptr};
   if (isInputFromSpill() && needProbedFlagSpill_) {
     spillProbedFlagVector =
@@ -576,9 +618,6 @@ void HashBuild::addInput(RowVectorPtr input) {
 
   activeRows_.applyToSelected([&](auto rowIndex) {
     char* newRow = rows->newRow();
-    if (nextOffset) {
-      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-    }
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.
@@ -591,7 +630,7 @@ void HashBuild::addInput(RowVectorPtr input) {
     if (spillProbedFlagVector != nullptr) {
       VELOX_CHECK(!spillProbedFlagVector->isNullAt(rowIndex));
       if (spillProbedFlagVector->valueAt(rowIndex)) {
-        rows->setProbedFlag(&newRow, 1);
+        rows->setProbedFlag({&newRow, 1});
       }
     }
   });
@@ -613,9 +652,7 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
   auto* rows = table_->rows();
   const auto numRows = rows->numRows();
 
-  auto [freeRows, outOfLineFreeBytes] = rows->freeSpace();
-  const auto outOfLineBytes =
-      rows->stringAllocator().retainedSize() - outOfLineFreeBytes;
+  const auto outOfLineBytes = rows->usedVariableWidthBytes();
   const auto currentUsage = pool()->usedBytes();
 
   if (numRows != 0) {
@@ -634,14 +671,14 @@ void HashBuild::ensureInputFits(RowVectorPtr& input) {
   const int64_t flatBytes = input->estimateFlatSize();
   const auto rowContainerIncrementBytes = numRows == 0
       ? flatBytes * 2
-      : rows->sizeIncrement(
+      : rows->maxGrowthBytes(
             input->size(), outOfLineBytes > 0 ? flatBytes * 2 : 0);
   const auto incrementBytes = rowContainerIncrementBytes + tableIncrementBytes;
 
   // First to check if we have sufficient minimal memory reservation.
   if (availableReservationBytes >= minReservationBytes) {
-    if (freeRows > input->size() &&
-        (outOfLineBytes == 0 || outOfLineFreeBytes >= flatBytes)) {
+    if (rows->maxGrowthBytes(
+            input->size(), outOfLineBytes > 0 ? flatBytes : 0) == 0) {
       // Enough free rows for input rows and enough variable length free
       // space for the flat size of the whole vector. If outOfLineBytes
       // is 0 there is no need for variable length space.
@@ -700,7 +737,7 @@ void HashBuild::spillInput(const RowVectorPtr& input) {
   vector_size_t numSpillInputs = 0;
   for (auto row = 0; row < numInput; ++row) {
     const auto partition = spillPartitions_[row];
-    if (FOLLY_UNLIKELY(!activeRows_.isValid(row))) {
+    if (!activeRows_.isValid(row)) [[unlikely]] {
       continue;
     }
     activeRows_.setValid(row, false);
@@ -1173,7 +1210,7 @@ void HashBuild::addRuntimeStats() {
   // Add max spilling level stats if spilling has been triggered.
   if (spiller_ != nullptr && spiller_->spillTriggered()) {
     lockedStats->addRuntimeStat(
-        std::string(HashBuild::kMaxSpillLevel),
+        std::string(HashBuildStatNames::kMaxSpillLevel),
         RuntimeCounter(
             spillConfig()->spillLevel(spiller_->hashBits().begin())));
   }
@@ -1492,7 +1529,7 @@ void HashBuildSpiller::spill(
     const RowVectorPtr& spillVector) {
   VELOX_CHECK(spillTriggered_);
   VELOX_CHECK(!finalized_);
-  if (FOLLY_UNLIKELY(spillVector == nullptr)) {
+  if (spillVector == nullptr) [[unlikely]] {
     return;
   }
   if (!state_.isPartitionSpilled(partitionId)) {
@@ -1519,7 +1556,7 @@ void HashBuildSpiller::extractSpill(
   }
   if (spillProbeFlag_) {
     container_->extractProbedFlags(
-        rows.data(), rows.size(), false, false, result->childAt(types.size()));
+        rows, false, false, result->childAt(types.size()));
   }
 }
 
@@ -1534,7 +1571,8 @@ void HashBuild::abandonHashBuildDedup() {
   // that was previously inserted into the hash table is already in the
   // RowContainer.
   addRuntimeStat(
-      std::string(HashBuild::kAbandonBuildNoDupHash), RuntimeCounter(1));
+      std::string(HashBuildStatNames::kAbandonBuildNoDupHash),
+      RuntimeCounter(1));
   abandonHashBuildDedup_ = true;
   table_->setAllowDuplicates(true);
   lookup_.reset();

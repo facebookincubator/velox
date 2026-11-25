@@ -17,8 +17,8 @@
 #include "velox/connectors/hive/FileIndexReader.h"
 
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -74,7 +74,7 @@ FileIndexReader::FileIndexReader(
     std::shared_ptr<const HiveConnectorSplit> hiveSplit,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const RowTypePtr& requestType,
@@ -270,8 +270,14 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   auto fileHandleCachePtr = fileHandleFactory_->generate(
       fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
   VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+  // The file reader caches its metadata and index in the data cache only when
+  // it has both the cache and the file handle, whose id keys the entries.
+  if (auto* cache = connectorQueryCtx_->cache()) {
+    readerOpts.setFileHandle(&(*fileHandleCachePtr));
+    readerOpts.setCache(cache);
+  }
 
-  auto baseFileInput = BufferedInputBuilder::getInstance()->create(
+  auto baseFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       readerOpts,
       connectorQueryCtx_,

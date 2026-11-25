@@ -371,8 +371,7 @@ IDs.
                  tpch::Table::TBL_NATION, {"n_regionkey"}, 1 /*scaleFactor*/)
              .capturePlanNodeId(nationScanId)
              .hashJoin(
-                 {"n_regionkey"},
-                 {"r_regionkey"},
+                 "n_regionkey = r_regionkey",
                  PlanBuilder(planNodeIdGenerator)
                      .tpchTableScan(
                          tpch::Table::TBL_REGION,
@@ -380,7 +379,6 @@ IDs.
                          1 /*scaleFactor*/)
                      .capturePlanNodeId(regionScanId)
                      .planNode(),
-                 "", // extra filter
                  {"r_name"})
              .singleAggregation({"r_name"}, {"count(1) as nation_cnt"})
              .orderBy({"r_name"}, false)

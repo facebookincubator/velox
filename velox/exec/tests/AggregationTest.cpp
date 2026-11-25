@@ -42,7 +42,9 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/SumNonPODAggregate.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
+#include "velox/exec/HashAggregationStatNames.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/LazyVector.h"
 
@@ -391,16 +393,13 @@ class AggregationTest : public HiveConnectorTestBase {
       const std::vector<TypePtr>& dependentTypes) {
     return std::make_unique<RowContainer>(
         keyTypes,
-        false,
         std::vector<Accumulator>{},
         dependentTypes,
-        false,
-        false,
-        true,
-        false, // hasCountFlag
-        true,
-        false,
-        pool_.get());
+        pool_.get(),
+        RowContainer::Options{
+            .nullableKeys = false,
+            .hasProbedFlag = true,
+            .hasNormalizedKey = true});
   }
 
   RowTypePtr rowType_{
@@ -505,21 +504,17 @@ TEST_F(AggregationTest, missingFunctionOrSignature) {
         .planNode();
   };
 
-  CursorParameters params;
-  params.planNode = makePlan(missingFunc);
   VELOX_ASSERT_THROW(
-      readCursor(params),
+      AssertQueryBuilder(makePlan(missingFunc)).countResults(),
       "Aggregate function not registered: missing-function");
 
-  params.planNode = makePlan(wrongInputTypes);
   VELOX_ASSERT_THROW(
-      readCursor(params),
+      AssertQueryBuilder(makePlan(wrongInputTypes)).countResults(),
       "Aggregate function signature is not supported: test_aggregate(BIGINT, BOOLEAN). "
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
 
-  params.planNode = makePlan(missingInputs);
   VELOX_ASSERT_THROW(
-      readCursor(params),
+      AssertQueryBuilder(makePlan(missingInputs)).countResults(),
       "Aggregate function signature is not supported: test_aggregate(). "
       "Supported signatures: (smallint,varchar) -> tinyint -> bigint.");
 }
@@ -566,10 +561,9 @@ TEST_F(AggregationTest, missingLambdaFunction) {
                   })
                   .planNode();
 
-  CursorParameters params;
-  params.planNode = plan;
   VELOX_ASSERT_THROW(
-      readCursor(params), "Aggregate function not registered: missing-lambda");
+      AssertQueryBuilder(plan).countResults(),
+      "Aggregate function not registered: missing-lambda");
 }
 
 TEST_F(AggregationTest, global) {
@@ -628,8 +622,8 @@ TEST_F(AggregationTest, combineGlobalPartial) {
     auto task = AssertQueryBuilder(builder.planNode())
                     .maxDrivers(4)
                     .assertResults(expected);
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& stats = planStats.at(partialAggregationId);
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), partialAggregationId);
     EXPECT_EQ(stats.numDrivers, 4);
     return stats.outputRows;
   };
@@ -897,25 +891,24 @@ TEST_F(AggregationTest, aggregateOfNulls) {
 // Verify behavior of setNull method.
 TEST_F(AggregationTest, setNull) {
   AggregateFunc aggregate(BIGINT());
-  int32_t accumulatorFlagsOffset = 0;
-  aggregate.setOffsets(
-      0,
-      RowContainer::nullByte(accumulatorFlagsOffset),
-      RowContainer::nullMask(accumulatorFlagsOffset),
-      RowContainer::initializedByte(accumulatorFlagsOffset),
-      RowContainer::initializedMask(accumulatorFlagsOffset),
-      0);
-  char group{0};
-  aggregate.clearNullTest(&group);
-  EXPECT_FALSE(aggregate.isNullTest(&group));
+  RowContainer rows(
+      /*keyTypes=*/{},
+      {Accumulator{&aggregate, BIGINT()}},
+      /*dependentTypes=*/{},
+      pool(),
+      RowContainer::Options{});
+  aggregate.setOffsets(rows.columnAt(0), rows.rowSizeOffset());
+  char* group = rows.newRow();
+  aggregate.clearNullTest(group);
+  EXPECT_FALSE(aggregate.isNullTest(group));
 
   // Verify setNull returns true if value is non null.
-  EXPECT_TRUE(aggregate.setNullTest(&group));
-  EXPECT_TRUE(aggregate.isNullTest(&group));
+  EXPECT_TRUE(aggregate.setNullTest(group));
+  EXPECT_TRUE(aggregate.isNullTest(group));
 
   // Verify setNull returns false if value is already null.
-  EXPECT_FALSE(aggregate.setNullTest(&group));
-  EXPECT_TRUE(aggregate.isNullTest(&group));
+  EXPECT_FALSE(aggregate.setNullTest(group));
+  EXPECT_TRUE(aggregate.isNullTest(group));
 }
 
 TEST_F(AggregationTest, hashmodes) {
@@ -1038,18 +1031,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                           .finalAggregation()
                           .planNode())
                   .assertResults("SELECT distinct c0 FROM tmp");
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .sum,
-      0);
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .max,
-      0);
+  {
+    const auto flushRowCount =
+        PlanNodeStats::extract(task->taskStats(), aggNodeId)
+            .customStat("flushRowCount");
+    EXPECT_GT(flushRowCount.sum, 0);
+    EXPECT_GT(flushRowCount.max, 0);
+  }
 
   // Count aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
@@ -1062,18 +1050,13 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
                      .finalAggregation()
                      .planNode())
              .assertResults("SELECT c0, count(1) FROM tmp GROUP BY 1");
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .count,
-      0);
-  EXPECT_GT(
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
-          .customStats.at("flushRowCount")
-          .max,
-      0);
+  {
+    const auto flushRowCount =
+        PlanNodeStats::extract(task->taskStats(), aggNodeId)
+            .customStat("flushRowCount");
+    EXPECT_GT(flushRowCount.count, 0);
+    EXPECT_GT(flushRowCount.max, 0);
+  }
 
   // Global aggregation.
   task = AssertQueryBuilder(duckDbQueryRunner_)
@@ -1088,8 +1071,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimit) {
              .assertResults("SELECT sum(c0) FROM tmp");
   EXPECT_EQ(
       0,
-      toPlanStats(task->taskStats())
-          .at(aggNodeId)
+      PlanNodeStats::extract(task->taskStats(), aggNodeId)
           .customStats.count("flushRowCount"));
 }
 
@@ -1220,18 +1202,20 @@ TEST_F(AggregationTest, largeValueRangeArray) {
                 .capturePlanNodeId(finalAggId)
                 .project({"c0", "cardinality(a0) as l"})
                 .planNode();
-  auto task = test::assertQuery(op, expected);
-  auto stats = toPlanStats(task->taskStats());
-  auto runtimeStats = stats.at(partialAggId).customStats;
+  auto task = AssertQueryBuilder(op).assertResults(expected);
+  const auto partialStats =
+      exec::PlanNodeStats::extract(task->taskStats(), partialAggId);
 
   // The partial agg is expected to exceed max size after the first batch and
   // see that it has an oversize range based array with just 2 entries. It is
   // then expected to change hash mode and rehash.
-  EXPECT_EQ(1, runtimeStats.at("hashtable.numRehashes").count);
+  EXPECT_EQ(1, partialStats.customStat("hashtable.numRehashes").count);
 
   // The partial agg is expected to flush just once. The final agg gets one
   // batch.
-  EXPECT_EQ(1, stats.at(finalAggId).inputVectors);
+  EXPECT_EQ(
+      1,
+      exec::PlanNodeStats::extract(task->taskStats(), finalAggId).inputVectors);
 }
 
 TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
@@ -1278,10 +1262,10 @@ TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
     auto task = AssertQueryBuilder(duckDbQueryRunner_)
                     .config(
                         QueryConfig::kMaxPartialAggregationMemory,
-                        std::to_string(testData.initialPartialMemoryLimit))
+                        testData.initialPartialMemoryLimit)
                     .config(
                         QueryConfig::kMaxExtendedPartialAggregationMemory,
-                        std::to_string(testData.extendedPartialMemoryLimit))
+                        testData.extendedPartialMemoryLimit)
                     .plan(
                         PlanBuilder()
                             .values(vectors)
@@ -1290,26 +1274,25 @@ TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
                             .finalAggregation()
                             .planNode())
                     .assertResults("SELECT distinct c0 FROM tmp");
-    const auto runtimeStats =
-        toPlanStats(task->taskStats()).at(aggNodeId).customStats;
+    const auto aggStats = PlanNodeStats::extract(task->taskStats(), aggNodeId);
     if (testData.expectedPartialOutputFlush > 0) {
-      EXPECT_LT(0, runtimeStats.at("flushRowCount").count);
-      EXPECT_LT(0, runtimeStats.at("flushRowCount").max);
-      EXPECT_LT(0, runtimeStats.at("partialAggregationPct").max);
+      EXPECT_LT(0, aggStats.customStat("flushRowCount").count);
+      EXPECT_LT(0, aggStats.customStat("flushRowCount").max);
+      EXPECT_LT(0, aggStats.customStat("partialAggregationPct").max);
     } else {
-      EXPECT_EQ(0, runtimeStats.count("flushRowCount"));
-      EXPECT_EQ(0, runtimeStats.count("partialAggregationPct"));
+      EXPECT_FALSE(aggStats.hasCustomStat("flushRowCount"));
+      EXPECT_FALSE(aggStats.hasCustomStat("partialAggregationPct"));
     }
     if (testData.expectedPartialAggregationMemoryLimitIncrease) {
       EXPECT_LT(
           testData.initialPartialMemoryLimit,
-          runtimeStats.at("maxExtendedPartialAggregationMemoryUsage").max);
+          aggStats.customStat("maxExtendedPartialAggregationMemoryUsage").max);
       EXPECT_GE(
           testData.extendedPartialMemoryLimit,
-          runtimeStats.at("maxExtendedPartialAggregationMemoryUsage").max);
+          aggStats.customStat("maxExtendedPartialAggregationMemoryUsage").max);
     } else {
-      EXPECT_EQ(
-          0, runtimeStats.count("maxExtendedPartialAggregationMemoryUsage"));
+      EXPECT_FALSE(
+          aggStats.hasCustomStat("maxExtendedPartialAggregationMemoryUsage"));
     }
   }
 }
@@ -1329,25 +1312,23 @@ TEST_F(AggregationTest, partialAggregationMaybeReservationReleaseCheck) {
   constexpr int64_t kGB = 1 << 30;
   const int64_t kMaxPartialMemoryUsage = 1 * kGB;
   // Make sure partial aggregation runs out of memory after first batch.
-  CursorParameters params;
-  params.queryCtx = core::QueryCtx::create(executor_.get());
-  params.queryCtx->testingOverrideConfigUnsafe({
-      {QueryConfig::kMaxPartialAggregationMemory,
-       std::to_string(kMaxPartialMemoryUsage)},
-      {QueryConfig::kMaxExtendedPartialAggregationMemory,
-       std::to_string(kMaxPartialMemoryUsage)},
-  });
-
   core::PlanNodeId aggNodeId;
-  params.planNode = PlanBuilder()
-                        .values(vectors)
-                        .partialAggregation({"c0"}, {})
-                        .capturePlanNodeId(aggNodeId)
-                        .finalAggregation()
-                        .planNode();
-  auto task = assertQuery(params, "SELECT distinct c0 FROM tmp");
+  auto plan = PlanBuilder()
+                  .values(vectors)
+                  .partialAggregation({"c0"}, {})
+                  .capturePlanNodeId(aggNodeId)
+                  .finalAggregation()
+                  .planNode();
+  auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .config(
+              QueryConfig::kMaxPartialAggregationMemory, kMaxPartialMemoryUsage)
+          .config(
+              QueryConfig::kMaxExtendedPartialAggregationMemory,
+              kMaxPartialMemoryUsage)
+          .assertResults("SELECT distinct c0 FROM tmp");
   const auto runtimeStats =
-      toPlanStats(task->taskStats()).at(aggNodeId).customStats;
+      PlanNodeStats::extract(task->taskStats(), aggNodeId).customStats;
   EXPECT_EQ(0, runtimeStats.count("flushRowCount"));
   EXPECT_EQ(0, runtimeStats.count("maxExtendedPartialAggregationMemoryUsage"));
   EXPECT_EQ(0, runtimeStats.count("partialAggregationPct"));
@@ -1378,14 +1359,13 @@ TEST_F(AggregationTest, spillAll) {
     auto tempDirectory = TempDirectoryPath::create();
     auto queryCtx = core::QueryCtx::create(executor_.get());
     TestScopedSpillInjection scopedSpillInjection(100);
-    auto task = AssertQueryBuilder(plan)
-                    .spillDirectory(tempDirectory->getPath())
-                    .config(QueryConfig::kSpillEnabled, true)
-                    .config(QueryConfig::kAggregationSpillEnabled, true)
-                    .config(
-                        QueryConfig::kSpillNumPartitionBits,
-                        std::to_string(numPartitionBits))
-                    .assertResults(results);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(tempDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, numPartitionBits)
+            .assertResults(results);
 
     auto stats = task->taskStats().pipelineStats;
     ASSERT_LT(
@@ -1470,10 +1450,8 @@ TEST_F(AggregationTest, spillWithCappedMergeFiles) {
             .spillDirectory(spillDirectory->getPath())
             .config(QueryConfig::kSpillEnabled, true)
             .config(QueryConfig::kAggregationSpillEnabled, true)
-            .config(QueryConfig::kSpillNumPartitionBits, "0")
-            .config(
-                QueryConfig::kSpillNumMaxMergeFiles,
-                std::to_string(numMaxMergeFiles))
+            .config(QueryConfig::kSpillNumPartitionBits, 0)
+            .config(QueryConfig::kSpillNumMaxMergeFiles, numMaxMergeFiles)
             .config(
                 QueryConfig::kMaxOutputBatchRows, testCase.maxOutputBatchRows)
             .maxDrivers(1)
@@ -1482,8 +1460,8 @@ TEST_F(AggregationTest, spillWithCappedMergeFiles) {
     // The pre-merge path is only taken when a partition holds more than
     // 'numMaxMergeFiles' files, so guard against the test passing because
     // nothing spilled.
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& stats = planStats.at(aggregationNodeId);
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), aggregationNodeId);
     ASSERT_GT(stats.spilledFiles, 4);
     ASSERT_EQ(stats.spilledPartitions, 1);
     // A batch boundary mid-merge is what makes the merge return with the
@@ -1526,25 +1504,22 @@ TEST_F(AggregationTest, distinctSpillWithCappedMergeFiles) {
 
     auto spillDirectory = TempDirectoryPath::create();
     TestScopedSpillInjection scopedSpillInjection(100);
-    auto task = AssertQueryBuilder(plan)
-                    .spillDirectory(spillDirectory->getPath())
-                    .config(QueryConfig::kSpillEnabled, true)
-                    .config(QueryConfig::kAggregationSpillEnabled, true)
-                    .config(QueryConfig::kSpillNumPartitionBits, "2")
-                    .config(QueryConfig::kMaxSpillRunRows, "4096")
-                    .config(
-                        QueryConfig::kSpillNumMaxMergeFiles,
-                        std::to_string(numMaxMergeFiles))
-                    .maxDrivers(1)
-                    .assertResults(expected);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(spillDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, 2)
+            .config(QueryConfig::kMaxSpillRunRows, 4'096)
+            .config(QueryConfig::kSpillNumMaxMergeFiles, numMaxMergeFiles)
+            .maxDrivers(1)
+            .assertResults(expected);
 
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& stats = planStats.at(aggregationNodeId);
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), aggregationNodeId);
     ASSERT_GT(stats.spilledFiles, 4);
     ASSERT_EQ(stats.spilledPartitions, 4);
-    ASSERT_GT(
-        stats.customStats.at(std::string(Operator::kSpillRuns)).sum,
-        kNumBatches);
+    ASSERT_GT(stats.customSum(Operator::kSpillRuns), kNumBatches);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
@@ -1582,19 +1557,18 @@ TEST_F(AggregationTest, distinctSpillWithCappedMergeFilesSparseKeys) {
 
     auto spillDirectory = TempDirectoryPath::create();
     TestScopedSpillInjection scopedSpillInjection(100);
-    auto task = AssertQueryBuilder(plan)
-                    .spillDirectory(spillDirectory->getPath())
-                    .config(QueryConfig::kSpillEnabled, true)
-                    .config(QueryConfig::kAggregationSpillEnabled, true)
-                    .config(QueryConfig::kSpillNumPartitionBits, "0")
-                    .config(
-                        QueryConfig::kSpillNumMaxMergeFiles,
-                        std::to_string(numMaxMergeFiles))
-                    .maxDrivers(1)
-                    .assertResults(expected);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(spillDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, 0)
+            .config(QueryConfig::kSpillNumMaxMergeFiles, numMaxMergeFiles)
+            .maxDrivers(1)
+            .assertResults(expected);
 
-    const auto planStats = toPlanStats(task->taskStats());
-    const auto& stats = planStats.at(aggregationNodeId);
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), aggregationNodeId);
     ASSERT_GT(stats.spilledFiles, 4);
     ASSERT_EQ(stats.spilledPartitions, 1);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
@@ -1628,8 +1602,10 @@ TEST_F(AggregationTest, memoryAllocations) {
 
   // Verify memory allocations. Aggregation should make 2 allocations: 1 for the
   // RowContainer holding single accumulator and 1 for the result.
-  auto planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(5, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(
+      5,
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId)
+          .numMemoryAllocations);
 
   plan = PlanBuilder()
              .values(data)
@@ -1644,8 +1620,10 @@ TEST_F(AggregationTest, memoryAllocations) {
   // Verify memory allocations. Aggregation should make 4 allocations: 1 for the
   // hash table, 1 for the RowContainer holding accumulators, 2 for results (1
   // for values of the grouping key column, 1 for sum column).
-  planStats = toPlanStats(task->taskStats());
-  ASSERT_EQ(8, planStats.at(aggNodeId).numMemoryAllocations);
+  ASSERT_EQ(
+      8,
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId)
+          .numMemoryAllocations);
 }
 
 TEST_F(AggregationTest, groupingSets) {
@@ -1802,15 +1780,8 @@ TEST_F(AggregationTest, groupingSetsOutput) {
       *reversedOrderGroupIdNode->outputType(), *reversedOrderExpectedRowType);
   ASSERT_EQ(*orderGroupIdNode->outputType(), *orderExpectedRowType);
 
-  CursorParameters orderParams;
-  orderParams.planNode = orderPlan;
-  auto orderResult = readCursor(orderParams);
-
-  CursorParameters reversedOrderParams;
-  reversedOrderParams.planNode = reversedOrderPlan;
-  auto reversedOrderResult = readCursor(reversedOrderParams);
-
-  assertEqualResults(orderResult.second, reversedOrderResult.second);
+  AssertQueryBuilder(reversedOrderPlan)
+      .assertResults(AssertQueryBuilder(orderPlan).copyResults(pool()));
 }
 
 TEST_F(AggregationTest, groupingSetsSameKey) {
@@ -1884,6 +1855,25 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
           .finalAggregation()
           .project({"count_c2"})
           .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT count(c2) as count_c2 FROM tmp WHERE c1 < 0 GROUP BY GROUPING SETS ((c1), ())");
+
+  // Input pre-grouped on every grouping key.
+  plan = PlanBuilder()
+             .values({data})
+             .filter("c1 < 0")
+             .groupId({"c1"}, {{"c1"}, {}}, {"c2"})
+             .aggregation(
+                 {"c1", "group_id"},
+                 {"c1", "group_id"},
+                 {"count(c2) as count_c2"},
+                 {},
+                 core::AggregationNode::Step::kSingle,
+                 /*ignoreNullKeys=*/false)
+             .project({"count_c2"})
+             .planNode();
 
   assertQuery(
       plan,
@@ -1972,8 +1962,8 @@ TEST_F(AggregationTest, groupingSetsEmptyInput) {
 // set, not one per empty driver. The barrier fires on both the single-step and
 // the partial step.
 TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
-  auto data = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4})});
+  auto data = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(std::vector<int64_t>{1, 2, 3, 4}));
 
   // One default row: a null for the () set, group_id 1, count 0.
   auto expected = makeRowVector({
@@ -1987,7 +1977,7 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
   // step.
   auto run = [&](bool split) {
     core::PlanNodeId rawInputAggId;
-    PlanBuilder builder(std::make_shared<core::PlanNodeIdGenerator>());
+    PlanBuilder builder;
     builder.values({data})
         .filter("a < 0")
         .groupId({"a"}, {{"a"}, {}}, {})
@@ -2006,7 +1996,8 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
                     .assertResults(expected);
     // The raw-input aggregation must run on multiple drivers to exercise the
     // peer barrier.
-    EXPECT_GT(toPlanStats(task->taskStats()).at(rawInputAggId).numDrivers, 1)
+    EXPECT_GT(
+        PlanNodeStats::extract(task->taskStats(), rawInputAggId).numDrivers, 1)
         << (split ? "partial+final" : "single-step");
   };
   run(/*split=*/false);
@@ -2017,8 +2008,8 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverEmpty) {
 // count==0 default row from the starved drivers, for either the single-step or
 // the partial + final aggregation.
 TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
-  auto data = makeRowVector(
-      {"a"}, {makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1})});
+  auto data = makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(std::vector<int64_t>{1, 1, 1, 1}));
 
   // Two rows: per-key (1, 0, 4) and grand total (null, 1, 4). No count==0 row.
   auto expected = makeRowVector({
@@ -2031,7 +2022,7 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
   // true, a partial + final aggregation also exercises the partial step.
   auto run = [&](bool split) {
     core::PlanNodeId rawInputAggId;
-    PlanBuilder builder(std::make_shared<core::PlanNodeIdGenerator>());
+    PlanBuilder builder;
     builder.values({data})
         .filter("a >= 0")
         .groupId({"a"}, {{"a"}, {}}, {})
@@ -2050,7 +2041,8 @@ TEST_F(AggregationTest, globalGroupingSetDefaultRowMultiDriverNonEmpty) {
                     .assertResults(expected);
     // The raw-input aggregation must run on multiple drivers to exercise the
     // peer barrier.
-    EXPECT_GT(toPlanStats(task->taskStats()).at(rawInputAggId).numDrivers, 1)
+    EXPECT_GT(
+        PlanNodeStats::extract(task->taskStats(), rawInputAggId).numDrivers, 1)
         << (split ? "partial+final" : "single-step");
   };
   run(/*split=*/false);
@@ -2164,10 +2156,8 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
-                std::to_string(testData.maxOutputBytes))
-            .config(
-                QueryConfig::kMaxOutputBatchRows,
-                std::to_string(testData.maxOutputRows))
+                testData.maxOutputBytes)
+            .config(QueryConfig::kMaxOutputBatchRows, testData.maxOutputRows)
             .plan(
                 PlanBuilder()
                     .values(inputs)
@@ -2175,10 +2165,10 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
                     .capturePlanNodeId(aggrNodeId)
                     .planNode())
             .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY 1");
-    ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
-    ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
-        testData.expectedNumOutputVectors);
+    const auto aggrStats =
+        PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+    ASSERT_GT(aggrStats.spilledBytes, 0);
+    ASSERT_EQ(aggrStats.outputVectors, testData.expectedNumOutputVectors);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
@@ -2229,10 +2219,8 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
-                std::to_string(testData.maxOutputBytes))
-            .config(
-                QueryConfig::kMaxOutputBatchRows,
-                std::to_string(testData.maxOutputRows))
+                testData.maxOutputBytes)
+            .config(QueryConfig::kMaxOutputBatchRows, testData.maxOutputRows)
             .plan(
                 PlanBuilder()
                     .values(vectors)
@@ -2241,10 +2229,10 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithSpillForOrderedAggr) {
                     .planNode())
             .assertResults(
                 "SELECT c0, array_agg(c1 order by c1) FROM tmp GROUP BY 1");
-    ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
-    ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
-        testData.expectedNumOutputVectors);
+    const auto aggrStats =
+        PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+    ASSERT_GT(aggrStats.spilledBytes, 0);
+    ASSERT_EQ(aggrStats.outputVectors, testData.expectedNumOutputVectors);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
@@ -2274,12 +2262,9 @@ TEST_F(AggregationTest, spillDuringOutputProcessing) {
           .config(QueryConfig::kAggregationSpillEnabled, true)
           // Set very large output buffer size, the number of output rows is
           // effectively controlled by 'kPreferredOutputBatchBytes'.
-          .config(
-              QueryConfig::kPreferredOutputBatchBytes,
-              std::to_string(1'000'000'000))
-          .config(
-              QueryConfig::kMaxOutputBatchRows, std::to_string(numOutputRows))
-          .config(QueryConfig::kSpillNumPartitionBits, "0")
+          .config(QueryConfig::kPreferredOutputBatchBytes, 1'000'000'000)
+          .config(QueryConfig::kMaxOutputBatchRows, numOutputRows)
+          .config(QueryConfig::kSpillNumPartitionBits, 0)
           .plan(
               PlanBuilder()
                   .values({input})
@@ -2289,12 +2274,11 @@ TEST_F(AggregationTest, spillDuringOutputProcessing) {
           .assertResults(
               "SELECT c0, c1, max(c2), min(c3) FROM tmp GROUP BY 1, 2");
 
-  ASSERT_EQ(
-      toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
-      vectorSize / numOutputRows);
-  ASSERT_GT(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+  const auto aggrStats = PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+  ASSERT_EQ(aggrStats.outputVectors, vectorSize / numOutputRows);
+  ASSERT_GT(aggrStats.spilledBytes, 0);
   // There is only one partition for spilling triggered during output stage.
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledPartitions, 1);
+  ASSERT_EQ(aggrStats.spilledPartitions, 1);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -2306,12 +2290,12 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithoutSpill) {
       {makeFlatVector<int32_t>(vectorSize, [&](auto row) { return row; }),
        makeFlatVector<StringView>(
            vectorSize, [&](auto /*unused*/) { return StringView(strValue); })});
-  auto largeRowType = asRowType(largeVector->type());
+  auto largeRowType = largeVector->rowType();
 
   RowVectorPtr smallVector = makeRowVector(
       {makeFlatVector<int32_t>(vectorSize, [&](auto row) { return row; }),
        makeFlatVector<int32_t>(vectorSize, [&](auto row) { return row; })});
-  auto smallRowType = asRowType(smallVector->type());
+  auto smallRowType = smallVector->rowType();
 
   struct {
     bool smallInput;
@@ -2357,10 +2341,8 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithoutSpill) {
         AssertQueryBuilder(duckDbQueryRunner_)
             .config(
                 QueryConfig::kPreferredOutputBatchBytes,
-                std::to_string(testData.maxOutputBytes))
-            .config(
-                QueryConfig::kMaxOutputBatchRows,
-                std::to_string(testData.maxOutputRows))
+                testData.maxOutputBytes)
+            .config(QueryConfig::kMaxOutputBatchRows, testData.maxOutputRows)
             .plan(
                 PlanBuilder()
                     .values(inputs)
@@ -2370,7 +2352,7 @@ TEST_F(AggregationTest, outputBatchSizeCheckWithoutSpill) {
             .assertResults("SELECT c0, array_agg(c1) FROM tmp GROUP BY 1");
 
     ASSERT_EQ(
-        toPlanStats(task->taskStats()).at(aggrNodeId).outputVectors,
+        PlanNodeStats::extract(task->taskStats(), aggrNodeId).outputVectors,
         testData.expectedNumOutputVectors);
   }
 }
@@ -2419,10 +2401,10 @@ DEBUG_ONLY_TEST_F(AggregationTest, minSpillableMemoryReservation) {
             .config(QueryConfig::kAggregationSpillEnabled, true)
             .config(
                 QueryConfig::kMinSpillableReservationPct,
-                std::to_string(minSpillableReservationPct))
+                minSpillableReservationPct)
             .config(
                 QueryConfig::kSpillableReservationGrowthPct,
-                std::to_string(minSpillableReservationPct + 1))
+                minSpillableReservationPct + 1)
             .plan(
                 PlanBuilder()
                     .values(batches)
@@ -2446,10 +2428,10 @@ TEST_F(AggregationTest, distinctWithSpilling) {
        8,
        [](uint32_t spilledFiles) { ASSERT_GE(spilledFiles, 100); }},
 
-      {{makeRowVector(
-           {"c0"},
-           {makeFlatVector<int64_t>(
-               2'000, [](vector_size_t /* unused */) { return 100; })})},
+      {{makeNamedRowVector(
+           "c0",
+           makeFlatVector<int64_t>(
+               2'000, [](vector_size_t /* unused */) { return 100; }))},
        1,
        [](uint32_t spilledFiles) { ASSERT_EQ(spilledFiles, 1); }}};
 
@@ -2471,8 +2453,8 @@ TEST_F(AggregationTest, distinctWithSpilling) {
                     .assertResults("SELECT distinct c0 FROM tmp");
 
     // Verify that spilling is not triggered.
-    const auto planNodeStatsMap = toPlanStats(task->taskStats());
-    const auto& aggrNodeStats = planNodeStatsMap.at(aggrNodeId);
+    const auto aggrNodeStats =
+        PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     ASSERT_GT(aggrNodeStats.spilledInputBytes, 0);
     ASSERT_EQ(
         aggrNodeStats.spilledPartitions, testParam.expectedSpilledPartitions);
@@ -2530,8 +2512,7 @@ TEST_P(DistinctAggregationTest, spillingForAggrsWithDistinct) {
                     .plan(plan)
                     .assertResults(sql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& stats = taskStats.at(aggrNodeId);
+    auto stats = exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     checkSpillStats(stats, true);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   };
@@ -2614,8 +2595,7 @@ TEST_F(AggregationTest, spillingForAggrsWithSorting) {
                     .plan(plan)
                     .assertResults(sql);
 
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& stats = taskStats.at(aggrNodeId);
+    auto stats = exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     checkSpillStats(stats, true);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   };
@@ -2808,37 +2788,32 @@ TEST_F(AggregationTest, spillPrefixSortOptimization) {
     auto testPlan = [&](const core::PlanNodePtr& plan, const std::string& sql) {
       SCOPED_TRACE(sql);
       TestScopedSpillInjection scopedSpillInjection(100);
-      auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                      .spillDirectory(spillDirectory->getPath())
-                      .config(QueryConfig::kSpillEnabled, true)
-                      .config(QueryConfig::kAggregationSpillEnabled, true)
-                      .config(
-                          QueryConfig::kSpillPrefixSortEnabled,
-                          testData.prefixSortSpillEnabled)
-                      .config(
-                          QueryConfig::kPrefixSortMinRows,
-                          std::to_string(testData.minNumRows))
-                      .config(
-                          QueryConfig::kPrefixSortNormalizedKeyMaxBytes,
-                          std::to_string(testData.maxNormalizedKeyBytes))
-                      .plan(plan)
-                      .assertResults(sql);
+      auto task =
+          AssertQueryBuilder(duckDbQueryRunner_)
+              .spillDirectory(spillDirectory->getPath())
+              .config(QueryConfig::kSpillEnabled, true)
+              .config(QueryConfig::kAggregationSpillEnabled, true)
+              .config(
+                  QueryConfig::kSpillPrefixSortEnabled,
+                  testData.prefixSortSpillEnabled)
+              .config(QueryConfig::kPrefixSortMinRows, testData.minNumRows)
+              .config(
+                  QueryConfig::kPrefixSortNormalizedKeyMaxBytes,
+                  testData.maxNormalizedKeyBytes)
+              .plan(plan)
+              .assertResults(sql);
 
-      auto taskStats = exec::toPlanStats(task->taskStats());
-      auto& stats = taskStats.at(aggrNodeId);
+      auto stats = exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
       checkSpillStats(stats, true);
       if (testData.expectedNumPrefixSortKeys > 0) {
         ASSERT_GE(
-            stats.customStats.at(std::string(PrefixSort::kNumPrefixSortKeys))
-                .sum,
+            stats.customSum(PrefixSort::kNumPrefixSortKeys),
             testData.expectedNumPrefixSortKeys);
         ASSERT_EQ(
-            stats.customStats.at(std::string(PrefixSort::kNumPrefixSortKeys))
-                .max,
+            stats.customStat(PrefixSort::kNumPrefixSortKeys).max,
             testData.expectedNumPrefixSortKeys);
         ASSERT_EQ(
-            stats.customStats.at(std::string(PrefixSort::kNumPrefixSortKeys))
-                .min,
+            stats.customStat(PrefixSort::kNumPrefixSortKeys).min,
             testData.expectedNumPrefixSortKeys);
       } else {
         ASSERT_EQ(
@@ -3043,8 +3018,9 @@ TEST_F(AggregationTest, preGroupedAggregationWithSpilling) {
           .assertResults("SELECT c0, c1, sum(c2) FROM tmp GROUP BY c0, c1");
   auto stats = task->taskStats().pipelineStats;
   // Verify that spilling is not triggered.
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledInputBytes, 0);
-  ASSERT_EQ(toPlanStats(task->taskStats()).at(aggrNodeId).spilledBytes, 0);
+  const auto aggrStats = PlanNodeStats::extract(task->taskStats(), aggrNodeId);
+  ASSERT_EQ(aggrStats.spilledInputBytes, 0);
+  ASSERT_EQ(aggrStats.spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -4020,7 +3996,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringOutputProcessing) {
             .maxDrivers(testData.numDrivers)
             .assertResults(expectedResult),
         "Memory pool manually aborted");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4086,7 +4062,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, abortDuringInputgProcessing) {
             .maxDrivers(testData.numDrivers)
             .assertResults(expectedResult),
         "Memory pool manually aborted");
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4331,8 +4307,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyInput) {
           .config(QueryConfig::kSpillEnabled, true)
           .config(QueryConfig::kAggregationSpillEnabled, true)
           .assertEmptyResults();
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  ASSERT_EQ(taskStats.at(aggNodeId).spilledBytes, 0);
+  const auto taskStats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId);
+  ASSERT_EQ(taskStats.spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -4407,8 +4384,9 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimEmptyOutput) {
                   .assertResults(expectedResult);
   // Since the spilling is triggered after the aggregation operator has produced
   // all the output, we don't expect any spilled data.
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  ASSERT_EQ(taskStats.at(aggNodeId).spilledBytes, 0);
+  const auto taskStats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggNodeId);
+  ASSERT_EQ(taskStats.spilledBytes, 0);
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
 }
 
@@ -4417,9 +4395,8 @@ TEST_F(AggregationTest, maxSpillBytes) {
       ROW({"c0", "c1", "c2"}, {INTEGER(), INTEGER(), VARCHAR()});
   const auto vectors = createVectors(rowType, 128, 1 << 20);
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId aggregationNodeId;
-  const auto plan = PlanBuilder(planNodeIdGenerator)
+  const auto plan = PlanBuilder()
                         .values(vectors)
                         .singleAggregation({"c0", "c1"}, {"array_agg(c2)"})
                         .capturePlanNodeId(aggregationNodeId)
@@ -4455,7 +4432,7 @@ TEST_F(AggregationTest, maxSpillBytes) {
       ASSERT_EQ(
           e.errorCode(), facebook::velox::error_code::kSpillLimitExceeded);
     }
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4488,9 +4465,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
             .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, true)
             .config(core::QueryConfig::kAggregationSpillEnabled, true)
-            .config(
-                core::QueryConfig::kMaxSpillRunRows,
-                std::to_string(maxSpillRunRows))
+            .config(core::QueryConfig::kMaxSpillRunRows, maxSpillRunRows)
             .plan(
                 PlanBuilder()
                     .values(vectors)
@@ -4499,8 +4474,8 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
                     .planNode())
             .assertResults(
                 "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(aggrNodeId);
+    auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     // The actual ime resolution is millisecond so we might see zero nanos
     // reporting in unit test.
@@ -4511,7 +4486,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregation) {
             .sum,
         0);
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4539,25 +4514,24 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromDistinctAggregation) {
 
     const auto spillDirectory = TempDirectoryPath::create();
     core::PlanNodeId aggrNodeId;
-    auto task = AssertQueryBuilder(duckDbQueryRunner_)
-                    .spillDirectory(spillDirectory->getPath())
-                    .config(core::QueryConfig::kSpillEnabled, true)
-                    .config(core::QueryConfig::kAggregationSpillEnabled, true)
-                    .config(
-                        core::QueryConfig::kMaxSpillRunRows,
-                        std::to_string(maxSpillRunRows))
-                    .plan(
-                        PlanBuilder()
-                            .values(vectors)
-                            .singleAggregation({"c0"}, {})
-                            .capturePlanNodeId(aggrNodeId)
-                            .planNode())
-                    .assertResults("SELECT distinct c0 FROM tmp");
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(aggrNodeId);
+    auto task =
+        AssertQueryBuilder(duckDbQueryRunner_)
+            .spillDirectory(spillDirectory->getPath())
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kAggregationSpillEnabled, true)
+            .config(core::QueryConfig::kMaxSpillRunRows, maxSpillRunRows)
+            .plan(
+                PlanBuilder()
+                    .values(vectors)
+                    .singleAggregation({"c0"}, {})
+                    .capturePlanNodeId(aggrNodeId)
+                    .planNode())
+            .assertResults("SELECT distinct c0 FROM tmp");
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     ASSERT_GT(planStats.spilledBytes, 0);
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4596,7 +4570,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationOnNoMoreInput) {
     auto stats = task->taskStats().pipelineStats;
     ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
@@ -4642,7 +4616,7 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimFromAggregationDuringOutput) {
     auto stats = task->taskStats().pipelineStats;
     ASSERT_GT(stats[0].operatorStats[1].spilledBytes, 0);
   }
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
@@ -4662,7 +4636,7 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
                     .planNode())
             .assertResults(
                 "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    waitForTaskCompletion(task.get());
+    TaskMonitor::waitForCompletion(*task);
     arbitrationWaitFlag = false;
     arbitrationWait.notifyAll();
   });
@@ -4670,7 +4644,7 @@ TEST_F(AggregationTest, reclaimFromCompletedAggregation) {
 
   memory::testingRunArbitration();
   aggregationThread.join();
-  waitForAllTasksToBeDeleted();
+  TaskMonitor::waitForAllTasksDeleted();
 }
 
 DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
@@ -4763,15 +4737,15 @@ DEBUG_ONLY_TEST_F(AggregationTest, reclaimWithCompact) {
                     .planNode())
             .assertResults(
                 "SELECT c0, c1, array_agg(c2) FROM tmp GROUP BY c0, c1");
-    auto taskStats = exec::toPlanStats(task->taskStats());
-    auto& planStats = taskStats.at(aggrNodeId);
+    const auto planStats =
+        exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
     if (testData.expectSpill) {
       ASSERT_GT(planStats.spilledBytes, 0);
     } else {
       ASSERT_EQ(planStats.spilledBytes, 0);
     }
     task.reset();
-    waitForAllTasksToBeDeleted();
+    TaskMonitor::waitForAllTasksDeleted();
   }
 }
 
@@ -4933,25 +4907,12 @@ TEST_F(AggregationTest, destroyAfterPartialInitialization) {
       [&agg](folly::Range<char**> groups) { agg.destroy(groups); });
 
   RowContainer rows(
-      {}, // keyTypes
-      false, // nullableKeys
+      {},
       {accumulator},
-      {}, // dependentTypes
-      false, // hasNext
-      false, // isJoinBuild
-      false, // hasProbedFlag
-      false, // hasCountFlag
-      false, // hasNormalizedKeys
-      false, // useListRowIndex
-      pool());
-  const auto rowColumn = rows.columnAt(0);
-  agg.setOffsets(
-      rowColumn.offset(),
-      rowColumn.nullByte(),
-      rowColumn.nullMask(),
-      rowColumn.initializedByte(),
-      rowColumn.initializedMask(),
-      rows.rowSizeOffset());
+      {},
+      pool(),
+      RowContainer::Options{.nullableKeys = false});
+  agg.setOffsets(rows.columnAt(0), rows.rowSizeOffset());
   rows.newRow();
   rows.clear();
 
@@ -5159,14 +5120,12 @@ TEST_F(AggregationTest, barrierExecutionSingleAggregation) {
   });
   createDuckDbTable({data1, data2});
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({"c0"}, {"sum(c1)"})
                   .planNode();
@@ -5191,14 +5150,12 @@ TEST_F(AggregationTest, barrierExecutionDistinct) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({"c0"}, {})
                   .planNode();
@@ -5222,14 +5179,12 @@ TEST_F(AggregationTest, barrierExecutionGlobalAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({}, {"sum(c1)"})
                   .planNode();
@@ -5253,14 +5208,12 @@ TEST_F(AggregationTest, barrierExecutionGlobalDistinctAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({}, {"count(DISTINCT c0)"})
                   .planNode();
@@ -5284,14 +5237,12 @@ TEST_F(AggregationTest, barrierExecutionGlobalSortedAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({}, {"array_agg(c1 ORDER BY c1 DESC)"})
                   .planNode();
@@ -5321,15 +5272,13 @@ TEST_F(AggregationTest, barrierExecutionPartialAggregation) {
       makeFlatVector<int64_t>({50, 60, 70, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId partialNodeId;
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .partialAggregation({"c0"}, {"avg(c1)"})
                   .capturePlanNodeId(partialNodeId)
@@ -5346,10 +5295,10 @@ TEST_F(AggregationTest, barrierExecutionPartialAggregation) {
 
   ASSERT_EQ(task->taskStats().numBarriers, 2);
   ASSERT_EQ(
-      toPlanStats(task->taskStats())
-          .at(partialNodeId)
+      PlanNodeStats::extract(task->taskStats(), partialNodeId)
           .customStats.count(
-              std::string(HashAggregation::kAbandonedPartialAggregationRows)),
+              std::string(
+                  HashAggregationStatNames::kAbandonedPartialAggregationRows)),
       0);
 }
 
@@ -5367,17 +5316,14 @@ TEST_F(AggregationTest, barrierExecutionAbandonedPartialAggregation) {
       makeFlatVector<int64_t>({90, 100, 110}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
-  auto file3 = TempFilePath::create();
-  writeToFile(file3->getPath(), data3);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
+  auto file3 = writeToFile(data3);
 
   core::PlanNodeId partialNodeId;
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .partialAggregation({"c0"}, {"avg(c1)"})
                   .capturePlanNodeId(partialNodeId)
@@ -5404,10 +5350,10 @@ TEST_F(AggregationTest, barrierExecutionAbandonedPartialAggregation) {
 
   ASSERT_EQ(task->taskStats().numBarriers, 3);
   ASSERT_GT(
-      toPlanStats(task->taskStats())
-          .at(partialNodeId)
+      PlanNodeStats::extract(task->taskStats(), partialNodeId)
           .customStats
-          .at(std::string(HashAggregation::kAbandonedPartialAggregationRows))
+          .at(std::string(
+              HashAggregationStatNames::kAbandonedPartialAggregationRows))
           .sum,
       0);
 }
@@ -5422,14 +5368,12 @@ TEST_F(AggregationTest, barrierExecutionDistinctAggregation) {
       makeFlatVector<int64_t>({50, 60, 60, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({"c0"}, {"count(DISTINCT c1)"})
                   .planNode();
@@ -5454,14 +5398,12 @@ TEST_F(AggregationTest, barrierExecutionSortedAggregation) {
       makeFlatVector<int64_t>({50, 70, 60, 80}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({"c0"}, {"array_agg(c1 ORDER BY c1)"})
                   .planNode();
@@ -5492,14 +5434,12 @@ TEST_F(AggregationTest, barrierExecutionPartiallyPreGroupedAggregation) {
       makeFlatVector<int64_t>({7, 8, 9, 10, 11, 12}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .aggregation(
                       {"c0", "c1"},
@@ -5538,14 +5478,12 @@ TEST_F(AggregationTest, barrierExecutionFullyPreGroupedAggregation) {
       makeFlatVector<int64_t>({7, 8, 9, 10, 11, 12}),
   });
 
-  auto file1 = TempFilePath::create();
-  writeToFile(file1->getPath(), data1);
-  auto file2 = TempFilePath::create();
-  writeToFile(file2->getPath(), data2);
+  auto file1 = writeToFile(data1);
+  auto file2 = writeToFile(data2);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data1->type()))
+                  .tableScan(data1->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .aggregation(
                       {"c0", "c1"},
@@ -5580,14 +5518,13 @@ TEST_F(AggregationTest, barrierExecutionSpillEnabledAggregationUnsupported) {
   VectorFuzzer fuzzer(options, pool());
   auto data = fuzzer.fuzzRow(rowType_);
 
-  auto file = TempFilePath::create();
-  writeToFile(file->getPath(), data);
+  auto file = writeToFile(data);
   auto spillDirectory = TempDirectoryPath::create();
   TestScopedSpillInjection scopedSpillInjection(100);
 
   core::PlanNodeId scanNodeId;
   auto plan = PlanBuilder()
-                  .tableScan(asRowType(data->type()))
+                  .tableScan(data->rowType())
                   .capturePlanNodeId(scanNodeId)
                   .singleAggregation({"c0"}, {"array_agg(c1)"})
                   .planNode();
@@ -5640,8 +5577,7 @@ TEST_F(AggregationTest, distinctNoRowLossWithBackpressuringDownstream) {
 
   // Single driver so the aggregation and the back-pressuring downstream share a
   // pipeline.
-  auto result = AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool());
-  EXPECT_EQ(result->size(), totalRows);
+  EXPECT_EQ(AssertQueryBuilder(plan).maxDrivers(1).countResults(), totalRows);
 }
 
 // Regression test for the abandoned-partial-aggregation buffer: once a partial
@@ -5680,13 +5616,13 @@ TEST_F(
                   })
                   .planNode();
 
-  auto result =
+  EXPECT_EQ(
       AssertQueryBuilder(plan)
           .maxDrivers(1)
-          .config(QueryConfig::kMaxPartialAggregationMemory, "4096")
-          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "4096")
-          .copyResults(pool());
-  EXPECT_EQ(result->size(), totalRows);
+          .config(QueryConfig::kMaxPartialAggregationMemory, 4'096)
+          .config(QueryConfig::kMaxExtendedPartialAggregationMemory, 4'096)
+          .countResults(),
+      totalRows);
 }
 
 // Regression test for duplicate keys with spilling merge enabled:
@@ -5720,9 +5656,9 @@ TEST_F(AggregationTest, duplicateKeysWithSpillingAndPreMerge) {
       .config(QueryConfig::kSpillEnabled, true)
       .config(QueryConfig::kAggregationSpillEnabled, true)
       // Force a batch boundary at the transition from key 99 to key 100.
-      .config(QueryConfig::kMaxOutputBatchRows, "100")
-      .config(QueryConfig::kSpillNumPartitionBits, "0")
-      .config(QueryConfig::kSpillNumMaxMergeFiles, "2")
+      .config(QueryConfig::kMaxOutputBatchRows, 100)
+      .config(QueryConfig::kSpillNumPartitionBits, 0)
+      .config(QueryConfig::kSpillNumMaxMergeFiles, 2)
       .maxDrivers(1)
       .plan(
           PlanBuilder()

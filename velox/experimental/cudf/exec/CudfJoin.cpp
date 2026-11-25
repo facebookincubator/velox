@@ -32,7 +32,7 @@ namespace facebook::velox::cudf_velox {
 namespace {
 
 void scatterGatheredColumns(
-    const std::vector<exec::IdentityProjection>& projections,
+    const std::vector<IdentityProjection>& projections,
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     std::vector<std::unique_ptr<cudf::column>>& gatheredCols) {
   VELOX_CHECK_EQ(gatheredCols.size(), projections.size());
@@ -45,7 +45,7 @@ void scatterGatheredColumns(
 }
 
 void scatterInputColumns(
-    const std::vector<exec::IdentityProjection>& projections,
+    const std::vector<IdentityProjection>& projections,
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     std::vector<std::unique_ptr<cudf::column>>& inputCols,
     std::size_t srcOffset) {
@@ -62,7 +62,7 @@ void scatterInputColumns(
 }
 
 void fillNullColumns(
-    const std::vector<exec::IdentityProjection>& projections,
+    const std::vector<IdentityProjection>& projections,
     const RowTypePtr& inputType,
     std::vector<std::unique_ptr<cudf::column>>& outCols,
     cudf::size_type numRows,

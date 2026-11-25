@@ -92,10 +92,10 @@ class SubStringFunction : public CudfFunction {
       }
     }
 
-    if (inputIsConstant_ && startIsConstant_ &&
-        (!hasLength_ || lengthIsConstant_)) {
-      VELOX_NYI("substring with only literal inputs is not supported");
-    }
+    VELOX_NYI_CHECK(
+        !(inputIsConstant_ && startIsConstant_ &&
+          (!hasLength_ || lengthIsConstant_)),
+        "substring with only literal inputs is not supported");
   }
 
   ColumnOrView eval(

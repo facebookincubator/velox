@@ -61,6 +61,7 @@ velox_add_library(
   Doubles.h
   Fs.h
   IOUtils.h
+  IdentityProjection.h
   IndexedPriorityQueue.h
   IoCounter.h
   Nulls.h
@@ -91,6 +92,15 @@ velox_link_libraries(
   PUBLIC velox_exception Folly::folly fmt::fmt xsimd
   PRIVATE velox_caching velox_common_compression velox_process velox_test_util glog::glog
 )
+
+# Flex 2.6.5 and later declare a virtual yyFlexLexer::yyread() that
+# YyFlexLexerShim.cpp must define.
+if(EXISTS "${FLEX_INCLUDE_DIRS}/FlexLexer.h")
+  file(STRINGS "${FLEX_INCLUDE_DIRS}/FlexLexer.h" _velox_flex_yyread REGEX "yyread")
+  if(_velox_flex_yyread)
+    velox_compile_definitions(velox_common_base PRIVATE VELOX_FLEX_LEXER_HAS_YYREAD)
+  endif()
+endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

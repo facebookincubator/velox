@@ -364,7 +364,7 @@ class NullableContentStreamChunker final : public StreamChunker {
         minChunkSize_{options.minChunkSize},
         maxChunkSize_{options.maxChunkSize},
         omitStream_{detail::shouldOmitDataStream(
-            streamData.data().size(),
+            streamData.data().size() + streamData.extraMemory(),
             options.minChunkSize,
             streamData.nonNulls().empty(),
             options.isFirstChunk)},

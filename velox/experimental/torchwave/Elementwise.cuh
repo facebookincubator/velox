@@ -647,6 +647,14 @@ __nan_to_num(double a1, double nan_val, double posinf_val, double neginf_val) {
   return a1;
 }
 
+// In-place nan_to_num_: writes the replacement into self.
+template <typename T>
+__device__ inline T
+__nan_to_num_(T& a1, double nan_val, double posinf_val, double neginf_val) {
+  a1 = __nan_to_num(a1, nan_val, posinf_val, neginf_val);
+  return a1;
+}
+
 // Min/max.
 
 template <typename T>
@@ -720,6 +728,18 @@ __device__ inline T __arange(int64_t idx) {
   return __arange_start<T>(idx, T(0));
 }
 
+// tw.arange_mem: writes 0 .. end - 1 to 'output', elements striding over the
+// op's threads.
+template <typename T, typename TEnd>
+__device__ void arange_mem(TEnd* end, Tensor* output, BlockInfo& block) {
+  T* out = storage<T>(output);
+  const int64_t n = static_cast<int64_t>(*end);
+  for (int64_t i = block.blockInOp * blockDim.x + threadIdx.x; i < n;
+       i += static_cast<int64_t>(block.numBlocksInOp) * blockDim.x) {
+    out[i] = static_cast<T>(i);
+  }
+}
+
 template <typename T>
 __device__ inline T __arange_start_step(int64_t idx, T start, T step) {
   return start + static_cast<T>(idx) * step;
@@ -758,7 +778,7 @@ __device__ inline T __index_put_elt_one(
     } else {
       dst[offset] = value;
     }
-  } else if (block.debugInfo) {
+  } else if (kernelError(block, __LINE__)) {
     block.debugInfo->line = __LINE__;
     block.debugInfo->extra[0] = 0;
     block.debugInfo->extra[1] = idx0;
@@ -783,7 +803,7 @@ __device__ inline T __index_put_elt_two(
     } else {
       dst[offset] = value;
     }
-  } else if (block.debugInfo) {
+  } else if (kernelError(block, __LINE__)) {
     block.debugInfo->line = __LINE__;
     block.debugInfo->extra[0] = idx0 < 0 || idx0 >= dest->dims[0] ? 0 : 1;
     block.debugInfo->extra[1] = idx0 < 0 || idx0 >= dest->dims[0] ? idx0 : idx1;
@@ -810,7 +830,7 @@ __device__ inline T __index_put_elt_three(
     } else {
       dst[offset] = value;
     }
-  } else if (block.debugInfo) {
+  } else if (kernelError(block, __LINE__)) {
     int32_t dim = idx0 < 0 || idx0 >= dest->dims[0] ? 0
         : idx1 < 0 || idx1 >= dest->dims[1]         ? 1
                                                     : 2;
@@ -885,7 +905,7 @@ __device__ inline T __slice_scatter(
       rem = len > 0 ? rem / static_cast<uint32_t>(len) : rem;
       int64_t destCoord = start + c * st;
       if (start < 0 || destCoord >= dimSize) {
-        if (block.debugInfo) {
+        if (kernelError(block, __LINE__)) {
           block.debugInfo->line = __LINE__;
           block.debugInfo->extra[0] = d0;
           block.debugInfo->extra[1] = start;
@@ -928,7 +948,7 @@ __device__ inline T __select_scatter(
   int64_t dimSize = out->dims[d0];
   int64_t sel = index < 0 ? static_cast<int64_t>(index) + dimSize : index;
   if (sel < 0 || sel >= dimSize) {
-    if (block.debugInfo) {
+    if (kernelError(block, __LINE__)) {
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = d0;
       block.debugInfo->extra[1] = index;
@@ -996,7 +1016,7 @@ __device__ inline bool scatterDestOffset(
   // here, so report instead of reading. Same reporting path as the scatter
   // coordinate check below and the index_put kernels.
   if (index->rank > out->rank || idx >= index->numEl) {
-    if (block.debugInfo) {
+    if (kernelError(block, __LINE__)) {
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = idx;
       block.debugInfo->extra[1] = index->numEl;
@@ -1018,7 +1038,7 @@ __device__ inline bool scatterDestOffset(
   // A non-contiguous or mis-described index can still land the strided offset
   // outside the buffer even when 'idx' is in range.
   if (indexElemOff < 0 || indexElemOff >= static_cast<int64_t>(index->numEl)) {
-    if (block.debugInfo) {
+    if (kernelError(block, __LINE__)) {
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = indexElemOff;
       block.debugInfo->extra[1] = index->numEl;
@@ -1034,7 +1054,7 @@ __device__ inline bool scatterDestOffset(
     indexVal += dimSize;
   }
   if (indexVal < 0 || indexVal >= dimSize) {
-    if (block.debugInfo) {
+    if (kernelError(block, __LINE__)) {
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = d0;
       block.debugInfo->extra[1] = static_cast<int32_t>(indexVal);
@@ -1115,7 +1135,7 @@ __index_elt_one(Tensor* source, int32_t idx0, BlockInfo& block) {
   if (idx0 >= 0 && idx0 < source->dims[0]) {
     return storage<T>(source)[indexOffset(source, idx0)];
   }
-  if (block.debugInfo) {
+  if (kernelError(block, __LINE__)) {
     block.debugInfo->line = __LINE__;
     block.debugInfo->extra[0] = 0;
     block.debugInfo->extra[1] = idx0;
@@ -1177,7 +1197,7 @@ __index_elt_two(Tensor* source, int32_t idx0, int32_t idx1, BlockInfo& block) {
       idx1 < source->dims[1]) {
     return storage<T>(source)[indexOffset(source, idx0, idx1)];
   }
-  if (block.debugInfo) {
+  if (kernelError(block, __LINE__)) {
     block.debugInfo->line = __LINE__;
     block.debugInfo->extra[0] = idx0 < 0 || idx0 >= source->dims[0] ? 0 : 1;
     block.debugInfo->extra[1] =
@@ -1198,7 +1218,7 @@ __device__ inline T __index_elt_three(
       idx1 < source->dims[1] && idx2 >= 0 && idx2 < source->dims[2]) {
     return storage<T>(source)[indexOffset(source, idx0, idx1, idx2)];
   }
-  if (block.debugInfo) {
+  if (kernelError(block, __LINE__)) {
     int32_t dim = idx0 < 0 || idx0 >= source->dims[0] ? 0
         : idx1 < 0 || idx1 >= source->dims[1]         ? 1
                                                       : 2;
@@ -1247,7 +1267,7 @@ __device__ void __indexgather(
       }
       if (idx < 0 || idx >= source->dims[dim]) {
         valid = false;
-        if (block.debugInfo) {
+        if (kernelError(block, __LINE__)) {
           block.debugInfo->line = __LINE__;
           block.debugInfo->extra[0] = dim;
           block.debugInfo->extra[1] = idx;
@@ -1343,7 +1363,7 @@ __device__ inline T __index_select(
   // end of 'index'. Reading there is an out-of-bounds access whose value then
   // fails the bounds check below as a bogus 'selected', so check it first.
   if (pos < 0 || static_cast<uint32_t>(pos) >= index->numEl) {
-    if (block.debugInfo) {
+    if (kernelError(block, __LINE__)) {
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = dim;
       block.debugInfo->extra[1] = -1;
@@ -1362,7 +1382,7 @@ __device__ inline T __index_select(
     selected += source->dims[dim];
   }
   if (selected < 0 || selected >= source->dims[dim]) {
-    if (block.debugInfo) {
+    if (kernelError(block, __LINE__)) {
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = dim;
       block.debugInfo->extra[1] = selected;
@@ -1414,7 +1434,7 @@ __device__ inline T __gather(
       const uint32_t extent = own->dims[ownDim];
       const uint32_t c = extent == 1 ? 0 : r;
       if (c >= extent) {
-        if (block.debugInfo) {
+        if (kernelError(block, __LINE__)) {
           block.debugInfo->line = __LINE__;
           block.debugInfo->extra[0] = own->numEl;
           block.debugInfo->extra[1] = out->numEl;
@@ -1452,7 +1472,7 @@ __device__ inline T __gather(
   // aten.gather rejects a negative index rather than wrapping it.
   const int64_t extent = self->dims[dim];
   if (index < 0 || index >= extent) {
-    if (block.debugInfo) {
+    if (kernelError(block, __LINE__)) {
       block.debugInfo->line = __LINE__;
       block.debugInfo->extra[0] = dim;
       block.debugInfo->extra[1] = index;

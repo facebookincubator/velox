@@ -23,6 +23,11 @@
 namespace facebook::velox::parquet {
 namespace {
 
+// Check the microsecond range regardless of the requested read precision.
+Timestamp toDateTimestamp(int32_t value) {
+  return Timestamp::fromMicros(Timestamp::fromDate(value).toMicros());
+}
+
 Timestamp toInt64Timestamp(int64_t value, TimestampPrecision filePrecision) {
   switch (filePrecision) {
     case TimestampPrecision::kMilliseconds:
@@ -47,8 +52,10 @@ Timestamp toInt96Timestamp(const int128_t& value) {
 template <typename T>
 class ParquetTimestampRange final : public common::TimestampRange {
  public:
-  // Use int128_t for Int96
-  static_assert(std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>);
+  // Use int32_t for DATE and int128_t for INT96.
+  static_assert(
+      std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+      std::is_same_v<T, int128_t>);
 
   // @param lower Lower end of the range, inclusive.
   // @param upper Upper end of the range, inclusive.
@@ -64,7 +71,9 @@ class ParquetTimestampRange final : public common::TimestampRange {
 
   bool testInt128(const int128_t& value) const final {
     Timestamp ts;
-    if constexpr (std::is_same_v<T, int64_t>) {
+    if constexpr (std::is_same_v<T, int32_t>) {
+      ts = toDateTimestamp(static_cast<int32_t>(value));
+    } else if constexpr (std::is_same_v<T, int64_t>) {
       ts = toInt64Timestamp(value, filePrecision_);
     } else if constexpr (std::is_same_v<T, int128_t>) {
       ts = toInt96Timestamp(value);
@@ -82,8 +91,10 @@ class ParquetTimestampRange final : public common::TimestampRange {
 template <typename T>
 class TimestampColumnReader : public IntegerColumnReader {
  public:
-  // Use int128_t for Int96
-  static_assert(std::is_same_v<T, int64_t> || std::is_same_v<T, int128_t>);
+  // Use int32_t for DATE and int128_t for INT96.
+  static_assert(
+      std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+      std::is_same_v<T, int128_t>);
 
   TimestampColumnReader(
       const TypePtr& requestedType,
@@ -146,7 +157,9 @@ class TimestampColumnReader : public IntegerColumnReader {
       }
 
       const int128_t encoded = reinterpret_cast<int128_t&>(rawValues[i]);
-      if constexpr (std::is_same_v<T, int64_t>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        rawValues[i] = toDateTimestamp(static_cast<int32_t>(encoded));
+      } else if constexpr (std::is_same_v<T, int64_t>) {
         rawValues[i] = toInt64Timestamp(encoded, filePrecision_);
         if (needsConversion_) {
           rawValues[i] = rawValues[i].toPrecision(requestedPrecision_);
@@ -229,8 +242,8 @@ class TimestampColumnReader : public IntegerColumnReader {
   // from Parquet.
   const TimestampPrecision requestedPrecision_;
 
-  // The precision of int64_t timestamp in Parquet. Only set when T is int64_t.
-  TimestampPrecision filePrecision_;
+  // The precision of int64_t timestamp in Parquet. Only used when T is int64_t.
+  TimestampPrecision filePrecision_{TimestampPrecision::kNanoseconds};
 
   // Whether Int64 Timestamp needs to be converted to the requested precision.
   bool needsConversion_ = false;

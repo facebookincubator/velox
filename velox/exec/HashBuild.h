@@ -26,6 +26,7 @@
 #include "velox/exec/UnorderedStreamReader.h"
 
 namespace facebook::velox::exec {
+class Expr;
 class HashBuildSpiller;
 
 /// Builds a hash table for use in HashProbe. This is the final
@@ -56,13 +57,6 @@ class HashBuild final : public Operator {
     kFinish = 5,
   };
   static std::string stateName(State state);
-
-  /// Runtime stat keys for hash build.
-  /// Maximum spill level reached during hash join build.
-  static constexpr std::string_view kMaxSpillLevel = "maxSpillLevel";
-  /// Whether dedup hash build was abandoned.
-  static constexpr std::string_view kAbandonBuildNoDupHash =
-      "abandonBuildNoDupHash";
 
   HashBuild(
       int32_t operatorId,
@@ -222,8 +216,13 @@ class HashBuild final : public Operator {
   // Invoked to process data from spill input reader on restoring.
   void processSpillInput();
 
+  // Returns true if the hash table needs only one row per key. 'filter' is the
+  // compiled join filter when the decision needs its determinism and fields.
+  bool canDropDuplicates(const Expr* filter) const;
+
   // Set up for null-aware and regular anti-join with filter processing.
   void setupFilterForAntiJoins(
+      const Expr& filter,
       const folly::F14FastMap<column_index_t, column_index_t>& keyChannelMap);
 
   // Invoked when preparing for null-aware and regular anti join with
@@ -284,9 +283,8 @@ class HashBuild final : public Operator {
   // not.
   const bool needProbedFlagSpill_;
 
-  // Indicates whether drop duplicate rows. Rows containing duplicate keys
-  // can be removed for left semi and anti join.
-  const bool dropDuplicates_;
+  // Indicates whether to drop rows with duplicate keys. Set in initialize().
+  bool dropDuplicates_{false};
 
   // Maximum number of distinct values to keep when merging vector hashers
   const size_t vectorHasherMaxNumDistinct_;

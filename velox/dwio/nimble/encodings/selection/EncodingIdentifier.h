@@ -48,6 +48,11 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Indices = 0;
   };
 
+  struct Reversed {
+    /// The values with the order-reversing mask applied.
+    static constexpr NestedEncodingIdentifier Values = 0;
+  };
+
   struct SharedDictionary {
     static constexpr NestedEncodingIdentifier Indices = 0;
   };
@@ -119,6 +124,15 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Offsets = 2;
   };
 
+  struct BlockBitPackingV2 {
+    // Nested per-block metadata sub-streams for BlockBitPackingV2: the
+    // per-block baselines, the per-block bit widths, and the ascending
+    // per-block data offsets.
+    static constexpr NestedEncodingIdentifier Baselines = 0;
+    static constexpr NestedEncodingIdentifier BitWidths = 1;
+    static constexpr NestedEncodingIdentifier Offsets = 2;
+  };
+
   struct For {
     static constexpr NestedEncodingIdentifier BitWidths = 0;
     static constexpr NestedEncodingIdentifier References = 1;
@@ -127,10 +141,9 @@ struct EncodingIdentifiers {
 
   struct PartitionedEliasFano {
     // Nested sub-streams for PartitionedEliasFano: the first row and the first
-    // value of each partition, and the first partition of each group.
+    // value of each partition.
     static constexpr NestedEncodingIdentifier PartitionOffsets = 0;
     static constexpr NestedEncodingIdentifier PartitionBases = 1;
-    static constexpr NestedEncodingIdentifier PartitionGroupOffsets = 2;
   };
 
   struct Fsst {

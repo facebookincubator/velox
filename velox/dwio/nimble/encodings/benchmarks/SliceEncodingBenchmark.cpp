@@ -18,7 +18,7 @@
 #include "folly/Benchmark.h"
 #include "folly/init/Init.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
@@ -26,11 +26,14 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 
+#include <algorithm>
 #include <iostream>
 #include <limits>
 
@@ -164,6 +167,32 @@ Vector<uint32_t> makePforUint32(uint32_t n = kNumElements) {
   return data;
 }
 
+Vector<uint32_t> makePartitionedEliasFanoUint32(uint32_t n = kNumElements) {
+  auto& pool = benchmarkPool();
+  Vector<uint32_t> data{pool.get()};
+  data.reserve(n);
+  while (data.size() < n) {
+    // Ten dense partitions merge into one group; the sparse partition forms
+    // another. A slice therefore trims its edge groups and copies whole groups
+    // between them.
+    for (uint32_t run = 0; run < 10 && data.size() < n; ++run) {
+      for (uint32_t value = 0; value < 100 && data.size() < n; ++value) {
+        data.push_back(run + value);
+      }
+    }
+    for (uint32_t value = 0; value < 100 && data.size() < n; ++value) {
+      data.push_back(value * 10'000'000);
+    }
+  }
+  return data;
+}
+
+Vector<uint32_t> makeDecreasingUint32(uint32_t n = kNumElements) {
+  auto data = makeIncreasing<uint32_t>(n);
+  std::reverse(data.begin(), data.end());
+  return data;
+}
+
 Vector<std::string_view> makeFsstStrings(uint32_t n = kNumElements) {
   static std::vector<std::string> storage;
   if (storage.size() != n) {
@@ -291,10 +320,22 @@ SLICE_BENCHMARKS(
     makeNarrow<uint32_t>(12));
 SLICE_BENCHMARKS(
     BlockBitPackingUint32,
-    BlockBitPackingEncoding<uint32_t>,
+    BlockBitPackingV2Encoding<uint32_t>,
     uint32_t,
-    EncodingType::BlockBitPacking,
+    EncodingType::BlockBitPackingV2,
     makeIncreasing<uint32_t>());
+SLICE_BENCHMARKS(
+    PartitionedEliasFanoUint32,
+    PartitionedEliasFanoEncoding<uint32_t>,
+    uint32_t,
+    EncodingType::PartitionedEliasFano,
+    makePartitionedEliasFanoUint32());
+SLICE_BENCHMARKS(
+    ReversedUint32,
+    ReversedEncoding<uint32_t>,
+    uint32_t,
+    EncodingType::Reversed,
+    makeDecreasingUint32());
 SLICE_BENCHMARKS(
     PFORUint32,
     PFOREncoding<uint32_t>,
@@ -348,8 +389,8 @@ BENCHMARK(Slice_BlockBitPackingUint32PartialBlock, iters) {
   std::string encoded;
   BENCHMARK_SUSPEND {
     const auto data = makeIncreasing<uint32_t>();
-    encoded = encodeData<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking, data);
+    encoded = encodeData<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2, data);
   }
   sliceBenchmark(
       encoded, kPartialBlockSliceOffset, kPartialBlockSliceLength, iters);
@@ -358,12 +399,12 @@ BENCHMARK_RELATIVE(MaterializeEncode_BlockBitPackingUint32PartialBlock, iters) {
   std::string encoded;
   BENCHMARK_SUSPEND {
     const auto data = makeIncreasing<uint32_t>();
-    encoded = encodeData<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking, data);
+    encoded = encodeData<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2, data);
   }
-  materializeEncodeBenchmark<BlockBitPackingEncoding<uint32_t>, uint32_t>(
+  materializeEncodeBenchmark<BlockBitPackingV2Encoding<uint32_t>, uint32_t>(
       encoded,
-      EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       kPartialBlockSliceOffset,
       kPartialBlockSliceLength,
       iters);
@@ -412,10 +453,16 @@ int main(int argc, char** argv) {
         "FixedBitWidthUint32",
         EncodingType::FixedBitWidth,
         makeNarrow<uint32_t>(12));
-    printSize<BlockBitPackingEncoding<uint32_t>>(
+    printSize<BlockBitPackingV2Encoding<uint32_t>>(
         "BlockBitPackingUint32",
-        EncodingType::BlockBitPacking,
+        EncodingType::BlockBitPackingV2,
         makeIncreasing<uint32_t>());
+    printSize<PartitionedEliasFanoEncoding<uint32_t>>(
+        "PartitionedEliasFanoUint32",
+        EncodingType::PartitionedEliasFano,
+        makePartitionedEliasFanoUint32());
+    printSize<ReversedEncoding<uint32_t>>(
+        "ReversedUint32", EncodingType::Reversed, makeDecreasingUint32());
     printSize<PFOREncoding<uint32_t>>(
         "PFORUint32", EncodingType::PFOR, makePforUint32());
     printSize<SimdForBitpackEncoding<uint32_t>>(

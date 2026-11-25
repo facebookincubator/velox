@@ -48,7 +48,7 @@ IoStatistics
 
 FileDataSource
 
-velox/connectors/hive/FileDataSource.cpp:381
+velox/connectors/common/FileDataSource.cpp:381
 
 dataIoStats\_ = make_shared < IoStatistics > () — for column data IO metadataIoStats\_ = make_shared < IoStatistics > () — for footer/metadata IO
 

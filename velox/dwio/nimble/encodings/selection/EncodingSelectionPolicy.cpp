@@ -82,6 +82,22 @@ ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors() {
   };
 }
 
+/* static */ std::vector<std::pair<EncodingType, float>>
+ManualEncodingSelectionPolicyFactory::metadataEncodingReadFactors() {
+  return {
+      {EncodingType::Constant, 1.0},
+      {EncodingType::Trivial, 1.0},
+      {EncodingType::FixedBitWidth, 1.0},
+      {EncodingType::Dictionary, 1.0},
+  };
+}
+
+/* static */ ManualEncodingSelectionPolicyFactory
+ManualEncodingSelectionPolicyFactory::createForMetadata() {
+  return ManualEncodingSelectionPolicyFactory{
+      metadataEncodingReadFactors(), /*compressionOptions=*/std::nullopt};
+}
+
 /* static */ std::vector<std::pair<nimble::EncodingType, float>>
 ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
     const std::string& readFactorsConfig) {
@@ -219,11 +235,14 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
       EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
       EncodingType::PartitionedEliasFano,
+      EncodingType::Sequence,
       EncodingType::Fsst,
       EncodingType::Huffman,
+      EncodingType::Reversed,
   };
 }
 

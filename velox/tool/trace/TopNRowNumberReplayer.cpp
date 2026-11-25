@@ -41,6 +41,7 @@ core::PlanNodePtr TopNRowNumberReplayer::createPlanNode(
           ? std::make_optional(topNRowNumberNode->outputType()->names().back())
           : std::nullopt,
       topNRowNumberNode->limit(),
+      topNRowNumberNode->isPartial(),
       source);
 }
 } // namespace facebook::velox::tool::trace

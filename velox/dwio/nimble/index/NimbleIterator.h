@@ -55,14 +55,14 @@ class NimbleIterator {
   /// encoded cluster-index key per row of the stripe. The decoder writes the
   /// bytes of the entries into 'keyStorage' and 'valueStorage', and sets
   /// 'keys' and 'values', which view those storages, to the entries. The
-  /// iterator releases 'rows' after the call, so a decoder whose entries refer
-  /// to 'rows' ties them to a storage, for example with an IOBuf whose free
-  /// function holds them. A non-empty input must produce at least one entry.
-  /// When the iterator prefetches, it calls the decoder on threads of the
-  /// prefetch executor, for several stripes at a time, so a decoder must be
-  /// thread-safe. The prefetch keeps a copy of the decoder until it stops,
-  /// which can be after the iterator is destroyed unless reset() ran first, so
-  /// a decoder must not refer to state that ends before that.
+  /// get iterator keeps 'rows' after the call and decodes the next rows into
+  /// them when nothing else holds them. A scan releases 'rows' after this call.
+  /// A decoder whose entries refer to 'rows' must hold them, for example with
+  /// an IOBuf whose free function holds them. This also makes a get iterator
+  /// decode the next rows into a new vector. reset() releases retained rows.
+  /// A non-empty input must produce at least one entry.
+  /// The iterator calls the decoder on the thread consuming the iterator.
+  /// I/O prefetch does not call the decoder.
   using EntryDecoder = std::function<void(
       const velox::RowVectorPtr& rows,
       index::KeyCursor& keyCursor,
@@ -73,19 +73,26 @@ class NimbleIterator {
 
   /// Controls stripe prefetch for an index iterator.
   struct Options {
-    /// Executor used to project later stripes ahead of the consumer. The
-    /// iterator also decodes the prefetched stripes into entries on it, so that
-    /// the stripe is ready when the consumer reaches it.
+    /// Executor used to load projected encoded streams ahead of the consumer.
+    /// Decoding and entry conversion run on the consumer thread. Also runs the
+    /// field decode tasks of a stripe when maxDecodeParallelism enables them.
     /// Must accept task submissions while its keep-alive token is held.
     /// Prefetch is disabled when the executor is empty or the stripe limit is
     /// zero.
     folly::Executor::KeepAlive<> prefetchExecutor{};
 
-    /// Maximum stripe slots reserved by queued or loading prefetch batches.
-    /// Batches target half this limit, rounded down, with a minimum of one
-    /// stripe. Reservations are held until the batch's last stripe is consumed.
-    /// Zero disables prefetch.
+    /// Maximum stripe slots reserved by queued or running I/O prefetch batches.
+    /// Batches target this limit divided by numPrefetchBatches, rounded down,
+    /// with a minimum of one stripe. Reservations are held until the batch's
+    /// last stripe is dequeued. Zero disables prefetch.
     uint32_t maxPrefetchStripes{1};
+
+    /// Number of batches that the stripe limit is split into, each loaded in
+    /// one read. With two, the next batch loads while the consumer reads the
+    /// current one. With one, each read loads the whole limit, for the fewest
+    /// reads, and the next batch loads after the consumer takes the last
+    /// stripe of the current one. Must be positive.
+    uint32_t numPrefetchBatches{2};
 
     /// Reads the CPU and wall clocks around index lookups, plan building,
     /// stripe loads and the decoding and conversion of stripes to fill the
@@ -99,6 +106,21 @@ class NimbleIterator {
     /// stripe and benefits. A point lookup reads one row and does better
     /// without them. See Encoding::Options::cacheEncodingView.
     bool cacheEncodingView{true};
+
+    /// Serves point lookups: the row iterator keeps the stripe of its last
+    /// lookup until it decodes another stripe or resets, so that later lookups
+    /// in the stripe, in any order, decode their rows without loading the
+    /// stripe again. A get iterator does not prefetch, which would load the
+    /// stripes of a lookup ahead instead. A scan iterator decodes each stripe
+    /// once and keeps nothing.
+    bool forGet{false};
+
+    /// Maximum parallel field decode tasks within a stripe. Zero or one is
+    /// serial. Uses prefetchExecutor independently of stripe prefetch.
+    uint32_t maxDecodeParallelism{0};
+
+    /// Target minimum scalar streams per planned decode task.
+    uint32_t minStreamsPerDecodeTask{1};
   };
 
   /// Creates an iterator over the output entries that 'entryDecoder' decodes
@@ -106,6 +128,20 @@ class NimbleIterator {
   /// nextRow(), key() and value() refer to the current entry, whose key is the
   /// key that the decoder returned and not the cluster-index key. A row of the
   /// file can have any number of entries.
+  /// With Options::forGet, the iterator keeps the stripe of its last
+  /// lookup for the next lookups.
+  /// When 'projector' co-loads key streams (see
+  /// NimbleIndexProjector::create()), a seek reads the key streams that resolve
+  /// its bounds in the same load as the first stripe it selects, and each later
+  /// stripe load also reads the stripe's key stream. The keys of the rows then
+  /// decode from those bytes instead of from reads of the index. A seek of a
+  /// get iterator into the stripe that the iterator keeps loads no stripe and
+  /// resolves its bounds through the index, and the keys of the stripe's rows
+  /// decode from the key chunk that the iterator keeps with the stripe.
+  /// Otherwise a seek reads the key chunks before the stripe. After a
+  /// prefetched decode failure, reset or seek before reading entries again.
+  /// valid() only reports whether the iterator is positioned on an entry.
+  /// Requires a thread-safe pool when prefetch or parallel decoding is enabled.
   static std::unique_ptr<NimbleIterator> createRowIterator(
       std::unique_ptr<NimbleIndexProjector> projector,
       velox::memory::MemoryPool* pool,
@@ -122,16 +158,18 @@ class NimbleIterator {
     uint64_t numReadRows{0};
     /// Total rows selected for the iterator's output.
     uint64_t numOutputRows{0};
-    /// Total rows decoded into vectors. The iterator decodes the selected rows
-    /// of a stripe at once, and ahead of the consumer when it prefetches,
-    /// so the count includes the rows of prefetched stripes that the consumer
-    /// seeks or resets before reading, and a range that excludes rows keeps it
-    /// below the rows of the stripe.
+    /// Total selected rows decoded into vectors on the consumer thread.
     uint64_t numMaterializedRows{0};
     /// Total bytes retained by projected stripe streams.
     uint64_t numOutputBytes{0};
     /// Total projected stream bytes planned by NimbleIndexProjector.
     uint64_t numPlannedBytes{0};
+    /// Number of loads that read cluster index key streams with stripe
+    /// streams.
+    uint32_t numKeyStreamCoLoads{0};
+    /// Number of stripes that seeks read with key streams and then skipped,
+    /// because no selected row came from them, as when a key is missing.
+    uint32_t numSkippedStripes{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming{};
@@ -141,11 +179,11 @@ class NimbleIterator {
     velox::CpuWallTiming scanTiming{};
     /// Time spent assembling projected stripe streams.
     velox::CpuWallTiming projectionTiming{};
-    /// Time spent decoding projected streams into vectors, which an iterator
-    /// that prefetches does on the prefetch executor.
+    /// Time spent decoding projected streams into vectors on the consumer.
+    /// With parallel decoding, CPU time excludes the field decode tasks on the
+    /// prefetch executor.
     velox::CpuWallTiming decodingTiming{};
-    /// Time spent converting decoded rows into entries, which an iterator that
-    /// prefetches does on the prefetch executor.
+    /// Time spent converting decoded rows into entries on the consumer.
     velox::CpuWallTiming conversionTiming{};
   };
 
@@ -162,20 +200,20 @@ class NimbleIterator {
   /// prefetch needs to stop.
   virtual void seek(const velox::serializer::EncodedKeyBounds& bounds) = 0;
 
-  /// Positions the iterator at the rows whose key equals the encoded key, and
-  /// leaves it invalid when there are none. The rows of a key can span chunks
-  /// and stripes, so this selects the range from the key to its successor, the
-  /// key followed by a zero byte. Blocks until the prefetch of the previous
-  /// scan stops.
-  virtual void seek(std::string encodedKey) = 0;
-
   /// Positions the iterator at the first indexed row. Blocks until the
   /// prefetch of the previous scan stops.
   virtual void seekToFirst() = 0;
 
-  /// Cancels pending prefetch and invalidates the current scan. Blocks until
-  /// the prefetch stops.
+  /// Cancels pending prefetch, invalidates the current scan and releases the
+  /// stripe that the iterator keeps for later lookups. Blocks until the
+  /// prefetch stops.
   virtual void reset() = 0;
+
+  /// Turns the verification of stream checksums on or off for the next seeks,
+  /// as ReaderOptions::verifyStreamChecksums() of the projector does at
+  /// creation, so that a caller that keeps an iterator between lookups reads
+  /// each lookup with its own setting. Must be called after reset().
+  virtual void setVerifyStreamChecksums(bool verifyStreamChecksums) = 0;
 
   /// Returns whether the iterator is positioned on a selected row.
   bool valid() const {

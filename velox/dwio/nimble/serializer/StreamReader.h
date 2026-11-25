@@ -16,13 +16,16 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string_view>
 #include <vector>
 
+#include <folly/Executor.h>
 #include <folly/container/F14Map.h>
 #include <folly/coro/Task.h>
+#include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -36,26 +39,56 @@ namespace facebook::nimble {
 class EncodingView;
 class FieldReader;
 class FieldReaderFactory;
-class InMemoryChunkedStream;
+class SharedDictionaryAlphabet;
 class Type;
 
 /// Decodes selected rows from the streams of one projected Nimble type through
 /// FieldReader. Scalar leaves use Decoder's random-access EncodingView path.
-/// Requires an EncodingView for every present stream.
+/// Requires an EncodingView for the encoding of every chunk.
 class StreamReader {
  public:
+  /// Maps the index of a stream in the layout of co_read() and setStreams() to
+  /// the alphabet of its shared dictionary. The index, not a descriptor
+  /// offset, names the stream, because a projected type numbers its streams
+  /// apart from the file it was projected from.
+  using SharedDictionaryAlphabets = folly::
+      F14FastMap<uint32_t, std::shared_ptr<const SharedDictionaryAlphabet>>;
+
+  /// Configures how the reader decodes the fields of a stripe.
+  struct Options {
+    /// Runs the tasks that decode child fields in parallel. Null decodes
+    /// serially. Must outlive the reader.
+    folly::Executor* decodeExecutor{nullptr};
+
+    /// Maximum parallel decode tasks across the field reader tree. Zero or one
+    /// decodes serially.
+    uint32_t maxDecodeParallelism{0};
+
+    /// Minimum nested scalar streams per planned decode task, so that each
+    /// task has enough work to amortize scheduling it.
+    uint32_t minStreamsPerDecodeTask{1};
+
+    /// Returns true when the reader can decode child fields in parallel.
+    bool parallelDecodeEnabled() const {
+      return decodeExecutor != nullptr && maxDecodeParallelism > 1;
+    }
+  };
+
   /// Binds the projected schema and initializes its reusable reader metadata.
+  /// Decodes child fields as 'options' configure.
   StreamReader(
       std::shared_ptr<const Type> type,
       velox::memory::MemoryPool* pool,
-      Encoding::Options options);
+      Options options);
 
   ~StreamReader();
 
   /// Decodes source ranges contiguously starting at `outputOffset`.
   /// Source ranges must be non-empty, ordered by `startRow`, and disjoint.
   /// `streams` must follow the projected schema's serialization traversal
-  /// order and contain one encoded chunk per present stream.
+  /// order. A present stream can hold several chunks. `options` configure the
+  /// encodings of the chunks as in setStreams(). Binds no shared dictionary
+  /// alphabets: read streams encoded with them through setStreams().
   /// String outputs retain backing buffers across calls so values written by
   /// earlier calls remain valid until the assembled output is released.
   /// Inputs and output must remain valid until the returned task completes.
@@ -63,6 +96,7 @@ class StreamReader {
       std::span<const std::string_view> streams,
       std::span<const RowRange> ranges,
       velox::vector_size_t outputOffset,
+      const Encoding::Options& options,
       velox::VectorPtr& output);
 
   /// Decodes source ranges of the stripe bound by setStreams() contiguously
@@ -75,8 +109,28 @@ class StreamReader {
 
   /// Binds one stripe's already-loaded streams for decoding. `streams` must
   /// follow the same layout as in co_read(). The stream storage must outlive
-  /// this binding.
-  void setStreams(std::span<const std::string_view> streams);
+  /// this binding. `options` configure the encodings of the chunks of this
+  /// binding only, so each stripe can decode with options of its own. The
+  /// decoders and the views of their encodings take scratch buffers from
+  /// `options.bufferPool` when it is not null. The pool must outlive this
+  /// binding, which ends with reset(), the next binding or the destruction of
+  /// the reader, and must not serve another thread until then.
+  void setStreams(
+      std::span<const std::string_view> streams,
+      const Encoding::Options& options);
+
+  /// Binds one stripe's streams as the overload above does, with the alphabets
+  /// of the streams encoded with a shared dictionary.
+  /// `alphabets` maps the index in `streams` of each such stream to its
+  /// alphabet. A file or external dictionary is the same in every stripe of a
+  /// file, while a stripe dictionary differs from stripe to stripe, so each
+  /// binding passes its own. `options.sharedDictionaryAlphabet` must be null
+  /// when `alphabets` is not empty. The views of the chunks keep the alphabets
+  /// they use, so the map need not outlive this call.
+  void setStreams(
+      std::span<const std::string_view> streams,
+      const SharedDictionaryAlphabets& alphabets,
+      const Encoding::Options& options);
 
   /// Decodes the next rows from the currently bound stripe asynchronously.
   /// Reuses uniquely owned vectors. Supplied output must match the projected
@@ -103,21 +157,39 @@ class StreamReader {
   // Initializes the schema-derived reader factory and stream offsets.
   void init();
 
-  // Binds one stripe's streams, reusing the cached reader for their
-  // stream-presence pattern when there is one. Requires one stream per
-  // projected stream.
-  void prepareRead(std::span<const std::string_view> streams);
+  // Binds one stripe's streams with 'options' and 'alphabets',
+  // reusing the cached reader for their stream-presence pattern when there is
+  // one. Requires one stream per projected stream.
+  void prepareRead(
+      std::span<const std::string_view> streams,
+      const SharedDictionaryAlphabets& alphabets,
+      const Encoding::Options& options);
 
-  // Loads the single encoded chunk of one stream. The chunk's buffers stay
-  // alive until the next reset().
-  std::string_view loadChunk(std::string_view stream);
+  // Splits one stream into the encodings of its chunks, in stream order, and
+  // stores them in loadedChunks_. Decompresses the encodings of compressed
+  // chunks into buffers that stay alive until the next reset().
+  void loadChunks(std::string_view stream);
 
   // Rebuilds the FieldReader tree over one stripe's streams in the cached
   // reader. Rebinds the decoders of the streams that stay present, creates the
   // decoders of new streams and drops those of absent streams.
-  void rebuildReader(std::span<const std::string_view> streams);
+  void rebuildReader(
+      std::span<const std::string_view> streams,
+      const SharedDictionaryAlphabets& alphabets);
 
-  // Creates the view of one encoded chunk for the decoders.
+  // Loads the chunks of 'stream', the stream at 'streamIndex' in the layout of
+  // co_read(), and runs 'bindDecoder' to bind a decoder to them. Meanwhile
+  // options_ carries the stream's alphabet in 'alphabets' if it has one, so
+  // the views that the decoder creates read SharedDictionary chunks with it.
+  // The views keep the alphabet, and options_ drops it on return, so nothing
+  // refers to the map after this call.
+  void bindStream(
+      std::string_view stream,
+      size_t streamIndex,
+      const SharedDictionaryAlphabets& alphabets,
+      const std::function<void()>& bindDecoder);
+
+  // Creates the view of the encoding of one chunk for the decoders.
   std::shared_ptr<const EncodingView> makeEncodingView(
       std::string_view encoding) const;
 
@@ -145,8 +217,12 @@ class StreamReader {
   // Owns all buffers allocated while decoding.
   velox::memory::MemoryPool* const pool_;
 
-  // Configures encoding creation and temporary buffer reuse.
-  const Encoding::Options options_;
+  // Configures the parallel decoding of child fields.
+  const Options readerOptions_;
+
+  // Configures the encodings of the bound stripe. Each binding sets it, and the
+  // decoders read it when they create the views of the chunks of the binding.
+  Encoding::Options options_;
 
   // Descriptor offsets corresponding positionally to input projection streams.
   std::vector<uint32_t> inputOffsets_;
@@ -163,8 +239,17 @@ class StreamReader {
   // i is present.
   Vector<uint8_t> cachedKey_;
 
-  // Owns outer-chunk decompression buffers referenced by decoders.
-  std::vector<std::unique_ptr<InMemoryChunkedStream>> chunkedStreams_;
+  // Keeps the decompressed bytes of compressed chunks alive until reset(),
+  // because the decoders' views point into them. Buffers from every stream of
+  // the bound stripe accumulate in load order. Nothing looks them up, so the
+  // order has no meaning.
+  std::vector<velox::BufferPtr> decompressedChunks_;
+
+  // Holds the encodings of the stream that loadChunks() split last, one per
+  // chunk in stream order, for the decoder that binds them next. Reused across
+  // calls to avoid an allocation per stream. Owns no bytes: each view points
+  // into the stream or into a buffer in decompressedChunks_.
+  std::vector<std::string_view> loadedChunks_;
 
   // Set while a stripe is bound to cachedReader_.
   bool streamsBound_{false};

@@ -180,7 +180,7 @@ class FixedDoubleHistogram {
       FixedDoubleHistogram& histogram,
       common::InputByteStream& in,
       size_t expectedSize) {
-    if (FOLLY_UNLIKELY(expectedSize < minDeserializedBufferSize())) {
+    if (expectedSize < minDeserializedBufferSize()) [[unlikely]] {
       VELOX_USER_FAIL(
           "Cannot deserialize FixedDoubleHistogram. Expected size: {}, actual size: {}",
           minDeserializedBufferSize(),

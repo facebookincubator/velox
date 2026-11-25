@@ -31,7 +31,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldId.h"
@@ -97,7 +97,7 @@ std::string makeUuid() {
 
 std::pair<std::string, std::string> IcebergFileNameGenerator::gen(
     std::optional<uint32_t> bucketId,
-    const std::shared_ptr<const HiveInsertTableHandle> insertTableHandle,
+    const HiveInsertTableHandlePtr& insertTableHandle,
     const ConnectorQueryCtx& connectorQueryCtx,
     uint32_t /* maxNumBuckets */,
     bool commitRequired) const {
@@ -143,24 +143,26 @@ IcebergInsertTableHandle::IcebergInsertTableHandle(
     WriteKind writeKind,
     std::unordered_map<std::string, ExistingDeletionVector>
         existingDeletionVectors,
-    std::shared_ptr<const FileNameGenerator> fileNameGenerator,
-    std::vector<std::string> insertedColumns)
+    FileNameGeneratorPtr fileNameGenerator,
+    std::vector<std::string> insertedColumns,
+    bool includePartitionPaths)
     : HiveInsertTableHandle(
           std::vector<HiveColumnHandlePtr>(
               inputColumns.begin(),
               inputColumns.end()),
           std::move(locationHandle),
+          HiveConfig::InsertExistingPartitionsBehavior::kError,
           tableStorageFormat,
           nullptr,
           compressionKind,
           serdeParameters,
-          nullptr,
-          false,
+          /*writeEmptyFile=*/false,
           std::move(fileNameGenerator)),
       partitionSpec_(partitionSpec),
       writeKind_(writeKind),
       existingDeletionVectors_(std::move(existingDeletionVectors)),
-      insertedColumns_(std::move(insertedColumns)) {
+      insertedColumns_(std::move(insertedColumns)),
+      includePartitionPaths_(includePartitionPaths) {
   // Data-file writes and merge writes both require the input row type to
   // have inputColumns populated (the data file sub-sink consumes them and
   // the merge sink projects them into a narrow data batch). The
@@ -417,7 +419,7 @@ IcebergDataSink::IcebergDataSink(
     if (writeDefaultValue.has_value() && isOmittedColumn) {
       writeDefaultColumns_.push_back(
           {static_cast<column_index_t>(i),
-           newConstantFromString(
+           connector::newConstantFromString(
                inputType_->childAt(i),
                writeDefaultValue.value(),
                connectorQueryCtx_->memoryPool(),
@@ -571,6 +573,23 @@ std::string IcebergDataSink::getPartitionName(uint32_t partitionId) const {
       partitionId,
       partitionIdGenerator_->partitionValues(),
       partitionKeyAsLowerCase_);
+}
+
+WriterParameters IcebergDataSink::getWriterParameters(
+    const std::optional<std::string>& partition,
+    std::optional<uint32_t> bucketId) const {
+  auto parameters = HiveDataSink::getWriterParameters(partition, bucketId);
+  if (icebergInsertTableHandle_->includePartitionPaths()) {
+    return parameters;
+  }
+  const auto& locationHandle = icebergInsertTableHandle_->locationHandle();
+  return WriterParameters{
+      parameters.updateMode(),
+      parameters.partitionName(),
+      parameters.targetFileName(),
+      locationHandle->targetPath(),
+      parameters.writeFileName(),
+      locationHandle->writePath()};
 }
 
 uint32_t IcebergDataSink::ensureWriter(const WriterId& id) {

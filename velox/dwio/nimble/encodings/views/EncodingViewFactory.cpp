@@ -19,9 +19,10 @@
 #include <array>
 
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ALPEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
-#include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/BlockBitPackingV2EncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DictionaryEncodingView.h"
@@ -35,7 +36,9 @@
 #include "velox/dwio/nimble/encodings/views/PFOREncodingView.h"
 #include "velox/dwio/nimble/encodings/views/PartitionedEliasFanoEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/RLEEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/ReversedEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SentinelEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/SequenceEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SimdForBitpackEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SparseBoolEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
@@ -128,6 +131,15 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "Dictionary encoding cannot be used for boolean data.");
+    case EncodingType::SharedDictionary:
+      if constexpr (isSharedDictionaryType<T>()) {
+        return std::make_unique<SharedDictionaryEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SharedDictionary encoding only supports integral and string data, "
+          "got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::SparseBool:
       if constexpr (std::is_same_v<T, bool>) {
         return std::make_unique<SparseBoolEncodingView>(data, pool, options);
@@ -165,6 +177,20 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "PartitionedEliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::Sequence:
+      if constexpr (isIntegralType<T>()) {
+        return std::make_unique<SequenceEncodingView<T>>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Sequence encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    case EncodingType::Reversed:
+      if constexpr (isIntegralType<T>()) {
+        return std::make_unique<ReversedEncodingView<T>>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Reversed encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::Huffman:
       if constexpr (
           isIntegralType<physicalType>() &&
@@ -191,11 +217,18 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
           TypeTraits<T>::dataType);
     case EncodingType::BlockBitPacking:
       if constexpr (isNumericType<physicalType>()) {
-        return std::make_unique<BlockBitPackingEncodingView<T>>(
+        return std::make_unique<deprecated::BlockBitPackingEncodingView<T>>(
             data, pool, options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
+    case EncodingType::BlockBitPackingV2:
+      if constexpr (isNumericType<physicalType>()) {
+        return std::make_unique<BlockBitPackingV2EncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BlockBitPackingV2 encoding should not be selected for non-numeric data types.");
     case EncodingType::SubIntSplit:
       if constexpr (
           isNumericType<physicalType>() &&
@@ -264,16 +297,20 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::ALPRD,
       EncodingType::FixedBitWidth,
       EncodingType::Dictionary,
+      EncodingType::SharedDictionary,
       EncodingType::SparseBool,
       EncodingType::RLE,
       EncodingType::FOR,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
       EncodingType::PartitionedEliasFano,
+      EncodingType::Sequence,
+      EncodingType::Reversed,
       EncodingType::Huffman,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
       EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       EncodingType::SubIntSplit,
       EncodingType::Varint,
       EncodingType::Fsst};

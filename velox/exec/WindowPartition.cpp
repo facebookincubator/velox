@@ -108,13 +108,12 @@ void WindowPartition::extractColumn(
     folly::Range<const vector_size_t*> rowNumbers,
     vector_size_t resultOffset,
     const VectorPtr& result) const {
-  RowContainer::extractColumn(
+  data_->extractColumn(
       partition_.data(),
       rowNumbers,
-      columns_[columnIndex],
-      data_->columnHasNulls(inputMapping_[columnIndex]),
-      resultOffset,
-      result);
+      inputMapping_[columnIndex],
+      result,
+      resultOffset);
 }
 
 void WindowPartition::extractColumn(
@@ -124,25 +123,24 @@ void WindowPartition::extractColumn(
     vector_size_t resultOffset,
     const VectorPtr& result) const {
   VELOX_CHECK_GE(partitionOffset, startRow_);
-  RowContainer::extractColumn(
+  data_->extractColumn(
       partition_.data() + partitionOffset - startRow_,
       numRows,
-      columns_[columnIndex],
-      data_->columnHasNulls(inputMapping_[columnIndex]),
-      resultOffset,
-      result);
+      inputMapping_[columnIndex],
+      result,
+      resultOffset);
 }
 
-void WindowPartition::extractNulls(
+vector_size_t WindowPartition::extractNulls(
     int32_t columnIndex,
     vector_size_t partitionOffset,
     vector_size_t numRows,
     const BufferPtr& nullsBuffer) const {
   VELOX_CHECK_GE(partitionOffset, startRow_);
-  RowContainer::extractNulls(
+  return data_->extractNulls(
       partition_.data() + partitionOffset - startRow_,
       numRows,
-      columns_[columnIndex],
+      inputMapping_[columnIndex],
       nullsBuffer);
 }
 
@@ -182,11 +180,10 @@ WindowPartition::extractNulls(
   auto framesSize = maxFrame - minFrame + 1;
   AlignedBuffer::reallocate<bool>(nulls, framesSize);
 
-  extractNulls(col, minFrame, framesSize, *nulls);
-  auto foundNull =
-      bits::findFirstBit((*nulls)->as<uint64_t>(), 0, framesSize) >= 0;
-  return foundNull ? std::make_optional(std::make_pair(minFrame, framesSize))
-                   : std::nullopt;
+  if (extractNulls(col, minFrame, framesSize, *nulls) == 0) {
+    return std::nullopt;
+  }
+  return std::make_pair(minFrame, framesSize);
 }
 
 bool WindowPartition::compareRowsWithSortKeys(const char* lhs, const char* rhs)
@@ -284,7 +281,7 @@ class WindowPartition::RowContainerAccessor {
   }
 
   static bool isNullAt(const char* row, RowColumn column) {
-    return RowContainer::isNullAt(row, column.nullByte(), column.nullMask());
+    return RowContainer::isNullAt(row, column);
   }
 
   const WindowPartition& partition_;

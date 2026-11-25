@@ -154,6 +154,54 @@ class VariableLengthColumnReaderTest : public ::testing::Test,
     ASSERT_EQ(0, rowReader.next(1, result));
   }
 
+  // Identifies an indices buffer without holding it, so the reader can reuse
+  // it. The capacity tells a reused buffer apart from a smaller new one that
+  // the allocator placed at the same address.
+  struct LoadedIndices {
+    const velox::Buffer* indices;
+    uint64_t capacity;
+  };
+
+  // Reads the deduplicated first column of the input lazily, in a batch of
+  // 1'000 rows and then one of 100 rows, loading it for every row or for every
+  // other row. Returns the indices of the dictionary the reader produced in
+  // each batch.
+  std::vector<LoadedIndices> readDeduplicatedLazily(
+      const RowVectorPtr& input,
+      WriterOptions writerOptions,
+      bool sparse) {
+    auto file =
+        test::createNimbleFile(*rootPool(), input, std::move(writerOptions));
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*input->type());
+    auto readers = makeReaders(input, file, scanSpec);
+    VectorPtr result = BaseVector::create(input->type(), 0, pool());
+    std::vector<LoadedIndices> loadedIndices;
+    for (const vector_size_t batchRows : {1'000, 100}) {
+      VELOX_CHECK_EQ(readers.rowReader->next(batchRows, result), batchRows);
+      const auto& column = result->asUnchecked<RowVector>()->childAt(0);
+      VELOX_CHECK(column->isLazy());
+      const BaseVector* loaded{nullptr};
+      if (sparse) {
+        std::vector<vector_size_t> rows;
+        for (vector_size_t row{0}; row < batchRows; row += 2) {
+          rows.push_back(row);
+        }
+        column->asUnchecked<LazyVector>()->load(rows, nullptr);
+        loaded = column->loadedVector();
+        VELOX_CHECK_EQ(loaded->encoding(), VectorEncoding::Simple::DICTIONARY);
+        loaded = loaded->valueVector().get();
+      } else {
+        loaded = column->loadedVector();
+      }
+      const auto* dictionary = loaded->as<DictionaryVector<ComplexType>>();
+      VELOX_CHECK_NOT_NULL(dictionary);
+      loadedIndices.push_back(
+          {dictionary->indices().get(), dictionary->indices()->capacity()});
+    }
+    return loadedIndices;
+  }
+
   const std::shared_ptr<io::IoStatistics> dataIoStats_{
       std::make_shared<io::IoStatistics>()};
   const std::shared_ptr<io::IoStatistics> metadataIoStats_{
@@ -642,6 +690,52 @@ TEST_F(VariableLengthColumnReaderTest, deduplicatedMapAllNonNullWithIsNull) {
   auto readers = makeReaders(input, file, scanSpec);
   // IS NULL matches nothing (all rows non-null): output is empty, no crash.
   validateWithFilter(*input, *readers.rowReader, 4, [](auto) { return false; });
+}
+
+TEST_F(VariableLengthColumnReaderTest, deduplicatedArrayReuseAfterFullLoad) {
+  auto input = makeRowVector({makeArrayVector<int64_t>(
+      1'100,
+      [](auto row) { return 1 + row / 4 % 3; },
+      [](auto row, auto index) { return row / 4 + index; })});
+  const auto loaded = readDeduplicatedLazily(
+      input, {.dictionaryArrayColumns = {"c0"}}, /*sparse=*/false);
+  EXPECT_EQ(loaded[1].indices, loaded[0].indices);
+  EXPECT_EQ(loaded[1].capacity, loaded[0].capacity);
+}
+
+TEST_F(VariableLengthColumnReaderTest, deduplicatedArrayReuseAfterSparseLoad) {
+  auto input = makeRowVector({makeArrayVector<int64_t>(
+      1'100,
+      [](auto row) { return 1 + row / 4 % 3; },
+      [](auto row, auto index) { return row / 4 + index; })});
+  const auto loaded = readDeduplicatedLazily(
+      input, {.dictionaryArrayColumns = {"c0"}}, /*sparse=*/true);
+  EXPECT_EQ(loaded[1].indices, loaded[0].indices);
+  EXPECT_EQ(loaded[1].capacity, loaded[0].capacity);
+}
+
+TEST_F(VariableLengthColumnReaderTest, deduplicatedMapReuseAfterFullLoad) {
+  std::vector<NullableMap<int64_t>> maps;
+  for (int64_t row{0}; row < 1'100; ++row) {
+    maps.push_back(makeNullableMap<int64_t>({{0, row / 4}, {1, row / 4 + 1}}));
+  }
+  auto input = makeRowVector({makeNullableMapVector<int64_t, int64_t>(maps)});
+  const auto loaded = readDeduplicatedLazily(
+      input, {.deduplicatedMapColumns = {"c0"}}, /*sparse=*/false);
+  EXPECT_EQ(loaded[1].indices, loaded[0].indices);
+  EXPECT_EQ(loaded[1].capacity, loaded[0].capacity);
+}
+
+TEST_F(VariableLengthColumnReaderTest, deduplicatedMapReuseAfterSparseLoad) {
+  std::vector<NullableMap<int64_t>> maps;
+  for (int64_t row{0}; row < 1'100; ++row) {
+    maps.push_back(makeNullableMap<int64_t>({{0, row / 4}, {1, row / 4 + 1}}));
+  }
+  auto input = makeRowVector({makeNullableMapVector<int64_t, int64_t>(maps)});
+  const auto loaded = readDeduplicatedLazily(
+      input, {.deduplicatedMapColumns = {"c0"}}, /*sparse=*/true);
+  EXPECT_EQ(loaded[1].indices, loaded[0].indices);
+  EXPECT_EQ(loaded[1].capacity, loaded[0].capacity);
 }
 
 } // namespace

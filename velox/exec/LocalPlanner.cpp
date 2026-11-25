@@ -281,7 +281,7 @@ OperatorSupplier makeOperatorSupplier(const core::PlanNodePtr& planNode) {
           planNode)) {
 #ifdef VELOX_ENABLE_FAISS
     return [join](int32_t operatorId, DriverCtx* ctx) {
-      return std::make_unique<VectorSearchJoinBuild>(operatorId, ctx, join);
+      return BaseVectorSearchJoinBuild::create(operatorId, ctx, join);
     };
 #else
     VELOX_UNSUPPORTED(kVectorSearchUnsupported);
@@ -673,7 +673,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
                 planNode)) {
 #ifdef VELOX_ENABLE_FAISS
       operators.push_back(
-          std::make_unique<VectorSearchJoinProbe>(
+          BaseVectorSearchJoinProbe::create(
               id, ctx.get(), vectorSearchJoinNode));
 #else
       VELOX_UNSUPPORTED(kVectorSearchUnsupported);
@@ -687,7 +687,10 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {
-      if (aggregationNode->isPreGrouped()) {
+      // Streaming aggregation does not emit the default rows of global
+      // grouping sets over empty input.
+      if (aggregationNode->isPreGrouped() &&
+          aggregationNode->globalGroupingSets().empty()) {
         operators.push_back(
             std::make_unique<StreamingAggregation>(
                 id, ctx.get(), aggregationNode));

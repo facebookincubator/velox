@@ -50,7 +50,7 @@ uint64_t BufferedOutputStream::flush() {
 
 void AppendOnlyBufferedStream::write(const char* data, size_t size) {
   while (size > 0) {
-    if (FOLLY_UNLIKELY(bufferOffset_ == bufferLength_)) {
+    if (bufferOffset_ == bufferLength_) [[unlikely]] {
       VELOX_CHECK(
           outStream_->Next(
               reinterpret_cast<void**>(&buffer_), &bufferLength_, size),

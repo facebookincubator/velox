@@ -188,7 +188,7 @@ class ArrayFlattenFunction : public exec::VectorFunction {
     for (auto i = 0, offset = state.arrayOffsets[inputRow];
          i < state.arraySizes[inputRow];
          ++i, ++offset) {
-      if (FOLLY_UNLIKELY(state.decodedInnerArray->isNullAt(offset))) {
+      if (state.decodedInnerArray->isNullAt(offset)) [[unlikely]] {
         continue;
       }
       const auto elementArrayIndex = state.decodedInnerArray->index(offset);
@@ -215,8 +215,7 @@ class ArrayFlattenFunction : public exec::VectorFunction {
     for (auto i = 0, elementArrayOffset = state.arrayOffsets[inputRow];
          i < state.arraySizes[inputRow];
          ++i, ++elementArrayOffset) {
-      if (FOLLY_UNLIKELY(
-              state.decodedInnerArray->isNullAt(elementArrayOffset))) {
+      if (state.decodedInnerArray->isNullAt(elementArrayOffset)) [[unlikely]] {
         continue;
       }
       const auto elementArrayIndex =

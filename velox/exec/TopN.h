@@ -44,7 +44,7 @@ class TopN : public Operator {
   bool isFinished() override;
 
  private:
-  const int32_t count_;
+  const int64_t count_;
 
   bool finished_ = false;
   uint32_t numRowsReturned_ = 0;

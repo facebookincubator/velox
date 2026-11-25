@@ -21,6 +21,7 @@
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 
+#include <folly/Portability.h>
 #include <folly/init/Init.h>
 
 using namespace facebook::velox::dwio::common;
@@ -400,11 +401,9 @@ TEST_F(E2EFilterTest, flatMapScalar) {
     dataSetBuilder_->makeMapStringValues(Subfield("string_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
   testWithTypes(
       kColumns,
       customize,
@@ -424,11 +423,9 @@ TEST_F(E2EFilterTest, flatMapComplex) {
     dataSetBuilder_->makeUniformMapKeys(Subfield("struct_vals"));
   };
   int numCombinations = 5;
-#if defined(__has_feature)
-#if __has_feature(thread_sanitizer) || __has_feature(__address_sanitizer__)
-  numCombinations = 1;
-#endif
-#endif
+  if (folly::kIsSanitizeAddress || folly::kIsSanitizeThread) {
+    numCombinations = 1;
+  }
 #if !defined(NDEBUG)
   numCombinations = 1;
 #endif

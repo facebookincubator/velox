@@ -12,22 +12,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# BatchReaderOSS.cpp stands in for fb/NimbleReader.cpp, which the Buck build
-# compiles instead: the batch reader depends on internal-only code.
 add_library(
   nimble_velox_reader_factory
+  FeatureSelection.cpp
+  FieldIdResolver.cpp
+  NimbleReader.cpp
   NimbleReaderFactory.cpp
-  BatchReaderOSS.cpp
+  FeatureSelection.h
+  FieldIdResolver.h
   NimbleReaderFactory.h
 )
-target_link_libraries(nimble_velox_reader_factory nimble_velox_selective velox_dwio_common)
+target_link_libraries(
+  nimble_velox_reader_factory
+  nimble_velox_selective
+  nimble_batch_reader
+  nimble_encodings
+  nimble_tablet_reader
+  nimble_velox_common
+  velox_dwio_common
+  Folly::folly
+  fmt::fmt
+)
 
 # Moved from velox/CMakeLists.txt when the nimble/velox/ folder was flattened.
 
 add_library(nimble_velox_field_reader FieldReader.cpp FieldReader.h Decoder.h)
 target_link_libraries(
   nimble_velox_field_reader
-  nimble_encodings_legacy
   nimble_velox_schema_reader
   nimble_common
   Folly::folly
@@ -54,7 +65,6 @@ target_link_libraries(
   nimble_velox_field_reader
   nimble_tablet_reader
   nimble_common
-  nimble_encodings_legacy
   velox_common_base
   Folly::folly
 )

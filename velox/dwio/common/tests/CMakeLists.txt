@@ -40,6 +40,7 @@ add_executable(
   DecoderUtilTest.cpp
   ExecutorBarrierTest.cpp
   OnDemandUnitLoaderTests.cpp
+  ParallelUnitLoaderPrefetchTest.cpp
   ParallelUnitLoaderTest.cpp
   LocalFileSinkTest.cpp
   MemorySinkTest.cpp
@@ -50,9 +51,9 @@ add_executable(
   ReadFileInputStreamTests.cpp
   ReaderTest.cpp
   RetryTests.cpp
+  RoaringBitmapViewTest.cpp
   ScanSpecTest.cpp
   SelectiveColumnReaderTest.cpp
-  SortingWriterTest.cpp
   StreamUtilTest.cpp
   BufferedInputTest.cpp
   CachedBufferedInputTest.cpp

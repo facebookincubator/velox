@@ -169,8 +169,11 @@ int main(int argc, char** argv) {
       // Requires constant index_type, metric and options arguments, which the
       // fuzzer does not generate.
       "vector_index_build",
-      // Requires a constant metric argument and cluster ids 0 to n - 1, which
-      // the fuzzer does not generate.
+      // Requires constant num_clusters and metric arguments, which the fuzzer
+      // does not generate.
+      "vector_index_train",
+      // Requires constant metric, num_clusters and dimension arguments,
+      // and cluster ids 0 to n - 1, which the fuzzer does not generate.
       "vector_index_pack",
       "reservoir_sample",
       // https://github.com/facebookincubator/velox/issues/13547

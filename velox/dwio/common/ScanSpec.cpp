@@ -17,6 +17,7 @@
 #include "velox/dwio/common/ScanSpec.h"
 
 #include "velox/core/Expressions.h"
+#include "velox/dwio/common/Reader.h"
 #include "velox/dwio/common/Statistics.h"
 
 namespace facebook::velox::common {
@@ -30,6 +31,8 @@ std::string_view ScanSpec::columnTypeString(ScanSpec::ColumnType columnType) {
       return "ROW_INDEX";
     case ScanSpec::ColumnType::kComposite:
       return "COMPOSITE";
+    case ScanSpec::ColumnType::kReadRange:
+      return "READ_RANGE";
     default:
       VELOX_UNREACHABLE(
           "Unrecognized ColumnType: {}", static_cast<int8_t>(columnType));
@@ -444,6 +447,26 @@ bool testFilter(
       break;
   }
 
+  return true;
+}
+
+bool testFilters(const ScanSpec& scanSpec, const dwio::common::Reader& reader) {
+  const auto numRows = reader.numberOfRows();
+  const auto& fileType = reader.typeWithId();
+  const auto& rowType = reader.rowType();
+  for (const auto& child : scanSpec.children()) {
+    if (child->filter() == nullptr || child->isConstant() ||
+        !rowType->containsChild(child->fieldName())) {
+      continue;
+    }
+    const auto& column = fileType->childByName(child->fieldName());
+    const auto stats = reader.columnStatistics(column->id());
+    if (stats != nullptr &&
+        !testFilter(
+            child->filter(), stats.get(), numRows.value(), column->type())) {
+      return false;
+    }
+  }
   return true;
 }
 

@@ -155,11 +155,15 @@ General Aggregate Functions
 
 .. spark:function:: first(x) -> x
 
-    Returns the first value of `x`.
+    Returns the first value of ``x``. Supported scalar types are BOOLEAN, TINYINT,
+    SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP,
+    INTERVAL DAY TO SECOND, INTERVAL YEAR TO MONTH, and UNKNOWN. VARCHAR,
+    VARBINARY, ARRAY, MAP, and ROW are also supported.
 
 .. spark:function:: first_ignore_null(x) -> x
 
-    Returns the first non-null value of `x`.
+    Returns the first non-null value of ``x``. Supports the same types as
+    :spark:func:`first`.
 
 .. spark:function:: kurtosis(x) -> double
 
@@ -169,11 +173,15 @@ General Aggregate Functions
 
 .. spark:function:: last(x) -> x
 
-    Returns the last value of `x`.
+    Returns the last value of ``x``. Supported scalar types are BOOLEAN, TINYINT,
+    SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP,
+    INTERVAL DAY TO SECOND, INTERVAL YEAR TO MONTH, and UNKNOWN. VARCHAR,
+    VARBINARY, ARRAY, MAP, and ROW are also supported.
 
 .. spark:function:: last_ignore_null(x) -> x
 
-    Returns the last non-null value of `x`.
+    Returns the last non-null value of ``x``. Supports the same types as
+    :spark:func:`last`.
 
 .. spark:function:: max(x) -> [same as x]
 

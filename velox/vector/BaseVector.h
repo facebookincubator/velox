@@ -22,7 +22,6 @@
 #include <utility>
 
 #include <fmt/format.h>
-#include <folly/Format.h>
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
 
@@ -91,6 +90,23 @@ class BaseVector {
 
   inline bool isLazy() const {
     return encoding() == VectorEncoding::Simple::LAZY;
+  }
+
+  /// Whether this vector can hold a lazy vector, itself or underneath: a lazy
+  /// vector, a dictionary, sequence or constant wrapper, or a row, whose
+  /// children may be lazy. False means it holds none; true means
+  /// isLazyNotLoaded() has to look.
+  bool mayContainLazy() const {
+    switch (encoding()) {
+      case VectorEncoding::Simple::LAZY:
+      case VectorEncoding::Simple::DICTIONARY:
+      case VectorEncoding::Simple::SEQUENCE:
+      case VectorEncoding::Simple::CONSTANT:
+      case VectorEncoding::Simple::ROW:
+        return true;
+      default:
+        return false;
+    }
   }
 
   /// Returns false if vector has no nulls. Return true if vector may have
@@ -901,10 +917,14 @@ class BaseVector {
 
   /// Creates a vector from a list of Variant values. The result is a flat
   /// vector with one element per value.
-  static VectorPtr createFromVariants(
+  template <typename T = BaseVector>
+  static std::shared_ptr<T> createFromVariants(
       const TypePtr& type,
       const std::vector<Variant>& values,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool) {
+    return std::static_pointer_cast<T>(
+        createFromVariantsInternal(type, values, pool));
+  }
 
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;
@@ -1057,6 +1077,11 @@ class BaseVector {
   std::optional<ByteCount> storageByteCount_;
 
  private:
+  static VectorPtr createFromVariantsInternal(
+      const TypePtr& type,
+      const std::vector<Variant>& values,
+      velox::memory::MemoryPool* pool);
+
   static VectorPtr createInternal(
       const TypePtr& type,
       vector_size_t size,
@@ -1117,9 +1142,16 @@ inline uint64_t BaseVector::byteSize<UnknownValue>(vector_size_t) {
   return 0;
 }
 
+namespace detail {
+bool isLazyNotLoadedImpl(const BaseVector& vector);
+} // namespace detail
+
 /// Returns true if vector is a Lazy vector, possibly wrapped, that hasn't
-/// been loaded yet.
-bool isLazyNotLoaded(const BaseVector& vector);
+/// been loaded yet. Inline, so that vectors that cannot hold a lazy vector
+/// answer without a call.
+inline bool isLazyNotLoaded(const BaseVector& vector) {
+  return vector.mayContainLazy() && detail::isLazyNotLoadedImpl(vector);
+}
 
 /// Allocates a buffer to fit at least 'size' indices and initializes them to
 /// zero.
@@ -1163,28 +1195,6 @@ OutputStream& operator<<(
 }
 
 } // namespace facebook::velox
-
-namespace folly {
-
-/// Allow VectorEncoding::Simple to be transparently used by folly::sformat.
-/// e.g: folly::sformat("type: {}", encodingType);
-template <>
-class FormatValue<facebook::velox::VectorEncoding::Simple> {
- public:
-  explicit FormatValue(const facebook::velox::VectorEncoding::Simple& type)
-      : type_(type) {}
-
-  template <typename FormatCallback>
-  void format(FormatArg& arg, FormatCallback& cb) const {
-    return format_value::formatString(
-        facebook::velox::VectorEncoding::mapSimpleToName(type_), arg, cb);
-  }
-
- private:
-  facebook::velox::VectorEncoding::Simple type_;
-};
-
-} // namespace folly
 
 template <>
 struct fmt::formatter<facebook::velox::VectorEncoding::Simple> {

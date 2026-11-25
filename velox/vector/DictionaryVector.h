@@ -143,6 +143,7 @@ class DictionaryVector : public SimpleVector<T> {
   }
 
   void setWrapInfo(BufferPtr indices) override {
+    VELOX_DCHECK_BUFFER_ALIGNED(indices, vector_size_t);
     indices_ = std::move(indices);
   }
 

@@ -417,6 +417,14 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.index.omit_key_column_storage",
     false);
 
+/* static */ Config::Entry<std::string> Config::INDEX_NAME(
+    "nimble.index.name",
+    "");
+
+/* static */ Config::Entry<std::string> Config::INDEX_PROPERTIES(
+    "nimble.index.properties",
+    "");
+
 // EXPERIMENTAL: BlockBitPacking encoding is not production-ready. Do not
 // enable for production tables without consulting the Nimble team
 // (oncall: dwios).
@@ -446,21 +454,29 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "");
 
 // Defaults match the corresponding WriterOptions fields, so an absent key
-// leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD is the
-// exception: WriterOptions holds an optional and the writer substitutes its own
-// threshold when unset, so the builder applies this only when the key is
-// present rather than defaulting it here.
+// leaves the writer exactly where it was. METADATA_COMPRESSION_THRESHOLD and
+// METADATA_FLUSH_THRESHOLD are the exception: WriterOptions holds optionals and
+// the writer substitutes its own thresholds when unset, so the builder applies
+// them only when the key is present rather than defaulting them here.
 /* static */ Config::Entry<uint32_t> Config::METADATA_COMPRESSION_THRESHOLD(
     "nimble.metadata.compression.threshold",
+    0);
+
+/* static */ Config::Entry<uint32_t> Config::METADATA_FLUSH_THRESHOLD(
+    "nimble.metadata.flush.threshold",
     0);
 
 /* static */ Config::Entry<std::string> Config::STRIPE_GROUP_ENCODING_LAYOUT(
     "nimble.stripe_group.encoding_layout",
     "raw");
 
+/* static */ Config::Entry<bool> Config::STRIPE_GROUP_SPARSE_LAYOUT(
+    "nimble.stripe_group.sparse_layout",
+    false);
+
 /* static */ Config::Entry<double> Config::CHUNK_STATS_MIN_AVG_CHUNKS(
     "nimble.chunk.stats.min_avg_chunks",
-    2);
+    0);
 
 /* static */ Config::Entry<uint32_t> Config::MAX_ENCODE_PARALLELISM(
     "nimble.encoding.max_parallelism",
@@ -482,6 +498,24 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 /* static */ Config::Entry<bool> Config::FIXED_BIT_WIDTH_USE_EXACT_BITS(
     "nimble.fixedbitwidth.use_exact_bits",
     false);
+
+/* static */ Config::Entry<bool> Config::SORT_DICTIONARY_ALPHABET(
+    "nimble.dictionary.sort_alphabet",
+    false);
+
+/* static */ Config::Entry<bool> Config::FIXED_BIT_WIDTH_TYPED_LANES(
+    "nimble.fixedbitwidth.typed_lanes",
+    false);
+
+/* static */ Config::Entry<uint64_t>
+    Config::FIXED_BIT_WIDTH_TYPED_LANES_MIN_VALUES(
+        "nimble.fixedbitwidth.typed_lanes_min_values",
+        256);
+
+/* static */ Config::Entry<uint32_t>
+    Config::FIXED_BIT_WIDTH_TYPED_LANES_OPENZL_LEVEL_OVERRIDE(
+        "nimble.fixedbitwidth.typed_lanes_openzl_level",
+        0);
 
 /* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(
     "nimble.flatmap.skip_constant_in_map_streams",

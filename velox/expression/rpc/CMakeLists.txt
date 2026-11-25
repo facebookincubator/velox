@@ -14,7 +14,15 @@
 
 velox_install_library_headers()
 
-velox_add_library(velox_async_rpc_function AsyncRPCFunction.cpp HEADERS AsyncRPCFunction.h)
+velox_add_library(
+  velox_async_rpc_function
+  AsyncRPCFunction.cpp
+  DeferredRpcBackend.cpp
+  HEADERS
+  AsyncRPCFunction.h
+  DeferredRpcBackend.h
+  JobReceipt.h
+)
 
 velox_link_libraries(
   velox_async_rpc_function

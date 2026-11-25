@@ -60,6 +60,15 @@ class SimpleNumericMinMaxAggregate : public SimpleNumericAggregate<T, T, T> {
     return true;
   }
 
+  bool supportsFillEmptyIntermediate() const override {
+    return true;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    result->addNulls(rows);
+  }
+
   void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -314,6 +323,15 @@ class MinMaxAggregateBase : public exec::Aggregate {
 
   bool supportsToIntermediate() const override {
     return true;
+  }
+
+  bool supportsFillEmptyIntermediate() const override {
+    return true;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    result->addNulls(rows);
   }
 
   void toIntermediate(

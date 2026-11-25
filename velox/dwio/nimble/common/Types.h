@@ -128,6 +128,8 @@ enum class EncodingType {
   // Stores integer data in fixed-size chunks (default 1024 rows), each with
   // its own baseline and bit width. Adapts per-chunk variable bit widths for
   // better compression on data with locally narrow value ranges.
+  // The first block may hold fewer rows than the block size. Superseded by
+  // BlockBitPackingV2.
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   BlockBitPacking = 15,
@@ -185,6 +187,24 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   PartitionedEliasFano = 27,
+  /// Same per-block packing as BlockBitPacking, but every block holds exactly
+  /// the block size rows except the last, so the header stores no first-block
+  /// row count.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  BlockBitPackingV2 = 28,
+  /// Stores an integer stream that forms an arithmetic progression, such as
+  /// row ids, as the value of row 0 and the step between adjacent rows.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  Sequence = 29,
+  /// Complements the order-preserving form of each integer value, so
+  /// descending values ascend, and stores the result in a nested encoding, so
+  /// that encodings that require non-decreasing values, such as EliasFano,
+  /// apply. See ReversedEncoding.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  Reversed = 30,
 };
 
 /// Serialized value of the removed BitRangeSplit encoding. It stays reserved so

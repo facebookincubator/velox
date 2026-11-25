@@ -89,7 +89,7 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
       const std::string& outputDirectory,
       const std::string& connectorId) {
     auto plan = PlanBuilder()
-                    .values({input})
+                    .values(input)
                     .tableWrite(
                         outputDirectory.data(),
                         {},
@@ -151,8 +151,8 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
 
     // Inner Join both the tables.
     core::PlanNodeId scan1, scan2;
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto table1Scan = PlanBuilder(planNodeIdGenerator, pool())
+    PlanBuilder builder(pool());
+    auto table1Scan = builder.newPlan()
                           .startTableScan()
                           .tableName("hive_table1")
                           .outputType(rowType1)
@@ -160,16 +160,15 @@ class S3MultipleEndpoints : public S3Test, public ::test::VectorTestBase {
                           .endTableScan()
                           .capturePlanNodeId(scan1)
                           .planNode();
-    auto join =
-        PlanBuilder(planNodeIdGenerator, pool())
-            .startTableScan()
-            .tableName("hive_table1")
-            .outputType(rowType2)
-            .connectorId(std::string(connectorId2))
-            .endTableScan()
-            .capturePlanNodeId(scan2)
-            .hashJoin({"b0"}, {"a0"}, table1Scan, "", {"a0", "a1", "a2", "a3"})
-            .planNode();
+    auto join = builder.newPlan()
+                    .startTableScan()
+                    .tableName("hive_table1")
+                    .outputType(rowType2)
+                    .connectorId(std::string(connectorId2))
+                    .endTableScan()
+                    .capturePlanNodeId(scan2)
+                    .hashJoin("b0 = a0", table1Scan, {"a0", "a1", "a2", "a3"})
+                    .planNode();
 
     auto split1 = createSplit(
         table1WriteInfo, outputDirectory.data(), std::string(connectorId1));

@@ -542,17 +542,17 @@ bool nonNullRowsFromSparse(
       nulls, rows, innerRows, outerRows, resultNullBytes, tailSkip);
 }
 
-// See SelectiveColumnReader::useBulkPath.
+// Checks what the visitor's types allow, then defers to
+// SelectiveColumnReader::useBulkPath for the filter, hook and null policy. The
+// reader prepares its nulls and stream layouts for the path that policy picks,
+// so a decoder must not take the fast path when the reader does not.
 template <typename Visitor, bool hasNulls>
 bool useFastPath(Visitor& visitor) {
   return (!std::is_same_v<typename Visitor::DataType, int128_t>) &&
-      process::hasSimd() && Visitor::FilterType::deterministic &&
-      Visitor::kHasBulkPath &&
-      (std::
-           is_same_v<typename Visitor::FilterType, velox::common::AlwaysTrue> ||
-       !hasNulls || !visitor.allowNulls()) &&
+      Visitor::FilterType::deterministic && Visitor::kHasBulkPath &&
       (std::is_same_v<typename Visitor::HookType, NoHook> || !hasNulls ||
-       Visitor::HookType::kSkipNulls);
+       Visitor::HookType::kSkipNulls) &&
+      visitor.reader().useBulkPath(hasNulls);
 }
 
 template <typename Visitor>

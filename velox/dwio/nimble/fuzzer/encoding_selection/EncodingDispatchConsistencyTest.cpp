@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
-// Deterministic counterpart to NimbleWriterFuzzer. Nimble has four
-// independent encoding read paths -- EncodingFactory, legacy::EncodingFactory,
-// and the DefaultEncodingTrait and legacy::LegacyEncodingTrait visitor tables
-// -- and an encoding can be writable while one of them cannot decode it.
+// Deterministic counterpart to NimbleWriterFuzzer. Nimble has two independent
+// encoding read paths -- EncodingFactory and the DefaultEncodingTrait visitor
+// table -- and an encoding can be writable while one of them cannot decode it.
 // Adding ALP and FSST to the writer's candidate set previously required
-// repairing two legacy tables by hand (D114295784).
+// repairing the dispatch tables by hand (D114295784).
 //
 // This test pins that invariant: for every (encoding, column type) pair the
-// writer accepts, all four read paths must decode the file. It covers the same
+// writer accepts, both read paths must decode the file. It covers the same
 // ground as the fuzzer but with fixed data and a fixed writer configuration, so
 // it runs in seconds, names the failing pair exactly, and cannot flake.
 
@@ -84,6 +83,9 @@ struct ColumnCase {
   // Whether the non-null values never decrease. DeltaBlockEncoding and
   // EliasFanoEncoding refuse anything else.
   bool isNonDecreasing{false};
+  // Whether the non-null values descend, with occasional repeats. Reversed
+  // can use its ordered nested encodings on this shape.
+  bool isNonIncreasing{false};
 };
 
 // The outcome a (column, encoding) pair must produce. Derived from the
@@ -128,11 +130,18 @@ WriteOutcome expectedOutcome(
       !columnCase.isNonDecreasing) {
     return WriteOutcome::kNotApplied;
   }
+  // Sequence needs an arithmetic progression. Among the cases only the
+  // single-valued columns form one, with step 0.
+  if (encodingType == EncodingType::Sequence && !columnCase.isSingleValued) {
+    return WriteOutcome::kNotApplied;
+  }
   // PartitionedEliasFano declines a stream with fewer than two ascending runs,
-  // which plain EliasFano covers. The cycling columns have two runs of at
-  // least 64 rows, the minimum average it accepts.
+  // which plain EliasFano covers.
   if (encodingType == EncodingType::PartitionedEliasFano &&
-      columnCase.isNonDecreasing) {
+      (columnCase.isNonDecreasing || columnCase.isNonIncreasing)) {
+    return WriteOutcome::kNotApplied;
+  }
+  if (encodingType == EncodingType::Reversed && !columnCase.isNonIncreasing) {
     return WriteOutcome::kNotApplied;
   }
   // "Huffman encoding requires at least two symbols" -- a single-symbol
@@ -167,6 +176,16 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
         {"c0"}, {vectorMaker_->flatVector<T>(kNumRows, [](auto row) {
           return static_cast<T>(row % 97) / static_cast<T>(100);
         })});
+  }
+
+  template <typename T>
+  VectorPtr makeDescendingColumn(bool nullable) {
+    return vectorMaker_->rowVector(
+        {"c0"},
+        {vectorMaker_->flatVector<T>(
+            kNumRows,
+            [](auto row) { return static_cast<T>(63 - (row + row / 3) / 4); },
+            [nullable](auto row) { return nullable && row % 7 == 0; })});
   }
 
   std::vector<ColumnCase> makeColumnCases() {
@@ -205,6 +224,31 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
                  [](auto row) { return static_cast<int64_t>(row / 2); })}),
          .dataType = DataType::Int64,
          .isNonDecreasing = true});
+    cases.push_back(
+        {.name = "descending_tinyint",
+         .batch = makeDescendingColumn<int8_t>(false),
+         .dataType = DataType::Int8,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "descending_smallint",
+         .batch = makeDescendingColumn<int16_t>(false),
+         .dataType = DataType::Int16,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "descending_integer",
+         .batch = makeDescendingColumn<int32_t>(false),
+         .dataType = DataType::Int32,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "descending_bigint",
+         .batch = makeDescendingColumn<int64_t>(false),
+         .dataType = DataType::Int64,
+         .isNonIncreasing = true});
+    cases.push_back(
+        {.name = "nullable_descending_bigint",
+         .batch = makeDescendingColumn<int64_t>(true),
+         .dataType = DataType::Int64,
+         .isNonIncreasing = true});
     cases.push_back(
         {.name = "real",
          .batch = makeDecimalLikeColumn<float>(),
@@ -377,6 +421,28 @@ TEST_F(
         (isIntegralOnlyEncoding(encodingType) ? 0 : kNumUnfilteredRounds) +
             stats.numForcedFilesWritten);
   }
+}
+
+TEST_F(EncodingDispatchConsistencyTest, generatedColumnsSelectReversed) {
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.maxSchemaDepth = 1;
+  options.batchSize = 64;
+  options.numBatches = 3;
+  options.randomizeWriterConfig = false;
+  NimbleWriterFuzzer fuzzer(options, *rootPool_);
+  for (int iteration = 0; iteration < 32; ++iteration) {
+    fuzzer.run();
+    const auto entry = fuzzer.coverage().find(EncodingType::Reversed);
+    if (entry != fuzzer.coverage().end() &&
+        entry->second.numChunksApplied > 0) {
+      break;
+    }
+    fuzzer.reSeed();
+  }
+  const auto entry = fuzzer.coverage().find(EncodingType::Reversed);
+  ASSERT_NE(entry, fuzzer.coverage().end());
+  EXPECT_GT(entry->second.numChunksApplied, 0U);
 }
 
 TEST_F(

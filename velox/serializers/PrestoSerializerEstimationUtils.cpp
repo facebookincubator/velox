@@ -15,6 +15,10 @@
  */
 #include "velox/serializers/PrestoSerializerEstimationUtils.h"
 
+#include <algorithm>
+#include <array>
+#include <limits>
+
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
@@ -38,10 +42,10 @@ void estimateFlattenedConstantSerializedSize(
   if (constantVector->isNullAt(0)) {
     elementSize = 1;
   } else if constexpr (std::is_same_v<T, StringView>) {
-    elementSize = constantVector->valueAt(0).size();
+    elementSize = saturatedSize(constantVector->valueAt(0).size());
   }
   for (int32_t i = 0; i < ranges.size(); ++i) {
-    *sizes[i] += elementSize * ranges[i].size;
+    addToSize(sizes[i], saturatedProduct(elementSize, ranges[i].size));
   }
 }
 
@@ -49,17 +53,20 @@ void estimateBiasedSerializedSize(
     const BaseVector* vector,
     const folly::Range<const IndexRange*>& ranges,
     vector_size_t** sizes) {
-  auto valueSize = vector->type()->cppSizeInBytes();
+  auto valueSize = static_cast<vector_size_t>(vector->type()->cppSizeInBytes());
   if (vector->mayHaveNulls()) {
     auto rawNulls = vector->rawNulls();
     for (int32_t i = 0; i < ranges.size(); ++i) {
       auto end = ranges[i].begin + ranges[i].size;
       int32_t numValues = bits::countBits(rawNulls, ranges[i].begin, end);
-      *(sizes[i]) += numValues * valueSize + bits::nbytes(ranges[i].size);
+      addToSize(
+          sizes[i],
+          static_cast<uint64_t>(numValues) * valueSize +
+              bits::nbytes(ranges[i].size));
     }
   } else {
     for (int32_t i = 0; i < ranges.size(); ++i) {
-      *(sizes[i]) += ranges[i].size * valueSize;
+      addToSize(sizes[i], saturatedProduct(ranges[i].size, valueSize));
     }
   }
 }
@@ -70,7 +77,8 @@ void estimateFlatSerializedSize(
     const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
-  const auto valueSize = vector->type()->cppSizeInBytes();
+  const auto valueSize =
+      static_cast<vector_size_t>(vector->type()->cppSizeInBytes());
   const auto numRows = rows.size();
   if (vector->mayHaveNulls()) {
     auto rawNulls = vector->rawNulls();
@@ -81,7 +89,7 @@ void estimateFlatSerializedSize(
     auto nonNulls = nonNullsHolder.get(numRows);
     const auto numNonNull = simd::indicesOfSetBits(nulls, 0, numRows, nonNulls);
     for (int32_t i = 0; i < numNonNull; ++i) {
-      *sizes[nonNulls[i]] += valueSize;
+      addToSize(sizes[nonNulls[i]], valueSize);
     }
   } else {
     VELOX_UNREACHABLE("Non null fixed width case handled before this");
@@ -99,9 +107,16 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
   auto rawValues = strings->rawValues();
   if (!rawNulls) {
     for (auto i = 0; i < rows.size(); ++i) {
-      *sizes[i] += rawValues[rows[i]].size();
+      // Add the size of the length and the string data.
+      addToSize(
+          sizes[i],
+          static_cast<uint64_t>(sizeof(int32_t) + rawValues[rows[i]].size()));
     }
   } else {
+    for (auto i = 0; i < numRows; ++i) {
+      addToSize(sizes[i], kInt32Bytes);
+    }
+
     ScratchPtr<uint64_t, 4> nullsHolder(scratch);
     ScratchPtr<int32_t, 64> nonNullsHolder(scratch);
     auto nulls = nullsHolder.get(bits::nwords(numRows));
@@ -110,7 +125,9 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
     auto numNonNull = simd::indicesOfSetBits(nulls, 0, numRows, nonNulls);
 
     for (int32_t i = 0; i < numNonNull; ++i) {
-      *sizes[nonNulls[i]] += rawValues[rows[nonNulls[i]]].size();
+      addToSize(
+          sizes[nonNulls[i]],
+          static_cast<uint64_t>(rawValues[rows[nonNulls[i]]].size()));
     }
   }
 }
@@ -152,9 +169,10 @@ void estimateFlattenedConstantSerializedSize(
 
   using T = typename KindToFlatVector<Kind>::WrapperType;
   auto* constantVector = vector->as<ConstantVector<T>>();
-  int32_t elementSize = sizeof(T);
+  int32_t elementSize = vector->valueVector() ? 0 : sizeof(T);
   if (constantVector->isNullAt(0)) {
-    elementSize = 1;
+    // A flattened null string still has a length.
+    elementSize = std::is_same_v<T, StringView> ? sizeof(int32_t) : 0;
   } else if (vector->valueVector()) {
     const auto* values = constantVector->wrappedVector();
     vector_size_t* sizePtr = &elementSize;
@@ -165,10 +183,12 @@ void estimateFlattenedConstantSerializedSize(
         &sizePtr,
         scratch);
   } else if constexpr (std::is_same_v<T, StringView>) {
-    elementSize = constantVector->valueAt(0).size();
+    // Add the size of the length and the string data.
+    elementSize =
+        saturatedSize(sizeof(int32_t) + constantVector->valueAt(0).size());
   }
   for (int32_t i = 0; i < rows.size(); ++i) {
-    *sizes[i] += elementSize;
+    addToSize(sizes[i], elementSize);
   }
 }
 
@@ -216,9 +236,238 @@ void estimateWrapperSerializedSize(
 void estimateBiasedSerializedSize(
     const BaseVector* vector,
     const folly::Range<const vector_size_t*>& rows,
+    vector_size_t** sizes) {
+  const auto valueSize =
+      static_cast<vector_size_t>(vector->type()->cppSizeInBytes());
+  if (!vector->mayHaveNulls()) {
+    for (auto i = 0; i < rows.size(); ++i) {
+      addToSize(sizes[i], valueSize);
+    }
+    return;
+  }
+
+  for (auto i = 0; i < rows.size(); ++i) {
+    if (!vector->isNullAt(rows[i])) {
+      addToSize(sizes[i], valueSize);
+    }
+  }
+}
+
+// Non-null rows of a collection and their size accumulators.
+struct ParentRows {
+  const vector_size_t* rows;
+  vector_size_t** sizes;
+  int32_t numRows;
+};
+
+// Returns the non-null 'rows' of a collection with 'rawNulls' and adds the
+// 4-byte length of each. Uses the holders only when some rows are null.
+ParentRows collectNonNullRows(
+    const folly::Range<const vector_size_t*>& rows,
+    const uint64_t* rawNulls,
+    vector_size_t** sizes,
+    ScratchPtr<vector_size_t, 64>& nonNullRowsHolder,
+    ScratchPtr<vector_size_t*, 64>& nonNullSizesHolder,
+    Scratch& scratch) {
+  const auto numRows = static_cast<int32_t>(rows.size());
+  ParentRows parents{rows.data(), sizes, numRows};
+  if (rawNulls != nullptr) {
+    ScratchPtr<uint64_t, 4> nullsHolder(scratch);
+    ScratchPtr<vector_size_t, 64> positionsHolder(scratch);
+    auto* nulls = nullsHolder.get(static_cast<int32_t>(bits::nwords(numRows)));
+    simd::gatherBits(rawNulls, rows, nulls);
+    auto* positions = positionsHolder.get(numRows);
+    const auto numNonNull =
+        simd::indicesOfSetBits(nulls, 0, numRows, positions);
+    auto* nonNullRows = nonNullRowsHolder.get(numNonNull);
+    auto* nonNullSizes = nonNullSizesHolder.get(numNonNull);
+    for (auto i = 0; i < numNonNull; ++i) {
+      nonNullRows[i] = rows[positions[i]];
+      nonNullSizes[i] = sizes[positions[i]];
+    }
+    parents = {nonNullRows, nonNullSizes, numNonNull};
+  }
+  for (auto i = 0; i < parents.numRows; ++i) {
+    addToSize(parents.sizes[i], kInt32Bytes);
+  }
+  return parents;
+}
+
+// Returns the total number of elements of 'rows' of a collection.
+int64_t countElements(
+    const vector_size_t* rows,
+    int32_t numRows,
+    const vector_size_t* rawLengths) {
+  int64_t numElements{0};
+  for (auto i = 0; i < numRows; ++i) {
+    numElements += rawLengths[rows[i]];
+  }
+  return numElements;
+}
+
+// Most element rows estimateElementsSerializedSize() expands at a time.
+constexpr int32_t kMaxElementRowsPerBatch{1 << 16};
+
+// Estimates the 'totalElements' elements of 'parents' of a collection into the
+// parents' size accumulators. A fixed-width child adds its width per non-null
+// element and a flat string child 4 bytes plus the string per element, which
+// the element ranges give without expanding them. Other children get the
+// element rows a bounded batch at a time. A batch can split a parent because
+// per-row estimates have no per-batch part.
+void estimateElementsSerializedSize(
+    const ParentRows& parents,
+    int64_t totalElements,
+    const vector_size_t* rawOffsets,
+    const vector_size_t* rawLengths,
+    std::initializer_list<const BaseVector*> children,
+    Scratch& scratch) {
+  if (totalElements == 0) {
+    return;
+  }
+  std::array<const BaseVector*, 2> expandedChildren;
+  int32_t numExpandedChildren{0};
+  for (const auto* child : children) {
+    const auto& type = *child->type();
+    if (type.isFixedWidth() && !child->mayHaveNullsRecursive()) {
+      const auto width = static_cast<vector_size_t>(type.cppSizeInBytes());
+      for (auto i = 0; i < parents.numRows; ++i) {
+        addToSize(
+            parents.sizes[i],
+            saturatedProduct(rawLengths[parents.rows[i]], width));
+      }
+    } else if (
+        type.isFixedWidth() &&
+        child->encoding() == VectorEncoding::Simple::FLAT) {
+      const auto width = static_cast<vector_size_t>(type.cppSizeInBytes());
+      const auto* rawNulls = child->rawNulls();
+      for (auto i = 0; i < parents.numRows; ++i) {
+        const auto begin = rawOffsets[parents.rows[i]];
+        const auto numNonNull = bits::countBits(
+            rawNulls, begin, begin + rawLengths[parents.rows[i]]);
+        addToSize(parents.sizes[i], saturatedProduct(numNonNull, width));
+      }
+    } else if (
+        child->encoding() == VectorEncoding::Simple::FLAT &&
+        (type.kind() == TypeKind::VARCHAR ||
+         type.kind() == TypeKind::VARBINARY)) {
+      const auto* rawValues =
+          child->asUnchecked<FlatVector<StringView>>()->rawValues();
+      const auto* rawNulls = child->rawNulls();
+      for (auto i = 0; i < parents.numRows; ++i) {
+        const auto begin = rawOffsets[parents.rows[i]];
+        const auto end = begin + rawLengths[parents.rows[i]];
+        uint64_t bytes{0};
+        for (auto row = begin; row < end; ++row) {
+          bytes += sizeof(int32_t);
+          if (rawNulls == nullptr || !bits::isBitNull(rawNulls, row)) {
+            bytes += rawValues[row].size();
+          }
+        }
+        addToSize(parents.sizes[i], bytes);
+      }
+    } else {
+      VELOX_CHECK_LT(numExpandedChildren, expandedChildren.size());
+      expandedChildren[numExpandedChildren++] = child;
+    }
+  }
+  if (numExpandedChildren == 0) {
+    return;
+  }
+
+  const auto batchSize = static_cast<int32_t>(
+      std::min<int64_t>(totalElements, kMaxElementRowsPerBatch));
+  ScratchPtr<vector_size_t> elementRowsHolder(scratch);
+  ScratchPtr<vector_size_t*> elementSizesHolder(scratch);
+  auto* elementRows = elementRowsHolder.get(batchSize);
+  auto* elementSizes = elementSizesHolder.get(batchSize);
+  int32_t numFilled{0};
+  auto estimateBatch = [&]() {
+    const folly::Range<const vector_size_t*> batch(elementRows, numFilled);
+    for (auto i = 0; i < numExpandedChildren; ++i) {
+      estimateSerializedSizeInt(
+          expandedChildren[i], batch, elementSizes, scratch);
+    }
+    numFilled = 0;
+  };
+  for (auto i = 0; i < parents.numRows; ++i) {
+    const auto begin = rawOffsets[parents.rows[i]];
+    const auto end = begin + rawLengths[parents.rows[i]];
+    for (auto elementRow = begin; elementRow < end; ++elementRow) {
+      elementRows[numFilled] = elementRow;
+      elementSizes[numFilled] = parents.sizes[i];
+      if (++numFilled == batchSize) {
+        estimateBatch();
+      }
+    }
+  }
+  if (numFilled > 0) {
+    estimateBatch();
+  }
+}
+
+// Estimates ARRAY or MAP 'rows'. Each row serializes all of its elements, and a
+// dictionary can repeat one row many times, as a join does. When per-row
+// estimates would expand more elements than the collection holds, the elements
+// of each distinct row are estimated once and added to every repeat, so the
+// work follows the elements of the distinct rows, not rows x elements. Distinct
+// rows that share elements through overlapping offsets still count them each.
+void estimateCollectionSerializedSize(
+    const BaseVector& collection,
+    const vector_size_t* rawOffsets,
+    const vector_size_t* rawLengths,
+    vector_size_t numCollectionElements,
+    std::initializer_list<const BaseVector*> children,
+    const folly::Range<const vector_size_t*>& rows,
     vector_size_t** sizes,
     Scratch& scratch) {
-  VELOX_UNSUPPORTED();
+  ScratchPtr<vector_size_t, 64> nonNullRowsHolder(scratch);
+  ScratchPtr<vector_size_t*, 64> nonNullSizesHolder(scratch);
+  const auto parents = collectNonNullRows(
+      rows,
+      collection.rawNulls(),
+      sizes,
+      nonNullRowsHolder,
+      nonNullSizesHolder,
+      scratch);
+  const auto totalElements =
+      countElements(parents.rows, parents.numRows, rawLengths);
+
+  if (totalElements <= numCollectionElements) {
+    estimateElementsSerializedSize(
+        parents, totalElements, rawOffsets, rawLengths, children, scratch);
+    return;
+  }
+
+  ScratchPtr<vector_size_t, 64> distinctRowsHolder(scratch);
+  auto* distinctRows = distinctRowsHolder.get(parents.numRows);
+  std::copy(parents.rows, parents.rows + parents.numRows, distinctRows);
+  std::sort(distinctRows, distinctRows + parents.numRows);
+  const auto numDistinct = static_cast<int32_t>(
+      std::unique(distinctRows, distinctRows + parents.numRows) - distinctRows);
+
+  ScratchPtr<vector_size_t, 64> distinctSizesHolder(scratch);
+  ScratchPtr<vector_size_t*, 64> distinctSizePointersHolder(scratch);
+  auto* distinctSizes = distinctSizesHolder.get(numDistinct);
+  auto* distinctSizePointers = distinctSizePointersHolder.get(numDistinct);
+  for (auto i = 0; i < numDistinct; ++i) {
+    distinctSizes[i] = 0;
+    distinctSizePointers[i] = &distinctSizes[i];
+  }
+  estimateElementsSerializedSize(
+      {distinctRows, distinctSizePointers, numDistinct},
+      countElements(distinctRows, numDistinct, rawLengths),
+      rawOffsets,
+      rawLengths,
+      children,
+      scratch);
+
+  for (auto i = 0; i < parents.numRows; ++i) {
+    const auto index =
+        std::lower_bound(
+            distinctRows, distinctRows + numDistinct, parents.rows[i]) -
+        distinctRows;
+    addToSize(parents.sizes[i], distinctSizes[index]);
+  }
 }
 } // namespace
 
@@ -232,7 +481,7 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
   for (int32_t i = 0; i < ranges.size(); ++i) {
     auto end = ranges[i].begin + ranges[i].size;
     int32_t numNulls = 0;
-    int32_t bytes = 0;
+    uint64_t bytes = 0;
     for (int32_t offset = ranges[i].begin; offset < end; ++offset) {
       if (rawNulls && bits::isBitNull(rawNulls, offset)) {
         ++numNulls;
@@ -240,7 +489,7 @@ void estimateFlatSerializedSizeVarcharOrVarbinary(
         bytes += sizeof(int32_t) + rawValues[offset].size();
       }
     }
-    *(sizes[i]) += bytes + bits::nbytes(numNulls) + 4 * numNulls;
+    addToSize(sizes[i], bytes + bits::nbytes(numNulls) + 4 * numNulls);
   }
 }
 
@@ -281,7 +530,7 @@ void estimateSerializedSizeInt(
         auto begin = ranges[i].begin;
         auto end = begin + ranges[i].size;
         for (auto offset = begin; offset < end; ++offset) {
-          *sizes[i] += sizeof(int32_t);
+          addToSize(sizes[i], kInt32Bytes);
           if (!vector->isNullAt(offset)) {
             childRanges.push_back(IndexRange{offset, 1});
             childSizes.push_back(sizes[i]);
@@ -376,7 +625,7 @@ void estimateWrapperSerializedSize(
         ++numNulls;
       }
     }
-    *sizes[i] += bits::nbytes(numNulls);
+    addToSize(sizes[i], static_cast<vector_size_t>(bits::nbytes(numNulls)));
   }
   estimateSerializedSizeInt(wrapped, newRanges, newSizes.data(), scratch);
 }
@@ -406,7 +655,7 @@ void expandRepeatedRanges(
         hasNull = true;
       } else {
         // Add the size of the length.
-        *sizes[i] += sizeof(int32_t);
+        addToSize(sizes[i], kInt32Bytes);
         childRanges->push_back(
             IndexRange{rawOffsets[offset], rawSizes[offset]});
         childSizes->push_back(sizes[i]);
@@ -415,7 +664,8 @@ void expandRepeatedRanges(
 
     if (hasNull) {
       // Add the size of the null bit mask.
-      *sizes[i] += bits::nbytes(ranges[i].size);
+      addToSize(
+          sizes[i], static_cast<vector_size_t>(bits::nbytes(ranges[i].size)));
     }
   }
 }
@@ -427,9 +677,10 @@ void estimateSerializedSizeInt(
     Scratch& scratch) {
   const auto numRows = rows.size();
   if (vector->type()->isFixedWidth() && !vector->mayHaveNullsRecursive()) {
-    const auto elementSize = vector->type()->cppSizeInBytes();
+    const auto elementSize =
+        static_cast<vector_size_t>(vector->type()->cppSizeInBytes());
     for (auto i = 0; i < numRows; ++i) {
-      *sizes[i] += elementSize;
+      addToSize(sizes[i], elementSize);
     }
     return;
   }
@@ -458,7 +709,7 @@ void estimateSerializedSizeInt(
       estimateWrapperSerializedSize(rows, sizes, vector, scratch);
       break;
     case VectorEncoding::Simple::BIASED:
-      estimateBiasedSerializedSize(vector, rows, sizes, scratch);
+      estimateBiasedSerializedSize(vector, rows, sizes);
       break;
     case VectorEncoding::Simple::ROW: {
       ScratchPtr<vector_size_t, 1> innerRowsHolder(scratch);
@@ -467,6 +718,9 @@ void estimateSerializedSizeInt(
       auto* innerRows = rows.data();
       auto* innerSizes = sizes;
       const auto numRows = rows.size();
+      for (auto i = 0; i < numRows; ++i) {
+        addToSize(sizes[i], kInt32Bytes);
+      }
       int32_t numInner = numRows;
       if (vector->mayHaveNulls()) {
         auto nulls = nullsHolder.get(bits::nwords(numRows));
@@ -498,54 +752,27 @@ void estimateSerializedSizeInt(
     }
     case VectorEncoding::Simple::MAP: {
       auto* mapVector = vector->asUnchecked<MapVector>();
-      ScratchPtr<IndexRange> rangeHolder(scratch);
-      ScratchPtr<vector_size_t*> sizesHolder(scratch);
-      const auto numRanges = rowsToRanges(
-          rows,
-          mapVector->rawNulls(),
+      estimateCollectionSerializedSize(
+          *mapVector,
           mapVector->rawOffsets(),
           mapVector->rawSizes(),
+          mapVector->mapKeys()->size(),
+          {mapVector->mapKeys().get(), mapVector->mapValues().get()},
+          rows,
           sizes,
-          rangeHolder,
-          &sizesHolder,
-          nullptr,
-          scratch);
-      if (numRanges == 0) {
-        return;
-      }
-      estimateSerializedSizeInt(
-          mapVector->mapKeys().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
-          sizesHolder.get(),
-          scratch);
-      estimateSerializedSizeInt(
-          mapVector->mapValues().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
-          sizesHolder.get(),
           scratch);
       break;
     }
     case VectorEncoding::Simple::ARRAY: {
       auto* arrayVector = vector->as<ArrayVector>();
-      ScratchPtr<IndexRange> rangeHolder(scratch);
-      ScratchPtr<vector_size_t*> sizesHolder(scratch);
-      const auto numRanges = rowsToRanges(
-          rows,
-          arrayVector->rawNulls(),
+      estimateCollectionSerializedSize(
+          *arrayVector,
           arrayVector->rawOffsets(),
           arrayVector->rawSizes(),
+          arrayVector->elements()->size(),
+          {arrayVector->elements().get()},
+          rows,
           sizes,
-          rangeHolder,
-          &sizesHolder,
-          nullptr,
-          scratch);
-      if (numRanges == 0) {
-        return;
-      }
-      estimateSerializedSizeInt(
-          arrayVector->elements().get(),
-          folly::Range<const IndexRange*>(rangeHolder.get(), numRanges),
-          sizesHolder.get(),
           scratch);
       break;
     }

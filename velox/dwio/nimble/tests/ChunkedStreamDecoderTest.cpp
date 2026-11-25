@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/reader/ChunkedStreamDecoder.h"
 #include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
@@ -111,7 +111,6 @@ TEST(ChunkedStreamDecoderTest, rejectsSelectedReads) {
          const std::function<void*(uint32_t)>&) {
         return std::unique_ptr<nimble::Encoding>{};
       },
-      /*stringDecoderZeroCopy=*/true,
       logger};
   const std::array<uint32_t, 1> rows{0};
   std::array<int64_t, 1> output{};
@@ -192,10 +191,9 @@ TEST(ChunkedStreamDecoderTest, remainingRowsTracksCurrentChunk) {
       [](velox::memory::MemoryPool& pool,
          std::string_view data,
          std::function<void*(uint32_t)> stringBufferFactory) {
-        return nimble::legacy::EncodingFactory().create(
+        return nimble::EncodingFactory().create(
             pool, data, std::move(stringBufferFactory));
       },
-      /*stringDecoderZeroCopy=*/false,
       /*metricsLogger=*/{}};
 
   EXPECT_EQ(decoder.remainingRows(), 3);
@@ -293,16 +291,16 @@ void test(
       *memoryPool,
       std::make_unique<nimble::InMemoryChunkedStream>(
           *memoryPool, std::move(streamLoader)),
-      optimizeStringBufferHandling ? [](velox::memory::MemoryPool& pool,
-         std::string_view data, std::function<void*(uint32_t)> stringBufferFactory) -> std::unique_ptr<nimble::Encoding> {
+      [](velox::memory::MemoryPool& pool,
+         std::string_view data,
+         std::function<void*(uint32_t)> stringBufferFactory)
+          -> std::unique_ptr<nimble::Encoding> {
         return nimble::EncodingFactory().create(
-            pool, data, std::move(stringBufferFactory), nimble::Encoding::Options{});
-      } : [](velox::memory::MemoryPool& pool,
-         std::string_view data, std::function<void*(uint32_t)> stringBufferFactory) -> std::unique_ptr<nimble::Encoding> {
-        return nimble::legacy::EncodingFactory().create(
-            pool, data, std::move(stringBufferFactory), nimble::Encoding::Options{});
+            pool,
+            data,
+            std::move(stringBufferFactory),
+            nimble::Encoding::Options{});
       },
-      optimizeStringBufferHandling,
       /* metricLogger */ {}};
 
   for (auto batchSize = 1; batchSize <= totalSize; ++batchSize) {

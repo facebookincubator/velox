@@ -18,12 +18,14 @@
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 #include <random>
 #include <span>
 #include <string_view>
 #include <type_traits>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/BitUtil.h"
@@ -32,7 +34,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
@@ -43,14 +45,31 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 using namespace facebook;
+
+namespace {
+
+// Both BlockBitPacking layouts slice the same way: a range whose boundary sits
+// inside a block keeps the boundary blocks whole and comes back wrapped.
+template <typename EncodingType, typename T>
+constexpr bool kIsBlockBitPacking =
+    std::is_same_v<
+        EncodingType,
+        nimble::deprecated::BlockBitPackingEncoding<T>> ||
+    std::is_same_v<EncodingType, nimble::BlockBitPackingV2Encoding<T>>;
+
+} // namespace
 
 class EncodingSliceTest : public ::testing::Test {
  protected:
@@ -178,6 +197,17 @@ class EncodingSliceTest : public ::testing::Test {
       }
     } else if constexpr (std::is_same_v<
                              EncodingType,
+                             nimble::SequenceEncoding<DataType>>) {
+      // A random start and step, wrapping like DataType.
+      auto value = nextIntegerValue();
+      const auto step =
+          static_cast<DataType>(std::uniform_int_distribution<uint32_t>{}(rng));
+      for (uint32_t i = 0; i < rowCount; ++i) {
+        values.push_back(value);
+        value = static_cast<DataType>(value + step);
+      }
+    } else if constexpr (std::is_same_v<
+                             EncodingType,
                              nimble::RLEEncoding<DataType>>) {
       while (values.size() < rowCount) {
         const auto value = nextIntegerValue();
@@ -209,6 +239,51 @@ class EncodingSliceTest : public ::testing::Test {
   slice(std::string_view encoded, uint32_t offset, uint32_t length) {
     return nimble::EncodingFactory::slice(
         encoded, offset, length, *buffer_, nimble::Encoding::Options{});
+  }
+
+  // Slices every range of a Varint stream of 'values' and checks that each
+  // slice keeps the source baseline, copies the source varint bytes and reads
+  // back the range.
+  template <typename T>
+  void expectVarintSlicesCopyBytes(
+      const nimble::Vector<T>& values,
+      bool useVarintRowCount) {
+    nimble::Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    const auto encoded =
+        nimble::test::Encoder<nimble::VarintEncoding<T>>::encode(
+            *buffer_, values, nimble::CompressionType::Uncompressed, options);
+    const auto baselineOffset = nimble::EncodingPrefix::serializedSize(
+        static_cast<uint32_t>(values.size()), useVarintRowCount);
+    const auto sourceBaseline = encoded.substr(baselineOffset, sizeof(T));
+    const auto sourcePayload = encoded.substr(baselineOffset + sizeof(T));
+
+    for (uint32_t offset = 0; offset < values.size(); ++offset) {
+      for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+        SCOPED_TRACE(
+            testing::Message() << "offset=" << offset << ", length=" << length);
+        const auto sliced = nimble::EncodingFactory::slice(
+            encoded, offset, length, *buffer_, options);
+
+        const auto sliceBaselineOffset =
+            nimble::EncodingPrefix::serializedSize(length, useVarintRowCount);
+        EXPECT_EQ(
+            sliced.substr(sliceBaselineOffset, sizeof(T)), sourceBaseline);
+        EXPECT_NE(
+            sourcePayload.find(sliced.substr(sliceBaselineOffset + sizeof(T))),
+            std::string_view::npos);
+
+        auto encoding = nimble::EncodingFactory{options}.create(
+            *pool_, sliced, [](uint32_t /*totalLength*/) { return nullptr; });
+        EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Varint);
+        nimble::Vector<T> output{pool_.get(), length};
+        encoding->materialize(length, output.data());
+        EXPECT_THAT(
+            std::vector<T>(output.begin(), output.end()),
+            testing::ElementsAreArray(
+                values.begin() + offset, values.begin() + offset + length));
+      }
+    }
   }
 
   template <typename T>
@@ -284,9 +359,7 @@ class EncodingSliceTest : public ::testing::Test {
         expectedEncodingType = nimble::EncodingType::Slice;
       }
     }
-    if constexpr (std::is_same_v<
-                      EncodingType,
-                      nimble::BlockBitPackingEncoding<T>>) {
+    if constexpr (kIsBlockBitPacking<EncodingType, T>) {
       // A range whose boundary sits inside a block keeps the boundary blocks
       // whole and comes back wrapped. This test's sources fit in one block, so
       // any range that isn't the full source is mid-block.
@@ -355,11 +428,13 @@ using EncodingSliceTypes = ::testing::Types<
     EncodingSliceConfig<nimble::ConstantEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::MainlyConstantEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::DeltaEncoding<uint32_t>>,
-    EncodingSliceConfig<nimble::BlockBitPackingEncoding<uint32_t>>,
+    EncodingSliceConfig<nimble::deprecated::BlockBitPackingEncoding<uint32_t>>,
+    EncodingSliceConfig<nimble::BlockBitPackingV2Encoding<uint32_t>>,
     EncodingSliceConfig<nimble::PFOREncoding<uint32_t>>,
     EncodingSliceConfig<nimble::SimdForBitpackEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::HuffmanEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::ForEncoding<uint32_t>>,
+    EncodingSliceConfig<nimble::SequenceEncoding<uint32_t>>,
     EncodingSliceConfig<nimble::ALPEncoding<double>>>;
 
 template <typename Config>
@@ -376,9 +451,7 @@ TYPED_TEST(EncodingSliceTypedTest, materializesRange) {
   // BlockBitPacking with default blockSize (1024) fits the 6-value source in
   // one block, so this mid-block range comes back wrapped in a SliceEncoding.
   auto expectedType = nimble::test::Encoder<EncodingType>::encodingType();
-  if constexpr (std::is_same_v<
-                    EncodingType,
-                    nimble::BlockBitPackingEncoding<uint32_t>>) {
+  if constexpr (kIsBlockBitPacking<EncodingType, uint32_t>) {
     expectedType = nimble::EncodingType::Slice;
   }
   this->template expectSliceMaterializes<EncodingType>(
@@ -633,6 +706,93 @@ TEST_F(EncodingSliceTest, materializesFixedBitWidthRangeWithoutWrapper) {
   EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
 }
 
+TEST_F(EncodingSliceTest, slicesVarintByCopyingBytes) {
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(
+        testing::Message() << "useVarintRowCount=" << useVarintRowCount);
+    expectVarintSlicesCopyBytes(
+        makeVector<uint64_t>(
+            {1'000, 1, 300, 70'000, 5'000'000'000, 2, 300, 301}),
+        useVarintRowCount);
+    expectVarintSlicesCopyBytes(
+        makeVector<int32_t>(
+            {-1'000, 5, -2'000'000'000, 7, 2'000'000'000, 0, -1}),
+        useVarintRowCount);
+    expectVarintSlicesCopyBytes(
+        makeVector<float>({1.5F, -2.0F, 1e10F, 0.0F, 3.25F, -1e-3F}),
+        useVarintRowCount);
+  }
+}
+
+TEST_F(EncodingSliceTest, slicesVarintAcrossRowCountPrefixBoundary) {
+  constexpr uint32_t kRowCount{130};
+  nimble::Vector<uint64_t> values{pool_.get(), kRowCount};
+  std::iota(values.begin(), values.end(), uint64_t{0});
+
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(useVarintRowCount);
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = useVarintRowCount,
+    };
+    const auto encoded =
+        nimble::test::Encoder<nimble::VarintEncoding<uint64_t>>::encode(
+            *buffer_, values, nimble::CompressionType::Uncompressed, options);
+    const std::vector<char> storage{encoded.begin(), encoded.end()};
+    const std::string_view source{storage.data(), storage.size()};
+
+    for (const uint32_t count : {127, 128}) {
+      SCOPED_TRACE(count);
+      const auto sliced = nimble::EncodingFactory::slice(
+          source, /*offset=*/1, count, *buffer_, options);
+      auto encoding = nimble::EncodingFactory{options}.create(
+          *pool_, sliced, [](uint32_t /*totalLength*/) { return nullptr; });
+      EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Varint);
+      EXPECT_EQ(encoding->rowCount(), count);
+      std::vector<uint64_t> output(count);
+      encoding->materialize(count, output.data());
+      EXPECT_THAT(
+          output,
+          testing::ElementsAreArray(
+              values.begin() + 1, values.begin() + 1 + count));
+    }
+  }
+}
+
+TEST_F(EncodingSliceTest, rejectsVarintSliceOfTruncatedData) {
+  const auto values =
+      makeVector<uint64_t>({1'000, 1, 300, 70'000, 5'000'000'000, 2, 300, 301});
+  const auto encoded =
+      nimble::test::Encoder<nimble::VarintEncoding<uint64_t>>::encode(
+          *buffer_, values);
+  const auto headerSize = nimble::EncodingPrefix::serializedSize(
+                              static_cast<uint32_t>(values.size()),
+                              /*useVarint=*/false) +
+      sizeof(uint64_t);
+  {
+    const auto truncated = encoded.substr(0, headerSize + 3);
+    NIMBLE_ASSERT_FILE_THROW(
+        slice(truncated, /*offset=*/5, /*length=*/3),
+        "Varint slice range exceeds the encoded data.");
+  }
+  {
+    const std::vector<char> truncated{
+        encoded.begin(), encoded.begin() + headerSize + 1};
+    const std::string_view truncatedView{truncated.data(), truncated.size()};
+    NIMBLE_ASSERT_FILE_THROW(
+        slice(truncatedView, /*offset=*/0, /*length=*/1),
+        "Varint skip runs past the end of the encoding.");
+  }
+  {
+    std::vector<char> truncated(headerSize + 8, static_cast<char>(0x80));
+    std::copy_n(encoded.begin(), headerSize, truncated.begin());
+    const std::string_view truncatedView{truncated.data(), truncated.size()};
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::VarintEncoding<uint64_t>::slice(
+            truncatedView, /*offset=*/0, /*length=*/8, *buffer_, {}),
+        "Varint skip runs past the end of the encoding.");
+  }
+}
+
 TEST_F(EncodingSliceTest, materializesCompressedTrivialRangeWithoutWrapper) {
   nimble::Vector<uint32_t> values{pool_.get()};
   values.resize(1024);
@@ -687,6 +847,96 @@ TEST_F(EncodingSliceTest, materializesNativeSliceForNullableEncoding) {
 
   const std::vector<uint32_t> expected{12, 13, 14};
   EXPECT_EQ(std::vector<uint32_t>(output.begin(), output.end()), expected);
+}
+
+TEST_F(EncodingSliceTest, slicesWithValueDelta) {
+  const auto sliceWithDelta =
+      [&](std::string_view encoded, uint32_t offset, uint32_t length) {
+        auto encoding = createEncoding(
+            nimble::EncodingFactory::slice(
+                encoded,
+                offset,
+                length,
+                /*valueDelta=*/-10,
+                *buffer_,
+                nimble::Encoding::Options{}));
+        std::vector<int32_t> output(length);
+        encoding->materialize(length, output.data());
+        return output;
+      };
+
+  // FixedBitWidth folds the delta into its baseline.
+  {
+    const auto values = makeVector<int32_t>({10, 11, 12, 13, 14, 15});
+    const auto encoded =
+        nimble::test::Encoder<nimble::FixedBitWidthEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/2, /*length=*/3),
+        (std::vector<int32_t>{2, 3, 4}));
+  }
+
+  // Sequence folds the delta into its base. Rows 2 to 4 start at 16, so the
+  // slice stores base 6 and keeps step 3.
+  {
+    const auto values = makeVector<int32_t>({10, 13, 16, 19, 22, 25});
+    const auto encoded =
+        nimble::test::Encoder<nimble::SequenceEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/2, /*length=*/3),
+        (std::vector<int32_t>{6, 9, 12}));
+
+    const nimble::SliceEncoding<int32_t> wrapper{
+        *pool_,
+        nimble::EncodingFactory::slice(
+            encoded,
+            /*offset=*/2,
+            /*length=*/3,
+            /*valueDelta=*/-10,
+            *buffer_,
+            nimble::Encoding::Options{})};
+    EXPECT_EQ(wrapper.valueDelta(), 0);
+    const auto inner = wrapper.innerEncoding();
+    ASSERT_EQ(
+        nimble::EncodingPrefix::encodingType(inner),
+        nimble::EncodingType::Sequence);
+    const auto dataOffset =
+        nimble::EncodingPrefix::prefixSize(inner, /*useVarint=*/false);
+    EXPECT_EQ(
+        nimble::SequenceEncoding<int32_t>::readBase(inner, dataOffset),
+        uint32_t{6});
+    EXPECT_EQ(
+        nimble::SequenceEncoding<int32_t>::readStep(inner, dataOffset),
+        uint32_t{3});
+  }
+
+  // RLE cannot absorb the delta, so the reader applies it.
+  {
+    const auto values = makeVector<int32_t>({10, 10, 11, 11, 12, 12});
+    const auto encoded =
+        nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
+            *buffer_, values);
+    EXPECT_EQ(
+        sliceWithDelta(encoded, /*offset=*/1, /*length=*/4),
+        (std::vector<int32_t>{0, 1, 1, 2}));
+  }
+
+  {
+    const auto values = makeVector<double>({1.5, 2.5, 3.5});
+    const auto encoded =
+        nimble::test::Encoder<nimble::TrivialEncoding<double>>::encode(
+            *buffer_, values);
+    NIMBLE_ASSERT_THROW(
+        nimble::EncodingFactory::slice(
+            encoded,
+            /*offset=*/0,
+            /*length=*/2,
+            /*valueDelta=*/-1,
+            *buffer_,
+            nimble::Encoding::Options{}),
+        "A value delta requires an integer stream");
+  }
 }
 
 TEST_F(EncodingSliceTest, rejectsOutOfRangeSlice) {

@@ -21,6 +21,16 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_topn_row_number_benchmark TopNRowNumberBenchmark.cpp)
+
+target_link_libraries(
+  velox_topn_row_number_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
 add_executable(velox_filter_project_benchmark FilterProjectBenchmark.cpp)
 
 target_link_libraries(
@@ -75,6 +85,15 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
+add_executable(velox_row_container_compare_benchmark RowContainerCompareBenchmark.cpp)
+
+target_link_libraries(
+  velox_row_container_compare_benchmark
+  velox_exec
+  Folly::folly
+  Folly::follybenchmark
+)
+
 add_executable(velox_hash_benchmark HashTableBenchmark.cpp)
 
 target_link_libraries(
@@ -111,12 +130,24 @@ target_link_libraries(
   Folly::follybenchmark
 )
 
-add_executable(velox_hash_join_right_semi_benchmark HashJoinRightSemiBenchmark.cpp)
+add_library(velox_hash_join_benchmark_base HashJoinBenchmarkBase.cpp)
+velox_add_test_headers(velox_hash_join_benchmark_base HashJoinBenchmarkBase.h)
 
 target_link_libraries(
-  velox_hash_join_right_semi_benchmark
+  velox_hash_join_benchmark_base
   velox_exec
   velox_exec_test_lib
+  velox_vector_test_lib
+  Folly::follybenchmark
+)
+
+add_executable(velox_hash_join_semi_anti_benchmark HashJoinSemiAntiBenchmark.cpp)
+
+target_link_libraries(
+  velox_hash_join_semi_anti_benchmark
+  velox_exec
+  velox_exec_test_lib
+  velox_hash_join_benchmark_base
   velox_vector_test_lib
   Folly::follybenchmark
 )
@@ -127,6 +158,7 @@ target_link_libraries(
   velox_hash_join_left_benchmark
   velox_exec
   velox_exec_test_lib
+  velox_hash_join_benchmark_base
   velox_vector_test_lib
   Folly::follybenchmark
 )

@@ -104,11 +104,10 @@ TYPED_TEST_SUITE(ApproxMostFrequentTest, ValueTypes);
 TYPED_TEST(ApproxMostFrequentTest, global) {
   auto values = this->makeValues();
   auto expected = this->makeGlobalExpected();
-  this->testAggregations(
-      {this->makeRowVector({values})},
-      {},
-      {"approx_most_frequent(3, c0, 31)"},
-      {this->makeRowVector({expected})});
+  AggregationTestBase::AggregationTester(*this)
+      .inputs(this->makeRowVector({values}))
+      .aggregates({"approx_most_frequent(3, c0, 31)"})
+      .assertResults(this->makeRowVector({expected}));
 }
 
 TYPED_TEST(ApproxMostFrequentTest, grouped) {
@@ -116,11 +115,11 @@ TYPED_TEST(ApproxMostFrequentTest, grouped) {
   auto keys = this->makeKeys();
   auto groupKeys = this->makeGroupKeys();
   auto expected = this->makeGroupedExpected();
-  this->testAggregations(
-      {this->makeRowVector({keys, values})},
-      {"c0"},
-      {"approx_most_frequent(3, c1, 11)"},
-      {this->makeRowVector({groupKeys, expected})});
+  AggregationTestBase::AggregationTester(*this)
+      .inputs(this->makeRowVector({keys, values}))
+      .groupBy({"c0"})
+      .aggregates({"approx_most_frequent(3, c1, 11)"})
+      .assertResults(this->makeRowVector({groupKeys, expected}));
 }
 
 TYPED_TEST(ApproxMostFrequentTest, emptyGroup) {
@@ -128,11 +127,11 @@ TYPED_TEST(ApproxMostFrequentTest, emptyGroup) {
   auto keys = this->makeKeys();
   auto groupKeys = this->makeGroupKeys();
   auto expected = this->makeEmptyGroupExpected();
-  this->testAggregations(
-      {this->makeRowVector({keys, values})},
-      {"c0"},
-      {"approx_most_frequent(3, c1, 11)"},
-      {this->makeRowVector({groupKeys, expected})});
+  AggregationTestBase::AggregationTester(*this)
+      .inputs(this->makeRowVector({keys, values}))
+      .groupBy({"c0"})
+      .aggregates({"approx_most_frequent(3, c1, 11)"})
+      .assertResults(this->makeRowVector({groupKeys, expected}));
 }
 
 using ApproxMostFrequentTestInt = ApproxMostFrequentTest<int>;
@@ -179,8 +178,10 @@ TEST_F(ApproxMostFrequentTestStringView, stringLifeCycle) {
             {StringView(s[29]), 118},
             {StringView(s[28]), 114}}}),
   });
-  testReadFromFiles(
-      {rows, rows}, {}, {"approx_most_frequent(3, c0, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs({rows, rows})
+      .aggregates({"approx_most_frequent(3, c0, 31)"})
+      .assertResults(expected);
 }
 
 TEST_F(ApproxMostFrequentTestStringView, globalAggregationWithCompaction) {
@@ -323,8 +324,10 @@ TEST_F(ApproxMostFrequentTestBoolean, basic) {
       }),
   });
 
-  testAggregations(
-      {input}, {}, {"approx_most_frequent(3, c1, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"approx_most_frequent(3, c1, 31)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int32_t>({0, 1}),
@@ -334,13 +337,18 @@ TEST_F(ApproxMostFrequentTestBoolean, basic) {
       }),
   });
 
-  testAggregations(
-      {input}, {"c0"}, {"approx_most_frequent(3, c1, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"approx_most_frequent(3, c1, 31)"})
+      .assertResults(expected);
 
   // All 'true'.
   expected = makeRowVector({makeMapVector<bool, int64_t>({{{true, 8}}})});
-  testAggregations(
-      {input}, {}, {"approx_most_frequent(3, c2, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"approx_most_frequent(3, c2, 31)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int32_t>({0, 1}),
@@ -350,13 +358,18 @@ TEST_F(ApproxMostFrequentTestBoolean, basic) {
       }),
   });
 
-  testAggregations(
-      {input}, {"c0"}, {"approx_most_frequent(3, c2, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"approx_most_frequent(3, c2, 31)"})
+      .assertResults(expected);
 
   // All 'false'.
   expected = makeRowVector({makeMapVector<bool, int64_t>({{{false, 8}}})});
-  testAggregations(
-      {input}, {}, {"approx_most_frequent(3, c3, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"approx_most_frequent(3, c3, 31)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int32_t>({0, 1}),
@@ -366,15 +379,20 @@ TEST_F(ApproxMostFrequentTestBoolean, basic) {
       }),
   });
 
-  testAggregations(
-      {input}, {"c0"}, {"approx_most_frequent(3, c3, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"approx_most_frequent(3, c3, 31)"})
+      .assertResults(expected);
 
   // All nulls.
   expected = makeRowVector({
       BaseVector::createNullConstant(MAP(BOOLEAN(), BIGINT()), 1, pool()),
   });
-  testAggregations(
-      {input}, {}, {"approx_most_frequent(3, c4, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"approx_most_frequent(3, c4, 31)"})
+      .assertResults(expected);
 
   // Some nulls.
   expected = makeRowVector({
@@ -383,8 +401,10 @@ TEST_F(ApproxMostFrequentTestBoolean, basic) {
       }),
   });
 
-  testAggregations(
-      {input}, {}, {"approx_most_frequent(3, c5, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"approx_most_frequent(3, c5, 31)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int32_t>({0, 1}),
@@ -394,8 +414,11 @@ TEST_F(ApproxMostFrequentTestBoolean, basic) {
       }),
   });
 
-  testAggregations(
-      {input}, {"c0"}, {"approx_most_frequent(3, c5, 31)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"approx_most_frequent(3, c5, 31)"})
+      .assertResults(expected);
 }
 
 class ApproxMostFrequentTestJson : public AggregationTestBase {
@@ -424,11 +447,10 @@ TEST_F(ApproxMostFrequentTestJson, basic) {
         {StringView("{\"type\": \"store\"}"), 2}}});
   auto expected = makeRowVector({{expectedMap}});
 
-  testAggregations(
-      {makeRowVector({inputVector})},
-      {},
-      {"approx_most_frequent(2, c0, 31)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(makeRowVector({inputVector}))
+      .aggregates({"approx_most_frequent(2, c0, 31)"})
+      .assertResults(expected);
 }
 
 // Non-templated test for UNKNOWN type
@@ -445,12 +467,12 @@ TEST_F(ApproxMostFrequentUnknownTest, unknownType) {
       BaseVector::createNullConstant(mapType, 2, pool()),
   });
 
-  testAggregations(
-      {data},
-      {"c0"},
-      {"approx_most_frequent(2, c1, 31)"},
-      {"c0", "a0"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"approx_most_frequent(2, c1, 31)"})
+      .project({"c0", "a0"})
+      .assertResults(expected);
 }
 
 } // namespace

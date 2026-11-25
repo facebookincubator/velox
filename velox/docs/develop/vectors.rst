@@ -103,6 +103,19 @@ using helper methods from the “bits” namespace.
 Since buffers are not typed, the size of the buffer reflects the number of bytes
 in the buffer, not the number of values.
 
+Alignment and Padding
+~~~~~~~~~~~~~~~~~~~~~
+
+Buffers held by vectors (nulls, values, indices, offsets and sizes) follow a
+contract on their alignment and padding, so that a vector can wrap memory from
+Arrow and other external sources without a copy. The contract is documented on
+``Buffer`` in ``velox/buffer/Buffer.h``.
+
+Memory that follows Arrow's recommended alignment and padding, a multiple of 8
+or 64 bytes, meets the contract, except that long decimals need 16-byte
+alignment. The Arrow bridge requires it of the buffers it imports, and copies
+long decimals that aren't 16-byte aligned.
+
 Null Flags
 ----------
 
@@ -278,6 +291,12 @@ Constant vectors are represented using ConstantVector<T> template which contains
 a value and a boolean indicating whether the value is null or not. It may
 contain a string buffer if T = StringView and the string is longer than 12
 characters.
+When the constant is built from another vector, the string buffer can be the
+source vector's string buffer rather than a copy, if the buffer belongs to the
+constant's memory pool. A constant built from another constant shares its
+buffer at any size. One built from a flat vector shares only strings longer
+than about 1 MB that fill at least half of their buffer, since a flat vector
+reuses its string buffers and packs many strings into one.
 
 .. code-block:: c++
 
@@ -444,6 +463,9 @@ offset of an empty array.
 
 Null array and empty array are not the same.
 
+The offset and size of a null array are undefined and can be any value.
+Elements that no non-null array covers are undefined as well.
+
 Elements vector may have a nulls buffer independent of the nulls buffer of the
 array vector itself. This allows us to specify non-null arrays with some or all
 null elements. Null array and array of all null elements are not the same.
@@ -478,6 +500,9 @@ considered undefined and can be any value. Consider using zero for the offset
 of an empty map.
 
 Null map and empty map are not the same.
+
+The offset and size of a null map are undefined and can be any value. Keys and
+values that no non-null map covers are undefined as well.
 
 Keys and values vectors may have nulls buffer independent of each other and of
 the nulls buffer of the map vector itself. This allows us to specify non-null

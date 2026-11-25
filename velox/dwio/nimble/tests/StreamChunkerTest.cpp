@@ -22,6 +22,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/memory/SharedArbitrator.h"
+#include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
 #include "velox/dwio/nimble/writer/StreamData.h"
@@ -1148,6 +1149,121 @@ TEST_F(StreamChunkerTestsBase, nullableContentStreamStringChunking) {
          .chunkNonNulls = {false, true, false},
          .hasNulls = true,
          .extraMemory = 5});
+  }
+}
+
+TEST_F(
+    StreamChunkerTestsBase,
+    nullableContentStreamStringFirstChunkUsesRawBytes) {
+  const uint64_t minChunkSize = 1 << 19;
+  const uint64_t maxChunkSize = 1 << 20;
+  const std::string largeString(maxChunkSize, 'x');
+  Buffer arena(*leafPool_);
+  const auto largeView = arena.writeString(largeString);
+  const auto smallView = arena.writeString("tail");
+
+  for (const auto scalarKind : {ScalarKind::String, ScalarKind::Binary}) {
+    SCOPED_TRACE(static_cast<int>(scalarKind));
+    const auto scalarTypeBuilder =
+        schemaBuilder_->createScalarTypeBuilder(scalarKind);
+    const auto* descriptor = &scalarTypeBuilder->scalarDescriptor();
+    for (const bool ensureFullChunks : {false, true}) {
+      SCOPED_TRACE(ensureFullChunks);
+      NullableContentStreamData<std::string_view> stream(
+          *leafPool_, *descriptor, *inputBufferGrowthPolicy_);
+      stream.ensureAdditionalNullsCapacity(
+          /*mayHaveNulls=*/true, /*additionalSize=*/3);
+      populateData<std::string_view>(
+          stream.mutableData(), {largeView, smallView});
+      populateData<bool>(stream.mutableNonNulls(), {true, false, true});
+      stream.extraMemory() = largeView.size() + smallView.size();
+      ASSERT_LT(stream.data().size(), minChunkSize);
+      ASSERT_GT(stream.memoryUsed(), minChunkSize);
+
+      auto chunker = getStreamChunker(
+          stream,
+          {.minChunkSize = minChunkSize,
+           .maxChunkSize = maxChunkSize,
+           .ensureFullChunks = ensureFullChunks,
+           .isFirstChunk = true});
+      const ExpectedChunk<std::string_view> retainedData{
+          .chunkData = {smallView},
+          .chunkNonNulls = {false, true},
+          .hasNulls = true,
+          .extraMemory = smallView.size()};
+      validateChunk<std::string_view>(
+          stream,
+          std::move(chunker),
+          {{.chunkData = {largeView}}},
+          retainedData);
+      ASSERT_EQ(stream.extraMemory(), smallView.size());
+      ASSERT_EQ(largeView, std::string_view(largeString));
+
+      auto remainingChunker = getStreamChunker(
+          stream,
+          {.minChunkSize = minChunkSize,
+           .maxChunkSize = maxChunkSize,
+           .ensureFullChunks = false,
+           .isFirstChunk = false});
+      validateChunk<std::string_view>(
+          stream, std::move(remainingChunker), {}, retainedData);
+
+      auto lastChunker = getStreamChunker(
+          stream, {.minChunkSize = 0, .maxChunkSize = maxChunkSize});
+      validateChunk<std::string_view>(
+          stream, std::move(lastChunker), {retainedData}, {});
+    }
+  }
+}
+
+TEST_F(StreamChunkerTestsBase, nullableContentStreamStringFirstChunkThreshold) {
+  const uint64_t minChunkSize = 64;
+  const uint64_t maxChunkSize = 128;
+  Buffer arena(*leafPool_);
+
+  for (const auto scalarKind : {ScalarKind::String, ScalarKind::Binary}) {
+    SCOPED_TRACE(static_cast<int>(scalarKind));
+    const auto scalarTypeBuilder =
+        schemaBuilder_->createScalarTypeBuilder(scalarKind);
+    const auto* descriptor = &scalarTypeBuilder->scalarDescriptor();
+    for (const uint64_t stringSize :
+         {uint64_t{1},
+          minChunkSize - sizeof(std::string_view),
+          minChunkSize - sizeof(std::string_view) + 1}) {
+      SCOPED_TRACE(stringSize);
+      const std::string value(stringSize, 'x');
+      const auto view = arena.writeString(value);
+      for (const bool ensureFullChunks : {false, true}) {
+        SCOPED_TRACE(ensureFullChunks);
+        NullableContentStreamData<std::string_view> stream(
+            *leafPool_, *descriptor, *inputBufferGrowthPolicy_);
+        stream.ensureAdditionalNullsCapacity(
+            /*mayHaveNulls=*/true, /*additionalSize=*/2);
+        populateData<std::string_view>(stream.mutableData(), {view});
+        populateData<bool>(stream.mutableNonNulls(), {true, false});
+        stream.extraMemory() = view.size();
+
+        auto chunker = getStreamChunker(
+            stream,
+            {.minChunkSize = minChunkSize,
+             .maxChunkSize = maxChunkSize,
+             .ensureFullChunks = ensureFullChunks,
+             .isFirstChunk = true});
+        const ExpectedChunk<std::string_view> expectedData{
+            .chunkData = {view},
+            .chunkNonNulls = {true, false},
+            .hasNulls = true,
+            .extraMemory = view.size()};
+        if (!ensureFullChunks &&
+            view.size() + sizeof(std::string_view) > minChunkSize) {
+          validateChunk<std::string_view>(
+              stream, std::move(chunker), {expectedData}, {});
+        } else {
+          validateChunk<std::string_view>(
+              stream, std::move(chunker), {}, expectedData);
+        }
+      }
+    }
   }
 }
 

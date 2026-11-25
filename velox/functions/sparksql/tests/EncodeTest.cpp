@@ -1,0 +1,863 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include <algorithm>
+#include <string_view>
+#include <tuple>
+#include <utility>
+
+#include <gmock/gmock.h>
+
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
+
+using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
+using ::testing::IsEmpty;
+
+namespace facebook::velox::functions::sparksql::test {
+namespace {
+
+class EncodeTest : public SparkFunctionBaseTest {
+ protected:
+  std::optional<std::string> encode(
+      const std::optional<std::string>& input,
+      const std::optional<std::string>& charset) {
+    return evaluateOnce<std::string>("encode(c0, c1)", input, charset);
+  }
+
+  // Encodes and returns the raw output bytes, asserting a value was produced.
+  std::vector<uint8_t> encodeBytes(
+      const std::optional<std::string>& input,
+      const std::optional<std::string>& charset) {
+    auto result = encode(input, charset);
+    EXPECT_TRUE(result.has_value());
+    if (!result.has_value()) {
+      return {};
+    }
+    return toBytes(*result);
+  }
+
+  static std::vector<uint8_t> toBytes(std::string_view input) {
+    return std::vector<uint8_t>(input.begin(), input.end());
+  }
+
+  void enableLegacyCodingErrorAction() {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
+         "true"},
+    });
+  }
+
+  void enableLegacyCharsets(bool replaceUnmappable) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyJavaCharsets),
+         "true"},
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
+         replaceUnmappable ? "true" : "false"},
+    });
+  }
+
+  void testOutputLifetime(
+      const std::string& value,
+      const std::string& charset,
+      bool dictionary,
+      bool lazy,
+      bool constantCharset,
+      const std::optional<std::string>& copiedOutput) {
+    auto flat = makeFlatVector<std::string>({value});
+    const auto* data = flat->valueAt(0).data();
+    ASSERT_EQ(flat->stringBuffers().size(), 1);
+    const auto* buffer = flat->stringBuffers().front().get();
+    const auto refCount = buffer->refCount();
+    VectorPtr input = flat;
+    flat.reset();
+    if (dictionary) {
+      input = wrapInDictionary(makeIndices({0}), input);
+    }
+    if (lazy) {
+      input = wrapInLazyDictionary(input);
+    }
+    auto inputs =
+        makeRowVector({input, makeFlatVector<std::string>({charset})});
+    auto result = evaluate<SimpleVector<StringView>>(
+        constantCharset ? fmt::format("encode(c0, '{}')", charset)
+                        : "encode(c0, c1)",
+        inputs);
+    if (copiedOutput.has_value()) {
+      EXPECT_NE(result->valueAt(0).data(), data);
+      EXPECT_EQ(buffer->refCount(), refCount);
+    } else {
+      EXPECT_EQ(result->valueAt(0).data(), data);
+      ASSERT_GT(buffer->refCount(), refCount);
+    }
+    inputs.reset();
+    input.reset();
+    EXPECT_EQ(result->valueAt(0).str(), copiedOutput.value_or(value));
+  }
+};
+
+TEST_F(EncodeTest, verifiedSingleByteCharsets) {
+  struct Golden {
+    const char* charset;
+    const char* input;
+    uint8_t expected;
+  };
+  // JDK 17 encoder goldens for every supported single-byte charset.
+  const std::vector<Golden> goldens{
+      {"IBM037", "\n", 0x15},
+      {"IBM437", "\x1A", 0x1A},
+      {"IBM437", "\xE2\x94\x80", 0xC4},
+      {"ISO-8859-2", "\xC3\xA9", 0xE9},
+      {"ISO-8859-2", "\xC4\x84", 0xA1},
+      {"ISO-8859-3", "\xC3\xA9", 0xE9},
+      {"ISO-8859-3", "\xC4\x88", 0xC6},
+      {"ISO-8859-4", "\xC3\xA9", 0xE9},
+      {"ISO-8859-4", "\xC4\x80", 0xC0},
+      {"ISO-8859-5", "\xD1\x8F", 0xEF},
+      {"ISO-8859-6", "\xD8\xA7", 0xC7},
+      {"ISO-8859-7", "\xCE\xB1", 0xE1},
+      {"ISO-8859-8", "\xD7\x90", 0xE0},
+      {"ISO-8859-9", "\xC3\xA9", 0xE9},
+      {"ISO-8859-9", "\xC4\x9E", 0xD0},
+      {"x-iso-8859-11", "\xE0\xB8\x81", 0xA1},
+      {"ISO-8859-13", "\xC3\xA9", 0xE9},
+      {"ISO-8859-13", "\xC4\x84", 0xC0},
+      {"ISO-8859-15", "\xC3\xA9", 0xE9},
+      {"ISO-8859-15", "\xE2\x82\xAC", 0xA4},
+      {"ISO-8859-16", "\xE2\x82\xAC", 0xA4},
+      {"KOI8-R", "\xD1\x8F", 0xD1},
+      {"KOI8-U", "\xD1\x8F", 0xD1},
+      {"KOI8-U", "\xD2\x91", 0xAD},
+      {"windows-1250", "\xE2\x82\xAC", 0x80},
+      {"windows-1251", "\xD1\x8F", 0xFF},
+      {"windows-1252", "\xC3\xA9", 0xE9},
+      {"windows-1252", "\xE2\x82\xAC", 0x80},
+      {"windows-1253", "\xCE\xB1", 0xE1},
+      {"windows-1254", "\xC3\xA9", 0xE9},
+      {"windows-1254", "\xC4\x9E", 0xD0},
+      {"windows-1255", "\xD7\x90", 0xE0},
+      {"windows-1256", "\xD8\xA7", 0xC7},
+      {"windows-1257", "\xC3\xA9", 0xE9},
+      {"windows-1257", "\xC4\x84", 0xC0},
+      {"windows-1258", "\xC3\xA9", 0xE9},
+      {"windows-1258", "\xC6\xA0", 0xD5},
+  };
+  for (const bool replaceUnmappable : {false, true}) {
+    enableLegacyCharsets(replaceUnmappable);
+    for (const auto& [charset, input, expected] : goldens) {
+      SCOPED_TRACE(charset);
+      EXPECT_THAT(encodeBytes(input, charset), ElementsAre(expected));
+    }
+    EXPECT_THAT(encodeBytes("\x1A\xC3\xA9", "IBM437"), ElementsAre(0x1A, 0x82));
+    // Spark lowercases U+212A KELVIN SIGN to the ASCII letter k in names.
+    EXPECT_THAT(
+        encodeBytes("\xD1\x8F", "\xE2\x84\xAAOI8-R"), ElementsAre(0xD1));
+    EXPECT_THAT(encodeBytes("\xCE\xB1", "gree\xE2\x84\xAA"), ElementsAre(0xE1));
+    EXPECT_THAT(
+        encodeBytes(
+            "A",
+            "UnicodeBigUnmar\xE2\x84\xAA"
+            "ed"),
+        ElementsAre(0x00, 0x41));
+    EXPECT_THAT(
+        encodeBytes(
+            "A",
+            "unicodelittleunmar\xE2\x84\xAA"
+            "ed"),
+        ElementsAre(0x41, 0x00));
+  }
+  enableLegacyCharsets(/*replaceUnmappable=*/false);
+  EXPECT_THAT(encodeBytes("\xC3\xA9", "cp1252"), ElementsAre(0xE9));
+  EXPECT_EQ(encode("A", "UTF8"), "A");
+  EXPECT_EQ(encode("A", "default"), "A");
+  for (const auto* charset : {"windows-1250", "windows-1252", "cp1252"}) {
+    VELOX_ASSERT_USER_THROW(
+        encode("\xC2\x81", charset),
+        fmt::format(
+            "encode: input contains a character that cannot be encoded using '{}'",
+            charset));
+  }
+  VELOX_ASSERT_USER_THROW(
+      encode("\xE2\x80\x8D", "windows-1252"),
+      "encode: input contains a character that cannot be encoded using 'windows-1252'");
+  enableLegacyCharsets(/*replaceUnmappable=*/true);
+  EXPECT_EQ(encode("\xC2\x81", "windows-1250"), "?");
+  EXPECT_EQ(encode("\xC2\x81", "windows-1252"), "?");
+  EXPECT_THAT(encodeBytes("\xFF", "IBM037"), ElementsAre(0x3F));
+  EXPECT_EQ(encode("\xC0\x80", "windows-1252"), "??");
+}
+
+TEST_F(EncodeTest, standardCharsetAliases) {
+  const std::vector<std::pair<std::string, std::string>> goldens{
+      {"UTF8", "\xC3\xA9"},
+      {"ASCII", "?"},
+      {"LATIN1", "\xE9"},
+      {"UNICODE", std::string("\xFE\xFF\x00\xE9", 4)},
+      {"UnicodeBigUnmarked", std::string("\x00\xE9", 2)},
+      {"UnicodeLittleUnmarked", std::string("\xE9\x00", 2)},
+      {"UTF_32", std::string("\x00\x00\x00\xE9", 4)},
+  };
+  for (const bool replaceUnmappable : {false, true}) {
+    enableLegacyCharsets(replaceUnmappable);
+    for (const auto& [charset, expected] : goldens) {
+      SCOPED_TRACE(charset);
+      if (charset == "ASCII" && !replaceUnmappable) {
+        VELOX_ASSERT_USER_THROW(
+            encode("\xC3\xA9", charset),
+            "encode: input contains a character that cannot be encoded using 'ASCII'");
+        EXPECT_EQ(
+            evaluateOnce<std::string>(
+                "try(encode(c0, 'ASCII'))",
+                std::optional<std::string>("\xC3\xA9")),
+            std::nullopt);
+      } else {
+        EXPECT_EQ(encode("\xC3\xA9", charset), expected);
+        EXPECT_EQ(
+            evaluateOnce<std::string>(
+                fmt::format("encode(c0, '{}')", charset),
+                std::optional<std::string>("\xC3\xA9")),
+            expected);
+      }
+    }
+  }
+}
+
+TEST_F(EncodeTest, rejectUnverifiedLegacyCharsets) {
+  for (const bool replaceUnmappable : {false, true}) {
+    enableLegacyCharsets(replaceUnmappable);
+    for (const auto* charset :
+         {"Shift_JIS",
+          "windows-31j",
+          "Big5",
+          "GBK",
+          "EUC-JP",
+          "EUC-KR",
+          "GB2312",
+          "ISO-2022-JP",
+          "ISO-2022-CN",
+          "x-JISAutoDetect",
+          "x-IBM930",
+          "HZ-GB-2312",
+          "UTF-32BE-BOM",
+          "UTF-32BE",
+          "UTF-32LE",
+          "UnicodeLittle",
+          "CESU-8",
+          "IBM850",
+          "x-mswin-936",
+          "\xE2\x84",
+          "\xE2\x84\xAA",
+          "\xE2\x84\xAAOI8-R ",
+          "\xE2\x84\xAAOI8-R\xE2\x84",
+          "\xE2\x84\xABOI8-R",
+          "\xE2\x80\xAAOI8-R",
+          "\xE2\x85\xAAOI8-R",
+          "U\xC5\xBF-ASCII",
+          "\xC4\xB1"
+          "bm037",
+          "w\xC4\xB1ndows-1255",
+          "window\xC5\xBF-1256",
+          "window\xC5\xBF-1258"}) {
+      SCOPED_TRACE(charset);
+      const auto error =
+          fmt::format("encode: unsupported charset '{}'", charset);
+      VELOX_ASSERT_USER_THROW(encode("A", charset), error);
+      VELOX_ASSERT_USER_THROW(encode("", charset), error);
+      EXPECT_EQ(encode(std::nullopt, charset), std::nullopt);
+      EXPECT_EQ(
+          evaluateOnce<std::string>(
+              "try(encode(c0, c1))",
+              std::optional<std::string>("A"),
+              std::optional<std::string>(charset)),
+          std::nullopt);
+    }
+  }
+}
+
+TEST_F(EncodeTest, dynamicLegacyCharsets) {
+  for (const bool replaceUnmappable : {false, true}) {
+    enableLegacyCharsets(replaceUnmappable);
+    auto inputs = makeFlatVector<std::string>({
+        "A",
+        "\xC2\x81",
+        "A",
+        "\n",
+        "A",
+        "A",
+        "A",
+        "A",
+        "A",
+        "\xD1\x8F",
+        "\xD1\x8F",
+        "A",
+        "\xD1\x8F",
+        "A",
+    });
+    auto charsets = makeFlatVector<std::string>({
+        "cp1250",
+        "cp1250",
+        "no-such-charset",
+        "IBM037",
+        "UTF8",
+        "cp1252",
+        "CP1250",
+        std::string("windows-1252") + '\0' + "x",
+        std::string(1'024, 'x'),
+        "\xE2\x84\xAAOI8-R",
+        "\xE2\x84\xAAOI8-R",
+        std::string("\xE2\x84\xAAOI8-R") + '\0',
+        "koi8-r",
+        "UnicodeBigUnmar\xE2\x84\xAA"
+        "ed",
+    });
+    auto expected = makeNullableFlatVector<std::string>(
+        {
+            "A",
+            replaceUnmappable ? std::optional<std::string>("?") : std::nullopt,
+            std::nullopt,
+            "\x15",
+            "A",
+            "A",
+            "A",
+            std::nullopt,
+            std::nullopt,
+            "\xD1",
+            "\xD1",
+            std::nullopt,
+            "\xD1",
+            std::string("\0A", 2),
+        },
+        VARBINARY());
+    auto result =
+        evaluate("try(encode(c0, c1))", makeRowVector({inputs, charsets}));
+    velox::test::assertEqualVectors(expected, result);
+  }
+}
+
+TEST_F(EncodeTest, repeatedUnsupportedDynamicCharset) {
+  const std::vector<std::string> unsupported{
+      "no-such-charset",
+      std::string(1'024, 'x'),
+      std::string("windows-1252") + '\0',
+      std::string("\xE2\x84\xAAOI8-R") + '\0',
+  };
+  for (const bool replaceUnmappable : {false, true}) {
+    enableLegacyCharsets(replaceUnmappable);
+    for (const auto& charset : unsupported) {
+      auto inputs = makeFlatVector<std::string>(
+          4, [](auto /*row*/) { return "\xE2\x82\xAC"; });
+      auto charsets = makeFlatVector<std::string>(
+          {"windows-1252", charset, charset, "windows-1252"});
+      auto expected = makeNullableFlatVector<std::string>(
+          {"\x80", std::nullopt, std::nullopt, "\x80"}, VARBINARY());
+      velox::test::assertEqualVectors(
+          expected,
+          evaluate("try(encode(c0, c1))", makeRowVector({inputs, charsets})));
+    }
+  }
+}
+
+TEST_F(EncodeTest, dynamicCharsetCacheAcrossBatches) {
+  for (const bool replaceUnmappable : {false, true}) {
+    enableLegacyCharsets(replaceUnmappable);
+    auto inputs = makeFlatVector<std::string>({"\xD8\xA7"});
+    auto charsets = makeFlatVector<std::string>({""});
+    auto expression =
+        compileExpression("try(encode(c0, c1))", ROW({"c0", "c1"}, VARCHAR()));
+    constexpr std::string_view name{"CSISOLATINARABIC"};
+    ASSERT_GT(name.size(), StringView::kInlineSize);
+    auto* nameBuffer = charsets->getRawStringBufferWithSpace(name.size());
+    const auto testCharset = [&](std::string_view charset,
+                                 std::optional<std::string> expected) {
+      ASSERT_EQ(charset.size(), name.size());
+      // Reuse live name storage to detect a borrowed, stale cache key.
+      std::copy(charset.begin(), charset.end(), nameBuffer);
+      charsets->setNoCopy(0, StringView(nameBuffer, name.size()));
+      velox::test::assertEqualVectors(
+          makeNullableFlatVector<std::string>({expected}, VARBINARY()),
+          evaluate(*expression, makeRowVector({inputs, charsets})));
+    };
+    testCharset("CSISOLATINARABIC", "\xC7");
+    testCharset("CSISOLATINARABIC", "\xC7");
+    testCharset(
+        "CSISOLATINHEBREW",
+        replaceUnmappable ? std::optional<std::string>("?") : std::nullopt);
+    testCharset(
+        "CSISOLATINHEBREW",
+        replaceUnmappable ? std::optional<std::string>("?") : std::nullopt);
+    testCharset("not-a-charset!!!", std::nullopt);
+    testCharset("not-a-charset!!!", std::nullopt);
+    testCharset("CSISOLATINARABIC", "\xC7");
+  }
+}
+
+TEST_F(EncodeTest, zeroCopyOutputLifetime) {
+  enableLegacyCharsets(/*replaceUnmappable=*/false);
+  const std::string ascii(128, 'A');
+  for (const auto* charset :
+       {"windows-1252", "cp1252", "KOI8-R", "ISO-8859-2"}) {
+    SCOPED_TRACE(charset);
+    for (const bool constantCharset : {false, true}) {
+      SCOPED_TRACE(constantCharset);
+      testOutputLifetime(
+          ascii,
+          charset,
+          /*dictionary=*/false,
+          /*lazy=*/false,
+          constantCharset,
+          std::nullopt);
+    }
+  }
+}
+
+TEST_F(EncodeTest, zeroCopyWrappedInputLifetime) {
+  enableLegacyCharsets(/*replaceUnmappable=*/false);
+  const std::string ascii(128, 'A');
+  for (const auto* charset :
+       {"windows-1252", "cp1252", "KOI8-R", "ISO-8859-2"}) {
+    SCOPED_TRACE(charset);
+    for (const bool lazy : {false, true}) {
+      SCOPED_TRACE(lazy);
+      for (const bool constantCharset : {false, true}) {
+        SCOPED_TRACE(constantCharset);
+        testOutputLifetime(
+            ascii,
+            charset,
+            /*dictionary=*/true,
+            lazy,
+            constantCharset,
+            std::nullopt);
+      }
+    }
+  }
+}
+
+TEST_F(EncodeTest, conversionOutputDoesNotRetainInput) {
+  const std::string ascii(128, 'A');
+  std::string utf16BE;
+  std::string utf16LE;
+  std::string utf32;
+  for (size_t i = 0; i < ascii.size(); ++i) {
+    utf16BE.append("\0A", 2);
+    utf16LE.append("A\0", 2);
+    utf32.append("\0\0\0A", 4);
+  }
+  const std::vector<std::pair<std::string, std::string>> goldens{
+      {"UTF-8", ascii},
+      {"US-ASCII", ascii},
+      {"ISO-8859-1", ascii},
+      {"UTF-16", std::string("\xFE\xFF", 2) + utf16BE},
+      {"UTF-16BE", utf16BE},
+      {"UTF-16LE", utf16LE},
+      {"UTF-32", utf32},
+  };
+  for (const auto& [legacyCharsets, constantCharset] :
+       {std::pair{false, false}, {false, true}, {true, true}}) {
+    SCOPED_TRACE(legacyCharsets);
+    SCOPED_TRACE(constantCharset);
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyJavaCharsets),
+         legacyCharsets ? "true" : "false"},
+    });
+    for (const auto& [charset, expected] : goldens) {
+      SCOPED_TRACE(charset);
+      for (const auto& [dictionary, lazy] :
+           {std::pair{false, false}, {true, false}, {true, true}}) {
+        SCOPED_TRACE(dictionary);
+        SCOPED_TRACE(lazy);
+        testOutputLifetime(
+            ascii, charset, dictionary, lazy, constantCharset, expected);
+      }
+    }
+  }
+  enableLegacyCharsets(/*replaceUnmappable=*/false);
+  for (const auto& [charset, expected] :
+       std::vector<std::pair<std::string, std::string>>{
+           {"IBM037", std::string(ascii.size(), '\xC1')},
+           {"UTF8", ascii},
+           {"UnicodeBigUnmarked", utf16BE},
+           {"UnicodeBigUnmar\xE2\x84\xAA"
+            "ed",
+            utf16BE},
+       }) {
+    SCOPED_TRACE(charset);
+    testOutputLifetime(
+        ascii,
+        charset,
+        /*dictionary=*/false,
+        /*lazy=*/false,
+        /*constantCharset=*/true,
+        expected);
+  }
+}
+
+TEST_F(EncodeTest, utf8) {
+  EXPECT_EQ(encode("hello", "UTF-8"), "hello");
+  EXPECT_EQ(encode("Spark SQL", "UTF-8"), "Spark SQL");
+  EXPECT_EQ(encode("", "UTF-8"), "");
+  EXPECT_EQ(encode("abc", "utf-8"), "abc");
+}
+
+TEST_F(EncodeTest, usAscii) {
+  EXPECT_EQ(encode("hello", "US-ASCII"), "hello");
+  EXPECT_EQ(encode("", "US-ASCII"), "");
+  EXPECT_EQ(encode("abc", "us-ascii"), "abc");
+  EXPECT_THAT(encodeBytes("\x7F", "US-ASCII"), ElementsAre(0x7F));
+  VELOX_ASSERT_USER_THROW(
+      encode("\xC2\x80", "US-ASCII"),
+      "encode: input contains a character that cannot be encoded using 'US-ASCII'");
+}
+
+TEST_F(EncodeTest, iso8859) {
+  EXPECT_EQ(encode("hello", "ISO-8859-1"), "hello");
+  EXPECT_EQ(encode("", "ISO-8859-1"), "");
+  EXPECT_EQ(encode("abc", "iso-8859-1"), "abc");
+  EXPECT_THAT(encodeBytes("\xC3\xA9", "ISO-8859-1"), ElementsAre(0xE9));
+  EXPECT_THAT(encodeBytes("\xC3\xBF", "ISO-8859-1"), ElementsAre(0xFF));
+}
+
+TEST_F(EncodeTest, utf16AndUtf32) {
+  const std::vector<std::tuple<std::string, std::string, std::vector<uint8_t>>>
+      testCases{
+          {"UTF-16BE", "utf-16be", {0x00, 0x41}},
+          {"UTF-16LE", "utf-16le", {0x41, 0x00}},
+          {"UTF-16", "utf-16", {0xFE, 0xFF, 0x00, 0x41}},
+          {"UTF-32", "utf-32", {0x00, 0x00, 0x00, 0x41}},
+      };
+  for (const auto& [charset, lowercaseCharset, expected] : testCases) {
+    SCOPED_TRACE(charset);
+    EXPECT_THAT(encodeBytes("A", charset), ElementsAreArray(expected));
+    EXPECT_THAT(encodeBytes("A", lowercaseCharset), ElementsAreArray(expected));
+    EXPECT_THAT(encodeBytes("", charset), IsEmpty());
+  }
+}
+
+TEST_F(EncodeTest, supplementaryCodepoint) {
+  const std::string emoji = "\xF0\x9F\x98\x80";
+  EXPECT_THAT(
+      encodeBytes(emoji, "UTF-16BE"), ElementsAre(0xD8, 0x3D, 0xDE, 0x00));
+  EXPECT_THAT(
+      encodeBytes(emoji, "UTF-16LE"), ElementsAre(0x3D, 0xD8, 0x00, 0xDE));
+  EXPECT_THAT(
+      encodeBytes(emoji, "UTF-16"),
+      ElementsAre(0xFE, 0xFF, 0xD8, 0x3D, 0xDE, 0x00));
+  EXPECT_THAT(
+      encodeBytes(emoji, "UTF-32"), ElementsAre(0x00, 0x01, 0xF6, 0x00));
+}
+
+TEST_F(EncodeTest, multibyte) {
+  EXPECT_THAT(encodeBytes("\xC3\xA9", "UTF-16BE"), ElementsAre(0x00, 0xE9));
+}
+
+TEST_F(EncodeTest, nullInputs) {
+  for (const bool legacyCharsets : {false, true}) {
+    SCOPED_TRACE(legacyCharsets);
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyJavaCharsets),
+         legacyCharsets ? "true" : "false"},
+    });
+    EXPECT_EQ(encode(std::nullopt, "UTF-8"), std::nullopt);
+    EXPECT_EQ(encode("hello", std::nullopt), std::nullopt);
+    EXPECT_EQ(encode(std::nullopt, std::nullopt), std::nullopt);
+    EXPECT_EQ(encode(std::nullopt, "INVALID-CHARSET"), std::nullopt);
+    EXPECT_EQ(
+        evaluateOnce<std::string>(
+            "encode(c0, cast(null as varchar))",
+            std::optional<std::string>("hello")),
+        std::nullopt);
+    EXPECT_EQ(
+        evaluateOnce<std::string>(
+            "encode(c0, 'INVALID-CHARSET')", std::optional<std::string>()),
+        std::nullopt);
+  }
+}
+
+TEST_F(EncodeTest, unsupportedCharset) {
+  VELOX_ASSERT_USER_THROW(
+      encode("hello", "INVALID-CHARSET"),
+      "encode: unsupported charset 'INVALID-CHARSET'");
+  EXPECT_EQ(
+      evaluateOnce<std::string>(
+          "try(encode(c0, 'INVALID-CHARSET'))",
+          std::optional<std::string>("hello")),
+      std::nullopt);
+}
+
+TEST_F(EncodeTest, charsetScope) {
+  const std::vector<std::string> names{
+      "UTF8",
+      "ASCII",
+      "US_ASCII",
+      "LATIN1",
+      "ISO8859_1",
+      "UTF16",
+      "Unicode",
+      "UTF16BE",
+      "UTF16LE",
+      "UnicodeLittle",
+      "UTF-32BE",
+      "UTF-32LE",
+      "windows-1252",
+      "windows-31j",
+      "Shift_JIS",
+      "Big5",
+      "GBK",
+      "IBM037",
+      "CESU-8",
+      "ISO-2022-JP",
+      "ISO-2022-CN",
+      "x-JISAutoDetect",
+      "default",
+      "UTF-32BE-BOM",
+      "x-mswin-936",
+      "ISO-8859-16",
+      "\xE2\x84\xAAOI8-R",
+      "UnicodeBigUnmar\xE2\x84\xAA"
+      "ed",
+      "",
+      " UTF-8",
+      "UTF-8 ",
+      std::string("UTF-8\0GBK", 9)};
+  for (const bool replaceUnmappable : {false, true}) {
+    SCOPED_TRACE(replaceUnmappable);
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
+         replaceUnmappable ? "true" : "false"},
+    });
+    for (const auto& name : names) {
+      SCOPED_TRACE(name);
+      VELOX_ASSERT_USER_THROW(
+          encode("hello", name),
+          fmt::format("encode: unsupported charset '{}'", name));
+      VELOX_ASSERT_USER_THROW(
+          encode("", name),
+          fmt::format("encode: unsupported charset '{}'", name));
+    }
+    const auto inputs = makeFlatVector<std::string>(
+        names.size(), [](auto /*row*/) { return "hello"; });
+    const auto charsets = makeFlatVector<std::string>(names);
+    const auto result = evaluate<SimpleVector<StringView>>(
+        "try(encode(c0, c1))", makeRowVector({inputs, charsets}));
+    for (vector_size_t row = 0; row < result->size(); ++row) {
+      EXPECT_TRUE(result->isNullAt(row)) << names[row];
+    }
+    EXPECT_EQ(
+        evaluateOnce<std::string>(
+            "try(encode(c0, 'windows-1252'))",
+            std::optional<std::string>("hello")),
+        std::nullopt);
+  }
+}
+
+TEST_F(EncodeTest, codingErrorAction) {
+  for (const auto* charset : {"US-ASCII", "ISO-8859-1"}) {
+    SCOPED_TRACE(charset);
+    VELOX_ASSERT_USER_THROW(
+        encode("\xC4\x80", charset),
+        fmt::format(
+            "encode: input contains a character that cannot be encoded using '{}'",
+            charset));
+    EXPECT_EQ(
+        evaluateOnce<std::string>(
+            fmt::format("try(encode(c0, '{}'))", charset),
+            std::optional<std::string>("\xC4\x80")),
+        std::nullopt);
+  }
+  enableLegacyCodingErrorAction();
+  for (const auto* charset : {"US-ASCII", "ISO-8859-1"}) {
+    SCOPED_TRACE(charset);
+    EXPECT_EQ(encode("\xC4\x80", charset), "?");
+    EXPECT_EQ(encode("\xF0\x9F\x98\x80", charset), "?");
+    EXPECT_EQ(encode("\xFF", charset), "?");
+  }
+  EXPECT_EQ(
+      encode(
+          "a\xC3\xA9"
+          "b",
+          "US-ASCII"),
+      "a?b");
+}
+
+TEST_F(EncodeTest, malformedUtf8) {
+  EXPECT_THAT(encodeBytes("\xC3", "UTF-8"), ElementsAre(0xEF, 0xBF, 0xBD));
+  EXPECT_THAT(
+      encodeBytes(std::string("\xC3\x00", 2), "UTF-8"),
+      ElementsAre(0xEF, 0xBF, 0xBD, 0x00));
+  EXPECT_THAT(encodeBytes("\xFF", "UTF-8"), ElementsAre(0xEF, 0xBF, 0xBD));
+  EXPECT_THAT(
+      encodeBytes(std::string("\xC0\x80", 2), "UTF-8"),
+      ElementsAre(0xEF, 0xBF, 0xBD, 0xEF, 0xBF, 0xBD));
+  EXPECT_THAT(
+      encodeBytes(std::string("\xF4\x90\x80\x80", 4), "UTF-8"),
+      ElementsAre(
+          0xEF,
+          0xBF,
+          0xBD,
+          0xEF,
+          0xBF,
+          0xBD,
+          0xEF,
+          0xBF,
+          0xBD,
+          0xEF,
+          0xBF,
+          0xBD));
+  EXPECT_THAT(
+      encodeBytes(std::string("\xED\xA0\x80", 3), "UTF-8"),
+      ElementsAre(0xEF, 0xBF, 0xBD));
+  EXPECT_THAT(encodeBytes("\xFF", "UTF-16BE"), ElementsAre(0xFF, 0xFD));
+  EXPECT_THAT(encodeBytes("\xFF", "UTF-16LE"), ElementsAre(0xFD, 0xFF));
+  EXPECT_THAT(
+      encodeBytes("\xFF", "UTF-16"), ElementsAre(0xFE, 0xFF, 0xFF, 0xFD));
+  EXPECT_THAT(
+      encodeBytes("\xFF", "UTF-32"), ElementsAre(0x00, 0x00, 0xFF, 0xFD));
+}
+
+TEST_F(EncodeTest, malformedUtf8Boundaries) {
+  struct Golden {
+    const char* charset;
+    std::string asciiPattern;
+    std::string replacement;
+    std::string bom;
+    bool singleByte;
+  };
+  // Pin JDK output bytes and replacement grouping independently of the decoder.
+  const std::vector<Golden> goldens{
+      {"UTF-8", "A", "\xEF\xBF\xBD", "", false},
+      {"UTF-16BE", std::string("\x00\x41", 2), "\xFF\xFD", "", false},
+      {"UTF-16LE", std::string("\x41\x00", 2), "\xFD\xFF", "", false},
+      {"UTF-16", std::string("\x00\x41", 2), "\xFF\xFD", "\xFE\xFF", false},
+      {"UTF-32",
+       std::string("\x00\x00\x00\x41", 4),
+       std::string("\x00\x00\xFF\xFD", 4),
+       "",
+       false},
+      {"US-ASCII", "A", "?", "", true},
+      {"ISO-8859-1", "A", "?", "", true},
+      {"windows-1252", "A", "?", "", true},
+      {"IBM037", "\xC1", "?", "", true},
+  };
+  const std::vector<std::pair<std::string, size_t>> malformed{
+      {"\xFF", 1},
+      {"\x80", 1},
+      {"\xC0\x80", 2},
+      {"\xED\xA0\x80", 1},
+      {"\xF4\x90\x80\x80", 4},
+      {"\xE2\x82", 1},
+      {"\xF0\x9F\x98", 1},
+  };
+  for (const bool replaceUnmappable : {false, true}) {
+    SCOPED_TRACE(replaceUnmappable);
+    enableLegacyCharsets(replaceUnmappable);
+    for (const auto& golden : goldens) {
+      SCOPED_TRACE(golden.charset);
+      const auto expression = fmt::format("encode(c0, '{}')", golden.charset);
+      const auto errorMessage = fmt::format(
+          "encode: input contains a character that cannot be encoded using '{}'",
+          golden.charset);
+      for (const size_t length : {11, 12, 13, 63, 64, 65}) {
+        SCOPED_TRACE(length);
+        for (const auto& [bytes, numReplacements] : malformed) {
+          SCOPED_TRACE(::testing::PrintToString(toBytes(bytes)));
+          const auto numAscii = length - bytes.size();
+          const std::string ascii(numAscii, 'A');
+          std::string encodedAscii;
+          for (size_t i = 0; i < numAscii; ++i) {
+            encodedAscii += golden.asciiPattern;
+          }
+          std::string replacement;
+          for (size_t i = 0; i < numReplacements; ++i) {
+            replacement += golden.replacement;
+          }
+          for (const bool asciiLeading : {false, true}) {
+            SCOPED_TRACE(asciiLeading);
+            const auto input = asciiLeading ? ascii + bytes : bytes + ascii;
+            if (golden.singleByte && !replaceUnmappable) {
+              VELOX_ASSERT_USER_THROW(
+                  encode(input, golden.charset), errorMessage);
+              VELOX_ASSERT_USER_THROW(
+                  evaluateOnce<std::string>(
+                      expression, std::optional<std::string>(input)),
+                  errorMessage);
+              continue;
+            }
+            const auto expected = golden.bom +
+                (asciiLeading ? encodedAscii + replacement
+                              : replacement + encodedAscii);
+            EXPECT_EQ(encode(input, golden.charset), expected);
+            EXPECT_EQ(
+                evaluateOnce<std::string>(
+                    expression, std::optional<std::string>(input)),
+                expected);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(EncodeTest, realReplacementCharInInput) {
+  EXPECT_THAT(
+      encodeBytes(std::string("\xEF\xBF\xBD", 3), "UTF-8"),
+      ElementsAre(0xEF, 0xBF, 0xBD));
+  EXPECT_THAT(
+      encodeBytes(
+          std::string(
+              "a\xEF\xBF\xBD"
+              "b",
+              5),
+          "UTF-8"),
+      ElementsAre('a', 0xEF, 0xBF, 0xBD, 'b'));
+}
+
+TEST_F(EncodeTest, perRowCharset) {
+  const std::vector<std::string> names{
+      "UTF-8",
+      "US-ASCII",
+      "ISO-8859-1",
+      "UTF-16BE",
+      "UTF-16LE",
+      "UTF-16",
+      "UTF-32"};
+  const std::vector<std::vector<uint8_t>> expected{
+      {0x41, 0x00},
+      {0x41, 0x00},
+      {0x41, 0x00},
+      {0x00, 0x41, 0x00, 0x00},
+      {0x41, 0x00, 0x00, 0x00},
+      {0xFE, 0xFF, 0x00, 0x41, 0x00, 0x00},
+      {0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x00}};
+  const auto inputs = makeFlatVector<std::string>(
+      names.size(), [](auto /*row*/) { return std::string("A\0", 2); });
+  const auto charsets = makeFlatVector<std::string>(names);
+  const auto result = evaluate<SimpleVector<StringView>>(
+      "encode(c0, c1)", makeRowVector({inputs, charsets}));
+  for (vector_size_t row = 0; row < result->size(); ++row) {
+    SCOPED_TRACE(names[row]);
+    ASSERT_FALSE(result->isNullAt(row));
+    EXPECT_EQ(toBytes(std::string_view(result->valueAt(row))), expected[row]);
+    EXPECT_EQ(encodeBytes(std::string("A\0", 2), names[row]), expected[row]);
+    const auto constantResult = evaluateOnce<std::string>(
+        fmt::format("encode(c0, '{}')", names[row]),
+        std::optional<std::string>(std::string("A\0", 2)));
+    ASSERT_TRUE(constantResult.has_value());
+    EXPECT_EQ(toBytes(*constantResult), expected[row]);
+  }
+}
+
+} // namespace
+} // namespace facebook::velox::functions::sparksql::test

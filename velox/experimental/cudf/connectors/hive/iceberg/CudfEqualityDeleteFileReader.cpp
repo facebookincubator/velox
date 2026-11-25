@@ -23,9 +23,9 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -50,7 +50,6 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
     const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
-    ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
     const std::string& connectorId)
     : equalityColumnNames_(equalityColumnNames) {
   VELOX_CHECK(
@@ -87,7 +86,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   dwio::common::ReaderOptions deleteReaderOpts(pool_);
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  velox_hive::configureReaderOptions(
+  ::facebook::velox::connector::configureReaderOptions(
       hiveConfig,
       connectorQueryCtx,
       deleteFileSchema,
@@ -100,7 +99,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
   auto deleteFileInput =
-      velox_hive::BufferedInputBuilder::getInstance()->create(
+      ::facebook::velox::connector::BufferedInputBuilder::getInstance()->create(
           *deleteFileHandleCachePtr,
           deleteReaderOpts,
           connectorQueryCtx,
@@ -123,21 +122,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!velox_hive::testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit->filePath,
-          deleteSplit->partitionKeys,
-          {},
-          hiveConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
-    runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
-    numDeleteKeys_ = 0;
-    return;
-  }
-
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  velox_hive::configureRowReaderOptions(
+  ::facebook::velox::connector::configureRowReaderOptions(
       {},
       scanSpec,
       nullptr,

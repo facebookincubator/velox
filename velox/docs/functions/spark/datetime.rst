@@ -77,6 +77,11 @@ These functions support TIMESTAMP and DATE input types.
 
     Returns timestamp ``ts`` truncated to the unit specified by the format model ``fmt``.
     Returns NULL if ``fmt`` is invalid. ``fmt`` as "MICROSECOND" and abbreviated unit string are allowed.
+    Throws "long overflow" if the result is outside the range of int64 microseconds since the epoch,
+    [-290308-12-21 19:59:05.224192, 294247-01-10 04:00:54.775807] UTC, e.g. when truncating the
+    minimum timestamp to a unit coarser than "MICROSECOND".
+    For "SECOND" and "MILLISECOND", this matches Spark 4.2 and later; Spark 3.5 to 4.1 return a
+    wrapped-around value instead.
 
     ``fmt`` is case insensitive and must be one of the following:
         * "YEAR", "YYYY", "YY" - truncate to the first date of the year that the ``ts`` falls in, the time part will be zero out

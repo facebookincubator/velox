@@ -1915,12 +1915,12 @@ struct GreatCircleDistanceFunction {
       const arg_type<double>& lat2,
       const arg_type<double>& long2) {
     Status status = geospatial::validateLatitudeLongitude(lat1, long1);
-    if (FOLLY_UNLIKELY(!status.ok())) {
+    if (!status.ok()) [[unlikely]] {
       return status;
     }
 
     status = geospatial::validateLatitudeLongitude(lat2, long2);
-    if (FOLLY_UNLIKELY(!status.ok())) {
+    if (!status.ok()) [[unlikely]] {
       return status;
     }
 
@@ -2032,7 +2032,7 @@ struct GeometryUnionFunction {
       geometryVector.push_back(std::move(geosGeometry));
     }
 
-    if (FOLLY_UNLIKELY(isCompletelyEmpty)) {
+    if (isCompletelyEmpty) [[unlikely]] {
       auto emptyCollection = factory_->createPolygon();
       common::geospatial::GeometrySerializer::serialize(
           *emptyCollection, result);
@@ -2157,12 +2157,12 @@ struct ToSphericalGeographyFunction {
     if (!env->isNull()) {
       status =
           geospatial::validateLatitudeLongitude(env->getMinY(), env->getMinX());
-      if (FOLLY_UNLIKELY(!status.ok())) {
+      if (!status.ok()) [[unlikely]] {
         return status;
       }
       status =
           geospatial::validateLatitudeLongitude(env->getMaxY(), env->getMaxX());
-      if (FOLLY_UNLIKELY(!status.ok())) {
+      if (!status.ok()) [[unlikely]] {
         return status;
       }
     }

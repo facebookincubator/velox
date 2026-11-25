@@ -22,61 +22,34 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
+#include "velox/dwio/nimble/compression/Compressor.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 
 namespace facebook::nimble {
 
-struct CompressionResult {
-  CompressionType compressionType;
-  std::optional<Vector<char>> buffer;
+/// One call to Compression::compress() as the compressor sees it: the
+/// payload's data type and the configuration it compresses with. Debug builds
+/// expose it to tests through TestValue
+/// "facebook::nimble::Compression::compress".
+struct CompressCall {
+  DataType dataType{DataType::Undefined};
+  CompressionConfig config;
 };
-
-struct ICompressor {
-  virtual CompressionResult compress(
-      velox::memory::MemoryPool& pool,
-      std::string_view data,
-      DataType dataType,
-      int bitWidth,
-      const CompressionPolicy& compressionPolicy) = 0;
-
-  virtual velox::BufferPtr uncompress(
-      velox::memory::MemoryPool& pool,
-      CompressionType compressionType,
-      DataType dataType,
-      std::string_view data,
-      velox::BufferPool* bufferPool = nullptr) = 0;
-
-  virtual std::optional<size_t> uncompressedSize(
-      std::string_view data) const = 0;
-
-  virtual CompressionType compressionType() = 0;
-
-  virtual ~ICompressor() = default;
-};
-
-/// Allocates a buffer of at least 'bytes' capacity, trying the BufferPool
-/// first if available, falling back to MemoryPool allocation.
-inline velox::BufferPtr allocateBuffer(
-    velox::memory::MemoryPool& memoryPool,
-    velox::BufferPool* bufferPool,
-    uint64_t bytes) {
-  if (bufferPool != nullptr) {
-    if (auto buf = bufferPool->get(bytes)) {
-      buf->setSize(bytes);
-      return buf;
-    }
-  }
-  return velox::AlignedBuffer::allocate<char>(bytes, &memoryPool);
-}
 
 class Compression {
  public:
+  /// Compresses 'data' as 'compressionPolicy' configures. With
+  /// 'typedLanesLevel' set, a typed payload ('dataType' other than Undefined)
+  /// compressed with MetaInternal uses that level instead of the policy's;
+  /// nothing else changes. Only FixedBitWidth's typed lanes pass a level
+  /// (Encoding::Options::fixedBitWidthTypedLanesOpenzlLevel).
   static CompressionResult compress(
       velox::memory::MemoryPool& pool,
       std::string_view data,
       DataType dataType,
       int bitWidth,
-      const CompressionPolicy& compressionPolicy);
+      const CompressionPolicy& compressionPolicy,
+      std::optional<int32_t> typedLanesLevel = std::nullopt);
 
   static velox::BufferPtr uncompress(
       velox::memory::MemoryPool& pool,
@@ -103,12 +76,15 @@ class CompressionEncoder {
  public:
   // This CTor handles the sub-pattern where the source data is already encoded
   // correctly, so no extra encoding is needed.
+  // Both CTors take an optional 'typedLanesLevel', passed to
+  // Compression::compress(); only FixedBitWidth's typed lanes set it.
   CompressionEncoder(
       velox::memory::MemoryPool& pool,
       const CompressionPolicy& compressionPolicy,
       DataType dataType,
       std::string_view uncompressedBuffer,
-      int bitWidth = 0)
+      int bitWidth = 0,
+      std::optional<int32_t> typedLanesLevel = std::nullopt)
       : dataSize_{uncompressedBuffer.size()},
         compressionType_{CompressionType::Uncompressed} {
     if (dataSize_ == 0 ||
@@ -121,7 +97,12 @@ class CompressionEncoder {
     }
 
     auto compressionResult = Compression::compress(
-        pool, uncompressedBuffer, dataType, bitWidth, compressionPolicy);
+        pool,
+        uncompressedBuffer,
+        dataType,
+        bitWidth,
+        compressionPolicy,
+        typedLanesLevel);
 
     if (compressionResult.compressionType == CompressionType::Uncompressed) {
       // Compression declined. Use the original buffer.
@@ -148,7 +129,8 @@ class CompressionEncoder {
       int bitWidth,
       size_t uncompressedSize,
       const std::function<std::span<char>()>& allocateUncompressedBuffer,
-      std::function<void(char*&)> encoder)
+      std::function<void(char*&)> encoder,
+      std::optional<int32_t> typedLanesLevel = std::nullopt)
       : encoder_{std::move(encoder)},
         dataSize_{uncompressedSize},
         compressionType_{CompressionType::Uncompressed} {
@@ -171,7 +153,8 @@ class CompressionEncoder {
         {uncompressed.data(), uncompressed.size()},
         dataType,
         bitWidth,
-        compressionPolicy);
+        compressionPolicy,
+        typedLanesLevel);
 
     if (compressionResult.compressionType == CompressionType::Uncompressed) {
       // Compression declined. Since we already encoded the data, remember the

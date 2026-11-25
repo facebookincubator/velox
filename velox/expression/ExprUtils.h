@@ -47,4 +47,13 @@ void flattenInput(
     const std::string& flattenCall,
     std::vector<core::TypedExprPtr>& flat);
 
+/// Returns true if 'inputs' are the same nodes, in the same order, as the
+/// inputs of 'expr'. A rewrite uses this to return 'expr' itself, or no
+/// rewrite, instead of an equal copy: optimization runs on every subtree during
+/// compilation, so copies of unchanged nodes add up to memory quadratic in the
+/// expression depth.
+bool sameInputs(
+    const core::TypedExprPtr& expr,
+    const std::vector<core::TypedExprPtr>& inputs);
+
 } // namespace facebook::velox::expression::utils

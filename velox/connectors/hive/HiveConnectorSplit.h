@@ -17,7 +17,7 @@
 
 #include <optional>
 #include <unordered_map>
-#include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 
 namespace facebook::velox::connector::hive {
@@ -40,7 +40,7 @@ struct RowIdProperties {
   std::string tableGuid;
 };
 
-struct HiveConnectorSplit : public FileConnectorSplit {
+struct HiveConnectorSplit : public connector::FileConnectorSplit {
   /// Synthesized columns like $path, $file_size associated with the split.
   std::unordered_map<std::string, std::string> infoColumns;
 
@@ -77,7 +77,7 @@ struct HiveConnectorSplit : public FileConnectorSplit {
           std::nullopt,
       std::optional<dwio::common::ColumnMappingMode> _columnMappingMode =
           std::nullopt)
-      : FileConnectorSplit(
+      : connector::FileConnectorSplit(
             connectorId,
             _filePath,
             _fileFormat,
@@ -215,6 +215,12 @@ class HiveConnectorSplitBuilder {
     return *this;
   }
 
+  HiveConnectorSplitBuilder& splitRowRange(
+      dwio::common::SplitRowRange splitRowRange) {
+    splitRowRange_ = splitRowRange;
+    return *this;
+  }
+
   std::shared_ptr<connector::hive::HiveConnectorSplit> build() const {
     auto split = std::make_shared<connector::hive::HiveConnectorSplit>(
         connectorId_,
@@ -236,12 +242,14 @@ class HiveConnectorSplitBuilder {
         columnMappingMode_);
     split->batchSizeHint = batchSizeHint_;
     split->physicalFilePath = physicalFilePath_;
+    split->splitRowRange = splitRowRange_;
     return split;
   }
 
  private:
   const std::string filePath_;
   std::string physicalFilePath_;
+  std::optional<dwio::common::SplitRowRange> splitRowRange_;
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};
   uint64_t length_{std::numeric_limits<uint64_t>::max()};

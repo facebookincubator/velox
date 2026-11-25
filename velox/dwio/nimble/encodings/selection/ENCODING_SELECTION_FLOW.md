@@ -235,6 +235,9 @@ DictionaryEncoding<string>
 
 ### ManualEncodingSelectionPolicy (Most Common)
 - Uses **cost-based selection**: `cost = estimatedSize * readFactor`
+  - `Reversed` is a candidate only for values that mostly descend, and it
+    estimates its size from EliasFano, PartitionedEliasFano and DeltaBlock
+    over the reversed values
 - **Read factors** weight encodings by decode performance
   - Trivial: 0.7 (fast to decode + compression benefits)
   - FixedBitWidth: 0.9 (faster than variable-width)

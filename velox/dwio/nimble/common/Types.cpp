@@ -43,6 +43,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::PFOR, "PFOR"},
         {EncodingType::SimdForBitpack, "SimdForBitpack"},
         {EncodingType::BlockBitPacking, "BlockBitPacking"},
+        {EncodingType::BlockBitPackingV2, "BlockBitPackingV2"},
         {EncodingType::SubIntSplit, "SubIntSplit"},
         {EncodingType::FrequencyPartition, "FrequencyPartition"},
         {EncodingType::FOR, "FOR"},
@@ -52,6 +53,8 @@ constexpr auto kEncodingTypes =
         {EncodingType::SharedDictionary, "SharedDictionary"},
         {EncodingType::Slice, "Slice"},
         {EncodingType::EliasFano, "EliasFano"},
+        {EncodingType::Sequence, "Sequence"},
+        {EncodingType::Reversed, "Reversed"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({

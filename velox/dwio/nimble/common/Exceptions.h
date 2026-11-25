@@ -308,6 +308,8 @@ NIMBLE_DECLARE_CHECK_FAIL_TEMPLATES(::facebook::nimble::NimbleInternalError);
 #define NIMBLE_CHECK_NULL(e, ...) NIMBLE_CHECK((e) == nullptr, ##__VA_ARGS__)
 #define NIMBLE_CHECK_NOT_NULL(e, ...) \
   NIMBLE_CHECK((e) != nullptr, ##__VA_ARGS__)
+#define NIMBLE_CHECK_FILE_NULL(e, ...) \
+  NIMBLE_CHECK_FILE((e) == nullptr, ##__VA_ARGS__)
 #define NIMBLE_CHECK_FILE_NOT_NULL(e, ...) \
   NIMBLE_CHECK_FILE((e) != nullptr, ##__VA_ARGS__)
 #define NIMBLE_USER_CHECK_NULL(e, ...) \

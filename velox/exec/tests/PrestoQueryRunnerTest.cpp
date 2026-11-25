@@ -88,7 +88,7 @@ TEST_F(PrestoQueryRunnerTest, DISABLED_fuzzer) {
   });
 
   auto plan = velox::exec::test::PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .singleAggregation({}, {"min(c0)", "max(c0)", "set_agg(c1)"})
                   .project({"a0", "a1", "array_sort(a2)"})
                   .planNode();
@@ -126,7 +126,7 @@ TEST_F(PrestoQueryRunnerTest, sortedAggregation) {
 
   auto plan =
       velox::exec::test::PlanBuilder()
-          .values({data})
+          .values(data)
           .singleAggregation({}, {"multimap_agg(c0, c1 order by c0 asc)"})
           .planNode();
 
@@ -142,7 +142,7 @@ TEST_F(PrestoQueryRunnerTest, sortedAggregation) {
 
   plan =
       velox::exec::test::PlanBuilder()
-          .values({data})
+          .values(data)
           .singleAggregation(
               {},
               {"multimap_agg(c0, c1 order by c1 asc nulls first, c0 desc nulls last, c2 asc nulls last)"})
@@ -168,7 +168,7 @@ TEST_F(PrestoQueryRunnerTest, distinctAggregation) {
       makeRowVector({makeFlatVector<int64_t>({}), makeFlatVector<int64_t>({})});
 
   auto plan = velox::exec::test::PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .singleAggregation({}, {"array_agg(distinct c0)"})
                   .planNode();
 
@@ -308,14 +308,12 @@ TEST_F(PrestoQueryRunnerTest, toSqlJoins) {
 
   // Single join.
   {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({t})
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(t)
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
-                        PlanBuilder(planNodeIdGenerator).values({u}).planNode(),
-                        /*filter=*/"",
+                        "t0 = u0",
+                        builder.newPlan().values(u).planNode(),
                         {"t0", "t1"},
                         core::JoinType::kInner)
                     .planNode();
@@ -326,21 +324,17 @@ TEST_F(PrestoQueryRunnerTest, toSqlJoins) {
 
   // Two joins with a filter.
   {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({t})
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(t)
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
-                        PlanBuilder(planNodeIdGenerator).values({u}).planNode(),
-                        /*filter=*/"",
+                        "t0 = u0",
+                        builder.newPlan().values(u).planNode(),
                         {"t0"},
                         core::JoinType::kLeftSemiFilter)
                     .hashJoin(
-                        {"t0"},
-                        {"v0"},
-                        PlanBuilder(planNodeIdGenerator).values({v}).planNode(),
-                        "v1 > 0",
+                        "t0 = v0 AND v1 > 0",
+                        builder.newPlan().values(v).planNode(),
                         {"t0", "v1"},
                         core::JoinType::kInner)
                     .planNode();
@@ -353,28 +347,22 @@ TEST_F(PrestoQueryRunnerTest, toSqlJoins) {
 
   // Three joins.
   {
-    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan = PlanBuilder(planNodeIdGenerator)
-                    .values({t})
+    PlanBuilder builder;
+    auto plan = builder.newPlan()
+                    .values(t)
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
-                        PlanBuilder(planNodeIdGenerator).values({u}).planNode(),
-                        /*filter=*/"",
+                        "t0 = u0",
+                        builder.newPlan().values(u).planNode(),
                         {"t0", "t1"},
                         core::JoinType::kLeft)
                     .hashJoin(
-                        {"t0"},
-                        {"v0"},
-                        PlanBuilder(planNodeIdGenerator).values({v}).planNode(),
-                        /*filter=*/"",
+                        "t0 = v0",
+                        builder.newPlan().values(v).planNode(),
                         {"t0", "v1"},
                         core::JoinType::kInner)
                     .hashJoin(
-                        {"t0", "v1"},
-                        {"w0", "w1"},
-                        PlanBuilder(planNodeIdGenerator).values({w}).planNode(),
-                        /*filter=*/"",
+                        "t0 = w0 AND v1 = w1",
+                        builder.newPlan().values(w).planNode(),
                         {"t0", "w1"},
                         core::JoinType::kFull)
                     .planNode();

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <unordered_set>
+
 #include "velox/exec/OutputBuffer.h"
 #include "velox/exec/OutputBufferManager.h"
 
@@ -113,22 +115,37 @@ class DefaultOutputBufferManager : public OutputBufferManager {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck = nullptr);
 
-  /// Like getData(), but when the buffer for 'taskId' does not exist yet,
+  /// Like getData(), but for a sub-task 'taskId' that the task 'parentTaskId'
+  /// may not have created yet, such as a fixed point's producer that a peer
+  /// worker reads in the same iteration. 'parentTaskId' has an output buffer
+  /// in this manager for as long as it may create 'taskId'. When the buffer
+  /// for 'taskId' does not exist yet and the one for 'parentTaskId' does,
   /// holds the request and serves it once initializeTask() creates the buffer.
-  /// For a consumer that may ask for a producer before the producer task
-  /// starts, such as a fixed point's peer reading another worker's producer in
-  /// the same iteration. 'activeCheck' is required: a held request is dropped
-  /// once it returns false, e.g. after the consumer's own wait ran out, and
-  /// when the consumer calls deleteResults() for its destination.
-  /// 'activeCheck' may run under this manager's lock, so it must be cheap and
-  /// must not call this manager.
+  /// When neither exists, the sub-task is never created and the request is
+  /// dropped. 'activeCheck' is required: a held request is dropped once it
+  /// returns false, e.g. after the consumer's own wait ran out, by
+  /// deleteResultsWhenCreated() for its destination, and by
+  /// removeTask('parentTaskId'). 'activeCheck' may run under this manager's
+  /// lock, so it must be cheap and must not call this manager.
   void getDataWhenCreated(
+      const std::string& parentTaskId,
       const std::string& taskId,
       int destination,
       uint64_t maxBytes,
       int64_t sequence,
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck);
+
+  /// Like deleteResults(), but for a sub-task 'taskId' that the task
+  /// 'parentTaskId' may not have created yet, as in getDataWhenCreated(). When
+  /// the buffer for 'taskId' does not exist yet and the one for 'parentTaskId'
+  /// does, initializeTask() deletes the results of 'destination' as it creates
+  /// the buffer, so the producer does not wait for a consumer that is gone. A
+  /// delete still pending is dropped by removeTask('parentTaskId').
+  void deleteResultsWhenCreated(
+      const std::string& parentTaskId,
+      const std::string& taskId,
+      int destination);
 
   // Returns a new stream listener if a listener factory has been set.
   std::unique_ptr<OutputStreamListener> newListener() const {
@@ -139,7 +156,7 @@ class DefaultOutputBufferManager : public OutputBufferManager {
   // for repartitioning, e.g. computing checksums.
   void setListenerFactory(
       std::function<std::unique_ptr<OutputStreamListener>()> factory) {
-    listenerFactory_ = factory;
+    listenerFactory_ = std::move(factory);
   }
 
   // Retrieves the set of buffers for a query if exists.
@@ -183,9 +200,24 @@ class DefaultOutputBufferManager : public OutputBufferManager {
     DataConsumerActiveCheckCallback activeCheck;
   };
 
-  // The held requests by task id. Guarded by the mutex of 'buffers_', so a
-  // request cannot be held after initializeTask() looked for it.
-  std::unordered_map<std::string, std::vector<HeldRequest>> heldRequests_;
+  // What consumers asked of a sub-task's buffer before it existed.
+  struct PendingBuffer {
+    // The task that creates the sub-task.
+    std::string parentTaskId;
+    // Reads waiting for the buffer.
+    std::vector<HeldRequest> requests;
+    // Destinations whose consumers deleted their results.
+    std::vector<int> deletedDestinations;
+  };
+
+  // The pending buffers by sub-task id. Guarded by the mutex of 'buffers_', so
+  // nothing is added for a sub-task after initializeTask() looked for it.
+  std::unordered_map<std::string, PendingBuffer> pendingBuffers_;
+
+  // The ids of the sub-tasks in 'pendingBuffers_' by parent task id, so
+  // removeTask() of a parent finds them. Guarded by the mutex of 'buffers_'.
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+      pendingSubTaskIds_;
 
   std::function<std::unique_ptr<OutputStreamListener>()> listenerFactory_{
       nullptr};

@@ -16,10 +16,12 @@
 
 #include "velox/functions/prestosql/aggregates/VectorIndexPackAggregate.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <span>
 
-#include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/FaissLocalVectorIndex.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/expression/FunctionSignature.h"
@@ -29,19 +31,38 @@ namespace {
 
 using common::vectorindex::EmbeddingNormalizer;
 using common::vectorindex::Embeddings;
-using common::vectorindex::LocalVectorIndex;
+using common::vectorindex::FaissLocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
+using common::vectorindex::VectorIndexKind;
 using common::vectorindex::VectorIndexMetric;
 using common::vectorindex::VectorIndexMetricName;
 using common::vectorindex::VectorIndexMetricValue;
-using common::vectorindex::VectorIndexType;
+
+// Returns the value of 'input', a positive constant BIGINT argument named
+// 'what'.
+int64_t positiveConstant(const VectorPtr& input, std::string_view what) {
+  VELOX_USER_CHECK_NOT_NULL(input, "{} must be a constant", what);
+  VELOX_USER_CHECK(!input->isNullAt(0), "{} must not be null", what);
+  const auto value = input->as<ConstantVector<int64_t>>()->valueAt(0);
+  VELOX_USER_CHECK_GT(value, 0, "{} must be positive", what);
+  return value;
+}
+
+// A zero centroid has no direction, so no metric can compare it.
+void checkNotZero(std::span<const float> centroid) {
+  VELOX_USER_CHECK(
+      std::ranges::any_of(centroid, [](float value) { return value != 0; }),
+      "Cluster centroid must not be all zeros");
+}
 
 class VectorIndexPackAggregate {
  public:
   using InputType = Row<
       /*cluster_id*/ int64_t,
       /*cluster_centroid*/ Array<float>,
-      /*metric*/ Varchar>;
+      /*metric*/ Varchar,
+      /*num_clusters*/ int64_t,
+      /*dimension*/ int64_t>;
 
   // Carries the metric from the constant argument, which steps that merge
   // intermediate results do not receive.
@@ -55,12 +76,15 @@ class VectorIndexPackAggregate {
   static constexpr int32_t kClusterIds = 1;
   static constexpr int32_t kCentroids = 2;
 
-  using OutputType = Varbinary;
+  using OutputType = VectorIndex;
 
-  // Reads and checks the constant 'metric' argument once, before any rows
-  // arrive.
+  // A null cluster id or centroid fails the aggregation, so rows with nulls
+  // reach addInput.
+  static constexpr bool default_null_behavior_ = false;
+
+  // Reads and checks the constant arguments once, before any rows arrive.
   void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
-    VELOX_CHECK_EQ(constantInputs.size(), 3);
+    VELOX_CHECK_EQ(constantInputs.size(), 5);
     const auto& metric = constantInputs[2];
     VELOX_USER_CHECK_NOT_NULL(metric, "Metric must be a constant");
     VELOX_USER_CHECK(!metric->isNullAt(0), "Metric must not be null");
@@ -71,6 +95,8 @@ class VectorIndexPackAggregate {
         constantMetric_.has_value(),
         "Unsupported vector index metric: {}",
         metricName);
+    numClusters_ = positiveConstant(constantInputs[3], "Number of clusters");
+    dimension_ = positiveConstant(constantInputs[4], "Dimension");
   }
 
   struct AccumulatorType {
@@ -83,9 +109,9 @@ class VectorIndexPackAggregate {
     // The group's metric: from the constant argument for raw input, and from
     // the intermediate results otherwise.
     std::optional<VectorIndexMetric> metric;
-    // The function object shared by all groups, which holds the metric from
-    // the constant argument.
-    VectorIndexPackAggregate* fn;
+    // The function object shared by all groups, which holds the constant
+    // arguments.
+    VectorIndexPackAggregate* function;
 
     static constexpr bool is_fixed_size_ = false;
     static constexpr bool use_external_memory_ = true;
@@ -94,36 +120,59 @@ class VectorIndexPackAggregate {
 
     explicit AccumulatorType(
         HashStringAllocator* allocator,
-        VectorIndexPackAggregate* fn)
+        VectorIndexPackAggregate* function)
         : clusterIds{StlAllocator<int64_t>(allocator)},
           centroids{StlAllocator<float>(allocator)},
-          fn{fn} {}
+          function{function} {}
 
-    void addInput(
+    // The metric, the number of clusters and the dimension are constants,
+    // which setConstantInputs has read and checked.
+    bool addInput(
         HashStringAllocator* /*allocator*/,
-        int64_t clusterId,
-        exec::arg_type<Array<float>> centroid,
-        exec::arg_type<Varchar> /*metric*/) {
-      VELOX_USER_CHECK_GE(clusterId, 0, "Cluster id must not be negative");
+        exec::optional_arg_type<int64_t> clusterId,
+        exec::optional_arg_type<Array<float>> centroid,
+        exec::optional_arg_type<Varchar> /*metric*/,
+        exec::optional_arg_type<int64_t> /*numClusters*/,
+        exec::optional_arg_type<int64_t> /*dimension*/) {
+      VELOX_USER_CHECK(clusterId.has_value(), "Cluster id must not be null");
+      VELOX_USER_CHECK(
+          centroid.has_value(), "Cluster centroid must not be null");
+      const int64_t id = clusterId.value();
+      VELOX_USER_CHECK_GE(id, 0, "Cluster id must not be negative");
+      VELOX_USER_CHECK_LT(
+          id,
+          function->numClusters_,
+          "Cluster id must be less than the number of clusters");
+      const auto& values = centroid.value();
+      VELOX_USER_CHECK_EQ(
+          values.size(),
+          function->dimension_,
+          "Cluster centroid must have the given dimension");
       if (!metric.has_value()) {
-        metric = fn->constantMetric();
+        metric = function->constantMetric();
       }
-      setDimension(centroid.size());
-      for (auto value : centroid) {
+      setDimension(values.size());
+      for (auto value : values) {
         VELOX_USER_CHECK(
             value.has_value(), "Cluster centroid must not contain nulls");
         addValue(value.value());
       }
-      EmbeddingNormalizer::normalize(
-          groupMetric(), std::span(centroids).last(dimension));
-      clusterIds.push_back(clusterId);
+      const auto added = std::span(centroids).last(dimension);
+      checkNotZero(added);
+      EmbeddingNormalizer::normalize(groupMetric(), added);
+      clusterIds.push_back(id);
+      return true;
     }
 
     // Intermediate results may come from vector_index_pack_merge, so their
-    // structure is checked.
-    void combine(
+    // structure is checked. A null one comes from a group without rows.
+    bool combine(
         HashStringAllocator* /*allocator*/,
-        exec::arg_type<IntermediateType> other) {
+        exec::optional_arg_type<IntermediateType> intermediate) {
+      if (!intermediate.has_value()) {
+        return false;
+      }
+      const auto& other = intermediate.value();
       VELOX_USER_CHECK(
           other.at<kMetric>().has_value(),
           "Intermediate vector index codec must include the metric");
@@ -138,8 +187,9 @@ class VectorIndexPackAggregate {
       if (!metric.has_value()) {
         metric = otherMetric;
       }
-      VELOX_USER_CHECK(
-          otherMetric == *metric,
+      VELOX_USER_CHECK_EQ(
+          otherMetric,
+          *metric,
           "Intermediate vector index codecs of a group must have the same metric");
       const auto& otherIds = *other.at<kClusterIds>();
       const auto& otherCentroids = *other.at<kCentroids>();
@@ -157,15 +207,25 @@ class VectorIndexPackAggregate {
             id.has_value(), "Intermediate cluster ids must not be null");
         clusterIds.push_back(id.value());
       }
+      vector_size_t numValues{0};
       for (auto value : otherCentroids) {
         VELOX_USER_CHECK(
             value.has_value(),
             "Intermediate cluster centroids must not contain nulls");
         addValue(value.value());
+        if (++numValues % dimension == 0) {
+          checkNotZero(std::span(centroids).last(dimension));
+        }
       }
+      return true;
     }
 
-    void writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+    bool writeIntermediateResult(
+        bool nonNullGroup,
+        exec::out_type<IntermediateType>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
       VELOX_USER_CHECK_LE(
           centroids.size(),
           std::numeric_limits<vector_size_t>::max(),
@@ -180,10 +240,14 @@ class VectorIndexPackAggregate {
       for (auto value : centroids) {
         centroidsWriter.add_item() = value;
       }
+      return true;
     }
 
-    void writeFinalResult(exec::out_type<OutputType>& out) {
-      const int64_t numClusters = clusterIds.size();
+    bool writeFinalResult(bool nonNullGroup, exec::out_type<OutputType>& out) {
+      if (!nonNullGroup) {
+        return false;
+      }
+      const auto numClusters = static_cast<int64_t>(clusterIds.size());
       // Puts the centroids in cluster-id order in place: each swap moves one
       // centroid to its final position. Each id moves with its centroid, so
       // the accumulator still represents the same input.
@@ -212,13 +276,14 @@ class VectorIndexPackAggregate {
       }
       out.reserve(
           centroids.size() * sizeof(float) + numClusters * sizeof(int64_t));
-      LocalVectorIndex::build(
-          VectorIndexType::kFlat,
+      FaissLocalVectorIndex::build(
+          VectorIndexKind::kFlat,
           groupMetric(),
           LocalVectorIndexOptions{},
           Embeddings(centroids, dimension),
           clusterIds,
           [&](std::string_view chunk) { out.append(chunk); });
+      return true;
     }
 
    private:
@@ -234,7 +299,7 @@ class VectorIndexPackAggregate {
       centroids.push_back(value);
     }
 
-    void setDimension(int64_t size) {
+    void setDimension(vector_size_t size) {
       VELOX_USER_CHECK_GT(size, 0, "Cluster centroid must not be empty");
       if (dimension == 0) {
         dimension = size;
@@ -253,6 +318,8 @@ class VectorIndexPackAggregate {
 
   // Set by setConstantInputs() in steps that read raw input.
   std::optional<VectorIndexMetric> constantMetric_;
+  int64_t numClusters_{0};
+  int64_t dimension_{0};
 };
 
 } // namespace
@@ -263,17 +330,19 @@ void registerVectorIndexPackAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
-          .returnType("varbinary")
+          .returnType("vector_index")
           .intermediateType("row(integer,array(bigint),array(real))")
           .argumentType("bigint")
           .argumentType("array(real)")
           .constantArgumentType("varchar")
+          .constantArgumentType("bigint")
+          .constantArgumentType("bigint")
           .build(),
   };
 
   exec::registerAggregateFunction(
       names,
-      std::move(signatures),
+      signatures,
       [](core::AggregationNode::Step step,
          const std::vector<TypePtr>& argTypes,
          const TypePtr& resultType,
@@ -283,7 +352,7 @@ void registerVectorIndexPackAggregate(
             exec::SimpleAggregateAdapter<VectorIndexPackAggregate>>(
             step, argTypes, resultType);
       },
-      {.ignoreNullInputs = true},
+      {},
       withCompanionFunctions,
       overwrite);
 }

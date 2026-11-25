@@ -138,7 +138,7 @@ FOLLY_ALWAYS_INLINE int64_t addToTime(int64_t time, int64_t valueInMillis) {
       "TIME value {} is out of range [0, 86400000)",
       time);
 
-  if (FOLLY_UNLIKELY(valueInMillis == 0)) {
+  if (valueInMillis == 0) [[unlikely]] {
     return time;
   }
 
@@ -152,7 +152,7 @@ FOLLY_ALWAYS_INLINE int64_t addToTime(int64_t time, int64_t valueInMillis) {
   auto newTime = resultDuration % dayDuration;
 
   // Ensure result is positive (C++ modulo can return negative values)
-  if (FOLLY_UNLIKELY(newTime.count() < 0)) {
+  if (newTime.count() < 0) [[unlikely]] {
     newTime += dayDuration;
   }
 

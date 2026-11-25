@@ -266,21 +266,23 @@ TEST_F(BatchedStreamDecoderTest, rejectsSelectedReads) {
 }
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{pool_.get()};
   auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"A", "B"};
   hybridMap->addGroup(
-      0, {"A", "B"}, schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+  std::vector<std::string> defaultKeys;
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      defaultKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
-  hybridMap->appendDefaultGroupKey("new:X");
-  hybridMap->appendDefaultGroupKey("new:Y");
+  defaultKeys.push_back("new:X");
+  defaultKeys.push_back("new:Y");
 
   SchemaSerializer schemaSerializer;
   const auto schema = SchemaDeserializer::deserialize(
-      schemaSerializer.serialize(schemaBuilder));
+      schemaSerializer.serialize(schemaBuilder), pool_.get());
   const auto& group = schema->asHybridFlatMap().groupAt(0);
 
   const auto options = serializerOptions();
@@ -428,19 +430,22 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
           expectedDefaultKeyPresence.end()));
 }
 
+// The keys that groups holding none lend to a type builder.
+const std::vector<std::string> kNoGroupKeys;
+
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapOmittedNullsAreAllNonNull) {
-  SchemaBuilder schemaBuilder;
+  SchemaBuilder schemaBuilder{pool_.get()};
   auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
       ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
+  const std::vector<std::string> groupKeys{"configured"};
   hybridMap->addGroup(
-      0,
-      {"configured"},
-      schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
+      0, groupKeys, schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
-      {},
+      kNoGroupKeys,
       schemaBuilder.createScalarTypeBuilder(ScalarKind::Int64));
-  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto schema =
+      SchemaReader::getSchema(schemaBuilder.schemaNodes(), pool_.get());
 
   BatchedStreamDecoder decoder{
       *schema, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};

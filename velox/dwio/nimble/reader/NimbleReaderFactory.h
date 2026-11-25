@@ -22,13 +22,12 @@ namespace facebook::velox::nimble {
 
 namespace detail {
 
-/// Creates the batch (non-selective) NIMBLE reader, or nullptr when that
-/// reader is not part of the build. Defined once per build flavour: the batch
-/// reader depends on internal-only code, so only the internal build can supply
-/// it.
+/// Creates the batch (non-selective) NIMBLE reader. Defined in
+/// NimbleReader.cpp.
 std::unique_ptr<dwio::common::Reader> createBatchReader(
     const dwio::common::ReaderOptions& options,
-    const std::shared_ptr<ReadFile>& readFile);
+    const std::shared_ptr<ReadFile>& readFile,
+    const FileIoContext& fileIoContext);
 
 } // namespace detail
 

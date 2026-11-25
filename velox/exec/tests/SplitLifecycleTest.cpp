@@ -30,6 +30,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
+#include "velox/exec/tests/utils/TaskMonitor.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
@@ -48,15 +49,15 @@ core::PlanNodePtr makeScanUnion(
     const RowTypePtr& rowType,
     core::PlanNodeId& sourceId,
     core::PlanNodeId& siblingId) {
-  const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
-  return test::PlanBuilder(ids)
+  test::PlanBuilder builder;
+  return builder.newPlan()
       .localPartitionRoundRobin({
-          test::PlanBuilder(ids)
+          builder.newPlan()
               .tableScan(rowType)
               .capturePlanNodeId(sourceId)
               .limit(0, 2, true)
               .planNode(),
-          test::PlanBuilder(ids)
+          builder.newPlan()
               .tableScan(rowType)
               .capturePlanNodeId(siblingId)
               .planNode(),
@@ -123,7 +124,7 @@ finishScan(TaskCursor& cursor, const core::PlanNodeId& scanId, Split split) {
     result->loadedVector();
     results.push_back(result);
   }
-  VELOX_CHECK(test::waitForTaskCompletion(task.get()));
+  VELOX_CHECK(test::TaskMonitor::waitForCompletion(*task));
   return results;
 }
 
@@ -210,20 +211,20 @@ void admitSplit(
 TEST_F(SplitLifecycleTest, admissionResumesAfterLimit) {
   const auto data = makeRowVector({makeFlatIdentityVector<int32_t>(10'000)});
   const auto file = writeToFile(data);
-  const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
   core::PlanNodeId sourceId;
   core::PlanNodeId siblingId;
   CursorParameters params;
-  params.planNode = test::PlanBuilder(ids)
+  params.planNode = builder.newPlan()
                         .localPartitionRoundRobin({
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .tableScan(data->rowType())
                                 .capturePlanNodeId(sourceId)
                                 .limit(0, 2, true)
                                 .localGather()
                                 .limit(0, 2, false)
                                 .planNode(),
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .tableScan(data->rowType())
                                 .capturePlanNodeId(siblingId)
                                 .planNode(),
@@ -243,7 +244,7 @@ TEST_F(SplitLifecycleTest, admissionResumesAfterLimit) {
 
   readRows(*cursor, data->size() + 2);
   ASSERT_FALSE(cursor->moveNext());
-  ASSERT_TRUE(test::waitForTaskCompletion(task.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCompletion(*task));
   expectNoOutstandingSplits(task->taskStats());
 }
 
@@ -366,7 +367,7 @@ TEST_F(SplitLifecycleTest, cancellationDiscardsUnstartedGroup) {
   waitForDrivers(*task, 1);
 
   task->requestCancel();
-  ASSERT_TRUE(test::waitForTaskCancelled(task.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCancel(*task));
   const auto stats = task->taskStats();
   expectNoOutstandingSplits(stats);
   EXPECT_EQ(stats.numAbandonedSplits, 4);
@@ -458,7 +459,7 @@ DEBUG_ONLY_TEST_F(SplitLifecycleTest, cancellationDiscardsAcquiredSplit) {
       },
       testing::ThrowsMessage<folly::OperationCancelled>(
           testing::StrEq("coroutine operation cancelled")));
-  ASSERT_TRUE(test::waitForTaskCancelled(task.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCancel(*task));
   const auto stats = task->taskStats();
   expectNoOutstandingSplits(stats);
   EXPECT_EQ(stats.numAbandonedSplits, 3);
@@ -470,28 +471,25 @@ TEST_F(SplitLifecycleTest, exchangeSource) {
   ExchangeSource::registerFactory(test::createLocalExchangeSource);
   const auto upstream = Task::create(
       "local://split-lifecycle",
-      test::PlanBuilder()
-          .values({data})
-          .partitionedOutput({}, 1)
-          .planFragment(),
+      test::PlanBuilder().values(data).partitionedOutput({}, 1).planFragment(),
       0,
       core::QueryCtx::create(driverExecutor_.get()),
       Task::ExecutionMode::kParallel);
   upstream->start(1);
 
-  const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  test::PlanBuilder builder;
   core::PlanNodeId sourceId;
   core::PlanNodeId siblingId;
   CursorParameters params;
   params.maxDrivers = 1;
-  params.planNode = test::PlanBuilder(ids)
+  params.planNode = builder.newPlan()
                         .localPartitionRoundRobin({
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .exchange(data->rowType(), "Presto")
                                 .capturePlanNodeId(sourceId)
                                 .limit(0, 2, true)
                                 .planNode(),
-                            test::PlanBuilder(ids)
+                            builder.newPlan()
                                 .tableScan(data->rowType())
                                 .capturePlanNodeId(siblingId)
                                 .planNode(),
@@ -524,7 +522,7 @@ TEST_F(SplitLifecycleTest, exchangeSource) {
     EXPECT_EQ(stats.numFinishedSplits, 1);
   }
 
-  ASSERT_TRUE(test::waitForTaskCompletion(upstream.get()));
+  ASSERT_TRUE(test::TaskMonitor::waitForCompletion(*upstream));
 }
 
 } // namespace

@@ -57,6 +57,9 @@ std::unique_ptr<ReadFile> FaultyFileSystem::openFileForRead(
     std::string_view path,
     const FileOptions& options) {
   const std::string delegatedPath = std::string(extractPath(path));
+  auto op = FaultFileSystemOpenFileForReadOperation(delegatedPath, options);
+  maybeInjectFilesystemFault(&op);
+  VELOX_CHECK(op.delegate, "A file system hook cannot skip openFileForRead");
   auto delegatedFile = getFileSystem(delegatedPath, config_)
                            ->openFileForRead(delegatedPath, options);
   return std::make_unique<FaultyReadFile>(

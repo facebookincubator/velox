@@ -20,7 +20,7 @@
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -35,6 +35,8 @@
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/ReversedEncoding.h"
+#include "velox/dwio/nimble/encodings/SequenceEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
@@ -42,6 +44,7 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 
 namespace facebook::nimble {
 
@@ -188,6 +191,22 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       NIMBLE_UNREACHABLE(
           "PartitionedEliasFano encoding only supports integral data types, got {}.",
           encoding.dataType());
+    case EncodingType::Sequence:
+      if constexpr (isIntegralType<T>()) {
+        return dispatchBySerializedIntegerType<SequenceEncoding>(
+            encoding, std::forward<F>(f));
+      }
+      NIMBLE_UNREACHABLE(
+          "Sequence encoding only supports integral data types, got {}.",
+          encoding.dataType());
+    case EncodingType::Reversed:
+      if constexpr (isIntegralType<T>()) {
+        return dispatchBySerializedIntegerType<ReversedEncoding>(
+            encoding, std::forward<F>(f));
+      }
+      NIMBLE_UNREACHABLE(
+          "Reversed encoding only supports integral data types, got {}.",
+          encoding.dataType());
     case EncodingType::ALPRD:
       if constexpr (isFloatingPointType<T>()) {
         return f(static_cast<ALPRDEncoding<T>&>(encoding));
@@ -203,7 +222,9 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
           "ALP encoding only supports float and double data types, got {}.",
           encoding.dataType());
     case EncodingType::BlockBitPacking:
-      return f(static_cast<BlockBitPackingEncoding<T>&>(encoding));
+      return f(static_cast<deprecated::BlockBitPackingEncoding<T>&>(encoding));
+    case EncodingType::BlockBitPackingV2:
+      return f(static_cast<BlockBitPackingV2Encoding<T>&>(encoding));
     case EncodingType::PFOR:
       if constexpr (isIntegralType<T>()) {
         return f(static_cast<PFOREncoding<T>&>(encoding));

@@ -160,11 +160,10 @@ class MakeRowFromMap {
 
     const auto& keyType = keysToProject_->type();
     VELOX_USER_CHECK_EQ(KeyKind, keyType->kind(), "Unexptected key TypeKind");
-    if (keyType != SMALLINT() && keyType != INTEGER() && keyType != BIGINT()) {
-      VELOX_NYI(
-          "Only SMALLINT, INTEGER, BIGINT keys are currently supported, instead got {}",
-          keyType->toString());
-    }
+    VELOX_NYI_CHECK(
+        keyType == SMALLINT() || keyType == INTEGER() || keyType == BIGINT(),
+        "Only SMALLINT, INTEGER, BIGINT keys are currently supported, instead got {}",
+        keyType->toString());
     createKeyToFieldIndexMap(options.keysToProject);
   }
 

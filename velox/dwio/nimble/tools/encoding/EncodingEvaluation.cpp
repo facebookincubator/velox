@@ -67,6 +67,7 @@ uint8_t nestedChildrenCount(nimble::EncodingType encodingType) {
   switch (encodingType) {
     case nimble::EncodingType::Delta:
     case nimble::EncodingType::BlockBitPacking:
+    case nimble::EncodingType::BlockBitPackingV2:
     case nimble::EncodingType::FOR:
       return 3;
     case nimble::EncodingType::RLE:
@@ -155,7 +156,7 @@ ChunkMeasurement evaluateCandidateEncodingOnce(
   nimble::SchemaSerializer schemaSerializer;
   const auto serializedSchema =
       schemaSerializer.serialize(serializer.schemaBuilder());
-  auto schema = nimble::SchemaDeserializer::deserialize(serializedSchema);
+  auto schema = nimble::SchemaDeserializer::deserialize(serializedSchema, pool);
   nimble::DeserializerOptions deserializerOptions{};
   nimble::Deserializer deserializer(schema, pool, deserializerOptions);
 

@@ -24,7 +24,7 @@ namespace facebook::velox::aggregate::prestosql {
 /// Registers the vector_index_build aggregate:
 ///
 ///   (embedding ARRAY(REAL), id BIGINT, index_type VARCHAR, metric VARCHAR,
-///    options MAP(VARCHAR, VARCHAR)) -> VARBINARY
+///    options MAP(VARCHAR, VARCHAR)) -> VECTOR_INDEX
 ///
 /// Builds a local index over the group's rows (see LocalVectorIndex).
 ///  - Embeddings must all have the same, non-zero length.

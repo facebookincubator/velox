@@ -69,6 +69,19 @@ class TrivialEncodingView final : public TypedEncodingView<T> {
     std::copy(values_ + offset, values_ + offset + length, output);
   }
 
+  // Gathers the values in one loop, with one bounds check for all indices. A
+  // Dictionary view reads its alphabet this way for every row it reads.
+  void readPhysicalAt(std::span<const uint32_t> indices, physicalType* output)
+      const final {
+    if (indices.empty()) {
+      return;
+    }
+    this->checkReadIndices(indices);
+    for (size_t i{0}; i < indices.size(); ++i) {
+      output[i] = values_[indices[i]];
+    }
+  }
+
   const physicalType* values_;
 };
 

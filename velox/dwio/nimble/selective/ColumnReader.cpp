@@ -18,7 +18,7 @@
 
 #include <memory>
 #include "folly/ScopeGuard.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/nimble/selective/ByteColumnReader.h"
@@ -100,6 +100,14 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> buildColumnReader(
       return std::make_unique<StructColumnReader>(
           requestedType, fileType, params, scanSpec, isRoot);
     case TypeKind::ARRAY: {
+      // TODO: Add a SlidingWindowArray column reader. Its offsets are element
+      // positions in the stripe, not indexes of distinct arrays, so
+      // DeduplicatedArrayColumnReader cannot read it.
+      if (nimbleType->isSlidingWindowArray()) {
+        NIMBLE_NOT_IMPLEMENTED(
+            "The selective reader does not support SlidingWindowArray columns: {}",
+            fileType->fullName());
+      }
       if (nimbleType->isArrayWithOffsets()) {
         if (!params.streams().hasStream(nimbleType->asArrayWithOffsets()
                                             .offsetsDescriptor()

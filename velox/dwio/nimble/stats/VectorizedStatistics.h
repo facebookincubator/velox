@@ -118,6 +118,10 @@ using FloatingPointVectorizedStatistics = TypedVectorizedStatistic<double>;
 using StringVectorizedStatistics = TypedVectorizedStatistic<std::string_view>;
 using DeduplicatedVectorizedStatistics = TypedVectorizedStatistic<uint64_t>;
 
+namespace detail {
+class LazyFileStatsReader;
+} // namespace detail
+
 class VectorizedFileStats {
  public:
   /// Options for building file and stripe vectorized statistics.
@@ -137,24 +141,50 @@ class VectorizedFileStats {
       velox::memory::MemoryPool* pool,
       Options options);
 
+  ~VectorizedFileStats();
+
   std::string_view serialize(nimble::Buffer& buffer);
 
+  // TODO: Delete once the lazy path is fully rolled out.
   static std::unique_ptr<VectorizedFileStats> deserialize(
       const std::string_view payload,
       velox::memory::MemoryPool& pool);
 
+  /// Deserializes lazily: parses only the header of 'payload'. Reads each stat
+  /// stream in place through an encoding view, created on first use, instead
+  /// of decoding it. 'payloadHolder' keeps 'payload' valid, or is null if the
+  /// caller does. The result answers only columnStatistics() and
+  /// logicalSize(), which are thread-safe.
+  static std::unique_ptr<VectorizedFileStats> deserialize(
+      std::string_view payload,
+      std::shared_ptr<const void> payloadHolder,
+      velox::TypePtr schema,
+      velox::memory::MemoryPool& pool);
+
+  // TODO: Delete once the lazy path is fully rolled out.
   std::vector<std::unique_ptr<ColumnStatistics>> toColumnStatistics(
       const velox::TypePtr& schema,
       const std::shared_ptr<const nimble::Type>& nimbleType);
 
- private:
-  friend class VectorizedStripeStats;
+  /// Returns the statistics of node 'nodeId', or null if the schema has no
+  /// such node. Builds them on first call. Throws on a corrupt section.
+  /// Requires the lazy deserialize().
+  const ColumnStatistics* columnStatistics(uint32_t nodeId) const;
 
+  /// Returns the logical size of node 'nodeId', or std::nullopt if the schema
+  /// has no such node. Builds no ColumnStatistics. Requires the lazy
+  /// deserialize().
+  std::optional<uint64_t> logicalSize(uint32_t nodeId) const;
+
+ private:
   VectorizedFileStats(
       const std::vector<StatStreamType>& streamTypes,
       const std::vector<uint64_t>& streamLengths,
       std::string_view statStreams,
       velox::memory::MemoryPool& pool);
+
+  explicit VectorizedFileStats(
+      std::unique_ptr<detail::LazyFileStatsReader> lazyReader);
 
   std::vector<StatStreamType> getStatStreamTypes() const;
   std::vector<StatStreamType> collateStatStreamTypes(
@@ -169,69 +199,18 @@ class VectorizedFileStats {
       std::string_view payload,
       velox::memory::MemoryPool& pool);
 
+  // Returns 'lazyReader_'. Throws if this object did not come from the lazy
+  // deserialize().
+  const detail::LazyFileStatsReader& lazyReader() const;
+
   // Options applied when constructing the vectorized statistics streams.
   Options options_;
   std::set<StatType> statTypes_;
   std::map<StatStreamType, std::unique_ptr<VectorizedStatistic>> statStreams_;
-  EncodingSelectionPolicyCreator encodingSelectionPolicyCreator_ =
-      [encodingFactory = ManualEncodingSelectionPolicyFactory{}](
-          DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
-    return encodingFactory.createPolicy(dataType);
-  };
-};
 
-// Not thread-safe. toStripeColumnStatistics() lazily populates stripeStats_ as
-// a memoization cache on first call, so a single VectorizedStripeStats instance
-// must not be shared across threads. Readers construct one transiently and copy
-// the result out on a single thread (see ReaderBase).
-class VectorizedStripeStats {
- public:
-  VectorizedStripeStats(
-      const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
-          stripeStats,
-      velox::memory::MemoryPool* pool)
-      : VectorizedStripeStats(
-            stripeStats,
-            pool,
-            VectorizedFileStats::Options{}) {}
-
-  VectorizedStripeStats(
-      const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
-          stripeStats,
-      velox::memory::MemoryPool* pool,
-      VectorizedFileStats::Options options);
-
-  std::string_view serialize(nimble::Buffer& buffer);
-
-  static std::unique_ptr<VectorizedStripeStats> deserialize(
-      std::string_view payload,
-      velox::memory::MemoryPool& pool);
-
-  // Lazily materializes and caches the per-stripe column statistics. Mutates
-  // stripeStats_ on first call; see the thread-safety note above.
-  const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
-  toStripeColumnStatistics(
-      const velox::TypePtr& schema,
-      const std::shared_ptr<const nimble::Type>& nimbleType);
-
-  // Materializes if needed, then transfers ownership of the cached stats to the
-  // caller. Use this for single-use extraction when the VectorizedStripeStats
-  // instance will be discarded afterward.
-  std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>
-  takeStripeColumnStatistics(
-      const velox::TypePtr& schema,
-      const std::shared_ptr<const nimble::Type>& nimbleType);
-
- private:
-  VectorizedStripeStats(
-      uint32_t numStripes,
-      uint32_t numColumns,
-      std::vector<std::unique_ptr<VectorizedFileStats>> stripeFileStats);
-
-  uint32_t numStripes_{0};
-  uint32_t numColumns_{0};
-  std::vector<std::unique_ptr<VectorizedFileStats>> stripeFileStats_;
-  std::vector<std::vector<std::unique_ptr<ColumnStatistics>>> stripeStats_;
+  // Set only by the lazy deserialize(), which leaves the members above at
+  // their defaults.
+  std::unique_ptr<detail::LazyFileStatsReader> lazyReader_;
 };
 
 } // namespace facebook::nimble

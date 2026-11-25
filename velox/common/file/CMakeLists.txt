@@ -18,6 +18,7 @@ velox_add_library(
   velox_file
   File.cpp
   FileInputStream.cpp
+  FileIoContext.cpp
   FileIoTracer.cpp
   FileSystems.cpp
   FileUtils.cpp
@@ -26,6 +27,7 @@ velox_add_library(
   HEADERS
   File.h
   FileInputStream.h
+  FileIoContext.h
   FileIoTracer.h
   FileSystems.h
   FileUtils.h

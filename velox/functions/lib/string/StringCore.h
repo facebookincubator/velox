@@ -25,16 +25,8 @@
 #include "velox/functions/lib/string/GreekFinalSigma.h"
 
 #if (ENABLE_VECTORIZATION > 0) && !defined(_DEBUG) && !defined(DEBUG)
-#if defined(__clang__) && (__clang_major__ > 7)
-#define IS_SANITIZER                          \
-  ((__has_feature(address_sanitizer) == 1) || \
-   (__has_feature(memory_sanitizer) == 1) ||  \
-   (__has_feature(thread_sanitizer) == 1) ||  \
-   (__has_feature(undefined_sanitizer) == 1))
-
-#if IS_SANITIZER == 0
+#if defined(__clang__) && (__clang_major__ > 7) && !defined(FOLLY_SANITIZE)
 #define VECTORIZE_LOOP_IF_POSSIBLE _Pragma("clang loop vectorize(enable)")
-#endif
 #endif
 #endif
 

@@ -77,7 +77,7 @@ jobs:
     # skipped or failed plan cannot quietly build nothing.
     if: >-
       always() && needs.plan.result != 'cancelled' &&
-      github.repository == 'facebookincubator/velox'
+      !github.event.repository.fork
     name: macos-15-${{ matrix.type }}
     strategy:
       fail-fast: false
@@ -113,6 +113,7 @@ jobs:
           CMAKE_POLICY_VERSION_MINIMUM: '3.5'
         run: |
           source scripts/setup-macos.sh
+          update_brew
           install_build_prerequisites
           install_velox_deps_from_brew
           install_gflags
@@ -134,6 +135,9 @@ jobs:
           install_double_conversion
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
+          # Later steps run in a new shell, so the OpenSSL 3 pin from
+          # setup-macos.sh has to be carried over explicitly.
+          echo "OPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
@@ -193,7 +197,7 @@ jobs:
             --target velox "${matched[@]}"
           ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:

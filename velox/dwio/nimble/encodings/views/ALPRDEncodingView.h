@@ -104,9 +104,7 @@ class ALPRDEncodingView final : public TypedEncodingView<T>,
     codes.resize(length);
     codes_->read(offset, length, codes.data());
     rightParts_->read(offset, length, output);
-    for (uint32_t i = 0; i < length; ++i) {
-      output[i] = decode(codes[i], output[i]);
-    }
+    combineParts(parameters_, codes.data(), length, output);
     while (exceptionIndex < exceptionPositions_.size() &&
            exceptionPositions_[exceptionIndex] < offset + length) {
       const auto index = exceptionPositions_[exceptionIndex] - offset;

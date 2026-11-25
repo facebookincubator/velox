@@ -134,7 +134,7 @@ void VeloxIn10MinDemo::run() {
 
   // First we need to parse the expression into a fully typed expression tree.
   // Then, we need to compile it into an executable ExprSet.
-  auto exprSet = compileExpression("a + b", asRowType(data->type()));
+  auto exprSet = compileExpression("a + b", data->rowType());
 
   // Let's print out the ExprSet:
   std::cout << std::endl << "> 'a + b' expression:" << std::endl;
@@ -149,7 +149,7 @@ void VeloxIn10MinDemo::run() {
   std::cout << abc->toString(0, c->size()) << std::endl;
 
   // Let's try a slightly more complex expression: `3 * a + sqrt(b)`.
-  exprSet = compileExpression("2 * a + b % 3", asRowType(data->type()));
+  exprSet = compileExpression("2 * a + b % 3", data->rowType());
 
   std::cout << std::endl << "> '2 * a + b % 3' expression:" << std::endl;
   std::cout << exprSet->toString(false /*compact*/) << std::endl;
@@ -165,8 +165,7 @@ void VeloxIn10MinDemo::run() {
   // Let's transform 'dow' column into a 3-letter prefix with first letter
   // capitalized, e.g. Mon, Tue, etc.
   exprSet = compileExpression(
-      "concat(upper(substr(dow, 1, 1)), substr(dow, 2, 2))",
-      asRowType(data->type()));
+      "concat(upper(substr(dow, 1, 1)), substr(dow, 2, 2))", data->rowType());
 
   std::cout << std::endl
             << "> '3-letter prefix with first letter capitalized' expression:"
@@ -184,7 +183,7 @@ void VeloxIn10MinDemo::run() {
   // and executing a query plan with an aggregation node.
 
   auto plan = PlanBuilder()
-                  .values({data})
+                  .values(data)
                   .singleAggregation(
                       {},
                       {"sum(a) AS sum_a",
@@ -202,7 +201,7 @@ void VeloxIn10MinDemo::run() {
 
   // Now, let's sort by 'a' descending.
 
-  plan = PlanBuilder().values({data}).orderBy({"a DESC"}, false).planNode();
+  plan = PlanBuilder().values(data).orderBy({"a DESC"}, false).planNode();
 
   auto sorted = AssertQueryBuilder(plan).copyResults(pool());
 
@@ -213,7 +212,7 @@ void VeloxIn10MinDemo::run() {
 
   // And take top 3 rows.
 
-  plan = PlanBuilder().values({data}).topN({"a DESC"}, 3, false).planNode();
+  plan = PlanBuilder().values(data).topN({"a DESC"}, 3, false).planNode();
 
   auto top3 = AssertQueryBuilder(plan).copyResults(pool());
 
@@ -223,7 +222,7 @@ void VeloxIn10MinDemo::run() {
   std::cout << top3->toString(0, top3->size()) << std::endl;
 
   // We can also filter rows that have even values of 'a'.
-  plan = PlanBuilder().values({data}).filter("a % 2 == 0").planNode();
+  plan = PlanBuilder().values(data).filter("a % 2 == 0").planNode();
 
   auto evenA = AssertQueryBuilder(plan).copyResults(pool());
 
@@ -256,27 +255,25 @@ void VeloxIn10MinDemo::run() {
   // node for nations table and another for region table. We also need to
   // provide splits for each TableScan node. We are going to use two
   // PlanBuilders: one for the probe side of the join and another one for the
-  // build side. We are going to use PlanNodeIdGenerator to ensure that all plan
-  // nodes in the final plan have unique IDs.
+  // build side. We create the build-side builder with newPlan() to ensure that
+  // all plan nodes in the final plan have unique IDs.
 
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  PlanBuilder builder;
   core::PlanNodeId nationScanId;
   core::PlanNodeId regionScanId;
-  plan = PlanBuilder(planNodeIdGenerator)
+  plan = builder.newPlan()
              .tpchTableScan(
                  tpch::Table::TBL_NATION, {"n_regionkey"}, 1 /*scaleFactor*/)
              .capturePlanNodeId(nationScanId)
              .hashJoin(
-                 {"n_regionkey"},
-                 {"r_regionkey"},
-                 PlanBuilder(planNodeIdGenerator)
+                 "n_regionkey = r_regionkey",
+                 builder.newPlan()
                      .tpchTableScan(
                          tpch::Table::TBL_REGION,
                          {"r_regionkey", "r_name"},
                          1 /*scaleFactor*/)
                      .capturePlanNodeId(regionScanId)
                      .planNode(),
-                 "", // extra filter
                  {"r_name"})
              .singleAggregation({"r_name"}, {"count(1) as nation_cnt"})
              .orderBy({"r_name"}, false)

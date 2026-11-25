@@ -51,7 +51,7 @@ void gatherMerge(
     bufferSourceIndices[numBatchRows] =
         currentStream->currentIndex(&endOfBatch);
     ++numBatchRows;
-    if (FOLLY_UNLIKELY(endOfBatch)) {
+    if (endOfBatch) [[unlikely]] {
       // The stream is at end of input batch. Need to copy out the rows before
       // fetching next batch in 'pop'.
       gatherCopy(
@@ -68,7 +68,7 @@ void gatherMerge(
   }
   VELOX_CHECK_LE(totalNumRows + numBatchRows, target->size());
 
-  if (FOLLY_LIKELY(numBatchRows != 0)) {
+  if (numBatchRows != 0) [[likely]] {
     gatherCopy(
         target.get(),
         totalNumRows,
@@ -235,11 +235,18 @@ uint64_t SpillState::appendToPartition(
   });
 
   const uint64_t bytes = rows->estimateFlatSize();
-  validateSpillBytesSize(bytes);
-  updateSpilledInputBytes(bytes);
+  auto* writer = partitionWriter(id);
+  // A writer that can't split the rows into pages keeps them in one page.
+  if (!writer->canEstimateWrites(*rows->type())) {
+    validateSpillBytesSize(bytes);
+  }
 
   IndexRange range{0, rows->size()};
-  return partitionWriter(id)->write(rows, folly::Range<IndexRange*>(&range, 1));
+  // The writer can reject the rows, so count them only once they are written.
+  const auto writtenBytes =
+      writer->write(rows, folly::Range<IndexRange*>(&range, 1));
+  updateSpilledInputBytes(bytes);
+  return writtenBytes;
 }
 
 SpillWriter* SpillState::partitionWriter(const SpillPartitionId& id) const {
@@ -353,7 +360,12 @@ SpillPartition::createUnorderedReader(
   for (auto& fileInfo : files_) {
     streams.push_back(
         FileSpillBatchStream::create(
-            SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+            SpillReadFile::create(
+                fileInfo,
+                bufferSize,
+                pool,
+                /*readAheadExecutor=*/nullptr,
+                spillStats)));
   }
   files_.clear();
   return std::make_unique<UnorderedStreamReader<BatchStream>>(
@@ -364,17 +376,19 @@ std::unique_ptr<TreeOfLosers<SpillMergeStream>>
 SpillPartition::createOrderedReaderInternal(
     uint64_t bufferSize,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* spillStats) {
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
   streams.reserve(files_.size());
   for (auto& fileInfo : files_) {
     streams.push_back(
         FileSpillMergeStream::create(
-            SpillReadFile::create(fileInfo, bufferSize, pool, spillStats)));
+            SpillReadFile::create(
+                fileInfo, bufferSize, pool, readAheadExecutor, spillStats)));
   }
   files_.clear();
   // Check if the partition is empty or not.
-  if (FOLLY_UNLIKELY(streams.empty())) {
+  if (streams.empty()) [[unlikely]] {
     return nullptr;
   }
   return std::make_unique<TreeOfLosers<SpillMergeStream>>(std::move(streams));
@@ -439,6 +453,7 @@ SpillFileInfo mergeSpillFiles(
     uint64_t writeBufferSize,
     SpillFileMergeParams& mergeParams,
     memory::MemoryPool* pool,
+    folly::Executor* readAheadExecutor,
     exec::SpillStats* spillStats) {
   VELOX_CHECK_GT(files.size(), 0);
   std::vector<std::unique_ptr<SpillMergeStream>> streams;
@@ -446,7 +461,12 @@ SpillFileInfo mergeSpillFiles(
   for (const auto& fileInfo : files) {
     streams.push_back(
         FileSpillMergeStream::create(
-            SpillReadFile::create(fileInfo, readBufferSize, pool, spillStats)));
+            SpillReadFile::create(
+                fileInfo,
+                readBufferSize,
+                pool,
+                readAheadExecutor,
+                spillStats)));
   }
   const auto batchRows = estimateOutputBatchRows(
       streams, mergeParams.maxBatchRows, mergeParams.maxBatchBytes);
@@ -516,7 +536,7 @@ SpillPartition::createOrderedReader(
   VELOX_CHECK_NE(numMaxMergeFiles, 1);
   if (numMaxMergeFiles == 0 || files_.size() <= numMaxMergeFiles) {
     return createOrderedReaderInternal(
-        spillConfig.readBufferSize, pool, spillStats);
+        spillConfig.readBufferSize, pool, spillConfig.executor, spillStats);
   }
 
   SpillFileHeap orderedFiles(files_.begin(), files_.end());
@@ -544,6 +564,7 @@ SpillPartition::createOrderedReader(
         spillConfig.writeBufferSize,
         mergeParams,
         pool,
+        spillConfig.executor,
         spillStats);
     orderedFiles.push(mergedFile);
     files.clear();
@@ -555,7 +576,7 @@ SpillPartition::createOrderedReader(
     orderedFiles.pop();
   }
   return createOrderedReaderInternal(
-      spillConfig.readBufferSize, pool, spillStats);
+      spillConfig.readBufferSize, pool, spillConfig.executor, spillStats);
 }
 
 IterableSpillPartitionSet::IterableSpillPartitionSet() {
@@ -703,7 +724,7 @@ bool ConcatFilesSpillBatchStream::nextBatch(RowVectorPtr& batch) {
 
 SpillPartitionId::SpillPartitionId(uint32_t partitionNumber)
     : encodedId_(partitionNumber) {
-  if (FOLLY_UNLIKELY(partitionNumber >= (1 << kMaxPartitionBits))) {
+  if (partitionNumber >= (1 << kMaxPartitionBits)) [[unlikely]] {
     VELOX_FAIL(
         fmt::format(
             "Partition number {} exceeds max partition number {}",
@@ -716,7 +737,7 @@ SpillPartitionId::SpillPartitionId(
     SpillPartitionId parent,
     uint32_t partitionNumber) {
   const auto childSpillLevel = parent.spillLevel() + 1;
-  if (FOLLY_UNLIKELY(childSpillLevel > kMaxSpillLevel)) {
+  if (childSpillLevel > kMaxSpillLevel) [[unlikely]] {
     VELOX_FAIL(
         fmt::format(
             "Spill level {} exceeds max spill level {}",
@@ -777,7 +798,7 @@ uint32_t SpillPartitionId::partitionNumber() const {
 /// level.
 uint32_t SpillPartitionId::partitionNumber(uint32_t level) const {
   const auto leafLevel = spillLevel();
-  if (FOLLY_UNLIKELY(level > leafLevel)) {
+  if (level > leafLevel) [[unlikely]] {
     VELOX_FAIL(
         "spillLevel needs to be equal or smaller than leaf level {} vs {}",
         level,

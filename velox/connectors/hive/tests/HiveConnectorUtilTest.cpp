@@ -44,22 +44,6 @@ namespace facebook::velox::connector {
 using namespace dwio::common;
 
 namespace {
-// Unsupported types for createPointFilter and createRangeFilter with test
-// values.
-struct UnsupportedFilterType {
-  TypePtr type;
-  variant value;
-};
-
-const std::vector<UnsupportedFilterType> kUnsupportedFilterTypes = {
-    {TIMESTAMP(), variant(Timestamp(0, 0))},
-    {ARRAY(BIGINT()), variant::array({variant::create<TypeKind::BIGINT>(1)})},
-    {MAP(VARCHAR(), BIGINT()),
-     variant::map({{variant("key"), variant::create<TypeKind::BIGINT>(1)}})},
-    {ROW({{"a", BIGINT()}}),
-     variant::row({variant::create<TypeKind::BIGINT>(1)})},
-};
-
 class DummyNimbleReaderFactory : public dwio::common::ReaderFactory {
  public:
   explicit DummyNimbleReaderFactory(FileFormat format)
@@ -805,37 +789,6 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
   }
 }
 
-TEST_F(HiveConnectorUtilTest, checkColumnHandleConsistent) {
-  // Create two consistent column handles
-  auto handle1 = std::make_shared<hive::HiveColumnHandle>(
-      "col1", hive::FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
-  auto handle2 = std::make_shared<hive::HiveColumnHandle>(
-      "col1", hive::FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
-
-  // Should not throw for consistent handles
-  EXPECT_NO_THROW(hive::checkColumnHandleConsistent(*handle1, *handle2));
-
-  // Test inconsistent column type
-  auto handlePartition = std::make_shared<hive::HiveColumnHandle>(
-      "col1",
-      hive::FileColumnHandle::ColumnType::kPartitionKey,
-      BIGINT(),
-      BIGINT());
-  VELOX_ASSERT_THROW(
-      hive::checkColumnHandleConsistent(*handle1, *handlePartition),
-      "Inconsistent column handle type: col1, expected Regular, got PartitionKey");
-
-  // Test inconsistent data type
-  auto handleVarchar = std::make_shared<hive::HiveColumnHandle>(
-      "col1",
-      hive::FileColumnHandle::ColumnType::kRegular,
-      VARCHAR(),
-      VARCHAR());
-  VELOX_ASSERT_THROW(
-      hive::checkColumnHandleConsistent(*handle1, *handleVarchar),
-      "Inconsistent column handle data type: col1, expected BIGINT, got VARCHAR");
-}
-
 TEST_F(HiveConnectorUtilTest, makeScanSpecWithIndexColumns) {
   // Data columns schema - all columns available in the file.
   const auto dataColumns = ROW(
@@ -965,7 +918,7 @@ TEST_F(HiveConnectorUtilTest, makeScanSpecWithIndexColumns) {
       subfieldFilters = testCase.makeSubfieldFilters();
     }
 
-    auto scanSpec = hive::makeScanSpec(
+    auto scanSpec = connector::makeScanSpec(
         testCase.rowType,
         testCase.outputSubfields,
         subfieldFilters,
@@ -994,7 +947,7 @@ TEST_F(HiveConnectorUtilTest, makeScanSpecWithIndexColumnsError) {
   const auto rowType = ROW({"a", "b"}, {BIGINT(), VARCHAR()});
 
   VELOX_ASSERT_THROW(
-      hive::makeScanSpec(
+      connector::makeScanSpec(
           rowType,
           /*outputSubfields=*/{},
           /*subfieldFilters=*/{},
@@ -1006,254 +959,6 @@ TEST_F(HiveConnectorUtilTest, makeScanSpecWithIndexColumnsError) {
           /*disableStatsBasedFilterReorder=*/false,
           pool_.get()),
       "");
-}
-
-TEST_F(HiveConnectorUtilTest, shouldEagerlyMaterialize) {
-  auto queryCtx = core::QueryCtx::create();
-  auto execCtx = std::make_unique<core::ExecCtx>(pool_.get(), queryCtx.get());
-
-  auto compileExpression = [&](const std::string& expr,
-                               const RowTypePtr& rowType) {
-    auto untyped = parse::DuckSqlExpressionsParser().parseExpr(expr);
-    auto typedExpr =
-        core::Expressions::inferTypes(untyped, rowType, pool_.get());
-    std::vector<core::TypedExprPtr> expressions = {typedExpr};
-    return std::make_unique<exec::ExprSet>(
-        std::move(expressions), execCtx.get());
-  };
-
-  const auto rowType = ROW({"a", "b", "c"}, {BIGINT(), BIGINT(), BIGINT()});
-
-  // Test 1: OR expression doesn't evaluate arguments on non-increasing
-  // selection, so should return true (eager materialization needed).
-  {
-    auto exprSet = compileExpression("a > 10 OR b > 20", rowType);
-    auto& expr = *exprSet->exprs().front();
-    for (const auto& field : expr.distinctFields()) {
-      EXPECT_TRUE(hive::shouldEagerlyMaterialize(expr, *field));
-    }
-  }
-
-  // Test 2: AND expression evaluates arguments on non-increasing selection.
-  // Field used in simple conjunct (no conditionals) should not be eagerly
-  // materialized.
-  {
-    auto exprSet = compileExpression("a > 10 AND b > 20", rowType);
-    auto& expr = *exprSet->exprs().front();
-    for (const auto& field : expr.distinctFields()) {
-      EXPECT_FALSE(hive::shouldEagerlyMaterialize(expr, *field));
-    }
-  }
-
-  // Test 3: AND expression with field used in IF conditional.
-  // Field used in input with conditionals should be eagerly materialized.
-  {
-    auto exprSet =
-        compileExpression("a > 10 AND if(b > 20, c < 30, c > 5)", rowType);
-    auto& expr = *exprSet->exprs().front();
-    for (const auto& field : expr.distinctFields()) {
-      if (field->field() == "c" || field->field() == "b") {
-        EXPECT_TRUE(hive::shouldEagerlyMaterialize(expr, *field));
-      } else {
-        EXPECT_FALSE(hive::shouldEagerlyMaterialize(expr, *field));
-      }
-    }
-  }
-
-  // Test 4: AND expression where field is used in simple conjunct,
-  // not in conditional.
-  {
-    auto exprSet =
-        compileExpression("a > 10 OR if(b > 20, c < 30, c < 5)", rowType);
-    auto& expr = *exprSet->exprs().front();
-    // Find field 'a' which is used in simple comparison, not in conditional.
-    for (const auto& field : expr.distinctFields()) {
-      EXPECT_TRUE(hive::shouldEagerlyMaterialize(expr, *field));
-    }
-  }
-}
-
-TEST_F(HiveConnectorUtilTest, createPointFilter) {
-  // Test BIGINT point filter.
-  {
-    auto filter = hive::createPointFilter(
-        BIGINT(), variant::create<TypeKind::BIGINT>(42));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testInt64(42));
-    EXPECT_FALSE(filter->testInt64(41));
-    EXPECT_FALSE(filter->testInt64(43));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test INTEGER point filter.
-  {
-    auto filter = hive::createPointFilter(INTEGER(), variant(100));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testInt64(100));
-    EXPECT_FALSE(filter->testInt64(99));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test DOUBLE point filter.
-  {
-    auto filter = hive::createPointFilter(DOUBLE(), variant(3.14));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testDouble(3.14));
-    EXPECT_FALSE(filter->testDouble(3.15));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test VARCHAR point filter.
-  {
-    auto filter = hive::createPointFilter(VARCHAR(), variant("hello"));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testBytes("hello", 5));
-    EXPECT_FALSE(filter->testBytes("world", 5));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test BOOLEAN point filter.
-  {
-    auto filter = hive::createPointFilter(BOOLEAN(), variant(true));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testBool(true));
-    EXPECT_FALSE(filter->testBool(false));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test null value throws.
-  {
-    VELOX_ASSERT_THROW(
-        hive::createPointFilter(BIGINT(), variant::null(TypeKind::BIGINT)),
-        "Value cannot be null");
-  }
-
-  // Test unsupported types throw.
-  for (const auto& unsupported : kUnsupportedFilterTypes) {
-    SCOPED_TRACE(
-        fmt::format("Unsupported type: {}", unsupported.type->toString()));
-    VELOX_ASSERT_THROW(
-        hive::createPointFilter(unsupported.type, unsupported.value), "");
-  }
-}
-
-TEST_F(HiveConnectorUtilTest, createRangeFilter) {
-  // Test BIGINT range filter.
-  {
-    auto filter = hive::createRangeFilter(
-        BIGINT(),
-        variant::create<TypeKind::BIGINT>(10),
-        variant::create<TypeKind::BIGINT>(20));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testInt64(10));
-    EXPECT_TRUE(filter->testInt64(15));
-    EXPECT_TRUE(filter->testInt64(20));
-    EXPECT_FALSE(filter->testInt64(9));
-    EXPECT_FALSE(filter->testInt64(21));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test INTEGER range filter.
-  {
-    auto filter = hive::createRangeFilter(INTEGER(), variant(0), variant(100));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testInt64(0));
-    EXPECT_TRUE(filter->testInt64(50));
-    EXPECT_TRUE(filter->testInt64(100));
-    EXPECT_FALSE(filter->testInt64(-1));
-    EXPECT_FALSE(filter->testInt64(101));
-  }
-
-  // Test DOUBLE range filter.
-  {
-    auto filter = hive::createRangeFilter(DOUBLE(), variant(1.0), variant(2.0));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testDouble(1.0));
-    EXPECT_TRUE(filter->testDouble(1.5));
-    EXPECT_TRUE(filter->testDouble(2.0));
-    EXPECT_FALSE(filter->testDouble(0.9));
-    EXPECT_FALSE(filter->testDouble(2.1));
-  }
-
-  // Test VARCHAR range filter.
-  {
-    auto filter =
-        hive::createRangeFilter(VARCHAR(), variant("apple"), variant("banana"));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testBytes("apple", 5));
-    EXPECT_TRUE(filter->testBytes("ball", 4));
-    EXPECT_TRUE(filter->testBytes("banana", 6));
-    EXPECT_FALSE(filter->testBytes("aaa", 3));
-    EXPECT_FALSE(filter->testBytes("cherry", 6));
-  }
-
-  // Test lower bound only (upper unbounded) - BIGINT.
-  {
-    auto filter = hive::createRangeFilter(
-        BIGINT(),
-        variant::create<TypeKind::BIGINT>(10),
-        variant::null(TypeKind::BIGINT));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testInt64(10));
-    EXPECT_TRUE(filter->testInt64(100));
-    EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::max()));
-    EXPECT_FALSE(filter->testInt64(9));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test upper bound only (lower unbounded) - BIGINT.
-  {
-    auto filter = hive::createRangeFilter(
-        BIGINT(),
-        variant::null(TypeKind::BIGINT),
-        variant::create<TypeKind::BIGINT>(20));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testInt64(20));
-    EXPECT_TRUE(filter->testInt64(0));
-    EXPECT_TRUE(filter->testInt64(std::numeric_limits<int64_t>::min()));
-    EXPECT_FALSE(filter->testInt64(21));
-    EXPECT_FALSE(filter->testNull());
-  }
-
-  // Test lower bound only - DOUBLE.
-  {
-    auto filter = hive::createRangeFilter(
-        DOUBLE(), variant(1.5), variant::null(TypeKind::DOUBLE));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testDouble(1.5));
-    EXPECT_TRUE(filter->testDouble(100.0));
-    EXPECT_FALSE(filter->testDouble(1.0));
-  }
-
-  // Test upper bound only - VARCHAR.
-  {
-    auto filter = hive::createRangeFilter(
-        VARCHAR(), variant::null(TypeKind::VARCHAR), variant("banana"));
-    ASSERT_NE(filter, nullptr);
-    EXPECT_TRUE(filter->testBytes("banana", 6));
-    EXPECT_TRUE(filter->testBytes("aaa", 3));
-    EXPECT_FALSE(filter->testBytes("cherry", 6));
-  }
-
-  // Test both bounds null throws.
-  {
-    VELOX_ASSERT_THROW(
-        hive::createRangeFilter(
-            BIGINT(),
-            variant::null(TypeKind::BIGINT),
-            variant::null(TypeKind::BIGINT)),
-        "At least one of lower or upper bound must be set");
-  }
-
-  // Test unsupported types throw.
-  for (const auto& unsupported : kUnsupportedFilterTypes) {
-    SCOPED_TRACE(
-        fmt::format("Unsupported type: {}", unsupported.type->toString()));
-    VELOX_ASSERT_THROW(
-        hive::createRangeFilter(
-            unsupported.type, unsupported.value, unsupported.value),
-        "");
-  }
 }
 
 } // namespace facebook::velox::connector

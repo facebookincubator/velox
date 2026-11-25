@@ -126,19 +126,18 @@ class ReaderBase {
     return fileSchemaWithId_;
   }
 
-  /// File-level column statistics from the vectorized stats optional section.
-  /// Empty if absent.
-  const std::vector<std::unique_ptr<ColumnStatistics>>& fileColumnStats()
-      const {
-    return fileColumnStats_;
-  }
+  /// Returns whether the file has a vectorized stats section.
+  bool hasFileColumnStatistics() const;
 
-  /// Per-stripe column statistics from the stripe-stats optional section,
-  /// indexed as [stripe][columnId]. Empty if the section is absent.
-  const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>&
-  stripeColumnStats() const {
-    return stripeColumnStats_;
-  }
+  /// Returns the file-level statistics of a schema node, or null if the file
+  /// has none for it. In lazy mode, builds the node's statistics on first
+  /// call.
+  const ColumnStatistics* fileColumnStatistics(uint32_t nodeId) const;
+
+  /// Returns the logical size from the node's file-level statistics, or
+  /// std::nullopt if the file has none for it. In lazy mode, reads only the
+  /// logical size stream.
+  std::optional<uint64_t> fileColumnLogicalSize(uint32_t nodeId) const;
 
  private:
   ReaderBase(
@@ -148,6 +147,7 @@ class ReaderBase {
       const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
       std::shared_ptr<const Type> nimbleSchema,
       velox::RowTypePtr fileSchema,
+      bool lazyFileStats,
       velox::memory::MemoryPool* pool);
 
   const std::unique_ptr<velox::dwio::common::BufferedInput> input_;
@@ -157,15 +157,12 @@ class ReaderBase {
   const std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const std::shared_ptr<const Type> nimbleSchema_;
   const velox::RowTypePtr fileSchema_;
-  // File-level column statistics deserialized from the vectorized stats
-  // optional section at construction.
+  // Empty in lazy mode.
+  // TODO: Delete once the lazy path is fully rolled out.
   const std::vector<std::unique_ptr<ColumnStatistics>> fileColumnStats_;
-  // Per-stripe column statistics deserialized from the stripe-stats optional
-  // section at construction, indexed as [stripe][columnId]. Empty when the
-  // section is absent (older files), in which case the reader falls back to
-  // reading every stripe.
-  const std::vector<std::vector<std::unique_ptr<ColumnStatistics>>>
-      stripeColumnStats_;
+  // Null in eager mode, or if the file has no stats section. Holds the
+  // section, and its cache pin when cached.
+  const std::unique_ptr<VectorizedFileStats> lazyStats_;
   mutable std::shared_ptr<const velox::dwio::common::TypeWithId>
       fileSchemaWithId_;
 };

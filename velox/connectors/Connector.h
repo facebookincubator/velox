@@ -322,6 +322,13 @@ class DataSink {
     return input.size();
   }
 
+  /// Returns the number of duplicate rows passed to appendData() that the sink
+  /// dropped instead of writing. Final once close() is called. The table
+  /// writer subtracts it from the row count it reports.
+  virtual uint64_t numDuplicateRows() const {
+    return 0;
+  }
+
   /// Called after all data has been added via possibly multiple calls to
   /// appendData() This function finishes the data procesing like sort all the
   /// added data and write them to the file writer. The finish might take long
@@ -389,7 +396,9 @@ class DataSource {
     scanBatchCallback_ = std::move(callback);
   }
 
-  /// Called by TableScan after each non-empty batch with generic scan stats.
+  /// Called by TableScan after each read that scanned rows, with generic scan
+  /// stats. A read whose rows the filters removed, or whose output is dropped,
+  /// is reported too.
   /// Default is a no-op. Subclasses should override to create a
   /// connector-specific event (e.g., FileScanBatchEvent), enrich it with
   /// connector-specific fields, and call scanBatchCallback_.
@@ -821,7 +830,7 @@ class ConnectorQueryCtx {
   const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
-      core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
+      core::QueryConfig::RowSizeTrackingMode::kEnabledForAll};
 };
 
 class Connector;

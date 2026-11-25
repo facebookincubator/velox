@@ -31,6 +31,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/VectorReaders.h"
+#include "velox/expression/rpc/AsyncRPCFunctionRegistry.h"
 #include "velox/parse/Expressions.h"
 #include "velox/parse/TypeResolver.h"
 
@@ -54,7 +55,7 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
     const RowTypePtr rowType,
     int32_t bucketCount,
     const std::vector<std::string>& bucketColumns,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy) {
+    const std::vector<HiveSortingColumnPtr>& sortBy) {
   std::vector<TypePtr> bucketTypes;
   bucketTypes.reserve(bucketColumns.size());
   for (const auto& bucketColumn : bucketColumns) {
@@ -343,12 +344,7 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
 
     if (!hasAssignments) {
       assignments_.insert(
-          {name,
-           std::make_shared<HiveColumnHandle>(
-               hiveColumnName,
-               FileColumnHandle::ColumnType::kRegular,
-               type,
-               type)});
+          {name, buildConnectorColumnHandle(hiveColumnName, type, i)});
     }
   }
 
@@ -390,18 +386,8 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
   }
 
   if (!tableHandle_) {
-    tableHandle_ = std::make_shared<HiveTableHandle>(
-        connectorId_,
-        tableName_,
-        std::move(subfieldFiltersMap_),
-        remainingFilterExpr,
-        dataColumns_,
-        indexColumns_,
-        /*tableParameters=*/std::unordered_map<std::string, std::string>{},
-        filterColumnHandles_,
-        sampleRate_,
-        /*dbName=*/"",
-        dataColumnFieldIds_);
+    tableHandle_ = buildConnectorTableHandle(
+        std::move(subfieldFiltersMap_), remainingFilterExpr);
   }
   core::PlanNodePtr result = std::make_shared<core::TableScanNode>(
       id, outputType_, tableHandle_, assignments_);
@@ -412,6 +398,33 @@ core::PlanNodePtr PlanBuilder::TableScanBuilder::build(core::PlanNodeId id) {
         std::make_shared<core::FilterNode>(filterId, filterNodeExpr, result);
   }
   return result;
+}
+
+connector::ColumnHandlePtr
+PlanBuilder::TableScanBuilder::buildConnectorColumnHandle(
+    const std::string& name,
+    const TypePtr& type,
+    uint32_t /*outputIndex*/) {
+  return std::make_shared<HiveColumnHandle>(
+      name, connector::FileColumnHandle::ColumnType::kRegular, type, type);
+}
+
+connector::ConnectorTableHandlePtr
+PlanBuilder::TableScanBuilder::buildConnectorTableHandle(
+    common::SubfieldFilters subfieldFilters,
+    const core::TypedExprPtr& remainingFilter) {
+  return std::make_shared<HiveTableHandle>(
+      connectorId_,
+      tableName_,
+      std::move(subfieldFilters),
+      remainingFilter,
+      dataColumns_,
+      indexColumns_,
+      /*tableParameters=*/std::unordered_map<std::string, std::string>{},
+      filterColumnHandles_,
+      sampleRate_,
+      /*dbName=*/"",
+      dataColumnFieldIds_);
 }
 
 core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
@@ -438,8 +451,8 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
           std::make_shared<connector::hive::HiveColumnHandle>(
               column,
               isPartitionKey
-                  ? connector::hive::FileColumnHandle::ColumnType::kPartitionKey
-                  : connector::hive::FileColumnHandle::ColumnType::kRegular,
+                  ? connector::FileColumnHandle::ColumnType::kPartitionKey
+                  : connector::FileColumnHandle::ColumnType::kRegular,
               targetColumns->childAt(i),
               targetColumns->childAt(i)));
     }
@@ -459,12 +472,12 @@ core::PlanNodePtr PlanBuilder::TableWriterBuilder::build(core::PlanNodeId id) {
     insertHandle_ = std::make_shared<connector::hive::HiveInsertTableHandle>(
         columnHandles,
         locationHandle,
+        connector::hive::HiveConfig::InsertExistingPartitionsBehavior::kError,
         fileFormat_,
         bucketProperty,
         compressionKind_,
         serdeParameters_,
-        options_,
-        ensureFiles_,
+        writeEmptyFile_,
         // Repeats the constructor's default so that storageParameters, which
         // follows it positionally, can be passed.
         std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
@@ -765,14 +778,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .outputFileName(outputFileName)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -780,14 +791,12 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::string& outputDirectoryPath,
     const std::vector<std::string>& partitionBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -797,8 +806,7 @@ PlanBuilder& PlanBuilder::tableWrite(
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
     const dwio::common::FileFormat fileFormat,
-    const std::vector<std::string>& aggregates,
-    const std::shared_ptr<dwio::common::WriterOptions>& options) {
+    const std::vector<std::string>& aggregates) {
   return TableWriterBuilder(*this)
       .outputDirectoryPath(outputDirectoryPath)
       .partitionBy(partitionBy)
@@ -806,7 +814,6 @@ PlanBuilder& PlanBuilder::tableWrite(
       .bucketedBy(bucketedBy)
       .fileFormat(fileFormat)
       .aggregates(aggregates)
-      .options(options)
       .endTableWriter();
 }
 
@@ -815,16 +822,15 @@ PlanBuilder& PlanBuilder::tableWrite(
     const std::vector<std::string>& partitionBy,
     int32_t bucketCount,
     const std::vector<std::string>& bucketedBy,
-    const std::vector<std::shared_ptr<const HiveSortingColumn>>& sortBy,
+    const std::vector<HiveSortingColumnPtr>& sortBy,
     const dwio::common::FileFormat fileFormat,
     const std::vector<std::string>& aggregates,
     const std::string_view& connectorId,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<dwio::common::WriterOptions>& options,
     const std::string& outputFileName,
     const common::CompressionKind compressionKind,
     const RowTypePtr& schema,
-    const bool ensureFiles,
+    const bool writeEmptyFile,
     const connector::CommitStrategy commitStrategy,
     connector::ConnectorInsertTableHandlePtr insertTableHandle,
     const std::unordered_map<std::string, std::string>& storageParameters) {
@@ -841,9 +847,8 @@ PlanBuilder& PlanBuilder::tableWrite(
       .connectorId(connectorId)
       .serdeParameters(serdeParameters)
       .storageParameters(storageParameters)
-      .options(options)
       .compressionKind(compressionKind)
-      .ensureFiles(ensureFiles)
+      .writeEmptyFile(writeEmptyFile)
       .commitStrategy(commitStrategy)
       .insertHandle(insertTableHandle)
       .endTableWriter();
@@ -1357,6 +1362,13 @@ PlanBuilder& PlanBuilder::localMerge(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::mixedUnion(std::vector<core::PlanNodePtr> sources) {
+  VELOX_CHECK_NULL(planNode_, "mixedUnion() must be the first call");
+  planNode_ = std::make_shared<core::MixedUnionNode>(
+      nextPlanNodeId(), std::move(sources));
+  return *this;
+}
+
 PlanBuilder& PlanBuilder::orderBy(
     const std::vector<std::string>& keys,
     bool isPartial) {
@@ -1372,7 +1384,7 @@ PlanBuilder& PlanBuilder::orderBy(
 
 PlanBuilder& PlanBuilder::topN(
     const std::vector<std::string>& keys,
-    int32_t count,
+    int64_t count,
     bool isPartial) {
   VELOX_CHECK_NOT_NULL(planNode_, "TopN cannot be the source node");
   auto [sortingKeys, sortingOrders] =
@@ -1407,6 +1419,24 @@ PlanBuilder& PlanBuilder::fixedPoint(
       nextPlanNodeId(),
       std::move(stateDeclarations),
       std::move(plans),
+      std::move(convergenceConfig),
+      std::move(outputStateEntry),
+      outputOnWorkerZero);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::fixedPoint(
+    std::vector<core::StateDeclarationPtr> stateDeclarations,
+    core::MultiStagePlan body,
+    core::ConvergenceConfig convergenceConfig,
+    std::string outputStateEntry,
+    bool outputOnWorkerZero) {
+  VELOX_CHECK_NULL(
+      planNode_, "FixedPoint is a leaf node and cannot have an input");
+  planNode_ = std::make_shared<core::FixedPointNode>(
+      nextPlanNodeId(),
+      std::move(stateDeclarations),
+      std::move(body),
       std::move(convergenceConfig),
       std::move(outputStateEntry),
       outputOnWorkerZero);
@@ -1489,6 +1519,65 @@ PlanBuilder& PlanBuilder::assignUniqueId(const std::string& idName) {
   planNode_ = std::make_shared<core::AssignUniqueIdNode>(
       nextPlanNodeId(), idName, planNode_);
   VELOX_CHECK(planNode_->supportsBarrier());
+  return *this;
+}
+
+namespace {
+TypePtr resolveRPCType(
+    const std::string& name,
+    const std::vector<TypePtr>& argTypes) {
+  const auto entry = exec::rpc::AsyncRPCFunctionRegistry::find(name);
+  VELOX_USER_CHECK(entry.has_value(), "RPC function doesn't exist: {}", name);
+  for (const auto& signature : entry->signatures) {
+    SignatureBinder binder(*signature, argTypes, TypeCoercer::defaults());
+    if (binder.tryBind()) {
+      return binder.tryResolveType(signature->returnType());
+    }
+  }
+  VELOX_USER_FAIL(
+      "RPC function signature is not supported: {}. Supported signatures: {}.",
+      toString(name, argTypes),
+      toString(entry->signatures));
+}
+} // namespace
+
+PlanBuilder& PlanBuilder::rpc(
+    std::string_view call,
+    velox::rpc::RPCStreamingMode streamingMode,
+    int32_t dispatchBatchSize,
+    std::string executionPhase) {
+  VELOX_CHECK_NOT_NULL(planNode_, "RPC cannot be the source node");
+  const auto untyped =
+      parse::DuckSqlExpressionsParser(options_).parseExpr(std::string(call));
+  const auto* callExpr = untyped->as<core::CallExpr>();
+  VELOX_USER_CHECK_NOT_NULL(callExpr, "RPC must be a function call: {}", call);
+
+  std::vector<core::TypedExprPtr> inputs;
+  std::vector<TypePtr> argTypes;
+  for (const auto& input : callExpr->inputs()) {
+    inputs.push_back(inferTypes(input));
+    argTypes.push_back(inputs.back()->type());
+  }
+  const auto resultColumn = callExpr->alias().value_or("__rpc_result");
+  VELOX_USER_CHECK(
+      !planNode_->outputType()->containsChild(resultColumn),
+      "RPC result column already exists in the input. Use an alias: {}",
+      resultColumn);
+  auto typedCall = std::make_shared<core::CallTypedExpr>(
+      resolveRPCType(callExpr->name(), argTypes),
+      std::move(inputs),
+      callExpr->name());
+  auto outputType =
+      planNode_->outputType()->unionWith({resultColumn}, {typedCall->type()});
+  planNode_ = std::make_shared<core::RPCNode>(
+      nextPlanNodeId(),
+      planNode_,
+      std::move(typedCall),
+      resultColumn,
+      std::move(outputType),
+      streamingMode,
+      dispatchBatchSize,
+      std::move(executionPhase));
   return *this;
 }
 
@@ -1878,15 +1967,40 @@ PlanBuilder& PlanBuilder::hashJoin(
     bool nullAware,
     bool nullAsValue) {
   VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
+  core::TypedExprPtr filterExpr;
+  if (!filter.empty()) {
+    filterExpr = parseExpr(
+        filter,
+        concat(planNode_->outputType(), build->outputType()),
+        options_,
+        pool_);
+  }
+  return addHashJoin(
+      leftKeys,
+      rightKeys,
+      build,
+      filterExpr,
+      outputLayout,
+      joinType,
+      nullAware,
+      nullAsValue);
+}
+
+PlanBuilder& PlanBuilder::addHashJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& build,
+    const core::TypedExprPtr& filter,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType,
+    bool nullAware,
+    bool nullAsValue) {
+  VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
 
   auto leftType = planNode_->outputType();
   auto rightType = build->outputType();
   auto resultType = concat(leftType, rightType);
-  core::TypedExprPtr filterExpr;
-  if (!filter.empty()) {
-    filterExpr = parseExpr(filter, resultType, options_, pool_);
-  }
 
   RowTypePtr outputType;
   if (isLeftSemiProjectJoin(joinType) || isRightSemiProjectJoin(joinType)) {
@@ -1914,7 +2028,7 @@ PlanBuilder& PlanBuilder::hashJoin(
       nullAware,
       leftKeyFields,
       rightKeyFields,
-      std::move(filterExpr),
+      filter,
       std::move(planNode_),
       build,
       outputType,
@@ -1922,6 +2036,109 @@ PlanBuilder& PlanBuilder::hashJoin(
       nullAsValue);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
+}
+
+namespace {
+
+// Adds the conjuncts of 'expr' to 'conjuncts'.
+void splitConjuncts(
+    const core::ExprPtr& expr,
+    std::vector<core::ExprPtr>& conjuncts) {
+  const auto* call = expr->as<core::CallExpr>();
+  if (call != nullptr && call->name() == "and") {
+    for (const auto& input : call->inputs()) {
+      splitConjuncts(input, conjuncts);
+    }
+    return;
+  }
+  conjuncts.push_back(expr);
+}
+
+std::optional<std::string> columnName(const core::ExprPtr& expr) {
+  const auto* field = expr->as<core::FieldAccessExpr>();
+  if (field != nullptr && field->isRootColumn()) {
+    return field->name();
+  }
+  return std::nullopt;
+}
+
+// Returns the left and right columns 'conjunct' equates, if it equates a left
+// column with a right column.
+std::optional<std::pair<std::string, std::string>> joinKey(
+    const core::ExprPtr& conjunct,
+    const std::string& equalsName,
+    const RowTypePtr& leftType,
+    const RowTypePtr& rightType) {
+  const auto* call = conjunct->as<core::CallExpr>();
+  if (call == nullptr || call->name() != equalsName) {
+    return std::nullopt;
+  }
+  auto first = columnName(call->inputAt(0));
+  auto second = columnName(call->inputAt(1));
+  if (!first.has_value() || !second.has_value()) {
+    return std::nullopt;
+  }
+  if (leftType->containsChild(*first) && rightType->containsChild(*second)) {
+    return std::make_pair(*first, *second);
+  }
+  if (leftType->containsChild(*second) && rightType->containsChild(*first)) {
+    return std::make_pair(*second, *first);
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+PlanBuilder& PlanBuilder::hashJoin(
+    const std::string& condition,
+    const core::PlanNodePtr& build,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType,
+    bool nullAware,
+    bool nullAsValue) {
+  VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
+  const auto& leftType = planNode_->outputType();
+  const auto& rightType = build->outputType();
+
+  std::vector<core::ExprPtr> conjuncts;
+  splitConjuncts(
+      parse::DuckSqlExpressionsParser(options_).parseExpr(condition),
+      conjuncts);
+
+  const auto equalsName = options_.functionPrefix + "eq";
+  std::vector<std::string> leftKeys;
+  std::vector<std::string> rightKeys;
+  core::ExprPtr filter;
+  for (const auto& conjunct : conjuncts) {
+    if (auto key = joinKey(conjunct, equalsName, leftType, rightType)) {
+      leftKeys.push_back(std::move(key->first));
+      rightKeys.push_back(std::move(key->second));
+    } else if (filter == nullptr) {
+      filter = conjunct;
+    } else {
+      filter = std::make_shared<core::CallExpr>(
+          "and", std::vector<core::ExprPtr>{filter, conjunct}, std::nullopt);
+    }
+  }
+  VELOX_USER_CHECK(
+      !leftKeys.empty(),
+      "Hash join condition must equate a probe column with a build column: {}",
+      condition);
+
+  core::TypedExprPtr typedFilter;
+  if (filter != nullptr) {
+    typedFilter = core::Expressions::inferTypes(
+        filter, concat(leftType, rightType), pool_);
+  }
+  return addHashJoin(
+      leftKeys,
+      rightKeys,
+      build,
+      typedFilter,
+      outputLayout,
+      joinType,
+      nullAware,
+      nullAsValue);
 }
 
 PlanBuilder& PlanBuilder::mergeJoin(
@@ -2037,15 +2254,16 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     const std::vector<std::string>& leftKeys,
     const std::vector<std::string>& rightKeys,
     const core::PlanNodePtr& right,
-    const std::string& probeEmbedding,
-    const std::string& buildIndex,
+    const std::string& embedding,
+    const std::string& index,
     int64_t k,
     const std::vector<std::string>& outputLayout,
     const std::optional<std::string>& id,
     const std::optional<std::string>& score,
     core::JoinType joinType,
     std::vector<std::pair<std::string, std::string>> searchOptions,
-    common::vectorindex::VectorIndexMetric metric) {
+    common::vectorindex::VectorIndexMetric metric,
+    std::string format) {
   VELOX_CHECK_NOT_NULL(planNode_, "VectorSearchJoin cannot be the source node");
   const auto& probeType = planNode_->outputType();
   const auto& buildType = right->outputType();
@@ -2061,13 +2279,17 @@ PlanBuilder& PlanBuilder::vectorSearchJoin(
     }
   }
 
+  const bool indexOnProbe = !buildType->containsChild(index);
   planNode_ = std::make_shared<core::VectorSearchJoinNode>(
       nextPlanNodeId(),
       joinType,
       fields(probeType, leftKeys),
       fields(buildType, rightKeys),
-      field(probeType, probeEmbedding),
-      field(buildType, buildIndex),
+      indexOnProbe ? core::VectorSearchJoinNode::IndexSide::kProbe
+                   : core::VectorSearchJoinNode::IndexSide::kBuild,
+      field(indexOnProbe ? buildType : probeType, embedding),
+      field(indexOnProbe ? probeType : buildType, index),
+      std::move(format),
       metric,
       k,
       std::move(searchOptions),
@@ -2703,24 +2925,28 @@ PlanBuilder& PlanBuilder::topNRank(
     const std::vector<std::string>& sortingKeys,
     int32_t limit,
     bool generateRowNumber) {
-  VELOX_CHECK_NOT_NULL(planNode_, "TopNRowNumber cannot be the source node");
-  auto [sortingFields, sortingOrders] =
-      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
-  std::optional<std::string> rowNumberColumnName;
-  if (generateRowNumber) {
-    rowNumberColumnName = "row_number";
-  }
-  planNode_ = std::make_shared<core::TopNRowNumberNode>(
-      nextPlanNodeId(),
-      core::TopNRowNumberNode::rankFunctionFromName(function),
-      fields(partitionKeys),
-      sortingFields,
-      sortingOrders,
-      rowNumberColumnName,
+  return addTopNRowNumber(
+      function,
+      partitionKeys,
+      sortingKeys,
       limit,
-      planNode_);
-  VELOX_CHECK(!planNode_->supportsBarrier());
-  return *this;
+      generateRowNumber ? std::optional<std::string>("row_number")
+                        : std::nullopt,
+      /*partial=*/false);
+}
+
+PlanBuilder& PlanBuilder::topNRankPartial(
+    std::string_view function,
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit) {
+  return addTopNRowNumber(
+      function,
+      partitionKeys,
+      sortingKeys,
+      limit,
+      /*rowNumberColumnName=*/std::nullopt,
+      /*partial=*/true);
 }
 
 PlanBuilder& PlanBuilder::topNRowNumber(
@@ -2730,6 +2956,37 @@ PlanBuilder& PlanBuilder::topNRowNumber(
     bool generateRowNumber) {
   return topNRank(
       "row_number", partitionKeys, sortingKeys, limit, generateRowNumber);
+}
+
+PlanBuilder& PlanBuilder::topNRowNumberPartial(
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit) {
+  return topNRankPartial("row_number", partitionKeys, sortingKeys, limit);
+}
+
+PlanBuilder& PlanBuilder::addTopNRowNumber(
+    std::string_view function,
+    const std::vector<std::string>& partitionKeys,
+    const std::vector<std::string>& sortingKeys,
+    int32_t limit,
+    const std::optional<std::string>& rowNumberColumnName,
+    bool partial) {
+  VELOX_CHECK_NOT_NULL(planNode_, "TopNRowNumber cannot be the source node");
+  auto [sortingFields, sortingOrders] =
+      parseOrderByClauses(sortingKeys, planNode_->outputType(), pool_);
+  planNode_ = std::make_shared<core::TopNRowNumberNode>(
+      nextPlanNodeId(),
+      core::TopNRowNumberNode::toRankFunction(function),
+      fields(partitionKeys),
+      sortingFields,
+      sortingOrders,
+      rowNumberColumnName,
+      limit,
+      partial,
+      planNode_);
+  VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
 }
 
 PlanBuilder& PlanBuilder::markDistinct(

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <gtest/gtest.h>
 #include <deque>
 
@@ -32,6 +33,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
@@ -160,7 +162,7 @@ class HashIndexTestBase {
       int32_t idValue) {
     auto key = encodeLookupKey(columns, idValue);
     return index->lookup(
-        IndexLookup::LookupRequest::pointLookup({std::move(key)}));
+        *IndexLookup::LookupRequest::pointLookup({std::move(key)}));
   }
 
   std::string tempFilePath(const std::string& name) {
@@ -408,9 +410,8 @@ TEST_P(HashIndexParamTest, rangeScanThrows) {
 
   auto key = encodeLookupKey(columns(), 5);
   NIMBLE_ASSERT_THROW(
-      hashIndex->lookup(
-          IndexLookup::LookupRequest::rangeScan(
-              {velox::serializer::EncodedKeyBounds{key, key}})),
+      hashIndex->lookup(*IndexLookup::LookupRequest::rangeScan(
+          {velox::serializer::EncodedKeyBounds{key, key}})),
       "Hash index only supports point lookups");
 }
 
@@ -590,6 +591,7 @@ TEST_F(HashIndexTest, indexDataReuseWithSameReader) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -641,7 +643,7 @@ TEST_F(HashIndexTest, indexDataReuseWithSameReader) {
       fileHandle->file = readFile;
       fileHandle->uuid = velox::StringIdLease(ids, fileIdStr);
       fileHandle->groupId = velox::StringIdLease(ids, fileIdStr + "_group");
-      options.cache = cache.get();
+      options.blockCache = getBlockCache(cache.get());
       options.fileHandle = fileHandle.get();
     }
 
@@ -663,6 +665,7 @@ TEST_F(HashIndexTest, indexDataReuseWithSameReader) {
     EXPECT_EQ(tablet->denseIndex({"id"}), tablet->denseIndex({"id"}));
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 
@@ -680,6 +683,7 @@ TEST_F(HashIndexTest, indexDataReuseCrossReaders) {
       velox::memory::MemoryAllocator::Options{
           .capacity = 1UL << 30, .reservationByteLimit = 0});
   auto cache = velox::cache::AsyncDataCache::create(allocator.get());
+  testingResetBlockCache();
 
   struct TestCase {
     bool cacheIndex;
@@ -738,7 +742,7 @@ TEST_F(HashIndexTest, indexDataReuseCrossReaders) {
         fileHandle->file = readFile;
         fileHandle->uuid = fileId;
         fileHandle->groupId = groupId;
-        options.cache = cache.get();
+        options.blockCache = getBlockCache(cache.get());
         options.fileHandle = fileHandle.get();
       }
 
@@ -773,6 +777,7 @@ TEST_F(HashIndexTest, indexDataReuseCrossReaders) {
     }
   }
 
+  testingResetBlockCache();
   cache->shutdown();
 }
 

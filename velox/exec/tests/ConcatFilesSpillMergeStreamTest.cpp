@@ -105,6 +105,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
                 spillFile,
                 spillConfig_.readBufferSize,
                 pool_.get(),
+                /*readAheadExecutor=*/nullptr,
                 &spillStats_));
       }
       auto stream =
@@ -138,7 +139,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
         spillSources[outputSize] = stream->current().get();
         spillSourceRows[outputSize] = stream->currentIndex(&isEndOfBatch);
         ++outputSize;
-        if (FOLLY_UNLIKELY(isEndOfBatch)) {
+        if (isEndOfBatch) [[unlikely]] {
           // The stream is at end of input batch. Need to copy out the rows
           // before fetching next batch in 'pop'.
           gatherCopy(
@@ -154,7 +155,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
         // Advance the stream.
         stream->pop();
       }
-      if (FOLLY_LIKELY(outputSize != 0)) {
+      if (outputSize != 0) [[likely]] {
         gatherCopy(
             output.get(),
             outputRow,

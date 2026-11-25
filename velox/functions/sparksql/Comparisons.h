@@ -92,6 +92,7 @@ struct GreaterOrEqual : private Less<T> {
 /// BOOLEAN
 /// VARCHAR
 /// TIMESTAMP
+/// TIMESTAMP UTC
 /// VARBINARY
 
 /// Special cases:
@@ -145,6 +146,7 @@ comparisonSignatures() {
         "varchar",
         "varbinary",
         "timestamp",
+        "timestamp utc",
         "date",
         "interval day to second",
         "interval year to month"}) {

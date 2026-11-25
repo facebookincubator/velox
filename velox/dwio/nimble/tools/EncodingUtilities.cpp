@@ -43,7 +43,8 @@ void extractCompressionType(
     // encodings.
     case EncodingType::Trivial:
     case EncodingType::FixedBitWidth:
-    case EncodingType::BlockBitPacking: {
+    case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2: {
       auto pos = stream.data() + prefixSize(stream, useVarintRowCount);
       properties.insert(
           {EncodingPropertyType::Compression,
@@ -64,6 +65,7 @@ void extractCompressionType(
     case EncodingType::Delta:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::Constant:
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
@@ -72,6 +74,7 @@ void extractCompressionType(
     case EncodingType::Fsst:
     case EncodingType::PFOR:
     case EncodingType::PartitionedEliasFano:
+    case EncodingType::Reversed:
     case EncodingType::SimdForBitpack:
     // SubIntSplit integration is disabled; it carries no separate compression
     // byte, so treat it like the other encodings handled here.
@@ -141,6 +144,7 @@ void traverseEncodings(
     case EncodingType::Prefix:
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
+    case EncodingType::Sequence:
     case EncodingType::SimdForBitpack:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
@@ -228,11 +232,12 @@ void traverseEncodings(
       }
       break;
     }
-    case EncodingType::BlockBitPacking: {
-      // Layout after the common prefix: compressionType [1 byte], blockSize
-      // [varint], numBlocks [varint], then three self-describing nested
-      // metadata sub-streams, each preceded by a varint size: the per-block
-      // baselines, bit widths, and data offsets.
+    case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2: {
+      // Layout after the common prefix, the same for both versions:
+      // compressionType [1 byte], blockSize [varint], numBlocks [varint], then
+      // three self-describing nested metadata sub-streams, each preceded by a
+      // varint size: the per-block baselines, bit widths, and data offsets.
       const char* pos = stream.data() + dataOffset;
       encoding::readChar(pos); // compressionType
       varint::readVarint32(&pos); // blockSize
@@ -273,15 +278,14 @@ void traverseEncodings(
     }
     case EncodingType::PartitionedEliasFano: {
       // Layout after the common prefix: numPartitions and numGroups
-      // [varints], then the partition offsets, the partition bases and the
-      // partition group offsets, each a nested stream preceded by a varint
-      // size. The per-group Elias-Fano streams follow.
+      // [varints], then the partition offsets and the partition bases, each a
+      // nested stream preceded by a varint size. The per-group Elias-Fano
+      // streams follow.
       auto body = stream.substr(dataOffset);
       encoding::readVarint32(body); // numPartitions
       encoding::readVarint32(body); // numGroups
       uint32_t childIndex{0};
-      for (const auto* name :
-           {"PartitionOffsets", "PartitionBases", "PartitionGroupOffsets"}) {
+      for (const auto* name : {"PartitionOffsets", "PartitionBases"}) {
         traverseEncodings(
             encoding::readLengthPrefixedBytes(body),
             level + 1,
@@ -478,6 +482,16 @@ void traverseEncodings(
           level + 1,
           1,
           "Nulls",
+          useVarintRowCount,
+          visitor);
+      break;
+    }
+    case EncodingType::Reversed: {
+      traverseEncodings(
+          stream.substr(dataOffset),
+          level + 1,
+          0,
+          "Values",
           useVarintRowCount,
           visitor);
       break;

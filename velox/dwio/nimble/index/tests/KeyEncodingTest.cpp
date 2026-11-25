@@ -538,6 +538,22 @@ TEST_P(KeyEncodingTest, cursorFromMiddleRow) {
   }
 }
 
+TEST_P(KeyEncodingTest, cursorSkipsKeys) {
+  auto [storage, values] = generateSortedKeys(50);
+  auto keyEncoding = createKeyEncoding(values);
+
+  auto cursor = keyEncoding->cursor(0);
+  EXPECT_EQ(cursor->next(), values[0]);
+  cursor->skip(0);
+  EXPECT_EQ(cursor->next(), values[1]);
+  // A skip across prefix restart blocks.
+  cursor->skip(20);
+  EXPECT_EQ(cursor->next(), values[22]);
+  // A skip stops at the end of the cursor.
+  cursor->skip(100);
+  EXPECT_FALSE(cursor->hasNext());
+}
+
 TEST_P(KeyEncodingTest, cursorAcrossRestartBlocks) {
   // Prefix encoding emits a full key every kDefaultRestartInterval rows, so
   // 50 keys span four restart blocks. Start on a block boundary, just after
@@ -555,6 +571,45 @@ TEST_P(KeyEncodingTest, cursorAcrossRestartBlocks) {
       EXPECT_EQ(cursor->next(), values[row]);
     }
     EXPECT_FALSE(cursor->hasNext());
+  }
+}
+
+TEST_P(KeyEncodingTest, cursorReadsKeysInBatches) {
+  // Batches start on, just after and just before prefix restart blocks, and
+  // the longer ones span blocks, so a batch carries the shared prefix across
+  // them. Each batch copies its keys to one allocation, so the keys stay valid
+  // past later batches.
+  constexpr uint32_t kNumKeys = 50;
+  auto [storage, values] = generateSortedKeys(kNumKeys);
+  auto keyEncoding = createKeyEncoding(values);
+
+  for (const uint32_t startRow : {0u, 1u, 15u, 16u, 17u, 49u}) {
+    for (const auto maxKeys : {size_t{1}, size_t{5}, size_t{16}, size_t{100}}) {
+      SCOPED_TRACE(fmt::format("startRow={} maxKeys={}", startRow, maxKeys));
+      auto cursor = keyEncoding->cursor(startRow);
+      std::vector<std::unique_ptr<char[]>> buffers;
+      const KeyCursor::BufferAllocator bufferAllocator = [&](size_t size) {
+        return buffers.emplace_back(std::make_unique<char[]>(size)).get();
+      };
+      std::vector<std::string_view> keys;
+      while (cursor->hasNext()) {
+        const auto numBuffers = buffers.size();
+        const auto numKeys = keys.size();
+        cursor->next(maxKeys, keys, bufferAllocator);
+        EXPECT_EQ(buffers.size(), numBuffers + 1);
+        EXPECT_EQ(
+            keys.size() - numKeys,
+            std::min<size_t>(maxKeys, kNumKeys - startRow - numKeys));
+      }
+
+      // A batch past the end appends nothing and allocates nothing.
+      const auto numBuffers = buffers.size();
+      cursor->next(maxKeys, keys, bufferAllocator);
+      EXPECT_EQ(buffers.size(), numBuffers);
+      EXPECT_EQ(
+          std::vector<std::string>(keys.begin(), keys.end()),
+          std::vector<std::string>(storage.begin() + startRow, storage.end()));
+    }
   }
 }
 

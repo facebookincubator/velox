@@ -31,6 +31,7 @@
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -51,11 +52,17 @@ uint32_t countRuns(const std::vector<T>& values) {
   return runs;
 }
 
-// Returns 'numRuns' ascending runs of random lengths and starting values.
+// Returns 'numRuns' ascending runs of random lengths in [minLength, maxLength]
+// and random starting values.
 template <typename T>
-std::vector<T> makeRuns(uint32_t numRuns, uint64_t seed) {
+std::vector<T> makeRuns(
+    uint32_t numRuns,
+    uint64_t seed,
+    uint32_t minLength,
+    uint32_t maxLength) {
   std::mt19937_64 random{seed};
-  std::uniform_int_distribution<uint32_t> lengthDistribution{64, 200};
+  std::uniform_int_distribution<uint32_t> lengthDistribution{
+      minLength, maxLength};
   std::uniform_int_distribution<int64_t> startDistribution{
       std::is_signed_v<T> ? -1'000 : 0, 1'000};
   std::uniform_int_distribution<int64_t> deltaDistribution{0, 50};
@@ -116,6 +123,7 @@ class PartitionedEliasFanoEncodingTest : public ::testing::Test {
   void SetUp() override {
     pool_ = velox::memory::deprecatedAddDefaultLeafMemoryPool();
     buffer_ = std::make_unique<nimble::Buffer>(*pool_);
+    sliceBuffer_ = std::make_unique<nimble::Buffer>(*pool_);
   }
 
   template <typename T>
@@ -126,6 +134,33 @@ class PartitionedEliasFanoEncodingTest : public ::testing::Test {
       values.push_back(value);
     }
     return values;
+  }
+
+  // Checks that the estimate of 'input' is within 5% of its encoded size.
+  void expectEstimateTracksEncodedSize(const std::vector<uint64_t>& input) {
+    const auto values = toVector(input);
+    const auto estimate =
+        nimble::PartitionedEliasFanoEncoding<uint64_t>::estimateSize(
+            std::span<const uint64_t>{values.data(), values.size()});
+    ASSERT_TRUE(estimate.has_value());
+
+    auto policy =
+        std::make_unique<nimble::ManualEncodingSelectionPolicy<uint64_t>>(
+            std::vector<std::pair<nimble::EncodingType, float>>{
+                {nimble::EncodingType::PartitionedEliasFano, 1.0},
+                {nimble::EncodingType::FixedBitWidth, 10.0},
+            },
+            /*compressionOptions=*/std::nullopt,
+            /*identifier=*/std::nullopt);
+    const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
+        std::move(policy), values, *buffer_);
+    ASSERT_EQ(
+        nimble::EncodingPrefix::encodingType(encoded),
+        nimble::EncodingType::PartitionedEliasFano);
+    EXPECT_NEAR(
+        static_cast<double>(*estimate),
+        static_cast<double>(encoded.size()),
+        0.05 * encoded.size());
   }
 
   template <typename T>
@@ -153,6 +188,18 @@ class PartitionedEliasFanoEncodingTest : public ::testing::Test {
       randomOutput[row] = partitioned.valueAt(row);
     }
     EXPECT_EQ(randomOutput, input);
+  }
+
+  // Returns the first row of each partition of 'input'.
+  template <typename T>
+  static std::vector<uint32_t> partitionStarts(const std::vector<T>& input) {
+    std::vector<uint32_t> starts{0};
+    for (uint32_t row = 1; row < input.size(); ++row) {
+      if (input[row] < input[row - 1]) {
+        starts.push_back(row);
+      }
+    }
+    return starts;
   }
 
   // Encodes random runs of T and checks every read path against the input,
@@ -207,12 +254,7 @@ class PartitionedEliasFanoEncodingTest : public ::testing::Test {
       }
 
       // Partition p covers rows [starts[p], starts[p + 1]).
-      std::vector<uint32_t> starts{0};
-      for (uint32_t row = 1; row < numRows; ++row) {
-        if (input[row] < input[row - 1]) {
-          starts.push_back(row);
-        }
-      }
+      auto starts = partitionStarts(input);
       starts.push_back(numRows);
       for (uint32_t probe = 0; probe < 50; ++probe) {
         const auto partition = random() % (starts.size() - 1);
@@ -257,16 +299,173 @@ class PartitionedEliasFanoEncodingTest : public ::testing::Test {
     }
   }
 
+  // Encodes 'input' with the standard selection, preferring
+  // PartitionedEliasFano. The selection also picks the directory encodings,
+  // which can be Constant for equal partition bases.
+  template <typename T>
+  std::string_view encodeWithNestedSelection(const std::vector<T>& input) {
+    auto policy = std::make_unique<nimble::ManualEncodingSelectionPolicy<T>>(
+        std::vector<std::pair<nimble::EncodingType, float>>{
+            {nimble::EncodingType::PartitionedEliasFano, 1.0},
+            {nimble::EncodingType::Trivial, 100.0},
+        },
+        /*compressionOptions=*/std::nullopt,
+        /*identifier=*/std::nullopt,
+        nimble::ManualEncodingSelectionPolicyFactory::
+            defaultEncodingReadFactors());
+    const auto values = toVector(input);
+    return nimble::EncodingFactory::encode<T>(
+        std::move(policy), values, *buffer_);
+  }
+
+  // Slices rows [offset, offset + length) of 'encoded', a PartitionedEliasFano
+  // stream of 'input', through the slice factory and checks the slice against
+  // 'input': its encoding, row count and data type, a full read and a read
+  // after a skip. A slice that starts at a partition's first row stays a
+  // PartitionedEliasFano stream, which must keep only the partitions it
+  // overlaps and read every row by random access. Any other slice comes back
+  // wrapped in a SliceEncoding. The source bytes are cleared
+  // before the slice is read, so the slice cannot refer to them. Returns the
+  // sliced stream.
+  template <typename T>
+  std::string_view checkSlice(
+      std::string_view encoded,
+      const std::vector<T>& input,
+      uint32_t offset,
+      uint32_t length,
+      const nimble::Encoding::Options& options = {}) {
+    SCOPED_TRACE(fmt::format("offset={} length={}", offset, length));
+    std::string source{encoded};
+    const auto sliced = nimble::EncodingFactory::slice(
+        source, offset, length, *sliceBuffer_, options);
+    std::fill(source.begin(), source.end(), '\0');
+    const bool startsPartition =
+        offset == 0 || input[offset] < input[offset - 1];
+    EXPECT_EQ(
+        nimble::EncodingPrefix::encodingType(sliced),
+        startsPartition ? nimble::EncodingType::PartitionedEliasFano
+                        : nimble::EncodingType::Slice);
+    auto encoding = nimble::EncodingFactory{options}.create(
+        *pool_, sliced, /*stringBufferFactory=*/nullptr);
+    EXPECT_EQ(encoding->rowCount(), length);
+    EXPECT_EQ(encoding->dataType(), nimble::TypeTraits<T>::dataType);
+
+    const std::vector<T> expected(
+        input.begin() + offset, input.begin() + offset + length);
+    std::vector<T> output(length);
+    encoding->materialize(length, output.data());
+    EXPECT_EQ(output, expected);
+
+    const uint32_t skipped = length / 2;
+    encoding->reset();
+    encoding->skip(skipped);
+    std::vector<T> rest(length - skipped);
+    encoding->materialize(length - skipped, rest.data());
+    EXPECT_TRUE(
+        std::equal(rest.begin(), rest.end(), expected.begin() + skipped));
+
+    if (startsPartition) {
+      const auto& partitioned =
+          dynamic_cast<const nimble::PartitionedEliasFanoEncoding<T>&>(
+              *encoding);
+      EXPECT_EQ(partitioned.numPartitions(), countRuns(expected));
+      for (uint32_t row = 0; row < length; ++row) {
+        EXPECT_EQ(static_cast<T>(partitioned.valueAt(row)), expected[row]);
+      }
+    }
+    return sliced;
+  }
+
+  // Slices every range of 'input', encoded with Trivial directories under
+  // each row count form.
+  template <typename T>
+  void checkEverySlice(const std::vector<T>& input) {
+    const auto numRows = static_cast<uint32_t>(input.size());
+    for (const bool useVarintRowCount : {false, true}) {
+      SCOPED_TRACE(fmt::format("useVarintRowCount={}", useVarintRowCount));
+      const nimble::Encoding::Options options{
+          .useVarintRowCount = useVarintRowCount,
+      };
+      const auto encoded = nimble::test::
+          Encoder<nimble::PartitionedEliasFanoEncoding<T>>::encode(
+              *buffer_,
+              toVector(input),
+              nimble::CompressionType::Uncompressed,
+              options);
+      for (uint32_t offset = 0; offset < numRows; ++offset) {
+        for (uint32_t length = 1; length <= numRows - offset; ++length) {
+          checkSlice(encoded, input, offset, length, options);
+        }
+      }
+    }
+  }
+
+  // Slices random ranges of random runs of T, encoded both with Trivial
+  // directories and with the standard selection. Also slices every range that
+  // starts at a partition's first row, and the whole stream.
+  template <typename T>
+  void checkRandomSlices(uint64_t seed) {
+    std::mt19937_64 random{seed};
+    for (uint32_t iteration = 0; iteration < 10; ++iteration) {
+      SCOPED_TRACE(fmt::format("seed={} iteration={}", seed, iteration));
+      const auto input = makeRandomRuns<T>(random);
+      const auto numRows = static_cast<uint32_t>(input.size());
+      std::vector<std::string_view> encodings{
+          nimble::test::Encoder<nimble::PartitionedEliasFanoEncoding<T>>::
+              encode(*buffer_, toVector(input)),
+      };
+      // The selection declines PartitionedEliasFano for one partition or for
+      // short partitions.
+      const auto selected = encodeWithNestedSelection(input);
+      if (nimble::EncodingPrefix::encodingType(selected) ==
+          nimble::EncodingType::PartitionedEliasFano) {
+        encodings.push_back(selected);
+      }
+      for (const auto encoded : encodings) {
+        for (uint32_t probe = 0; probe < 50; ++probe) {
+          const auto offset = static_cast<uint32_t>(random() % numRows);
+          const auto length =
+              1 + static_cast<uint32_t>(random() % (numRows - offset));
+          checkSlice(encoded, input, offset, length);
+        }
+        for (const auto start : partitionStarts(input)) {
+          checkSlice(encoded, input, start, numRows - start);
+        }
+        // Calls the encoding's slice directly, since the slice factory copies
+        // a whole stream without slicing it.
+        const auto whole = nimble::PartitionedEliasFanoEncoding<T>::slice(
+            encoded, /*offset=*/0, numRows, *sliceBuffer_, {});
+        auto encoding = nimble::EncodingFactory{}.create(
+            *pool_, whole, /*stringBufferFactory=*/nullptr);
+        std::vector<T> output(numRows);
+        encoding->materialize(numRows, output.data());
+        EXPECT_EQ(output, input);
+      }
+    }
+  }
+
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::unique_ptr<nimble::Buffer> buffer_;
+  // Holds sliced streams apart from the encoded ones they come from.
+  std::unique_ptr<nimble::Buffer> sliceBuffer_;
 };
 
 TEST_F(PartitionedEliasFanoEncodingTest, roundTripRandomPartitions) {
-  roundTrip(makeRuns<uint32_t>(/*numRuns=*/200, /*seed=*/1));
-  roundTrip(makeRuns<uint64_t>(/*numRuns=*/200, /*seed=*/2));
-  roundTrip(makeRuns<int32_t>(/*numRuns=*/200, /*seed=*/3));
-  roundTrip(makeRuns<int64_t>(/*numRuns=*/200, /*seed=*/4));
-  roundTrip(makeRuns<int16_t>(/*numRuns=*/50, /*seed=*/5));
+  roundTrip(
+      makeRuns<uint32_t>(
+          /*numRuns=*/200, /*seed=*/1, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<uint64_t>(
+          /*numRuns=*/200, /*seed=*/2, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<int32_t>(
+          /*numRuns=*/200, /*seed=*/3, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<int64_t>(
+          /*numRuns=*/200, /*seed=*/4, /*minLength=*/64, /*maxLength=*/200));
+  roundTrip(
+      makeRuns<int16_t>(
+          /*numRuns=*/50, /*seed=*/5, /*minLength=*/64, /*maxLength=*/200));
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, roundTripDocumentedExample) {
@@ -388,11 +587,9 @@ TEST_F(
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, estimateRejectsShortPartitions) {
-  // Two 63-row runs average below the 64 rows a partition needs; two 64-row
-  // runs do not.
-  const auto estimate = [&](uint32_t runLength) {
+  const auto estimate = [&](const std::vector<uint32_t>& runLengths) {
     std::vector<uint64_t> input;
-    for (uint32_t run = 0; run < 2; ++run) {
+    for (const auto runLength : runLengths) {
       for (uint64_t value = 0; value < runLength; ++value) {
         input.push_back(value);
       }
@@ -401,8 +598,112 @@ TEST_F(PartitionedEliasFanoEncodingTest, estimateRejectsShortPartitions) {
     return nimble::PartitionedEliasFanoEncoding<uint64_t>::estimateSize(
         std::span<const uint64_t>{values.data(), values.size()});
   };
-  EXPECT_FALSE(estimate(63).has_value());
-  EXPECT_TRUE(estimate(64).has_value());
+  // Two 31-row runs average below the 32 rows a partition needs; two 32-row
+  // runs do not.
+  EXPECT_FALSE(estimate({31, 31}).has_value());
+  EXPECT_TRUE(estimate({32, 32}).has_value());
+  EXPECT_TRUE(estimate({60, 4}).has_value());
+  EXPECT_FALSE(estimate({59, 4}).has_value());
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, selectionWeighsPartitionsBySize) {
+  // Random values, whose ascending runs average about two rows, store smaller
+  // as FixedBitWidth. Short runs of small gaps above wide bases store smaller
+  // as PartitionedEliasFano.
+  const auto encodeWith =
+      [&](const std::vector<uint32_t>& input,
+          std::vector<std::pair<nimble::EncodingType, float>> readFactors) {
+        auto policy =
+            std::make_unique<nimble::ManualEncodingSelectionPolicy<uint32_t>>(
+                std::move(readFactors),
+                /*compressionOptions=*/std::nullopt,
+                /*identifier=*/std::nullopt);
+        return nimble::EncodingFactory::encode<uint32_t>(
+            std::move(policy), toVector(input), *buffer_);
+      };
+  // Returns the selected encoding, and checks that it stores 'input' in fewer
+  // bytes than the other candidate.
+  const auto select = [&](const std::vector<uint32_t>& input) {
+    const auto selected = encodeWith(
+        input,
+        {{nimble::EncodingType::FixedBitWidth, 1.0},
+         {nimble::EncodingType::PartitionedEliasFano, 1.0}});
+    const auto selectedType = nimble::EncodingPrefix::encodingType(selected);
+    const auto other = selectedType == nimble::EncodingType::FixedBitWidth
+        ? nimble::EncodingType::PartitionedEliasFano
+        : nimble::EncodingType::FixedBitWidth;
+    const auto otherSize =
+        encodeWith(input, {{other, 1.0}, {selectedType, 10.0}}).size();
+    EXPECT_LE(selected.size(), otherSize);
+    return selectedType;
+  };
+  std::mt19937 random{7};
+
+  std::vector<uint32_t> randomValues(1'000);
+  for (auto& value : randomValues) {
+    value = random() % (uint32_t{1} << 30);
+  }
+  EXPECT_EQ(select(randomValues), nimble::EncodingType::FixedBitWidth);
+
+  constexpr uint32_t kNumRuns{20};
+  constexpr uint32_t kRowsPerRun{49};
+  std::vector<uint32_t> runs;
+  for (uint32_t run = kNumRuns; run > 0; --run) {
+    uint32_t value = run << 25;
+    for (uint32_t row = 0; row < kRowsPerRun; ++row) {
+      value += random() % 4;
+      runs.push_back(value);
+    }
+  }
+  EXPECT_EQ(select(runs), nimble::EncodingType::PartitionedEliasFano);
+}
+
+TEST_F(
+    PartitionedEliasFanoEncodingTest,
+    selectionDeclinesPartitionsBelowMinimum) {
+  const auto makeInput = [](uint32_t rowsPerRun) {
+    std::mt19937 random{11};
+    std::vector<uint32_t> input;
+    for (uint32_t run = 40; run > 0; --run) {
+      uint32_t value = run << 25;
+      for (uint32_t row = 0; row < rowsPerRun; ++row) {
+        value += random() % 4;
+        input.push_back(value);
+      }
+    }
+    return input;
+  };
+  const auto encodeWith =
+      [&](const std::vector<uint32_t>& input,
+          std::vector<std::pair<nimble::EncodingType, float>> readFactors) {
+        auto policy =
+            std::make_unique<nimble::ManualEncodingSelectionPolicy<uint32_t>>(
+                std::move(readFactors),
+                /*compressionOptions=*/std::nullopt,
+                /*identifier=*/std::nullopt);
+        return nimble::EncodingFactory::encode<uint32_t>(
+            std::move(policy), toVector(input), *buffer_);
+      };
+  for (const uint32_t rowsPerRun : {32, 31}) {
+    SCOPED_TRACE(rowsPerRun);
+    const auto input = makeInput(rowsPerRun);
+    const auto partitionedSize =
+        nimble::test::Encoder<nimble::PartitionedEliasFanoEncoding<uint32_t>>::
+            encode(*buffer_, toVector(input))
+                .size();
+    const auto fixedBitWidthSize =
+        encodeWith(input, {{nimble::EncodingType::FixedBitWidth, 1.0}}).size();
+    EXPECT_LT(partitionedSize * 3, fixedBitWidthSize);
+
+    const auto selected = nimble::EncodingPrefix::encodingType(encodeWith(
+        input,
+        {{nimble::EncodingType::FixedBitWidth, 1.0},
+         {nimble::EncodingType::PartitionedEliasFano, 1.0}}));
+    EXPECT_EQ(
+        selected,
+        rowsPerRun == 32 ? nimble::EncodingType::PartitionedEliasFano
+                         : nimble::EncodingType::FixedBitWidth);
+  }
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, resetSkipAndMaterialize) {
@@ -539,7 +840,8 @@ TEST_F(PartitionedEliasFanoEncodingTest, findsPartitionsOfUnevenLengths) {
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, factoryRoundTripWithNestedSelection) {
-  const auto input = makeRuns<uint64_t>(/*numRuns=*/64, /*seed=*/7);
+  const auto input = makeRuns<uint64_t>(
+      /*numRuns=*/64, /*seed=*/7, /*minLength=*/64, /*maxLength=*/200);
   const auto values = toVector(input);
   auto policy =
       std::make_unique<nimble::ManualEncodingSelectionPolicy<uint64_t>>(
@@ -566,31 +868,314 @@ TEST_F(PartitionedEliasFanoEncodingTest, factoryRoundTripWithNestedSelection) {
       std::string::npos);
 }
 
-TEST_F(PartitionedEliasFanoEncodingTest, estimateTracksEncodedSize) {
-  const auto input = makeRuns<uint64_t>(/*numRuns=*/500, /*seed=*/8);
-  const auto values = toVector(input);
-  const auto estimate =
-      nimble::PartitionedEliasFanoEncoding<uint64_t>::estimateSize(
-          std::span<const uint64_t>{values.data(), values.size()});
-  ASSERT_TRUE(estimate.has_value());
+TEST_F(PartitionedEliasFanoEncodingTest, slicesRandomRangesAllTypes) {
+  checkRandomSlices<int8_t>(/*seed=*/21);
+  checkRandomSlices<uint8_t>(/*seed=*/22);
+  checkRandomSlices<int16_t>(/*seed=*/23);
+  checkRandomSlices<uint16_t>(/*seed=*/24);
+  checkRandomSlices<int32_t>(/*seed=*/25);
+  checkRandomSlices<uint32_t>(/*seed=*/26);
+  checkRandomSlices<int64_t>(/*seed=*/27);
+  checkRandomSlices<uint64_t>(/*seed=*/28);
+}
 
-  auto policy =
-      std::make_unique<nimble::ManualEncodingSelectionPolicy<uint64_t>>(
-          std::vector<std::pair<nimble::EncodingType, float>>{
-              {nimble::EncodingType::PartitionedEliasFano, 1.0},
-              {nimble::EncodingType::FixedBitWidth, 10.0},
-          },
-          std::nullopt,
-          std::nullopt);
-  const auto encoded = nimble::EncodingFactory::encode<uint64_t>(
-      std::move(policy), values, *buffer_);
+TEST_F(PartitionedEliasFanoEncodingTest, materializesRangesAcrossGroups) {
+  // Dense partitions merge into a group of more rows than one decode batch,
+  // and sparse ones into another group, so ranges cover several
+  // partitions of one group, cross group boundaries, and end batches in the
+  // middle of a partition.
+  constexpr int kNumRuns{12};
+  constexpr int kNumDenseRuns{8};
+  constexpr int kRowsPerRun{200};
+  std::mt19937 random{29};
+  std::vector<int64_t> input;
+  for (int run = 0; run < kNumRuns; ++run) {
+    // Each run starts below the previous one's end, so each is a partition.
+    int64_t value = (kNumRuns - run) * (int64_t{1} << 41) - (int64_t{1} << 44);
+    const int64_t maxGap = run < kNumDenseRuns ? 3 : int64_t{1} << 30;
+    for (int row = 0; row < kRowsPerRun; ++row) {
+      value += static_cast<int64_t>(random() % (maxGap + 1));
+      input.push_back(value);
+    }
+  }
+  const auto encoding = createEncoding(input);
+  const auto& partitioned =
+      dynamic_cast<const nimble::PartitionedEliasFanoEncoding<int64_t>&>(
+          *encoding);
+  ASSERT_EQ(partitioned.numPartitions(), kNumRuns);
+  // The dense partitions share one group and the sparse ones another.
+  ASSERT_EQ(partitioned.numGroups(), 2);
+  const auto expectRange = [&](uint32_t offset, uint32_t length) {
+    std::vector<int64_t> output(length);
+    partitioned.materializeAt(
+        offset, length, reinterpret_cast<uint64_t*>(output.data()));
+    ASSERT_TRUE(
+        std::equal(output.begin(), output.end(), input.begin() + offset))
+        << "offset=" << offset << ", length=" << length;
+  };
+  const auto numRows = static_cast<uint32_t>(input.size());
+  for (uint32_t offset = 0; offset < numRows; offset += 37) {
+    for (uint32_t length = 0; offset + length <= numRows; length += 101) {
+      expectRange(offset, length);
+    }
+  }
+  // Single rows include the first and last row of every partition.
+  for (uint32_t row = 0; row < numRows; ++row) {
+    expectRange(row, 1);
+  }
+  // A full batch ends exactly at the end of partition 5, and a range crosses
+  // from the last row of the dense group into the sparse group.
+  expectRange(/*offset=*/176, /*length=*/1'024);
+  expectRange(/*offset=*/kNumDenseRuns * kRowsPerRun - 1, /*length=*/2);
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, slicesEveryRange) {
+  constexpr auto kMin = std::numeric_limits<int64_t>::min();
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  // Partitions of one row, of duplicates, across zero and at the limits. The
+  // sparse ones do not share a group with the dense ones.
+  const std::vector<int64_t> input{
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      5,
+      -3,
+      -2,
+      -1,
+      0,
+      1,
+      -7,
+      -7,
+      -7,
+      kMin,
+      -1'000'000'000'000,
+      kMax,
+      -5,
+      -4,
+      -3,
+      -2,
+      -10,
+      1'000'000'000'000,
+      2'000'000'000'000,
+  };
+  const auto encoding = createEncoding(input);
+  const auto& partitioned =
+      dynamic_cast<const nimble::PartitionedEliasFanoEncoding<int64_t>&>(
+          *encoding);
+  ASSERT_EQ(partitioned.numPartitions(), 7);
+  ASSERT_GE(partitioned.numGroups(), 2);
+  checkEverySlice(input);
+
+  // A narrow type, with a partition of one row between two others.
+  checkEverySlice(
+      std::vector<uint8_t>{
+          0,
+          255,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          3,
+          3,
+          3,
+          2,
+          1,
+          101,
+          255,
+          0,
+          4,
+          8,
+      });
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, slicesAtPartitionAndGroupBoundaries) {
+  // Ten dense runs share one group and a sparse run gets its own, as in
+  // groupsPartitionsBySize. The partitions are long enough for the standard
+  // selection to pick PartitionedEliasFano.
+  std::vector<uint64_t> input;
+  for (uint32_t run = 0; run < 10; ++run) {
+    for (uint64_t value = 0; value < 100; ++value) {
+      input.push_back(value + run);
+    }
+  }
+  for (uint64_t value = 0; value < 100; ++value) {
+    input.push_back(value * 10'000'000'000);
+  }
+  const auto numRows = static_cast<uint32_t>(input.size());
+  using Encoding = nimble::PartitionedEliasFanoEncoding<uint64_t>;
+  const auto numGroups = [&](std::string_view encoded) {
+    const auto encoding = nimble::EncodingFactory{}.create(
+        *pool_, encoded, /*stringBufferFactory=*/nullptr);
+    return dynamic_cast<const Encoding&>(*encoding).numGroups();
+  };
+  const auto encoded =
+      nimble::test::Encoder<Encoding>::encode(*buffer_, toVector(input));
+  const auto selected = encodeWithNestedSelection(input);
+  ASSERT_EQ(
+      nimble::EncodingPrefix::encodingType(selected),
+      nimble::EncodingType::PartitionedEliasFano);
+  ASSERT_EQ(numGroups(encoded), 2);
+  ASSERT_EQ(numGroups(selected), 2);
+
+  // Rows next to each partition boundary, and the last row.
+  std::vector<uint32_t> rows;
+  for (const auto start : partitionStarts(input)) {
+    for (const auto row : {start - 1, start, start + 1}) {
+      if (row < numRows) {
+        rows.push_back(row);
+      }
+    }
+  }
+  rows.push_back(numRows - 1);
+  for (const auto source : {encoded, selected}) {
+    for (const auto offset : rows) {
+      for (const auto lastRow : rows) {
+        if (lastRow >= offset) {
+          checkSlice(source, input, offset, lastRow - offset + 1);
+        }
+      }
+    }
+  }
+
+  // Keeps three partitions of the dense group.
+  const auto denseSlice = checkSlice(encoded, input, /*offset=*/200, 250);
+  const auto encoding = nimble::EncodingFactory{}.create(
+      *pool_, denseSlice, /*stringBufferFactory=*/nullptr);
+  EXPECT_EQ(dynamic_cast<const Encoding&>(*encoding).numPartitions(), 3);
+  EXPECT_EQ(numGroups(denseSlice), 1);
+
+  // Spans the end of the dense group and the start of the sparse one.
+  EXPECT_EQ(numGroups(checkSlice(encoded, input, /*offset=*/900, 105)), 2);
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, slicesAcrossWholeInteriorGroup) {
+  std::vector<uint64_t> input;
+  const auto appendDenseGroup = [&] {
+    for (uint32_t run = 0; run < 10; ++run) {
+      for (uint64_t value = 0; value < 100; ++value) {
+        input.push_back(value + run);
+      }
+    }
+  };
+  appendDenseGroup();
+  for (uint64_t value = 0; value < 100; ++value) {
+    input.push_back(value * 10'000'000'000);
+  }
+  appendDenseGroup();
+
+  using Encoding = nimble::PartitionedEliasFanoEncoding<uint64_t>;
+  const auto encoded =
+      nimble::test::Encoder<Encoding>::encode(*buffer_, toVector(input));
+  auto encoding = nimble::EncodingFactory{}.create(
+      *pool_, encoded, /*stringBufferFactory=*/nullptr);
+  ASSERT_EQ(dynamic_cast<const Encoding&>(*encoding).numGroups(), 3);
+
+  // Slices the first and last groups while copying the middle group whole.
+  const auto sliced = checkSlice(encoded, input, /*offset=*/200, 950);
+  encoding = nimble::EncodingFactory{}.create(
+      *pool_, sliced, /*stringBufferFactory=*/nullptr);
+  EXPECT_EQ(dynamic_cast<const Encoding&>(*encoding).numGroups(), 3);
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, slicesCompressedDirectories) {
+  // Many short partitions give directories long enough to compress.
+  std::vector<uint32_t> input;
+  for (uint32_t run = 0; run < 300; ++run) {
+    for (uint32_t value = 0; value < 3; ++value) {
+      input.push_back(run % 7 + value);
+    }
+  }
+  const auto numRows = static_cast<uint32_t>(input.size());
+  const auto encoded =
+      nimble::test::Encoder<nimble::PartitionedEliasFanoEncoding<uint32_t>>::
+          encode(*buffer_, toVector(input), nimble::CompressionType::Zstd);
+  const auto layout = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
+  for (uint8_t child = 0; child < 2; ++child) {
+    ASSERT_TRUE(layout.child(child).has_value());
+    ASSERT_EQ(
+        layout.child(child)->compressionType(), nimble::CompressionType::Zstd);
+  }
+
+  std::mt19937_64 random{13};
+  for (uint32_t offset = 0; offset < numRows; ++offset) {
+    checkSlice(encoded, input, offset, numRows - offset);
+    checkSlice(
+        encoded,
+        input,
+        offset,
+        1 + static_cast<uint32_t>(random() % (numRows - offset)));
+  }
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, slicesConstantBasesInsidePartition) {
+  // Every partition starts at 0, so the standard selection stores the bases
+  // as Constant. Materializing and re-encoding a slice that starts inside a
+  // partition would need a different base for it, which a Constant layout
+  // cannot hold.
+  std::vector<uint32_t> input;
+  for (uint32_t run = 0; run < 8; ++run) {
+    for (uint32_t value = 0; value < 100; ++value) {
+      input.push_back(value * 3);
+    }
+  }
+  const auto encoded = encodeWithNestedSelection(input);
   ASSERT_EQ(
       nimble::EncodingPrefix::encodingType(encoded),
       nimble::EncodingType::PartitionedEliasFano);
-  EXPECT_NEAR(
-      static_cast<double>(*estimate),
-      static_cast<double>(encoded.size()),
-      0.05 * encoded.size());
+  const auto layout = nimble::EncodingLayoutCapture::capture(
+      encoded, nimble::Encoding::Options{});
+  ASSERT_TRUE(layout.child(1).has_value());
+  ASSERT_EQ(layout.child(1)->encodingType(), nimble::EncodingType::Constant);
+
+  checkSlice(encoded, input, /*offset=*/150, 400);
+  checkSlice(encoded, input, /*offset=*/799, 1);
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, sliceRejectsInvalidRange) {
+  using Encoding = nimble::PartitionedEliasFanoEncoding<uint32_t>;
+  const auto encoded = nimble::test::Encoder<Encoding>::encode(
+      *buffer_, toVector(std::vector<uint32_t>{3, 5, 1, 2}));
+  NIMBLE_ASSERT_THROW(
+      Encoding::slice(encoded, /*offset=*/0, /*length=*/0, *sliceBuffer_),
+      "Cannot slice zero rows.");
+  NIMBLE_ASSERT_THROW(
+      Encoding::slice(encoded, /*offset=*/5, /*length=*/1, *sliceBuffer_),
+      "Slice starts past the last row.");
+  NIMBLE_ASSERT_THROW(
+      Encoding::slice(encoded, /*offset=*/3, /*length=*/2, *sliceBuffer_),
+      "Slice ends past the last row.");
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, sliceOfRebasedSliceIsNotSupported) {
+  using Encoding = nimble::PartitionedEliasFanoEncoding<uint32_t>;
+  // Partitions [3, 5], [1, 2] and [0, 4]. Slicing from the second partition
+  // shifts the offset directories with a SliceEncoding value delta.
+  const auto encoded = nimble::test::Encoder<Encoding>::encode(
+      *buffer_, toVector(std::vector<uint32_t>{3, 5, 1, 2, 0, 4}));
+  const auto sliced =
+      Encoding::slice(encoded, /*offset=*/2, /*length=*/4, *sliceBuffer_);
+  NIMBLE_ASSERT_THROW(
+      Encoding::slice(sliced, /*offset=*/2, /*length=*/2, *sliceBuffer_),
+      "Encoding Slice is not supported.");
+}
+
+TEST_F(PartitionedEliasFanoEncodingTest, estimateTracksEncodedSize) {
+  for (const auto& [minLength, maxLength] :
+       std::vector<std::pair<uint32_t, uint32_t>>{{64, 200}, {32, 63}}) {
+    SCOPED_TRACE(fmt::format("runs of {} to {} rows", minLength, maxLength));
+    expectEstimateTracksEncodedSize(
+        makeRuns<uint64_t>(/*numRuns=*/500, /*seed=*/8, minLength, maxLength));
+  }
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, rejectsTruncatedStreams) {
@@ -624,9 +1209,11 @@ TEST_F(PartitionedEliasFanoEncodingTest, rejectsOverflowingVarint) {
       "Invalid uint32 varint");
 }
 
-TEST_F(PartitionedEliasFanoEncodingTest, rejectsStreamsOfWrongType) {
-  // Assembles the stream of {10, 20, 5, 9}: two partitions in one group.
-  const auto assemble = [](const std::vector<std::string_view>& streams) {
+TEST_F(PartitionedEliasFanoEncodingTest, rejectsMalformedStreams) {
+  // Assembles a stream of 4 rows in two partitions from 'streams', the
+  // directories and then the 'numGroups' group streams.
+  const auto assemble = [](const std::vector<std::string_view>& streams,
+                           uint32_t numGroups = 1) {
     std::string data(64, '\0');
     for (const auto stream : streams) {
       data.resize(data.size() + stream.size() + 5);
@@ -639,7 +1226,7 @@ TEST_F(PartitionedEliasFanoEncodingTest, rejectsStreamsOfWrongType) {
         /*useVarint=*/false,
         pos);
     nimble::varint::writeVarint(uint32_t{2}, &pos);
-    nimble::varint::writeVarint(uint32_t{1}, &pos);
+    nimble::varint::writeVarint(numGroups, &pos);
     for (const auto stream : streams) {
       nimble::encoding::writeVarintString(stream, pos);
     }
@@ -656,16 +1243,19 @@ TEST_F(PartitionedEliasFanoEncodingTest, rejectsStreamsOfWrongType) {
   };
   const auto starts = trivialUint32({0, 2});
   const auto bases = trivialUint32({10, 5});
-  const auto groupStarts = trivialUint32({0});
-  const auto group = nimble::EliasFanoEncoding<uint64_t>::encodeNonDecreasing(
-      std::vector<uint64_t>{0, 10, 10, 14}, *buffer_, {});
+  const auto eliasFano = [&](std::vector<uint64_t> values) {
+    return nimble::EliasFanoEncoding<uint64_t>::encodeNonDecreasing(
+        values, *buffer_, {});
+  };
+  // {10, 20, 5, 9} in one group.
+  const auto group = eliasFano({0, 10, 10, 14});
   const auto open = [&](const std::string& data) {
     return nimble::EncodingFactory{}.create(
         *pool_, data, /*stringBufferFactory=*/nullptr);
   };
 
   {
-    const auto data = assemble({starts, bases, groupStarts, group});
+    const auto data = assemble({starts, bases, group});
     auto encoding = open(data);
     std::vector<uint32_t> output(4);
     encoding->materialize(4, output.data());
@@ -673,30 +1263,46 @@ TEST_F(PartitionedEliasFanoEncodingTest, rejectsStreamsOfWrongType) {
   }
   {
     // A uint64 start of 1 << 32 would read as 0 through a uint32 destination.
-    const auto data = assemble(
-        {trivialUint64({0, uint64_t{1} << 32}), bases, groupStarts, group});
-    NIMBLE_ASSERT_FILE_THROW(open(data), "directory has the wrong data type");
-  }
-  {
     const auto data =
-        assemble({starts, trivialUint64({10, 5}), groupStarts, group});
+        assemble({trivialUint64({0, uint64_t{1} << 32}), bases, group});
     NIMBLE_ASSERT_FILE_THROW(open(data), "directory has the wrong data type");
   }
   {
-    const auto data = assemble({starts, bases, trivialUint64({0}), group});
+    const auto data = assemble({starts, trivialUint64({10, 5}), group});
     NIMBLE_ASSERT_FILE_THROW(open(data), "directory has the wrong data type");
   }
   {
-    const auto data =
-        assemble({starts, bases, groupStarts, trivialUint64({0, 10, 10, 14})});
+    const auto data = assemble({starts, bases, trivialUint64({0, 10, 10, 14})});
     NIMBLE_ASSERT_FILE_THROW(open(data), "group is not an EliasFano stream");
   }
   {
     const auto narrowGroup =
         nimble::EliasFanoEncoding<uint32_t>::encodeNonDecreasing(
             std::vector<uint32_t>{0, 10, 10, 14}, *buffer_, {});
-    const auto data = assemble({starts, bases, groupStarts, narrowGroup});
+    const auto data = assemble({starts, bases, narrowGroup});
     NIMBLE_ASSERT_FILE_THROW(open(data), "group has the wrong data type");
+  }
+  {
+    // One group per partition reads the same rows.
+    const auto data =
+        assemble({starts, bases, eliasFano({0, 10}), eliasFano({0, 4})}, 2);
+    auto encoding = open(data);
+    std::vector<uint32_t> output(4);
+    encoding->materialize(4, output.data());
+    EXPECT_EQ(output, (std::vector<uint32_t>{10, 20, 5, 9}));
+  }
+  {
+    const auto data = assemble({starts, bases, eliasFano({0, 10, 10, 14, 20})});
+    NIMBLE_ASSERT_FILE_THROW(open(data), "group extends past the last row");
+  }
+  {
+    const auto data = assemble({starts, bases, eliasFano({0, 10, 10})});
+    NIMBLE_ASSERT_FILE_THROW(
+        open(data), "group must end at a partition boundary");
+  }
+  {
+    const auto data = assemble({starts, bases, eliasFano({0, 10})});
+    NIMBLE_ASSERT_FILE_THROW(open(data), "groups must cover every row");
   }
 }
 

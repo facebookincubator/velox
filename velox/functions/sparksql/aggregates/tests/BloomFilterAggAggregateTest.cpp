@@ -53,7 +53,10 @@ TEST_F(BloomFilterAggAggregateTest, basic) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>(
       100, [](vector_size_t row) { return row % 9; })})};
   auto expected = {makeRowVector({getSerializedBloomFilter(11)})};
-  testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"bloom_filter_agg(c0, 5, 64)"})
+      .assertResults(expected);
 }
 
 TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
@@ -61,30 +64,40 @@ TEST_F(BloomFilterAggAggregateTest, bloomFilterAggArgument) {
       100, [](vector_size_t row) { return row % 9; })})};
 
   auto expected1 = {makeRowVector({getSerializedBloomFilter(13)})};
-  testAggregations(vectors, {}, {"bloom_filter_agg(c0, 6)"}, expected1);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"bloom_filter_agg(c0, 6)"})
+      .assertResults(expected1);
 
   auto expected2 = {makeRowVector({getSerializedBloomFilter(524'288)})};
-  testAggregations(vectors, {}, {"bloom_filter_agg(c0)"}, expected2);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"bloom_filter_agg(c0)"})
+      .assertResults(expected2);
 
   // Max bits case: bloom filter is at its largest possible size.
   auto expected3 = {makeRowVector({getSerializedBloomFilter(4'194'304)})};
-  testAggregations(vectors, {}, {"bloom_filter_agg(c0, 10000000)"}, expected3);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"bloom_filter_agg(c0, 10000000)"})
+      .assertResults(expected3);
 }
 
 TEST_F(BloomFilterAggAggregateTest, emptyInput) {
   auto vectors = {makeRowVector({makeFlatVector<int64_t>({})})};
   auto expected = {makeRowVector({makeNullConstant(TypeKind::VARBINARY, 1)})};
-  testAggregations(vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expected);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"bloom_filter_agg(c0, 5, 64)"})
+      .assertResults(expected);
 }
 
 TEST_F(BloomFilterAggAggregateTest, nullBloomFilter) {
   auto vectors = {makeRowVector({makeAllNullFlatVector<int64_t>(2)})};
-  auto expectedFake = {makeRowVector(
-      {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY())})};
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          vectors, {}, {"bloom_filter_agg(c0, 5, 64)"}, expectedFake),
-      "First argument of bloom_filter_agg cannot be null");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"bloom_filter_agg(c0, 5, 64)"})
+      .assertError("First argument of bloom_filter_agg cannot be null");
 }
 
 TEST_F(BloomFilterAggAggregateTest, config) {
@@ -95,13 +108,13 @@ TEST_F(BloomFilterAggAggregateTest, config) {
 
   // This config will decide the bloom filter capacity, the expected value is
   // the serialized bloom filter, it should be consistent.
-  testAggregations(
-      vector,
-      {},
-      {"bloom_filter_agg(c0)"},
-      expected,
-      {{SparkQueryConfig::qualify(SparkQueryConfig::kBloomFilterMaxNumBits),
-        "1600"}});
+  AggregationTester(*this)
+      .inputs(vector)
+      .aggregates({"bloom_filter_agg(c0)"})
+      .config(
+          SparkQueryConfig::qualify(SparkQueryConfig::kBloomFilterMaxNumBits),
+          "1600")
+      .assertResults(expected);
 
   // Test fails without setting the config.
   auto planNode = exec::test::PlanBuilder(pool())

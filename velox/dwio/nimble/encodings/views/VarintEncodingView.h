@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <span>
 
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -99,6 +100,33 @@ class VarintEncodingView final : public TypedEncodingView<T> {
     }
     std::copy(
         values_.data() + offset, values_.data() + offset + length, output);
+  }
+
+  // Without cacheEncodingView, decodes the stream once up to the largest index
+  // instead of once per index, which matters for a view read once per row,
+  // such as an ALP Dictionary alphabet.
+  void readPhysicalAt(std::span<const uint32_t> indices, physicalType* output)
+      const final {
+    if (indices.empty()) {
+      return;
+    }
+    const auto maxIndex = this->checkReadIndices(indices);
+    if (this->options_.cacheEncodingView) {
+      for (size_t i{0}; i < indices.size(); ++i) {
+        output[i] = values_[indices[i]];
+      }
+      return;
+    }
+    if (indices.size() == 1) {
+      readPhysical(maxIndex, 1, output);
+      return;
+    }
+    ScopedVector<physicalType> decoded{
+        maxIndex + 1, this->pool_, this->options_.bufferPool};
+    createDecoder()->materialize(maxIndex + 1, decoded.data());
+    for (size_t i{0}; i < indices.size(); ++i) {
+      output[i] = decoded[indices[i]];
+    }
   }
 
   // Holds every decoded value. Empty without cacheEncodingView.

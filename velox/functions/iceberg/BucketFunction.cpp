@@ -81,30 +81,33 @@ struct BucketFunction {
 
 } // namespace
 
-void registerBucketFunctions(const std::string& prefix) {
+void registerBucketFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<BucketFunction, int32_t, int32_t, int32_t>(
-      {prefix + "bucket"});
+      {prefix + "bucket"}, {}, true, defaultOwner);
   registerFunction<BucketFunction, int32_t, int32_t, int64_t>(
-      {prefix + "bucket"});
+      {prefix + "bucket"}, {}, true, defaultOwner);
   registerFunction<BucketFunction, int32_t, int32_t, Varchar>(
-      {prefix + "bucket"});
+      {prefix + "bucket"}, {}, true, defaultOwner);
   registerFunction<BucketFunction, int32_t, int32_t, Varbinary>(
-      {prefix + "bucket"});
-  registerFunction<BucketFunction, int32_t, int32_t, Date>({prefix + "bucket"});
+      {prefix + "bucket"}, {}, true, defaultOwner);
+  registerFunction<BucketFunction, int32_t, int32_t, Date>(
+      {prefix + "bucket"}, {}, true, defaultOwner);
   registerFunction<BucketFunction, int32_t, int32_t, Timestamp>(
-      {prefix + "bucket"});
+      {prefix + "bucket"}, {}, true, defaultOwner);
 
   registerFunction<
       BucketDecimalFunction,
       int32_t,
       int32_t,
-      LongDecimal<P1, S1>>({prefix + "bucket"});
+      LongDecimal<P1, S1>>({prefix + "bucket"}, {}, true, defaultOwner);
 
   registerFunction<
       BucketDecimalFunction,
       int32_t,
       int32_t,
-      ShortDecimal<P1, S1>>({prefix + "bucket"});
+      ShortDecimal<P1, S1>>({prefix + "bucket"}, {}, true, defaultOwner);
 }
 
 } // namespace facebook::velox::functions::iceberg

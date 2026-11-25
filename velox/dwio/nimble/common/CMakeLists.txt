@@ -25,6 +25,7 @@ add_library(
   FixedBitArray.cpp
   MetricsLogger.cpp
   NimbleException.cpp
+  StringPageArena.cpp
   Types.cpp
   Varint.cpp
   Zigzag.h
@@ -32,6 +33,7 @@ add_library(
   Vector.h
   Varint.h
   Types.h
+  StringPageArena.h
   StatsUtil.h
   NimbleException.h
   MetricsLogger.h
@@ -50,7 +52,14 @@ target_link_libraries(nimble_common velox_common_base velox_memory velox_excepti
 
 # Moved from velox/CMakeLists.txt when the nimble/velox/ folder was flattened.
 
-add_library(nimble_velox_common SchemaUtils.cpp SchemaUtils.h RowRange.h OrderedRanges.h)
+add_library(
+  nimble_velox_common
+  SchemaUtils.cpp
+  SchemaUtils.h
+  RowRange.h
+  StripeRange.h
+  OrderedRanges.h
+)
 target_link_libraries(nimble_velox_common nimble_common velox_type Folly::folly fmt::fmt)
 
 add_library(nimble_velox_hybrid_flat_map HybridFlatMap.cpp HybridFlatMap.h)
@@ -59,6 +68,9 @@ target_link_libraries(
   nimble_velox_schema
   nimble_velox_schema_fb
   nimble_common
+  nimble_encodings
+  velox_buffer
+  velox_memory
   Folly::folly
   fmt::fmt
 )
@@ -176,5 +188,6 @@ target_link_libraries(
   nimble_velox_schema
   nimble_velox_hybrid_flat_map
   nimble_common
+  nimble_encodings
   Folly::folly
 )

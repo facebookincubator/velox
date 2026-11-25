@@ -67,8 +67,7 @@ class KHyperLogLogResultVerifier : public ResultVerifier {
     projection.push_back(resultName_);
 
     auto sortByGroupingKeys = [&](const RowVectorPtr& input) {
-      auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-      auto builder = PlanBuilder(planNodeIdGenerator).values({input});
+      auto builder = PlanBuilder().values(input);
       if (!keys_.empty()) {
         builder = builder.orderBy(keys_, false);
       }

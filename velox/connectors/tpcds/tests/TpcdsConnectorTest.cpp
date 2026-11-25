@@ -158,24 +158,22 @@ TEST_F(TpcdsConnectorTest, unknownColumn) {
 
 // Join warehouse and store on state.
 TEST_F(TpcdsConnectorTest, join) {
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  exec::test::PlanBuilder builder;
   core::PlanNodeId itemScanId;
   core::PlanNodeId inventoryScanId;
-  auto plan = exec::test::PlanBuilder(planNodeIdGenerator)
+  auto plan = builder.newPlan()
                   .tpcdsTableScan(
                       velox::tpcds::Table::TBL_WAREHOUSE,
                       {"w_warehouse_id", "w_state"},
                       1)
                   .capturePlanNodeId(itemScanId)
                   .hashJoin(
-                      {"w_state"},
-                      {"s_state"},
-                      exec::test::PlanBuilder(planNodeIdGenerator)
+                      "w_state = s_state",
+                      builder.newPlan()
                           .tpcdsTableScan(
                               velox::tpcds::Table::TBL_STORE, {"s_state"}, 1)
                           .capturePlanNodeId(inventoryScanId)
                           .planNode(),
-                      "",
                       {"w_warehouse_id"})
                   // Get distinct values of warehouse_id
                   .partialAggregation({"w_warehouse_id"}, {})

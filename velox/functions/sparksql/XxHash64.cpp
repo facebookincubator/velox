@@ -21,33 +21,10 @@
 
 namespace facebook::velox::functions::sparksql {
 
-uint64_t XxHash64::hashInt32(const int32_t input, uint64_t seed) {
-  int64_t hash = seed + kPrime64_5 + 4L;
-  hash ^= static_cast<int64_t>((input & 0xFFFFFFFFL) * kPrime64_1);
-  hash = bits::rotateLeft64(hash, 23) * kPrime64_2 + kPrime64_3;
-  return fmix(hash);
-}
-
-uint64_t XxHash64::hashInt64(int64_t input, uint64_t seed) {
-  int64_t hash = seed + kPrime64_5 + 8L;
-  hash ^= bits::rotateLeft64(input * kPrime64_2, 31) * kPrime64_1;
-  hash = bits::rotateLeft64(hash, 27) * kPrime64_1 + kPrime64_4;
-  return fmix(hash);
-}
-
 uint64_t XxHash64::hashLongDecimal(int128_t input, uint64_t seed) {
   char out[sizeof(int128_t)];
   int32_t length = DecimalUtil::toByteArray(input, out);
   return hashBytes(StringView(out, length), seed);
-}
-
-uint64_t XxHash64::fmix(uint64_t hash) {
-  hash ^= hash >> 33;
-  hash *= kPrime64_2;
-  hash ^= hash >> 29;
-  hash *= kPrime64_3;
-  hash ^= hash >> 32;
-  return hash;
 }
 
 uint64_t XxHash64::hashBytesByWords(const StringView& input, uint64_t seed) {

@@ -69,6 +69,13 @@ SerializationDump::SerializationStats SerializationDump::serializationStats(
   info.version = header.version;
   info.rowCount = header.rowCount;
 
+  // The streams and the trailer of a kBlob blob may sit inside its
+  // compressed payload.
+  // TODO: Decompress the body and dump its streams.
+  if (header.version == SerializationVersion::kBlob) {
+    NIMBLE_NOT_IMPLEMENTED("SerializationDump does not read kBlob blobs yet.");
+  }
+
   // Walk the sparse (indices, sizes) trailer directly. Emit "empty" entries
   // for gaps between non-zero slots so the offset-indexed view is preserved.
   // Legacy kLegacyCompact blobs are decoded via the frozen legacy reader.
