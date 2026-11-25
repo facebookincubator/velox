@@ -166,6 +166,16 @@ class HiveConfig : public connector::FileConfig {
   static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
       "sort-writer-finish-time-slice-limit-ms";
 
+  VELOX_FILE_CONFIG(
+      kSortWriterNumUniqueKeyColumnsSession,
+      sortWriterNumUniqueKeyColumns,
+      "sort_writer_num_unique_key_columns",
+      uint32_t,
+      0,
+      "Number of leading sort columns that identify a row in a sorted bucketed write. The writer keeps the first row of each run of equal values in these columns and drops the rest. Zero keeps every row. Any other write fails if this is above zero.")
+  static constexpr const char* kSortWriterNumUniqueKeyColumns =
+      "sort-writer-num-unique-key-columns";
+
   VELOX_FILE_CONFIG(kUser, user, "user", std::string, "", "User of the query.")
 
   VELOX_FILE_CONFIG(
