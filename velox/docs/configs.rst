@@ -1625,11 +1625,12 @@ Spark-specific Configuration
    * - spark.map_key_normalization_enabled
      - bool
      - false
-     - If true, the top-level ``REAL`` and ``DOUBLE`` keys of the maps that Spark ``map``, ``map_from_arrays``,
-       ``map_from_entries`` and ``transform_keys`` build are normalized before they are deduplicated: ``-0.0``
-       becomes ``0.0`` and NaN becomes the canonical NaN. This is Spark 4.0's behavior, which
-       ``spark.sql.legacy.disableMapKeyNormalization`` turns off. If false, ``-0.0`` and ``0.0`` are two keys,
-       as in Spark 3.x.
+     - If true, top-level ``REAL`` and ``DOUBLE`` map keys created by Spark map-building functions, including ``map``,
+       ``map_from_arrays``, ``map_from_entries``, and ``transform_keys``, are normalized before deduplication.
+       Specifically, ``-0.0`` is normalized to ``0.0``, and all NaN values are normalized to the canonical NaN. This
+       matches Spark 4.0 behavior, where normalization is enabled by default and can be disabled via
+       ``spark.sql.legacy.disableMapKeyNormalization``. If false, ``-0.0`` and ``0.0`` are treated as distinct keys,
+       matching Spark 3.x behavior.
 
 Tracing
 --------

@@ -15,13 +15,10 @@
  */
 #include "velox/functions/sparksql/Map.h"
 
-#include <cmath>
-#include <cstring>
-#include <limits>
-
 #include <velox/common/base/Exceptions.h>
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/sparksql/JavaFloatingPoint.h"
 #include "velox/functions/sparksql/LastWin.h"
 #include "velox/functions/sparksql/MapFromArrays.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -138,6 +135,50 @@ vector_size_t buildMapEntriesForConstantKeys(
   return numEntries;
 }
 
+// Returns the key Spark 4.0+ stores for a floating-point map key: 0.0 for
+// -0.0, and the canonical NaN for a NaN.
+template <typename T>
+T normalizeKey(T key) {
+  if (std::isnan(key)) {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+  // -0.0 == 0.0, so this turns -0.0 into 0.0.
+  return key == 0 ? T{0} : key;
+}
+
+// Whether normalizeKey changes a key: -0.0, or a NaN other than the canonical
+// one.
+template <typename T>
+bool needsNormalization(T key) {
+  return key == 0 ? std::signbit(key)
+                  : std::bit_cast<JavaFloatingPoint::Bits<T>>(key) !=
+          JavaFloatingPoint::bits(key);
+}
+
+template <typename T>
+VectorPtr normalizeFloatingPointKeys(
+    const VectorPtr& keys,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context) {
+  exec::LocalDecodedVector decoded(context, *keys, rows);
+  const bool normalized = rows.testSelected([&](vector_size_t row) {
+    return decoded->isNullAt(row) ||
+        !needsNormalization(decoded->valueAt<T>(row));
+  });
+  if (normalized) {
+    return keys;
+  }
+  auto result = BaseVector::create<FlatVector<T>>(
+      keys->type(), keys->size(), context.pool());
+  result->copy(keys.get(), 0, 0, keys->size());
+  rows.applyToSelected([&](vector_size_t row) {
+    if (!result->isNullAt(row)) {
+      result->set(row, normalizeKey(result->valueAt(row)));
+    }
+  });
+  return result;
+}
+
 } // namespace
 
 std::shared_ptr<MapVector> buildDeduplicatedMap(
@@ -195,50 +236,6 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
       BaseVector::wrapInDictionary(
           nullptr, std::move(valuesIndices), numEntries, valueElements));
 }
-
-namespace {
-
-// Returns the key Spark 4.0+ stores for a floating-point map key.
-template <typename T>
-T normalizeKey(T key) {
-  if (std::isnan(key)) {
-    return std::numeric_limits<T>::quiet_NaN();
-  }
-  // -0.0 == 0.0, so this turns -0.0 into 0.0.
-  return key == 0 ? T{0} : key;
-}
-
-// Whether a key has the bits of its normalized key.
-template <typename T>
-bool isNormalizedKey(T key) {
-  const T normalized = normalizeKey(key);
-  return std::memcmp(&normalized, &key, sizeof(T)) == 0;
-}
-
-template <typename T>
-VectorPtr normalizeFloatingPointKeys(
-    const VectorPtr& keys,
-    const SelectivityVector& rows,
-    exec::EvalCtx& context) {
-  exec::LocalDecodedVector decoded(context, *keys, rows);
-  const bool normalized = rows.testSelected([&](vector_size_t row) {
-    return decoded->isNullAt(row) || isNormalizedKey(decoded->valueAt<T>(row));
-  });
-  if (normalized) {
-    return keys;
-  }
-  auto result = BaseVector::create<FlatVector<T>>(
-      keys->type(), keys->size(), context.pool());
-  result->copy(keys.get(), 0, 0, keys->size());
-  rows.applyToSelected([&](vector_size_t row) {
-    if (!result->isNullAt(row)) {
-      result->set(row, normalizeKey(result->valueAt(row)));
-    }
-  });
-  return result;
-}
-
-} // namespace
 
 VectorPtr normalizeMapKeys(
     const VectorPtr& keys,

@@ -76,7 +76,7 @@ class TransformKeysFunction : public exec::VectorFunction {
       remainingRows->deselectNulls(
           flatMap->rawNulls(), rows.begin(), rows.end());
     }
-    const auto keyRows =
+    const auto& keyRows =
         toElementRows<MapVector>(numKeys, *remainingRows, flatMap.get());
     // The keys are normalized before they are deduplicated, and the result
     // holds the normalized keys.

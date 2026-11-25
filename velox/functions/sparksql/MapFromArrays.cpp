@@ -78,19 +78,20 @@ void MapFromArraysFunction::apply(
 
   auto* keysArray = decodedKeys->base()->as<ArrayVector>();
   auto* valuesArray = decodedValues->base()->as<ArrayVector>();
+  const auto& keysElements = keysArray->elements();
   const auto keyElementRows = toElementRows(
-      keysArray->elements()->size(),
+      keysElements->size(),
       rows,
       keysArray,
       decodedKeys->nulls(&rows),
       decodedKeys->indices());
   // The keys are normalized before they are deduplicated, and the result holds
   // the normalized keys.
-  const auto keysElements = normalizeKeys_
-      ? normalizeMapKeys(keysArray->elements(), keyElementRows, context)
-      : keysArray->elements();
+  const auto normalizedKeys = normalizeKeys_
+      ? normalizeMapKeys(keysElements, keyElementRows, context)
+      : keysElements;
   exec::LocalDecodedVector decodedKeyElements(
-      context, *keysElements, keyElementRows);
+      context, *normalizedKeys, keyElementRows);
 
   // Under EXCEPTION no row can shrink, so the result can reference the input
   // arrays instead of building entry indices.
@@ -109,7 +110,7 @@ void MapFromArraysFunction::apply(
         rows.end(),
         keysArray->offsets(),
         keysArray->sizes(),
-        keysElements,
+        normalizedKeys,
         valuesArray->elements());
     context.moveOrCopyResult(mapVector, *remainingRows, result);
     return;
@@ -124,7 +125,7 @@ void MapFromArraysFunction::apply(
       *decodedKeys,
       *decodedValues,
       *decodedKeyElements,
-      keysElements,
+      normalizedKeys,
       valuesArray->elements(),
       throwExceptionOnDuplicateMapKeys_);
   context.deselectErrors(*remainingRows);
