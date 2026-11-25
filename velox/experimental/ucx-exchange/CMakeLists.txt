@@ -13,6 +13,7 @@
 # limitations under the License.
 set(
   UCX_EXCHANGE_SOURCES
+  UcxChannelState.cpp
   UcxPartitionedOutput.cpp
   UcxOutputQueueManager.cpp
   UcxQueues.cpp
