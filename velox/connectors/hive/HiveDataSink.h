@@ -227,6 +227,8 @@ class HiveDataSink : public FileDataSink {
 
   std::vector<column_index_t> sortColumnIndices_;
   std::vector<CompareFlags> sortCompareFlags_;
+  // Written-column channels of the unique key; empty keeps every row.
+  std::vector<column_index_t> dedupeKeyChannels_;
 
   // Strategy for naming writer files
   FileNameGeneratorPtr fileNameGenerator_;

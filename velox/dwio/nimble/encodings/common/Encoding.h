@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/buffer/Buffer.h"
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
@@ -28,6 +29,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -73,6 +75,7 @@ struct DecodingStats;
 
 namespace facebook::nimble {
 
+class DecodedStringBuffers;
 class EncodingBufferPool;
 class SharedDictionaryAlphabet;
 
@@ -158,6 +161,8 @@ class Encoding {
 
     /// When true, FOR-family payloads use the exact required bit width. When
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
+    /// FixedBitWidth chunks that take typed lanes (see fixedBitWidthTypedLanes)
+    /// use the byte-rounded width either way.
     bool fixedBitWidthUseExactBits{false};
 
     /// When true, DictionaryEncoding orders an integer alphabet by physical
@@ -167,6 +172,30 @@ class Encoding {
     /// full value width. Only the writer reads this option: a reader looks
     /// indices up in the stored alphabet whatever its order.
     bool sortDictionaryAlphabet{false};
+
+    /// When true, FixedBitWidthEncoding stores eligible integer chunks as
+    /// typed lanes: values in whole 16-, 32- or type-width lanes, handed to
+    /// compression with a typed DataType instead of Undefined, so typed
+    /// compressors see integers rather than a bit-packed blob. A chunk is
+    /// eligible when it is encoded with an integer type, its bit width rounded
+    /// up to whole bytes is at least 16 (fixedBitWidthUseExactBits does not
+    /// apply to lanes), it has at least
+    /// fixedBitWidthTypedLanesMinValues values and its compression policy's
+    /// compressor reads the payload's DataType (Managed Compression or OpenZL,
+    /// see FixedBitWidthTypedLanes::compressorDataTypeAware()). Readers need no
+    /// option. See FixedBitWidthEncoding.
+    bool fixedBitWidthTypedLanes{false};
+
+    /// Minimum number of values in a chunk for fixedBitWidthTypedLanes.
+    // TODO: Replace this value-count floor with a stream-size threshold in
+    // bytes, so the floor tracks payload size rather than row count.
+    uint64_t fixedBitWidthTypedLanesMinValues{256};
+
+    /// MetaInternal compression level for FixedBitWidth chunks that take typed
+    /// lanes, in place of the compression policy's level. Bit-packed chunks,
+    /// other encodings and other compressors are unaffected. Unset (the
+    /// default) changes nothing. Levels must be in [1, 9]; the writer checks.
+    std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
@@ -231,6 +260,31 @@ class Encoding {
     /// reads and costs more per read. Both settings return the same values, and
     /// reads stay thread safe. Other encodings ignore it.
     bool cacheEncodingView{false};
+
+    /// Gives the cached views created with these options buffers that they
+    /// share to decode strings into, such as the views of the chunks of one
+    /// stream. Their strings then lie in a few buffers instead of at least
+    /// one for each view, so that a caller that keeps the strings it reads by
+    /// holding their buffers, instead of copying them, holds and frees fewer
+    /// buffers. The views do not own it: the caller keeps it alive while the
+    /// views exist. It is not thread-safe, so the caller must not read the
+    /// views that share it at once. The buffers it gives out stay valid while
+    /// a caller holds them. When null, each view decodes into buffers of its
+    /// own. Cached FSST views decode into them the chunks of rows that they
+    /// cache, and the rows of a read given an addStringBuffer that they decode
+    /// for that read alone. Other encodings ignore it.
+    DecodedStringBuffers* decodedStringBuffers{nullptr};
+
+    /// Points to the buffer that holds the bytes that the views created with
+    /// these options read, such as the stream or the decompressed chunk that
+    /// an encoding lies in. A view whose string values point into those bytes
+    /// passes the buffer to the addStringBuffer of its reads, so that a caller
+    /// that holds it keeps the values valid. The views do not own it: the
+    /// caller keeps it alive while the views exist. When null, such a view
+    /// copies its values for those reads instead. A view creates the views of
+    /// its nested encodings, which lie in the same bytes, with the same
+    /// buffer. Other encodings ignore it.
+    velox::Buffer* inputStringBuffer{nullptr};
   };
 
   static constexpr int kEncodingTypeOffset =

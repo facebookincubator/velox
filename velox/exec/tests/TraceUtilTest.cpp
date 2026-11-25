@@ -34,6 +34,11 @@ class TraceUtilTest : public testing::Test {
     filesystems::registerLocalFileSystem();
     tests::utils::registerFaultyFileSystem();
   }
+
+  // Removes injection hooks, which capture test-local state.
+  void TearDown() override {
+    tests::utils::faultyFileSystem()->clearFileSystemInjections();
+  }
 };
 
 TEST_F(TraceUtilTest, traceDir) {
@@ -269,6 +274,9 @@ TEST_F(TraceUtilTest, createTraceDirectoryTest) {
 
   bool createdTraceDir = false;
   tests::utils::FileSystemFaultInjectionHook hook = [&](auto* op) {
+    if (op->type != tests::utils::FaultFileSystemOperation::Type::kMkdir) {
+      return;
+    }
     auto mkdirOp =
         static_cast<tests::utils::FaultFileSystemMkdirOperation*>(op);
     if (mkdirOp->path == fmt::format("{}/trace", tmpRootDir->getPath())) {

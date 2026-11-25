@@ -1565,6 +1565,208 @@ DEBUG_ONLY_TEST_P(
       (std::vector<std::string>{encodeKey(0), encodeKey(4), encodeKey(8)}));
 }
 
+// On a file that stores its key chunks in stripes, a seek reads the key stream
+// that resolves it in the same load as the first stripe it selects, and the
+// keys of the stripe's rows decode from those bytes. Without the co-load, it
+// reads the key chunks from the index first.
+TEST_P(NimbleRowIteratorTest, rowIteratorSeekCoLoadsKeyStreams) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  writeStripeKeyStreamData(
+      makeEvenKeyBatches(*vectorMaker_, /*numBatches=*/3),
+      /*enableStreamChecksums=*/false);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  for (const bool coLoadKeyStreams : {false, true}) {
+    SCOPED_TRACE(fmt::format("coLoadKeyStreams={}", coLoadKeyStreams));
+    // Drops the previous tablet, whose index keeps the key chunks it decoded.
+    resetReaders();
+    TestNimbleIterator iterator{createRowIterator(
+        projectedSubfields, NimbleIterator::Options{}, coLoadKeyStreams)};
+    // Loads the index partition, which covers all three stripes.
+    iterator.seek(makePointLookup(rowType, {"key"}, 10));
+    ASSERT_TRUE(iterator.valid());
+    iterator.value();
+    const auto indexBytesBefore = indexBytesRead();
+    const auto dataReadsBefore = dataIoStats_->read().count();
+
+    const auto bounds = makePointLookup(rowType, {"key"}, 300);
+    iterator.seek(bounds);
+    ASSERT_TRUE(iterator.valid());
+    EXPECT_EQ(iterator.key(), bounds.lowerKey.value());
+    expectVectorRows(
+        velox::row::CompactRow::deserialize(
+            {iterator.value()}, ROW("value", INTEGER()), leafPool_.get()),
+        vectorMaker_->rowVector(
+            {"value"}, {vectorMaker_->flatVector<int32_t>({3'000})}));
+    iterator.next();
+    EXPECT_FALSE(iterator.valid());
+
+    EXPECT_EQ(dataIoStats_->read().count() - dataReadsBefore, 1);
+    if (!coLoadKeyStreams) {
+      EXPECT_GT(indexBytesRead() - indexBytesBefore, 0);
+      EXPECT_EQ(iterator.stats().numKeyStreamCoLoads, 0);
+    } else {
+      EXPECT_EQ(indexBytesRead(), indexBytesBefore);
+      EXPECT_EQ(iterator.stats().numKeyStreamCoLoads, 2);
+    }
+  }
+}
+
+// A scan over a file that stores its key chunks in stripes reads the key stream
+// of each stripe with the stripe, so the keys of its rows decode without
+// reading the index, whether stripes load ahead or not.
+TEST_P(NimbleRowIteratorTest, rowIteratorScanReadsStripeKeyStreams) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  writeStripeKeyStreamData(
+      makeEvenKeyBatches(*vectorMaker_, /*numBatches=*/3),
+      /*enableStreamChecksums=*/false);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  std::vector<std::string> expectedKeys;
+  for (int64_t key{0}; key < 3 * kEvenKeyBatchRows * 2; key += 2) {
+    expectedKeys.push_back(
+        makePointLookup(rowType, {"key"}, key).lowerKey.value());
+  }
+
+  for (const bool prefetch : {false, true}) {
+    for (const bool coLoadKeyStreams : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "prefetch {}, coLoadKeyStreams {}", prefetch, coLoadKeyStreams));
+      resetReaders();
+      auto executor = std::make_unique<folly::CPUThreadPoolExecutor>(2);
+      TestNimbleIterator iterator{createRowIterator(
+          projectedSubfields,
+          NimbleIterator::Options{
+              .prefetchExecutor = prefetch ? folly::getKeepAliveToken(*executor)
+                                           : folly::Executor::KeepAlive<>{},
+              .maxPrefetchStripes = 2,
+          },
+          coLoadKeyStreams)};
+      // Loads the index partition, which covers all three stripes.
+      iterator.seek(makePointLookup(rowType, {"key"}, 10));
+      ASSERT_TRUE(iterator.valid());
+      iterator.value();
+      const auto indexBytesBefore = indexBytesRead();
+
+      iterator.seekToFirst();
+      std::vector<std::string> keys;
+      std::vector<int32_t> values;
+      while (iterator.valid()) {
+        keys.emplace_back(iterator.key());
+        const auto row = velox::row::CompactRow::deserialize(
+            {iterator.value()}, ROW("value", INTEGER()), leafPool_.get());
+        values.push_back(row->childAt(0)->asFlatVector<int32_t>()->valueAt(0));
+        iterator.next();
+      }
+      EXPECT_EQ(keys, expectedKeys);
+      EXPECT_EQ(values, evenKeyValues(0, 3 * kEvenKeyBatchRows * 2));
+      if (!coLoadKeyStreams) {
+        EXPECT_GT(indexBytesRead() - indexBytesBefore, 0);
+      } else {
+        EXPECT_EQ(indexBytesRead(), indexBytesBefore);
+      }
+    }
+  }
+}
+
+// A get iterator on a file that stores its key chunks in stripes reads each
+// stripe that it loads in one load with the key stream of the seek. A seek into
+// the stripe that the iterator keeps, also of a missing key, loads nothing and
+// reads no index bytes: it seeks in the key chunk that the iterator keeps with
+// the stripe.
+TEST_P(NimbleRowIteratorTest, getIteratorDoesNotCoLoadTheStripeItKeeps) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  writeStripeKeyStreamData(
+      makeEvenKeyBatches(*vectorMaker_, /*numBatches=*/3),
+      /*enableStreamChecksums=*/false);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  struct TestParam {
+    std::string description;
+    int64_t key;
+    uint32_t numReadStripes;
+
+    std::string debugString() const {
+      return fmt::format(
+          "{}: key {}, numReadStripes {}", description, key, numReadStripes);
+    }
+  };
+  // Stripe s holds the even keys from 200 * s to 200 * s + 198.
+  const std::vector<TestParam> testSettings{
+      {"co-loads stripe 0 and keeps it", 10, 1},
+      {"reads on in the kept stripe", 20, 1},
+      {"reads an earlier row of the kept stripe", 0, 1},
+      {"a miss keeps the stripe", 11, 1},
+      {"co-loads stripe 1, which replaces stripe 0", 300, 2},
+      {"co-loads stripe 0 again", 10, 3},
+  };
+  TestNimbleIterator iterator{createRowIterator(
+      projectedSubfields, NimbleIterator::Options{.forGet = true})};
+  const auto dataReadsBefore = dataIoStats_->read().count();
+  std::optional<uint64_t> indexBytesAfterFirstSeek;
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto bounds = makePointLookup(rowType, {"key"}, testData.key);
+    iterator.seek(bounds);
+    // The first seek loads the index metadata. Every seek resolves its key in
+    // the key chunk of its stripe, from the load or the kept stripe.
+    if (!indexBytesAfterFirstSeek.has_value()) {
+      indexBytesAfterFirstSeek = indexBytesRead();
+    }
+    EXPECT_EQ(indexBytesRead(), indexBytesAfterFirstSeek.value());
+    if (testData.key % 2 != 0) {
+      EXPECT_FALSE(iterator.valid());
+    } else {
+      ASSERT_TRUE(iterator.valid());
+      EXPECT_EQ(iterator.key(), bounds.lowerKey.value());
+      expectVectorRows(
+          velox::row::CompactRow::deserialize(
+              {iterator.value()}, ROW("value", INTEGER()), leafPool_.get()),
+          vectorMaker_->rowVector(
+              {"value"},
+              {vectorMaker_->flatVector<int32_t>(
+                  {static_cast<int32_t>(testData.key * 10)})}));
+    }
+    const auto stats = iterator.stats();
+    EXPECT_EQ(stats.numReadStripes, testData.numReadStripes);
+    EXPECT_EQ(stats.numKeyStreamCoLoads, testData.numReadStripes);
+    EXPECT_EQ(stats.numSkippedStripes, 0);
+    EXPECT_EQ(
+        dataIoStats_->read().count() - dataReadsBefore,
+        testData.numReadStripes);
+  }
+}
+
+// A seek of a key that is missing from its stripe loads the stripe with its key
+// stream and then skips it. A key past the last key of the file loads nothing.
+TEST_P(NimbleRowIteratorTest, rowIteratorSeekCountsSkippedStripes) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  writeStripeKeyStreamData(
+      makeEvenKeyBatches(*vectorMaker_, /*numBatches=*/3),
+      /*enableStreamChecksums=*/false);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator iterator{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+  const auto dataReadsBefore = dataIoStats_->read().count();
+
+  // Key 301 falls in the second stripe without being in the file.
+  iterator.seek(makePointLookup(rowType, {"key"}, 301));
+  EXPECT_FALSE(iterator.valid());
+  EXPECT_EQ(dataIoStats_->read().count() - dataReadsBefore, 1);
+  EXPECT_EQ(iterator.stats().numKeyStreamCoLoads, 1);
+  EXPECT_EQ(iterator.stats().numSkippedStripes, 1);
+
+  iterator.seek(makePointLookup(rowType, {"key"}, 1'000));
+  EXPECT_FALSE(iterator.valid());
+  EXPECT_EQ(dataIoStats_->read().count() - dataReadsBefore, 1);
+  EXPECT_EQ(iterator.stats().numSkippedStripes, 1);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     AllCacheParams,
     NimbleRowIteratorTest,

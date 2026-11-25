@@ -60,8 +60,7 @@ HashTable<ignoreNullKeys>::HashTable(
       allowDuplicates_(options.allowDuplicates),
       buildPartitionBounds_(raw_vector<PartitionBoundIndexType>(pool)),
       analyzedValueIds_(pool) {
-  VELOX_CHECK(
-      bloomFilterMaxSize_ == 0 || (options.isJoinBuild && ignoreNullKeys));
+  VELOX_CHECK(bloomFilterMaxSize_ == 0 || options.isJoinBuild);
   std::vector<TypePtr> keys;
   for (auto& hasher : hashers_) {
     keys.push_back(hasher->type());
@@ -936,8 +935,8 @@ void syncWorkItems(
 
 } // namespace
 
-template <>
-bool HashTable<true>::bloomFilterSupported() const {
+template <bool ignoreNullKeys>
+bool HashTable<ignoreNullKeys>::bloomFilterSupported() const {
   if (!(bloomFilterMaxSize_ > 0 &&
         common::BigintValuesUsingBloomFilter::numBlocks(numDistinct_) *
                 sizeof(SplitBlockBloomFilter::Block) <=
@@ -949,12 +948,6 @@ bool HashTable<true>::bloomFilterSupported() const {
       return true;
     }
   }
-  return false;
-}
-
-template <>
-bool HashTable<false>::bloomFilterSupported() const {
-  VELOX_CHECK_EQ(bloomFilterMaxSize_, 0);
   return false;
 }
 
@@ -1254,8 +1247,8 @@ void HashTable<ignoreNullKeys>::buildJoinPartition(
   }
 }
 
-template <>
-void HashTable<true>::buildBloomFilterPartition(
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::buildBloomFilterPartition(
     column_index_t columnIndex,
     uint8_t partition,
     const std::vector<std::unique_ptr<RowPartitions>>& rowPartitions) {
@@ -1272,14 +1265,6 @@ void HashTable<true>::buildBloomFilterPartition(
           *hashers_[columnIndex], rowColumn.offset(), rows, numRows, *filter);
     }
   }
-}
-
-template <>
-void HashTable<false>::buildBloomFilterPartition(
-    column_index_t /*columnIndex*/,
-    uint8_t /*partition*/,
-    const std::vector<std::unique_ptr<RowPartitions>>& /*rowPartitions*/) {
-  VELOX_UNREACHABLE();
 }
 
 template <bool ignoreNullKeys>

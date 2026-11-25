@@ -329,6 +329,48 @@ TEST_F(PlanBuilderTest, filter) {
       expectation);
 }
 
+// A condition gives the same join as the keys and the filter spelled out.
+TEST_F(PlanBuilderTest, hashJoinCondition) {
+  const auto probeType = ROW({"t0", "t1", "t2"}, BIGINT());
+  const auto build =
+      PlanBuilder().tableScan(ROW({"u0", "u1", "u2"}, BIGINT())).planNode();
+  const std::vector<std::string> outputLayout{"t0", "u1"};
+
+  auto hashJoin = [&](std::string_view condition) {
+    return PlanBuilder()
+        .tableScan(probeType)
+        .hashJoin(std::string(condition), build, outputLayout)
+        .planNode()
+        ->toString(true, false);
+  };
+  auto expected = [&](const std::vector<std::string>& probeKeys,
+                      const std::vector<std::string>& buildKeys,
+                      const std::string& filter) {
+    return PlanBuilder()
+        .tableScan(probeType)
+        .hashJoin(probeKeys, buildKeys, build, filter, outputLayout)
+        .planNode()
+        ->toString(true, false);
+  };
+
+  EXPECT_EQ(hashJoin("t0 = u0"), expected({"t0"}, {"u0"}, ""));
+  EXPECT_EQ(
+      hashJoin("t0 = u0 AND u1 = t1"),
+      expected({"t0", "t1"}, {"u0", "u1"}, ""));
+  EXPECT_EQ(
+      hashJoin("t0 = u0 AND t2 < u2 AND t1 + 1 = u1"),
+      expected({"t0"}, {"u0"}, "t2 < u2 AND t1 + 1 = u1"));
+  EXPECT_EQ(
+      hashJoin("t0 = t1 AND t0 = u0"), expected({"t0"}, {"u0"}, "t0 = t1"));
+
+  VELOX_ASSERT_THROW(
+      hashJoin("t0 < u0"),
+      "Hash join condition must equate a probe column with a build column: t0 < u0");
+  VELOX_ASSERT_THROW(
+      hashJoin("t0 = t1"),
+      "Hash join condition must equate a probe column with a build column: t0 = t1");
+}
+
 TEST_F(PlanBuilderTest, commitStrategyParameter) {
   auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
   auto directory = "/some/test/directory";

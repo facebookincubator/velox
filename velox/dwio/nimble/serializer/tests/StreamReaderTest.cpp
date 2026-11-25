@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -45,6 +46,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/views/DecodedStringBuffers.h"
 #include "velox/dwio/nimble/serializer/StreamReader.h"
 #include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/type/Type.h"
@@ -486,7 +488,8 @@ DEBUG_ONLY_TEST_F(StreamReaderTest, decodesChildFieldsInParallel) {
   {
     StreamReader serialReader{type, pool_.get(), {.decodeExecutor = &executor}};
     velox::VectorPtr output;
-    serialReader.setStreams(streams, {});
+    serialReader.setStreams(
+        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, {});
     folly::coro::blockingWait(serialReader.co_next(3, output));
     EXPECT_EQ(parallelFieldReads, 0);
   }
@@ -501,7 +504,11 @@ DEBUG_ONLY_TEST_F(StreamReaderTest, decodesChildFieldsInParallel) {
   velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
   std::array<velox::VectorPtr, 2> outputs;
   for (auto& output : outputs) {
-    reader.setStreams(streams, {.bufferPool = &bufferPool});
+    reader.setStreams(
+        streams,
+        /*streamBufferHolders=*/{},
+        /*alphabets=*/{},
+        {.bufferPool = &bufferPool});
     folly::coro::blockingWait(reader.co_next(3, output));
     reader.reset();
   }
@@ -536,7 +543,8 @@ TEST_F(StreamReaderTest, reusesRowOutputAcrossSequentialReads) {
       });
   StreamReader reader{type, pool_.get(), /*options=*/{}};
   const std::array<std::string_view, 2> streams{std::string_view{}, stream};
-  reader.setStreams(streams, /*options=*/{});
+  reader.setStreams(
+      streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
   velox::VectorPtr output;
   folly::coro::blockingWait(reader.co_next(3, output));
   ASSERT_NE(output, nullptr);
@@ -591,7 +599,8 @@ TEST_F(StreamReaderTest, readsScalarAfterResettingOutput) {
       StreamDescriptor{0, ScalarKind::Int64});
   StreamReader reader{type, pool_.get(), /*options=*/{}};
   const std::array<std::string_view, 1> streams{stream};
-  reader.setStreams(streams, /*options=*/{});
+  reader.setStreams(
+      streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
   auto output = velox::BaseVector::create(
       velox::ROW("value", velox::BIGINT()), 1, pool_.get());
 
@@ -627,7 +636,8 @@ TEST_F(StreamReaderTest, readsRowAfterResettingOutput) {
         ->set(0, velox::StringView{"retained"});
     const auto retainedOutput = retainOutput ? output : nullptr;
 
-    reader.setStreams(streams, /*options=*/{});
+    reader.setStreams(
+        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
     output.reset();
     folly::coro::blockingWait(reader.co_next(3, output));
 
@@ -816,7 +826,11 @@ TEST_F(StreamReaderTest, rejectsInvalidChunkHeaders) {
     const auto stream = chunk + chunk.substr(0, kChunkHeaderSize - 1);
     const std::array<std::string_view, 1> streams{stream};
     NIMBLE_ASSERT_FILE_THROW(
-        reader.setStreams(streams, /*options=*/{}),
+        reader.setStreams(
+            streams,
+            /*streamBufferHolders=*/{},
+            /*alphabets=*/{},
+            /*options=*/{}),
         "Truncated chunk header in stream");
   }
 
@@ -824,7 +838,11 @@ TEST_F(StreamReaderTest, rejectsInvalidChunkHeaders) {
     const auto stream = chunk.substr(0, chunk.size() - 1);
     const std::array<std::string_view, 1> streams{stream};
     NIMBLE_ASSERT_FILE_THROW(
-        reader.setStreams(streams, /*options=*/{}),
+        reader.setStreams(
+            streams,
+            /*streamBufferHolders=*/{},
+            /*alphabets=*/{},
+            /*options=*/{}),
         "Chunk data exceeds stream boundary");
   }
 
@@ -837,7 +855,11 @@ TEST_F(StreamReaderTest, rejectsInvalidChunkHeaders) {
         header);
     const std::array<std::string_view, 1> streams{stream};
     NIMBLE_ASSERT_FILE_THROW(
-        reader.setStreams(streams, /*options=*/{}),
+        reader.setStreams(
+            streams,
+            /*streamBufferHolders=*/{},
+            /*alphabets=*/{},
+            /*options=*/{}),
         "Unsupported chunk compression type");
   }
 }
@@ -853,7 +875,8 @@ TEST_F(StreamReaderTest, readsSequentialRowsAcrossEncodingChunks) {
         StreamDescriptor{0, ScalarKind::Int64});
     StreamReader reader{type, pool_.get(), /*options=*/{}};
     const std::array<std::string_view, 1> streams{stream};
-    reader.setStreams(streams, /*options=*/{});
+    reader.setStreams(
+        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
     velox::VectorPtr output;
 
     folly::coro::blockingWait(reader.co_skip(1));
@@ -883,7 +906,8 @@ TEST_F(StreamReaderTest, readsSequentialRowsAcrossEncodingChunks) {
         });
     StreamReader reader{type, pool_.get(), /*options=*/{}};
     const std::array<std::string_view, 2> streams{presence, values};
-    reader.setStreams(streams, /*options=*/{});
+    reader.setStreams(
+        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
     velox::VectorPtr output;
 
     folly::coro::blockingWait(reader.co_skip(1));
@@ -914,7 +938,11 @@ TEST_F(StreamReaderTest, rebindsStreamsWithDifferentChunkCounts) {
   // Every stripe has the same presence pattern, so each stripe after the first
   // rebinds the cached reader's decoder.
   const std::array<std::string_view, 1> oneChunkStreams{oneChunk};
-  reader.setStreams(oneChunkStreams, /*options=*/{});
+  reader.setStreams(
+      oneChunkStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      /*options=*/{});
   runRead(
       reader,
       std::array<RowRange, 1>{{{0, 3}}},
@@ -923,7 +951,11 @@ TEST_F(StreamReaderTest, rebindsStreamsWithDifferentChunkCounts) {
   EXPECT_THAT(readScalars(output, 0, 3), testing::ElementsAre(10, 11, 12));
 
   const std::array<std::string_view, 1> threeChunkStreams{threeChunks};
-  reader.setStreams(threeChunkStreams, /*options=*/{});
+  reader.setStreams(
+      threeChunkStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      /*options=*/{});
   runRead(
       reader,
       std::array<RowRange, 1>{{{0, 4}}},
@@ -931,7 +963,11 @@ TEST_F(StreamReaderTest, rebindsStreamsWithDifferentChunkCounts) {
       output);
   EXPECT_THAT(readScalars(output, 0, 4), testing::ElementsAre(20, 21, 22, 23));
 
-  reader.setStreams(oneChunkStreams, /*options=*/{});
+  reader.setStreams(
+      oneChunkStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      /*options=*/{});
   runRead(
       reader,
       std::array<RowRange, 1>{{{1, 3}}},
@@ -959,7 +995,11 @@ TEST_F(StreamReaderTest, rebindsStreamsWithEncodingOptionsOfEachStripe) {
   // each stripe with the options that bind the stripe.
   const std::array<std::string_view, 1> varintStreams{varintChunk};
   const std::array<std::string_view, 1> fixedStreams{fixedChunk};
-  reader.setStreams(varintStreams, varintOptions);
+  reader.setStreams(
+      varintStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      varintOptions);
   runRead(
       reader,
       std::array<RowRange, 1>{{{0, 3}}},
@@ -967,7 +1007,11 @@ TEST_F(StreamReaderTest, rebindsStreamsWithEncodingOptionsOfEachStripe) {
       output);
   EXPECT_THAT(readScalars(output, 0, 3), testing::ElementsAre(10, 11, 12));
 
-  reader.setStreams(fixedStreams, /*options=*/{});
+  reader.setStreams(
+      fixedStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      /*options=*/{});
   runRead(
       reader,
       std::array<RowRange, 1>{{{0, 3}}},
@@ -975,7 +1019,11 @@ TEST_F(StreamReaderTest, rebindsStreamsWithEncodingOptionsOfEachStripe) {
       output);
   EXPECT_THAT(readScalars(output, 0, 3), testing::ElementsAre(20, 21, 22));
 
-  reader.setStreams(varintStreams, varintOptions);
+  reader.setStreams(
+      varintStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      varintOptions);
   runRead(
       reader,
       std::array<RowRange, 1>{{{1, 3}}},
@@ -1006,13 +1054,21 @@ TEST_F(StreamReaderTest, rebindsStreamsWithBufferPoolOfEachStripe) {
   // them into scratch buffers from the pool of the binding first. Both stripes
   // have the same presence pattern, so the second rebinds the decoders of the
   // first, which must then use the pool of the second.
-  reader.setStreams(streams, {.bufferPool = &firstPool});
+  reader.setStreams(
+      streams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      {.bufferPool = &firstPool});
   folly::coro::blockingWait(reader.co_next(4, output));
   reader.reset();
   const auto numScratchBuffers = firstPool.size();
   ASSERT_GT(numScratchBuffers, 0);
 
-  reader.setStreams(streams, {.bufferPool = &secondPool});
+  reader.setStreams(
+      streams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      {.bufferPool = &secondPool});
   folly::coro::blockingWait(reader.co_next(4, output));
   reader.reset();
   EXPECT_EQ(secondPool.size(), numScratchBuffers);
@@ -1039,7 +1095,8 @@ TEST_F(StreamReaderTest, readsSharedDictionaryStreamsWithTheirAlphabets) {
                               std::span<const RowRange> ranges,
                               velox::vector_size_t numRows) {
     auto output = velox::BaseVector::create(outputType, numRows, pool_.get());
-    reader.setStreams(streams, alphabets, /*options=*/{});
+    reader.setStreams(
+        streams, /*streamBufferHolders=*/{}, alphabets, /*options=*/{});
     // The map holds the only other references to the alphabets, so the read
     // checks that the views of the binding keep the alphabets they use.
     alphabets.clear();
@@ -1056,8 +1113,8 @@ TEST_F(StreamReaderTest, readsSharedDictionaryStreamsWithTheirAlphabets) {
     return std::pair{std::move(output), std::move(rows)};
   };
 
-  // Names longer than an inline StringView check that the output keeps its
-  // own copy of the strings and not views into the alphabet.
+  // Names longer than an inline StringView check that the output holds the
+  // buffers of the strings and not only views into the alphabet.
   const auto firstIds = encodeSharedDictionaryChunk<int64_t>({0, 2, 1, 2});
   const auto firstNames =
       encodeSharedDictionaryChunk<std::string_view>({1, 0, 1, 2});
@@ -1137,6 +1194,7 @@ TEST_F(StreamReaderTest, rejectsAlphabetsFromBothMapAndOptions) {
     NIMBLE_ASSERT_USER_THROW(
         reader.setStreams(
             streams,
+            /*streamBufferHolders=*/{},
             {{1, makeAlphabet<int64_t>({10, 20})}},
             {.sharedDictionaryAlphabet = makeAlphabet<int64_t>({30, 40})}),
         "Shared dictionary alphabets must come from the map or the options, not both");
@@ -1147,7 +1205,10 @@ TEST_F(StreamReaderTest, rejectsAlphabetsFromBothMapAndOptions) {
   {
     NIMBLE_ASSERT_USER_THROW(
         reader.setStreams(
-            streams, {{1, makeAlphabet<int64_t>({10, 20})}}, /*options=*/{}),
+            streams,
+            /*streamBufferHolders=*/{},
+            {{1, makeAlphabet<int64_t>({10, 20})}},
+            /*options=*/{}),
         "Shared dictionary encoding requires an alphabet.");
   }
 }
@@ -1327,7 +1388,10 @@ TEST_F(StreamReaderTest, rejectsUnsupportedEncodingViews) {
 
   expectUnsupported(
       [&] { runRead(reader, streams, ranges, /*outputOffset=*/0, output); });
-  expectUnsupported([&] { reader.setStreams(streams, /*options=*/{}); });
+  expectUnsupported([&] {
+    reader.setStreams(
+        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
+  });
 }
 
 TEST_F(StreamReaderTest, rejectsSharedDictionaryStreamWithoutAlphabet) {
@@ -1338,13 +1402,18 @@ TEST_F(StreamReaderTest, rejectsSharedDictionaryStreamWithoutAlphabet) {
   const std::array<std::string_view, 1> streams{stream};
 
   NIMBLE_ASSERT_USER_THROW(
-      reader.setStreams(streams, /*options=*/{}),
+      reader.setStreams(
+          streams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          /*options=*/{}),
       "Shared dictionary encoding requires an alphabet.");
 
   // An alphabet keyed by another stream does not serve this one.
   NIMBLE_ASSERT_USER_THROW(
       reader.setStreams(
           streams,
+          /*streamBufferHolders=*/{},
           {{1, makeAlphabet<int64_t>({10, 20})}},
           /*options=*/{}),
       "Shared dictionary encoding requires an alphabet.");
@@ -1388,13 +1457,21 @@ TEST_F(StreamReaderTest, readsBoundStreamsAcrossCalls) {
   const std::array<RowRange, 1> trailingRanges{{{3, 4}}};
 
   const std::array<std::string_view, 1> firstStreams{firstStream};
-  reader.setStreams(firstStreams, /*options=*/{});
+  reader.setStreams(
+      firstStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      /*options=*/{});
   runRead(reader, leadingRanges, /*outputOffset=*/0, output);
   runRead(reader, trailingRanges, /*outputOffset=*/2, output);
   EXPECT_THAT(readScalars(output, 0, 3), testing::ElementsAre(10, 11, 13));
 
   const std::array<std::string_view, 1> secondStreams{secondStream};
-  reader.setStreams(secondStreams, /*options=*/{});
+  reader.setStreams(
+      secondStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      /*options=*/{});
   runRead(reader, trailingRanges, /*outputOffset=*/0, output);
   EXPECT_THAT(readScalars(output, 0, 1), testing::ElementsAre(23));
 }
@@ -1413,7 +1490,8 @@ TEST_F(StreamReaderTest, rejectsBoundReadWithoutStreams) {
       "No streams are bound");
 
   const std::array<std::string_view, 1> streams{stream};
-  reader.setStreams(streams, /*options=*/{});
+  reader.setStreams(
+      streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
   reader.reset();
   NIMBLE_ASSERT_THROW(
       runRead(reader, ranges, /*outputOffset=*/0, output),
@@ -1431,11 +1509,30 @@ TEST_F(StreamReaderTest, rejectsStreamCountMismatch) {
   const std::array<RowRange, 1> ranges{{{0, 1}}};
 
   NIMBLE_ASSERT_THROW(
-      reader.setStreams(streams, /*options=*/{}),
+      reader.setStreams(
+          streams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          /*options=*/{}),
       "Stream count must match the projected schema");
   NIMBLE_ASSERT_THROW(
       runRead(reader, streams, ranges, /*outputOffset=*/0, output),
       "Stream count must match the projected schema");
+}
+
+TEST_F(StreamReaderTest, rejectsStreamBufferHoldersNotAlignedWithStreams) {
+  const auto stream = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"long string value"},
+      EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::String});
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  const std::array<std::string_view, 1> streams{stream};
+  const std::array<velox::BufferPtr, 2> holders{};
+
+  NIMBLE_ASSERT_USER_THROW(
+      reader.setStreams(streams, holders, /*alphabets=*/{}, /*options=*/{}),
+      "Stream buffer holders must align with the streams");
 }
 
 TEST_F(StreamReaderTest, readsStripesWithDifferingPresencePatterns) {
@@ -1548,7 +1645,11 @@ TEST_F(StreamReaderTest, readsStripeAfterFailedRebind) {
   // fails after the first child has been rebound.
   const auto firstStripe = encodeStripe(100);
   const auto firstStreams = makeStreams(firstStripe);
-  reader.setStreams(firstStreams, /*options=*/{});
+  reader.setStreams(
+      firstStreams,
+      /*streamBufferHolders=*/{},
+      /*alphabets=*/{},
+      /*options=*/{});
 
   // A truncated chunk header fails before the second child's decoder is
   // rebound.
@@ -1556,7 +1657,11 @@ TEST_F(StreamReaderTest, readsStripeAfterFailedRebind) {
   truncatedStripe[1] += truncatedStripe[1].substr(0, kChunkHeaderSize - 1);
   const auto truncatedStreams = makeStreams(truncatedStripe);
   NIMBLE_ASSERT_FILE_THROW(
-      reader.setStreams(truncatedStreams, /*options=*/{}),
+      reader.setStreams(
+          truncatedStreams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          /*options=*/{}),
       "Truncated chunk header in stream");
 
   // A chunk of another data type fails after the second child's decoder has
@@ -1566,7 +1671,11 @@ TEST_F(StreamReaderTest, readsStripeAfterFailedRebind) {
       encodeChunk<int32_t>(std::vector<int32_t>{0}, EncodingType::Trivial);
   const auto mixedTypeStreams = makeStreams(mixedTypeStripe);
   NIMBLE_ASSERT_FILE_THROW(
-      reader.setStreams(mixedTypeStreams, /*options=*/{}),
+      reader.setStreams(
+          mixedTypeStreams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          /*options=*/{}),
       "Encoding chunks of a stream must store the same data type");
 
   auto output = velox::BaseVector::create(outputType, 1, pool_.get());
@@ -1657,7 +1766,11 @@ TEST_F(StreamReaderTest, readsStripeAfterFailedPatternChange) {
   truncatedStripe[1] += truncatedStripe[1].substr(0, kChunkHeaderSize - 1);
   const auto truncatedStreams = makeStreams(truncatedStripe, /*absentChild=*/2);
   NIMBLE_ASSERT_FILE_THROW(
-      reader.setStreams(truncatedStreams, /*options=*/{}),
+      reader.setStreams(
+          truncatedStreams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          /*options=*/{}),
       "Truncated chunk header in stream");
 
   // A chunk of another data type fails after the second child's decoder has
@@ -1667,7 +1780,11 @@ TEST_F(StreamReaderTest, readsStripeAfterFailedPatternChange) {
       encodeChunk<int32_t>(std::vector<int32_t>{0}, EncodingType::Trivial);
   const auto mixedTypeStreams = makeStreams(mixedTypeStripe, /*absentChild=*/2);
   NIMBLE_ASSERT_FILE_THROW(
-      reader.setStreams(mixedTypeStreams, /*options=*/{}),
+      reader.setStreams(
+          mixedTypeStreams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          /*options=*/{}),
       "Encoding chunks of a stream must store the same data type");
 
   auto output = velox::BaseVector::create(outputType, 1, pool_.get());
@@ -1721,6 +1838,172 @@ TEST_F(StreamReaderTest, retainsScatteredStringsAcrossStreamBindings) {
           "unused long string",
           "second long string",
           "fourth long string"}));
+}
+
+TEST_F(StreamReaderTest, keepsStringsInStreamBufferHolders) {
+  const auto firstStream = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"first long string", "second long string"},
+      EncodingType::Trivial);
+  const auto secondStream = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"third long string", "fourth long string"},
+      EncodingType::Trivial);
+  const auto thirdStream = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"fifth long string", "sixth long string"},
+      EncodingType::Trivial);
+
+  // The first two streams lie one after the other in one buffer, which holds
+  // both. The third stream has no buffer holder.
+  auto holder = velox::AlignedBuffer::allocate<char>(
+      firstStream.size() + secondStream.size(), pool_.get());
+  auto* rawHolder = holder->asMutable<char>();
+  std::copy(firstStream.begin(), firstStream.end(), rawHolder);
+  std::copy(
+      secondStream.begin(), secondStream.end(), rawHolder + firstStream.size());
+  const std::array<std::string_view, 4> streams{
+      std::string_view{},
+      std::string_view{rawHolder, firstStream.size()},
+      std::string_view{rawHolder + firstStream.size(), secondStream.size()},
+      thirdStream,
+  };
+  std::array<velox::BufferPtr, 4> holders{nullptr, holder, holder, nullptr};
+  const std::vector<std::string> names{"first", "second", "third"};
+  std::vector<std::shared_ptr<const Type>> children;
+  for (uint32_t child{1}; child <= names.size(); ++child) {
+    children.emplace_back(
+        std::make_shared<const ScalarType>(
+            StreamDescriptor{child, ScalarKind::String}));
+  }
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool}, names, children);
+  auto output = velox::BaseVector::create(
+      velox::ROW(names, velox::VARCHAR()), 2, pool_.get());
+  {
+    StreamReader reader{type, pool_.get(), /*options=*/{}};
+    reader.setStreams(streams, holders, /*alphabets=*/{}, /*options=*/{});
+    const std::array<RowRange, 1> ranges{{{0, 2}}};
+    runRead(reader, ranges, /*outputOffset=*/0, output);
+  }
+
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  const auto childStrings = [&](velox::column_index_t child) {
+    const auto* flat = row->childAt(child)->asFlatVector<velox::StringView>();
+    NIMBLE_CHECK_NOT_NULL(flat);
+    return flat;
+  };
+  const auto liesIn = [](velox::StringView value, std::string_view bytes) {
+    return value.data() >= bytes.data() &&
+        value.data() + value.size() <= bytes.data() + bytes.size();
+  };
+  const std::string_view holderBytes{holder->as<char>(), holder->size()};
+  for (velox::column_index_t child{0}; child < 2; ++child) {
+    SCOPED_TRACE(fmt::format("child {}", child));
+    EXPECT_THAT(
+        childStrings(child)->stringBuffers(), testing::Contains(holder));
+    for (velox::vector_size_t i{0}; i < 2; ++i) {
+      EXPECT_TRUE(liesIn(childStrings(child)->valueAt(i), holderBytes));
+    }
+  }
+  EXPECT_THAT(
+      childStrings(2)->stringBuffers(),
+      testing::Not(testing::Contains(holder)));
+  for (velox::vector_size_t i{0}; i < 2; ++i) {
+    EXPECT_FALSE(liesIn(childStrings(2)->valueAt(i), thirdStream));
+  }
+
+  // The output alone keeps the holder alive.
+  holders.fill(nullptr);
+  holder.reset();
+  std::vector<std::string> actual;
+  for (velox::column_index_t child{0}; child < names.size(); ++child) {
+    for (velox::vector_size_t i{0}; i < 2; ++i) {
+      actual.push_back(childStrings(child)->valueAt(i).str());
+    }
+  }
+  EXPECT_THAT(
+      actual,
+      testing::ElementsAre(
+          "first long string",
+          "second long string",
+          "third long string",
+          "fourth long string",
+          "fifth long string",
+          "sixth long string"));
+}
+
+TEST_F(StreamReaderTest, keepsStringsOfStreamChunksInOneBuffer) {
+  // Three FSST chunks, which cached views decode chunks of rows of. Their
+  // strings fit in the first buffer, of 32 KB.
+  constexpr uint32_t kChunkRows{200};
+  constexpr uint32_t kNumRows{3 * kChunkRows};
+  std::vector<std::string> storage;
+  storage.reserve(kNumRows);
+  for (uint32_t row{0}; row < kNumRows; ++row) {
+    storage.push_back(
+        fmt::format("https://www.example.com/experiments/{}", row % 97));
+  }
+  std::string stream;
+  for (uint32_t chunk{0}; chunk < 3; ++chunk) {
+    const std::vector<std::string_view> values(
+        storage.begin() + chunk * kChunkRows,
+        storage.begin() + (chunk + 1) * kChunkRows);
+    stream += encodeChunk<std::string_view>(
+        values,
+        EncodingType::Fsst,
+        {.type = CompressionType::Uncompressed},
+        {.fsstCompressionTargetRatio = 10.0});
+  }
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::String});
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  const std::array<std::string_view, 1> streams{stream};
+  const std::array<RowRange, 1> ranges{{{0, kNumRows}}};
+
+  // Reads every row of the stream in two stripes. The strings of the three
+  // chunks of each lie in one buffer, which the output alone keeps alive.
+  for (int stripe{0}; stripe < 2; ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe {}", stripe));
+    auto output =
+        velox::BaseVector::create(velox::VARCHAR(), kNumRows, pool_.get());
+    reader.setStreams(
+        streams,
+        /*streamBufferHolders=*/{},
+        /*alphabets=*/{},
+        {.cacheEncodingView = true});
+    runRead(reader, ranges, /*outputOffset=*/0, output);
+    reader.reset();
+
+    const auto* flat = output->asFlatVector<velox::StringView>();
+    ASSERT_NE(flat, nullptr);
+    for (velox::vector_size_t row{0}; row < output->size(); ++row) {
+      ASSERT_EQ(flat->valueAt(row).str(), storage[row]) << "row " << row;
+    }
+    ASSERT_EQ(flat->stringBuffers().size(), 1);
+    const auto* begin = flat->stringBuffers()[0]->as<char>();
+    const auto* end = begin + flat->stringBuffers()[0]->size();
+    for (velox::vector_size_t row{0}; row < output->size(); ++row) {
+      const auto value = flat->valueAt(row);
+      EXPECT_TRUE(value.data() >= begin && value.data() + value.size() <= end)
+          << "row " << row;
+    }
+  }
+}
+
+TEST_F(StreamReaderTest, rejectsDecodedStringBuffersInOptions) {
+  const auto stream = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"first long string"},
+      EncodingType::Trivial);
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::String});
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  const std::array<std::string_view, 1> streams{stream};
+  DecodedStringBuffers decodedStringBuffers{pool_.get()};
+  Encoding::Options options{.cacheEncodingView = true};
+  options.decodedStringBuffers = &decodedStringBuffers;
+  NIMBLE_ASSERT_USER_THROW(
+      reader.setStreams(
+          streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, options),
+      "Decoded string buffers must not be set");
 }
 
 TEST_F(StreamReaderTest, readsSelectedFlatRowThroughFieldReader) {
@@ -2202,6 +2485,56 @@ TEST_F(StreamReaderTest, readsSelectedDeduplicatedArrays) {
   EXPECT_THAT(
       readArrays(output, /*offset=*/0, /*count=*/2),
       ::testing::ElementsAre(NullableArray{{10, 11}}, NullableArray{{14, 15}}));
+}
+
+TEST_F(StreamReaderTest, readsSelectedSlidingWindowArrays) {
+  // Rows 0, 1, 3 and 4 are the windows [10, 11, 12], [11, 12, 13], [11, 12]
+  // and [13] over one elements stream. Row 2 is null.
+  const auto offsets = encodeNullableChunk<uint32_t>(
+      {0, 1, std::nullopt, 1, 3}, EncodingType::Trivial);
+  const auto lengths = encodeChunk<uint32_t>(
+      std::array<uint32_t, 4>{3, 3, 2, 1}, EncodingType::Trivial);
+  const auto elements = encodeChunk<int64_t>(
+      std::array<int64_t, 4>{10, 11, 12, 13}, EncodingType::Trivial);
+  const auto type = std::make_shared<const SlidingWindowArrayType>(
+      StreamDescriptor{0, ScalarKind::UInt32},
+      StreamDescriptor{1, ScalarKind::UInt32},
+      std::make_shared<const ScalarType>(
+          StreamDescriptor{2, ScalarKind::Int64}));
+  const std::array<std::string_view, 3> streams{offsets, lengths, elements};
+  using NullableArray = std::optional<std::vector<int64_t>>;
+
+  {
+    // Rows 3 and 4 fall inside the window of row 1, so all three rows share
+    // the three output elements [11, 12, 13].
+    StreamReader reader{type, pool_.get(), /*options=*/{}};
+    auto output = velox::BaseVector::create(
+        velox::ARRAY(velox::BIGINT()), 4, pool_.get());
+    const std::array<RowRange, 2> ranges{{{1, 3}, {3, 5}}};
+    runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+    EXPECT_THAT(
+        readArrays(output, /*offset=*/0, /*count=*/4),
+        ::testing::ElementsAre(
+            NullableArray{{11, 12, 13}},
+            NullableArray{std::nullopt},
+            NullableArray{{11, 12}},
+            NullableArray{{13}}));
+    EXPECT_EQ(output->as<velox::ArrayVector>()->elements()->size(), 3);
+  }
+  {
+    // Row 4 starts where the window of row 0 ends, so its element is staged
+    // as a separate range.
+    StreamReader reader{type, pool_.get(), /*options=*/{}};
+    auto output = velox::BaseVector::create(
+        velox::ARRAY(velox::BIGINT()), 2, pool_.get());
+    const std::array<RowRange, 2> ranges{{{0, 1}, {4, 5}}};
+    runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+    EXPECT_THAT(
+        readArrays(output, /*offset=*/0, /*count=*/2),
+        ::testing::ElementsAre(
+            NullableArray{{10, 11, 12}}, NullableArray{{13}}));
+    EXPECT_EQ(output->as<velox::ArrayVector>()->elements()->size(), 4);
+  }
 }
 
 TEST_F(StreamReaderTest, readsSelectedSlidingWindowMaps) {

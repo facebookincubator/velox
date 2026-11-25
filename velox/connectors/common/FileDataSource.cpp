@@ -26,6 +26,7 @@
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/connectors/common/FileConfig.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -110,7 +111,7 @@ FileDataSource::FileDataSource(
     if (!unique) {
       // This should not happen normally, but there are cases where we get
       // duplicate assignments for partitioning columns.
-      checkColumnHandleConsistent(*handle, *it->second);
+      handle->checkConsistentWith(*it->second);
       VELOX_CHECK_EQ(
           handle->columnType(),
           FileColumnHandle::ColumnType::kPartitionKey,
@@ -123,7 +124,7 @@ FileDataSource::FileDataSource(
   for (auto& handle : tableHandle_->filterColumnHandles()) {
     auto it = columnHandles.find(handle->name());
     if (it != columnHandles.end()) {
-      checkColumnHandleConsistent(*handle, *it->second);
+      handle->checkConsistentWith(*it->second);
       continue;
     }
     processColumnHandle(handle);
@@ -142,7 +143,7 @@ FileDataSource::FileDataSource(
     readColumnNames.push_back(handle->name());
     for (auto& subfield : handle->requiredSubfields()) {
       VELOX_USER_CHECK_EQ(
-          getColumnName(subfield),
+          subfield.baseName(),
           handle->name(),
           "Required subfield does not match column name");
       subfields_[handle->name()].push_back(&subfield);
@@ -152,16 +153,14 @@ FileDataSource::FileDataSource(
 
   if (fileConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx->sessionProperties())) {
-    checkColumnNameLowerCase(outputType_);
-    checkColumnNameLowerCase(tableHandle_->subfieldFilters(), infoColumns_);
-    checkColumnNameLowerCase(tableHandle_->remainingFilter());
+    tableHandle_->checkColumnNamesLowerCase(*outputType_);
   }
 
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
     fileScanState_->filters.emplace(k.clone(), v);
   }
   double sampleRate = tableHandle_->sampleRate();
-  auto remainingFilter = extractFiltersFromRemainingFilter(
+  auto remainingFilter = exec::ExprToSubfieldFilterParser::extractFilters(
       tableHandle_->remainingFilter(),
       expressionEvaluator_,
       fileScanState_->filters,
@@ -181,11 +180,16 @@ FileDataSource::FileDataSource(
     // These columns must be loaded eagerly (not lazily) so the filter
     // can evaluate before lazy columns are accessed.
     folly::F14FastSet<std::string> remainingFilterColumns;
+    const auto fieldsReadForAllPassingRows =
+        remainingFilterExpr->fieldsReadForAllPassingRows();
     for (auto& input : remainingFilterExpr->distinctFields()) {
       remainingFilterColumns.insert(input->field());
       auto it = columnNames.find(input->field());
       if (it != columnNames.end()) {
-        if (shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
+        if (std::find(
+                fieldsReadForAllPassingRows.begin(),
+                fieldsReadForAllPassingRows.end(),
+                input) == fieldsReadForAllPassingRows.end()) {
           multiReferencedFields_.push_back(it->second);
         }
         continue;
@@ -204,7 +208,7 @@ FileDataSource::FileDataSource(
           fmt::join(remainingFilterSubfields_, ", "));
     }
     for (auto& subfield : remainingFilterSubfields_) {
-      const auto& name = getColumnName(subfield);
+      const auto& name = subfield.baseName();
       auto it = subfields_.find(name);
       if (it != subfields_.end()) {
         // Some subfields of the column are already projected out, we append the
@@ -224,7 +228,6 @@ FileDataSource::FileDataSource(
       readerOutputType_,
       subfields_,
       fileScanState_->filters,
-      /*indexColumns=*/{},
       tableHandle_->dataColumns(),
       partitionKeys_,
       infoColumns_,
@@ -272,7 +275,6 @@ FileDataSource::FileDataSource(
         readerOutputType_,
         subfields_,
         fileScanState_->filters,
-        /*indexColumns=*/{},
         tableHandle_->dataColumns(),
         partitionKeys_,
         infoColumns_,
@@ -432,8 +434,7 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // Split reader subclasses may need to use the reader options in prepareSplit
   // so we initialize it beforehand.
-  splitReader_->configureReaderOptions(randomSkip_);
-  splitReader_->setRemainingFilterColumns(remainingFilterColumns_);
+  splitReader_->initialize(randomSkip_, remainingFilterColumns_);
   splitReader_->prepareSplit(
       fileScanState_->metadataFilter, runtimeStats_, fileReadOps_);
 
@@ -693,6 +694,361 @@ void FileDataSource::resetSplit() {
     splitReader_->resetSplit();
   }
   // Keep readers around to hold adaptation.
+}
+
+namespace {
+
+struct SubfieldSpec {
+  const common::Subfield* subfield;
+  bool filterOnly;
+};
+
+template <typename T>
+void deduplicate(std::vector<T>& values) {
+  std::sort(values.begin(), values.end());
+  values.erase(std::unique(values.begin(), values.end()), values.end());
+}
+
+// Floating point map key subscripts are truncated toward 0 in Presto.  For
+// example given `a' as a map with floating point key, if user queries a[0.99],
+// Presto coordinator will generate a required subfield a[0]; for a[-1.99] it
+// will generate a[-1]; for anything larger than 9223372036854775807, it
+// generates a[9223372036854775807]; for anything smaller than
+// -9223372036854775808 it generates a[-9223372036854775808].
+template <typename T>
+std::unique_ptr<common::Filter> makeFloatingPointMapKeyFilter(
+    const std::vector<int64_t>& subscripts) {
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  for (auto subscript : subscripts) {
+    T lower = subscript;
+    T upper = subscript;
+    bool lowerUnbounded = subscript == std::numeric_limits<int64_t>::min();
+    bool upperUnbounded = subscript == std::numeric_limits<int64_t>::max();
+    bool lowerExclusive = false;
+    bool upperExclusive = false;
+    if (lower <= 0 && !lowerUnbounded) {
+      if (lower > subscript - 1) {
+        lower = subscript - 1;
+      } else {
+        lower = std::nextafter(lower, -std::numeric_limits<T>::infinity());
+      }
+      lowerExclusive = true;
+    }
+    if (upper >= 0 && !upperUnbounded) {
+      if (upper < subscript + 1) {
+        upper = subscript + 1;
+      } else {
+        upper = std::nextafter(upper, std::numeric_limits<T>::infinity());
+      }
+      upperExclusive = true;
+    }
+    if (lowerUnbounded && upperUnbounded) {
+      continue;
+    }
+    filters.push_back(
+        std::make_unique<common::FloatingPointRange<T>>(
+            lower,
+            lowerUnbounded,
+            lowerExclusive,
+            upper,
+            upperUnbounded,
+            upperExclusive,
+            false));
+  }
+  if (filters.size() == 1) {
+    return std::move(filters[0]);
+  }
+  return std::make_unique<common::MultiRange>(std::move(filters), false);
+}
+
+// Recursively add subfields to scan spec.
+void addSubfields(
+    const Type& type,
+    std::vector<SubfieldSpec>& subfields,
+    int level,
+    memory::MemoryPool* pool,
+    common::ScanSpec& spec) {
+  int newSize = 0;
+  for (int i = 0; i < subfields.size(); ++i) {
+    if (level < subfields[i].subfield->path().size()) {
+      subfields[newSize++] = subfields[i];
+    } else if (!subfields[i].filterOnly) {
+      spec.addAllChildFields(type);
+      return;
+    }
+  }
+  subfields.resize(newSize);
+
+  switch (type.kind()) {
+    case TypeKind::ROW: {
+      folly::F14FastMap<std::string, std::vector<SubfieldSpec>> required;
+      for (auto& subfield : subfields) {
+        auto* element = subfield.subfield->path()[level].get();
+        auto* nestedField = element->asChecked<common::Subfield::NestedField>();
+        required[nestedField->name()].push_back(subfield);
+      }
+      const auto& rowType = type.asRow();
+      for (int i = 0; i < rowType.size(); ++i) {
+        auto& childName = rowType.nameOf(i);
+        auto& childType = rowType.childAt(i);
+        auto* child = spec.addField(childName, i);
+        auto it = required.find(childName);
+        if (it == required.end()) {
+          child->setConstantValue(
+              BaseVector::createNullConstant(childType, 1, pool));
+        } else {
+          addSubfields(*childType, it->second, level + 1, pool, *child);
+        }
+      }
+      break;
+    }
+    case TypeKind::MAP: {
+      auto& keyType = type.childAt(0);
+      auto* keys = spec.addMapKeyFieldRecursively(*keyType);
+      addSubfields(
+          *type.childAt(1),
+          subfields,
+          level + 1,
+          pool,
+          *spec.addMapValueField());
+      if (subfields.empty()) {
+        return;
+      }
+      bool stringKey = keyType->isVarchar() || keyType->isVarbinary();
+      std::vector<std::string> stringSubscripts;
+      std::vector<int64_t> longSubscripts;
+      for (auto& subfield : subfields) {
+        auto* element = subfield.subfield->path()[level].get();
+        if (element->is(common::SubfieldKind::kAllSubscripts)) {
+          return;
+        }
+        if (stringKey) {
+          auto* subscript = element->as<common::Subfield::StringSubscript>();
+          VELOX_CHECK(
+              subscript,
+              "Unsupported for string map pruning: {}",
+              element->toString());
+          stringSubscripts.push_back(subscript->index());
+        } else {
+          auto* subscript = element->as<common::Subfield::LongSubscript>();
+          VELOX_CHECK(
+              subscript,
+              "Unsupported for long map pruning: {}",
+              element->toString());
+          longSubscripts.push_back(subscript->index());
+        }
+      }
+      std::unique_ptr<common::Filter> filter;
+      if (stringKey) {
+        deduplicate(stringSubscripts);
+        filter = std::make_unique<common::BytesValues>(stringSubscripts, false);
+        spec.setFlatMapFeatureSelection(std::move(stringSubscripts));
+      } else {
+        deduplicate(longSubscripts);
+        if (keyType->isReal()) {
+          filter = makeFloatingPointMapKeyFilter<float>(longSubscripts);
+        } else if (keyType->isDouble()) {
+          filter = makeFloatingPointMapKeyFilter<double>(longSubscripts);
+        } else {
+          filter = common::createBigintValues(longSubscripts, false);
+        }
+        std::vector<std::string> features;
+        for (auto num : longSubscripts) {
+          features.push_back(std::to_string(num));
+        }
+        spec.setFlatMapFeatureSelection(std::move(features));
+      }
+      keys->setFilter(std::move(filter));
+      break;
+    }
+    case TypeKind::ARRAY: {
+      addSubfields(
+          *type.childAt(0),
+          subfields,
+          level + 1,
+          pool,
+          *spec.addArrayElementField());
+      if (subfields.empty()) {
+        return;
+      }
+      constexpr long kMaxIndex = std::numeric_limits<vector_size_t>::max();
+      long maxIndex = -1;
+      for (auto& subfield : subfields) {
+        auto* element = subfield.subfield->path()[level].get();
+        if (dynamic_cast<const common::Subfield::AllSubscripts*>(element)) {
+          return;
+        }
+        auto* subscript =
+            dynamic_cast<const common::Subfield::LongSubscript*>(element);
+        VELOX_CHECK(
+            subscript,
+            "Unsupported for array pruning: {}",
+            element->toString());
+        VELOX_USER_CHECK_GT(
+            subscript->index(),
+            0,
+            "Non-positive array subscript cannot be push down");
+        maxIndex = std::max(maxIndex, std::min(kMaxIndex, subscript->index()));
+      }
+      spec.setMaxArrayElementsCount(maxIndex);
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+inline bool isSynthesizedColumn(
+    const std::string& name,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns) {
+  return infoColumns.count(name) != 0;
+}
+
+bool isSpecialColumn(
+    const std::string& name,
+    const std::optional<std::string>& specialName) {
+  return specialName.has_value() && name == *specialName;
+}
+
+} // namespace
+
+namespace {
+
+void processFieldSpec(
+    const RowTypePtr& dataColumns,
+    const TypePtr& outputType,
+    common::ScanSpec& fieldSpec) {
+  fieldSpec.visit(*outputType, [](const Type& type, common::ScanSpec& spec) {
+    if (type.isMap() && !spec.isConstant()) {
+      auto* keys = spec.childByName(common::ScanSpec::kMapKeysFieldName);
+      VELOX_CHECK_NOT_NULL(keys);
+      if (keys->filter()) {
+        VELOX_CHECK(!keys->filter()->testNull());
+      } else {
+        keys->setFilter(std::make_shared<common::IsNotNull>());
+      }
+    }
+  });
+  if (dataColumns) {
+    const auto childIdxOpt =
+        dataColumns->getChildIdxIfExists(fieldSpec.fieldName());
+    if (childIdxOpt.has_value()) {
+      if (dataColumns->childAt(*childIdxOpt)->isMap() && outputType->isRow()) {
+        fieldSpec.setFlatMapAsStruct(true);
+      }
+    }
+  }
+}
+
+} // namespace
+
+// static
+std::shared_ptr<common::ScanSpec> FileDataSource::makeScanSpec(
+    const RowTypePtr& rowType,
+    const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
+        outputSubfields,
+    const common::SubfieldFilters& subfieldFilters,
+    const RowTypePtr& dataColumns,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& partitionKeys,
+    const std::unordered_map<std::string, FileColumnHandlePtr>& infoColumns,
+    const SpecialColumnNames& specialColumns,
+    bool disableStatsBasedFilterReorder,
+    memory::MemoryPool* pool) {
+  auto spec = std::make_shared<common::ScanSpec>("root");
+  folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
+      filterSubfields;
+  std::vector<SubfieldSpec> subfieldSpecs;
+  for (const auto& [subfield, _] : subfieldFilters) {
+    if (auto name = subfield.toString();
+        !isSynthesizedColumn(name, infoColumns) &&
+        partitionKeys.count(name) == 0) {
+      VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowIndex));
+      VELOX_CHECK(!isSpecialColumn(name, specialColumns.rowId));
+      VELOX_CHECK(!isSpecialColumn(name, specialColumns.readRange));
+      filterSubfields[subfield.baseName()].push_back(&subfield);
+    }
+  }
+
+  // Process columns that will be projected out.
+  for (int i = 0; i < rowType->size(); ++i) {
+    auto& name = rowType->nameOf(i);
+    auto& type = rowType->childAt(i);
+    if (isSpecialColumn(name, specialColumns.rowIndex)) {
+      VELOX_CHECK(type->isBigint());
+      auto* fieldSpec = spec->addField(name, i);
+      fieldSpec->setColumnType(common::ScanSpec::ColumnType::kRowIndex);
+      continue;
+    }
+    if (isSpecialColumn(name, specialColumns.rowId)) {
+      VELOX_CHECK(type->isRow() && type->size() == 5);
+      auto& rowIdType = type->asRow();
+      auto* fieldSpec = spec->addFieldRecursively(name, rowIdType, i);
+      fieldSpec->setColumnType(common::ScanSpec::ColumnType::kComposite);
+      fieldSpec->childByName(rowIdType.nameOf(0))
+          ->setColumnType(common::ScanSpec::ColumnType::kRowIndex);
+      continue;
+    }
+    if (isSpecialColumn(name, specialColumns.readRange)) {
+      VELOX_USER_CHECK(
+          type->kindEquals(ROW({BIGINT(), INTEGER()})),
+          "Read range column must be ROW(BIGINT, INTEGER): {}",
+          type->toString());
+      auto* fieldSpec = spec->addField(name, i);
+      fieldSpec->setColumnType(common::ScanSpec::ColumnType::kReadRange);
+      continue;
+    }
+    auto it = outputSubfields.find(name);
+    if (it == outputSubfields.end()) {
+      auto* fieldSpec = spec->addFieldRecursively(name, *type, i);
+      processFieldSpec(dataColumns, type, *fieldSpec);
+      filterSubfields.erase(name);
+      continue;
+    }
+    for (auto* subfield : it->second) {
+      subfieldSpecs.push_back({subfield, false});
+    }
+    it = filterSubfields.find(name);
+    if (it != filterSubfields.end()) {
+      for (auto* subfield : it->second) {
+        subfieldSpecs.push_back({subfield, true});
+      }
+      filterSubfields.erase(it);
+    }
+    auto* fieldSpec = spec->addField(name, i);
+    addSubfields(*type, subfieldSpecs, 1, pool, *fieldSpec);
+    processFieldSpec(dataColumns, type, *fieldSpec);
+    subfieldSpecs.clear();
+  }
+
+  // Now process the columns that will not be projected out.
+  if (!filterSubfields.empty()) {
+    VELOX_CHECK_NOT_NULL(dataColumns);
+    for (auto& [fieldName, subfields] : filterSubfields) {
+      for (auto* subfield : subfields) {
+        subfieldSpecs.push_back({subfield, true});
+      }
+      auto& type = dataColumns->findChild(fieldName);
+      auto* fieldSpec = spec->getOrCreateChild(fieldName);
+      addSubfields(*type, subfieldSpecs, 1, pool, *fieldSpec);
+      processFieldSpec(dataColumns, type, *fieldSpec);
+      subfieldSpecs.clear();
+    }
+  }
+
+  for (auto& pair : subfieldFilters) {
+    const auto name = pair.first.toString();
+    if (isSynthesizedColumn(name, infoColumns)) {
+      continue;
+    }
+    auto fieldSpec = spec->getOrCreateChild(pair.first);
+    VELOX_CHECK_NULL(spec->filter());
+    fieldSpec->setFilter(pair.second);
+  }
+
+  if (disableStatsBasedFilterReorder) {
+    spec->disableStatsBasedFilterReorder();
+  }
+  return spec;
 }
 
 } // namespace facebook::velox::connector

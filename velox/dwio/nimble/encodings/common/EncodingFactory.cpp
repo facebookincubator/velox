@@ -17,6 +17,8 @@
 
 #include <utility>
 
+#include <folly/CPortability.h>
+
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
@@ -83,19 +85,19 @@ std::unique_ptr<Encoding> createSharedDictionaryEncoding(
       dataType);
 }
 
-} // namespace
-
-std::unique_ptr<Encoding> EncodingFactory::create(
+// Creates the encoding `data` holds, reading it with `options`. Inlined into
+// both create() overloads so that neither pays an extra call.
+FOLLY_ALWAYS_INLINE std::unique_ptr<Encoding> createEncoding(
     velox::memory::MemoryPool& pool,
     std::string_view data,
-    std::function<void*(uint32_t)> stringBufferFactory) const {
+    const std::function<void*(uint32_t)>& stringBufferFactory,
+    const Encoding::Options& options) {
   NIMBLE_CHECK_FILE(
       data.size() >= EncodingPrefix::kRowCountOffset,
       "Truncated encoding prefix.");
   // Maybe we should have a magic number of encodings too? Hrm.
   const EncodingType encodingType = EncodingPrefix::encodingType(data);
   const DataType dataType = EncodingPrefix::dataType(data);
-  const auto& options = options_;
 
   switch (encodingType) {
     case EncodingType::Trivial: {
@@ -238,13 +240,21 @@ std::unique_ptr<Encoding> EncodingFactory::create(
   }
 }
 
+} // namespace
+
+std::unique_ptr<Encoding> EncodingFactory::create(
+    velox::memory::MemoryPool& pool,
+    std::string_view data,
+    std::function<void*(uint32_t)> stringBufferFactory) const {
+  return createEncoding(pool, data, stringBufferFactory, options_);
+}
+
 std::unique_ptr<Encoding> EncodingFactory::create(
     velox::memory::MemoryPool& pool,
     std::string_view data,
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options) const {
-  return EncodingFactory{options}.create(
-      pool, data, std::move(stringBufferFactory));
+  return createEncoding(pool, data, stringBufferFactory, options);
 }
 
 std::string_view EncodingFactory::slice(

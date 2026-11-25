@@ -16,8 +16,15 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <ranges>
+#include <span>
+#include <type_traits>
+
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::common::testutil {
 
@@ -40,6 +47,34 @@ class PageBeforeGuard {
   /// Returns the end of the accessible page, which is the start of the guard.
   uint8_t* end() const {
     return begin_ + pageSize_;
+  }
+
+  /// Returns room for 'size' values of T that ends at end(), so that a read
+  /// past the last value faults. The values start aligned to the width of T if
+  /// it is a power of 2, as a page is. T must be trivially copyable and
+  /// destructible, as the page holds no constructed objects.
+  template <typename T>
+    requires(
+        std::is_trivially_copyable_v<T> && std::is_trivially_destructible_v<T>)
+  std::span<T> atEnd(size_t size) const {
+    VELOX_CHECK_LE(size, pageSize_ / sizeof(T), "Values must fit in one page.");
+    return {reinterpret_cast<T*>(end()) - size, size};
+  }
+
+  /// Copies 'values' to the end of the page, as atEnd() places them, and
+  /// returns the copy.
+  template <std::ranges::contiguous_range Range>
+  std::span<std::ranges::range_value_t<Range>> copyToEnd(
+      const Range& values) const {
+    auto copy = atEnd<std::ranges::range_value_t<Range>>(std::size(values));
+    std::ranges::copy(values, copy.begin());
+    return copy;
+  }
+
+  /// Same as above, for a braced list of values.
+  template <typename T>
+  std::span<T> copyToEnd(std::initializer_list<T> values) const {
+    return copyToEnd(std::span<const T>(values.begin(), values.size()));
   }
 
  private:

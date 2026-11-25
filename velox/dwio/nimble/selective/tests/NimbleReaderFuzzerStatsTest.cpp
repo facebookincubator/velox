@@ -157,11 +157,9 @@ TEST(
 
   DictionaryAwareReadPaths bulkPaths;
   bulkPaths.recordAddValues();
-  bulkPaths.recordMergeBulkNullsDense();
   DictionaryAwareReadPaths mixedPaths;
   mixedPaths.recordAddValue();
   mixedPaths.recordAddValues();
-  mixedPaths.recordMergeBulkNullsSparse();
 
   // Only reads whose filter accepts nulls count their paths.
   updateIntegerDictionaryAwareReads(velox::common::AlwaysTrue(), bulkPaths);
@@ -191,13 +189,7 @@ TEST(
               1),
           testing::Pair(
               "nimbleIntegerDictionaryAwareReads.filterAcceptsNull.addValues",
-              2),
-          testing::Pair(
-              "nimbleIntegerDictionaryAwareReads.filterAcceptsNull.mergeBulkNulls.dense",
-              1),
-          testing::Pair(
-              "nimbleIntegerDictionaryAwareReads.filterAcceptsNull.mergeBulkNulls.sparse",
-              1)));
+              2)));
 #else
   EXPECT_THAT(sums, testing::IsEmpty());
 #endif

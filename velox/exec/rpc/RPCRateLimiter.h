@@ -134,6 +134,12 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Hard upper bound on the adaptive congestion window.
     int64_t hardLimit{0};
 
+    /// Floor the adaptive window cannot back off below, in thousandths of an
+    /// admission unit: the configured floor, raised to the probe floor and
+    /// capped at the ceiling. Zero when no floor applies: the limiter does not
+    /// adapt, or its floor reaches the ceiling and holds the window there.
+    int64_t floorMilli{0};
+
     /// In-flight requests right now.
     int64_t pending{0};
 
@@ -473,8 +479,12 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
       std::vector<ContinuePromise>& toNotify);
 
   // Reserves the single timer for nextPacedAdmission_ without calling the
-  // external Timekeeper. Caller holds mutex_.
-  std::optional<PacingTimerRequest> preparePacingTimerLocked();
+  // external Timekeeper. 'now' is the time at which the caller found admission
+  // too early. The timer is armed from it rather than from a new reading: time
+  // may pass nextPacedAdmission_ in between, and then no timer would wake the
+  // waiter. Caller holds mutex_.
+  std::optional<PacingTimerRequest> preparePacingTimerLocked(
+      std::chrono::steady_clock::time_point now);
 
   // Schedules a timer previously reserved under mutex_. Never called while
   // holding mutex_, because an injected Timekeeper may run callbacks inline.

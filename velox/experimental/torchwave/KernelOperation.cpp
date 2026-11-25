@@ -58,7 +58,7 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
     }
     return n;
   }
-  int64_t result = 0;
+  int64_t result = op == SizeShortcut::kProduct ? 1 : 0;
   for (auto valueId : values) {
     auto& ivalue = frame->getIValue(valueId);
     // A size operand must be a tensor (sized by numel) or a scalar int.
@@ -85,6 +85,8 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
           *largestOut = valueId;
         }
       }
+    } else if (op == SizeShortcut::kProduct) {
+      result *= n;
     } else {
       result += n;
     }
@@ -197,7 +199,7 @@ int64_t SizeExpr::numElements(
     }
     return n;
   }
-  int64_t result = 0;
+  int64_t result = op == SizeShortcut::kProduct ? 1 : 0;
   for (auto valueId : values) {
     if (!table.valid(valueId)) {
       continue;
@@ -217,6 +219,8 @@ int64_t SizeExpr::numElements(
           *largestOut = valueId;
         }
       }
+    } else if (op == SizeShortcut::kProduct) {
+      result *= n;
     } else {
       result += n;
     }
@@ -1469,10 +1473,38 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       leafIds.push_back(value->id());
     }
   }
+  const auto* meta = expr_ ? Registry::metadata(expr_->target()) : nullptr;
+  // An op that declares its count, over operands that are kernel inputs.
+  if (meta != nullptr && meta->gridCount.has_value()) {
+    std::vector<nativert::ValueId> ids;
+    bool resolved = true;
+    for (const auto& operand : meta->gridCount->operands) {
+      const nativert::Value* value = nullptr;
+      if (operand.name != nullptr) {
+        const auto* input = expr_->tryGetInput(operand.name);
+        value = input != nullptr ? input->value : nullptr;
+      } else if (
+          operand.ordinal >= 0 &&
+          static_cast<size_t>(operand.ordinal) < expr_->inputs().size()) {
+        value = expr_->inputs()[operand.ordinal].value;
+      }
+      resolved = resolved && value != nullptr &&
+          std::find(
+              orderedInputs_.begin(),
+              orderedInputs_.begin() + numInputs_,
+              value) != orderedInputs_.begin() + numInputs_;
+      if (!resolved) {
+        break;
+      }
+      ids.push_back(CHECK_NOTNULL(value)->id());
+    }
+    if (resolved) {
+      return SizeExpr{meta->gridCount->kind, std::move(ids), {}};
+    }
+  }
   // An op whose work spans a whole tensor list is sized by the total, not the
   // largest member; kMax would size its grid off one list element and starve
   // it of blocks. See Metadata::gridSizeSumsInputs.
-  const auto* meta = expr_ ? Registry::metadata(expr_->target()) : nullptr;
   auto shortcut = (meta != nullptr && meta->gridSizeSumsInputs)
       ? SizeShortcut::kSum
       : SizeShortcut::kMax;

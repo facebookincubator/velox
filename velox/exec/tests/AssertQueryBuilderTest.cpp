@@ -165,14 +165,12 @@ TEST_F(AssertQueryBuilderTest, hiveSplits) {
                       .tableScan(data->rowType())
                       .capturePlanNodeId(probeScanId)
                       .hashJoin(
-                          {"c0"},
-                          {"b_c0"},
+                          "c0 = b_c0",
                           builder.newPlan()
                               .tableScan(data->rowType())
                               .capturePlanNodeId(buildScanId)
                               .project({"c0 as b_c0"})
                               .planNode(),
-                          "",
                           {"c0", "b_c0"})
                       .singleAggregation({}, {"count(1)"})
                       .planNode();

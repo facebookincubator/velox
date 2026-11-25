@@ -19,8 +19,8 @@
 #include "velox/common/Casts.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/serializers/KeyEncoder.h"
@@ -250,11 +250,12 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   readerOpts.setDataIoStats(ioStatistics_);
   readerOpts.setMetadataIoStats(ioStatistics_);
   readerOpts.setIndexIoStats(ioStatistics_);
-  hive::configureReaderOptions(
+  connector::FileSplitReader::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
-      tableHandle_,
       hiveSplit_,
+      tableHandle_->dataColumns(),
+      tableHandle_->tableParameters(),
       hiveSplit_->serdeParameters,
       readerOpts);
   readerOpts.setLoadClusterIndex(true);
@@ -270,6 +271,12 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   auto fileHandleCachePtr = fileHandleFactory_->generate(
       fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
   VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
+  // The file reader caches its metadata and index in the data cache only when
+  // it has both the cache and the file handle, whose id keys the entries.
+  if (auto* cache = connectorQueryCtx_->cache()) {
+    readerOpts.setFileHandle(&(*fileHandleCachePtr));
+    readerOpts.setCache(cache);
+  }
 
   auto baseFileInput = connector::BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
@@ -296,16 +303,16 @@ FileIndexReader::createIndexReader() {
       "FileIndexReader only supports Nimble, Flux and SST file formats");
 
   dwio::common::RowReaderOptions rowReaderOpts;
-  configureRowReaderOptions(
-      tableHandle_->tableParameters(),
+  connector::FileSplitReader::configureRowReaderOptions(
+      fileConfig_,
+      connectorQueryCtx_,
+      hiveSplit_,
       scanSpec_,
       /*metadataFilter=*/nullptr,
       outputType_,
-      hiveSplit_,
-      hiveSplit_->serdeParameters,
-      fileConfig_,
-      connectorQueryCtx_->sessionProperties(),
       ioExecutor_,
+      tableHandle_->tableParameters(),
+      hiveSplit_->serdeParameters,
       rowReaderOpts);
   if (hiveSplit_->fileFormat != dwio::common::FileFormat::SST) {
     rowReaderOpts.setIndexEnabled(true);

@@ -106,6 +106,7 @@ TEST_P(EncodingViewFactoryTest, readsNullableEncoding) {
       const auto numNonNull = view->read(
           ranges,
           [&](uint32_t outputIndex) { actualNulls[outputIndex] = true; },
+          /*addStringBuffer=*/nullptr,
           actualValues.data());
       EXPECT_EQ(numNonNull, 3);
       EXPECT_EQ(actualValues, expectedValues);

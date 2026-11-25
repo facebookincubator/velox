@@ -31,7 +31,6 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/common/FileColumnHandle.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/common/PartitionValue.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -41,6 +40,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/Filter.h"
 
@@ -312,7 +312,7 @@ ScanFilters splitAndFoldFilters(
   // remaining filter into subfield filters, as the CPU data source does.
   filters.sampleRate = tableHandle.sampleRate();
   const auto remainingFilter =
-      facebook::velox::connector::extractFiltersFromRemainingFilter(
+      facebook::velox::exec::ExprToSubfieldFilterParser::extractFilters(
           tableHandle.remainingFilter(),
           expressionEvaluator,
           filters.subfieldFilters,

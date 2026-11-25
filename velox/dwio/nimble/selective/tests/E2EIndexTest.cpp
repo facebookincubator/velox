@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <gtest/gtest.h>
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
@@ -34,11 +35,16 @@
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/tablet/Constants.h"
+#include "velox/dwio/nimble/tablet/TabletReader.h"
+#include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/FlatVector.h"
@@ -448,7 +454,8 @@ class E2EIndexTestBase : public ::testing::Test {
       uint64_t minStreamChunkRawSize = 0,
       uint32_t batchesPerStripe = 0,
       ChunkStatsVersion chunkStatsVersion = ChunkStatsVersion::kV2,
-      const std::vector<std::string>& indexColumns = {}) {
+      const std::vector<std::string>& indexColumns = {},
+      bool enableStreamDeduplication = false) {
     sinkData_.clear();
     auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
     auto batchesInStripe = std::make_shared<uint32_t>(0);
@@ -487,7 +494,7 @@ class E2EIndexTestBase : public ::testing::Test {
                       [](const StripeProgress&) { return true; });
                 },
             .enableChunking = true,
-            .enableStreamDeduplication = false,
+            .enableStreamDeduplication = enableStreamDeduplication,
         });
     for (const auto& batch : batches) {
       writer.write(batch);
@@ -1065,6 +1072,48 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsMergeRangesAcrossColumns) {
   EXPECT_EQ(result.stats.processedRows, 12);
 }
 
+// The scan spec names only the last of the file's columns, as a query of a wide
+// table names few of its columns.
+TEST_F(E2EIndexTestBase, v2ChunkStatsPruneWithPartialScanSpec) {
+  const auto fileType = ROW({"first", "second", "value"}, BIGINT());
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(3);
+  for (int64_t batch = 0; batch < 3; ++batch) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"first", "second", "value"},
+        {vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 10 + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 20 + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [batch](auto row) { return batch * 100 + row; })}));
+  }
+  writeChunkStatsData(batches);
+
+  const auto scanType = ROW("value", BIGINT());
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(100, 103, false);
+  auto reader = createReader(/*sampleRate=*/1.0, /*randomSeed=*/0);
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setRequestedType(fileType);
+  rowReaderOptions.setScanSpec(createScanSpec(scanType, filters));
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  std::vector<RowVectorPtr> rows;
+  VectorPtr result = BaseVector::create(scanType, 1, leafPool_.get());
+  while (rowReader->next(1'000, result) > 0) {
+    result->loadedVector();
+    rows.push_back(std::dynamic_pointer_cast<RowVector>(result));
+  }
+  RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+
+  verifyResultsEqual(
+      rows, {vectorMaker_->rowVector({"value"}, {batches[1]->childAt(2)})});
+  EXPECT_EQ(stats.chunkSkippedRows, 8);
+  EXPECT_EQ(stats.processedRows, 12);
+}
+
 TEST_F(E2EIndexTestBase, v2ChunkStatsUnalignedChunksAcrossStripes) {
   const auto rowType = ROW({{"narrow", TINYINT()}, {"wide", BIGINT()}});
   std::vector<RowVectorPtr> batches;
@@ -1594,6 +1643,89 @@ TEST_F(E2EIndexTestBase, splitRowRangeWithIndexCountsFromSplitStart) {
         EXPECT_EQ(result.numStripeLoads, testCase.expectedStripeLoads);
       }
     }
+  }
+}
+
+// An all-null struct's null stream and an all-false BOOLEAN column have the
+// same bytes, so stream deduplication stores them once. The null stream counts
+// each false as a null, while the BOOLEAN column has none. Each stream must
+// keep its own chunk null counts, or 'b = false' skips every row when the
+// struct comes first.
+TEST_F(E2EIndexTestBase, v2ChunkStatsDeduplicatedStreamsKeepOwnNullCounts) {
+  constexpr vector_size_t kNumRows{100};
+  for (const bool structFirst : {true, false}) {
+    SCOPED_TRACE(fmt::format("structFirst: {}", structFirst));
+    auto structs = vectorMaker_->rowVector(
+        {"x"}, {vectorMaker_->flatVector<int64_t>(kNumRows, [](auto row) {
+          return row;
+        })});
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      structs->setNull(row, true);
+    }
+    auto booleans =
+        vectorMaker_->flatVector<bool>(kNumRows, [](auto) { return false; });
+    const auto batch = structFirst
+        ? vectorMaker_->rowVector({"s", "b"}, {structs, booleans})
+        : vectorMaker_->rowVector({"b", "s"}, {booleans, structs});
+    writeChunkStatsData(
+        {batch},
+        /*enableChunkStats=*/true,
+        ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+        /*minStreamChunkRawSize=*/0,
+        /*batchesPerStripe=*/0,
+        ChunkStatsVersion::kV2,
+        /*indexColumns=*/{},
+        /*enableStreamDeduplication=*/true);
+
+    auto readFile = std::make_shared<InMemoryReadFile>(sinkData_);
+    auto tablet = TabletReader::create(
+        readFile,
+        leafPool_.get(),
+        test::makeTestTabletOptions(leafPool_.get()));
+    const auto section =
+        tablet->loadOptionalSection(std::string(kSchemaSection));
+    ASSERT_TRUE(section.has_value());
+    const auto schema =
+        SchemaDeserializer::deserialize(section->content().data());
+    const auto& root = schema->asRow();
+    const uint32_t structColumn = structFirst ? 0 : 1;
+    const auto structNulls =
+        root.childAt(structColumn)->asRow().nullsDescriptor().offset();
+    const auto booleanValues =
+        root.childAt(1 - structColumn)->asScalar().scalarDescriptor().offset();
+
+    // Both streams point at the same bytes.
+    ASSERT_EQ(tablet->stripeCount(), 1);
+    const auto stripe = tablet->stripeIdentifier(0);
+    EXPECT_EQ(
+        tablet->streamOffset(stripe, structNulls),
+        tablet->streamOffset(stripe, booleanValues));
+
+    // Each stream reports its own null counts.
+    ASSERT_NE(stripe.chunkStats(), nullptr);
+    const auto streamNullCount = [&](uint32_t streamId) {
+      const auto streamIndex = stripe.chunkStats()->createStreamIndex(
+          0, streamId, tablet->streamSize(stripe, streamId));
+      NIMBLE_CHECK_NOT_NULL(streamIndex);
+      uint32_t nullCount{0};
+      const auto [startChunk, endChunk] = streamIndex->chunkRange();
+      for (auto chunk = startChunk; chunk < endChunk; ++chunk) {
+        const auto chunkNullCount = streamIndex->chunkNullCount(chunk);
+        NIMBLE_CHECK(chunkNullCount.has_value());
+        nullCount += *chunkNullCount;
+      }
+      return nullCount;
+    };
+    EXPECT_EQ(streamNullCount(structNulls), kNumRows);
+    EXPECT_EQ(streamNullCount(booleanValues), 0);
+
+    // 'b = false' matches every row.
+    std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+    filters["b"] = std::make_unique<BoolValue>(false, /*nullAllowed=*/false);
+    const auto result = readChunkStatsData(asRowType(batch->type()), filters);
+    EXPECT_EQ(countRows(result.rows), kNumRows);
+    verifyResultsEqual(result.rows, {batch});
+    EXPECT_EQ(result.stats.chunkSkippedRows, 0);
   }
 }
 

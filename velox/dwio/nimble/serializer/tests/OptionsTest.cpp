@@ -29,6 +29,7 @@ TEST(OptionsTest, serializationVersionEnumValues) {
   EXPECT_EQ(static_cast<uint8_t>(SerializationVersion::kSerialization), 4);
   EXPECT_EQ(static_cast<uint8_t>(SerializationVersion::kProjection), 5);
   EXPECT_EQ(static_cast<uint8_t>(SerializationVersion::kTablet), 6);
+  EXPECT_EQ(static_cast<uint8_t>(SerializationVersion::kBlob), 7);
 }
 
 TEST(OptionsTest, toStringVersion) {
@@ -39,6 +40,7 @@ TEST(OptionsTest, toStringVersion) {
   EXPECT_EQ(toString(SerializationVersion::kSerialization), "kSerialization");
   EXPECT_EQ(toString(SerializationVersion::kProjection), "kProjection");
   EXPECT_EQ(toString(SerializationVersion::kTablet), "kTablet");
+  EXPECT_EQ(toString(SerializationVersion::kBlob), "kBlob");
 }
 
 TEST(OptionsTest, streamOperator) {
@@ -64,6 +66,8 @@ TEST(OptionsTest, serializerOptionsDefaults) {
   // Verify encoding layout tree and compression options defaults.
   EXPECT_FALSE(options.encodingLayoutTree.has_value());
   EXPECT_FALSE(options.compressionOptions.has_value());
+  EXPECT_EQ(
+      options.blobCompressionOptions.compressionType, CompressionType::Lz4);
 
   // Verify default encoding selection policy factory creates a valid policy.
   auto policy = options.encodingSelectionPolicyCreator(DataType::Int32);
@@ -129,6 +133,11 @@ TEST(OptionsTest, serializationHeaderFlags) {
           .expectedHasSerializationHeaderFlags = true,
           .expectedUsesCompactHeaderFlags = false,
       },
+      {
+          .version = SerializationVersion::kBlob,
+          .expectedHasSerializationHeaderFlags = true,
+          .expectedUsesCompactHeaderFlags = true,
+      },
   };
 
   for (const auto& testCase : testCases) {
@@ -148,6 +157,16 @@ TEST(OptionsTest, isTabletVersion) {
   EXPECT_FALSE(isTabletVersion(SerializationVersion::kSerialization));
   EXPECT_FALSE(isTabletVersion(SerializationVersion::kProjection));
   EXPECT_TRUE(isTabletVersion(SerializationVersion::kTablet));
+  EXPECT_FALSE(isTabletVersion(SerializationVersion::kBlob));
+}
+
+TEST(OptionsTest, isSupportedBlobCompression) {
+  EXPECT_TRUE(isSupportedBlobCompression(CompressionType::Lz4));
+  EXPECT_TRUE(isSupportedBlobCompression(CompressionType::Zstd));
+  EXPECT_TRUE(isSupportedBlobCompression(CompressionType::MetaInternal));
+  EXPECT_TRUE(isSupportedBlobCompression(CompressionType::OpenZL));
+  EXPECT_TRUE(isSupportedBlobCompression(CompressionType::Uncompressed));
+  EXPECT_FALSE(isSupportedBlobCompression(static_cast<CompressionType>(99)));
 }
 
 TEST(OptionsTest, getTrailerEncodingTypeBasic) {

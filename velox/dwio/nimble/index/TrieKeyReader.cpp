@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/index/HierarchicalKeyReader.h"
+#include "velox/dwio/nimble/index/TrieKeyReader.h"
 
 #include <algorithm>
 #include <array>
@@ -30,7 +30,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
-#include "velox/dwio/nimble/index/HierarchicalKeyFormat.h"
+#include "velox/dwio/nimble/index/TrieKeyFormat.h"
 
 namespace facebook::nimble::index {
 namespace {
@@ -58,7 +58,7 @@ std::vector<uint32_t> readLevelValueCounts(
   NIMBLE_CHECK_FILE_LE(
       numLevels,
       remainingBytes(position, end) / sizeof(uint32_t),
-      "Truncated HierarchicalKeyReader metadata.");
+      "Truncated TrieKeyReader metadata.");
   std::vector<uint32_t> levelCounts(numLevels);
   encoding::readUint32s(position, std::span<uint32_t>{levelCounts});
   return levelCounts;
@@ -76,11 +76,11 @@ std::string_view readSizedSequence(const char*& position, const char* end) {
   NIMBLE_CHECK_FILE_GE(
       remainingBytes(position, end),
       sizeof(uint32_t),
-      "Truncated HierarchicalKeyReader metadata.");
+      "Truncated TrieKeyReader metadata.");
   NIMBLE_CHECK_FILE_GE(
       remainingBytes(position, end) - sizeof(uint32_t),
       encoding::peek<uint32_t>(position),
-      "Truncated HierarchicalKeyReader sequence.");
+      "Truncated TrieKeyReader sequence.");
   return encoding::readString(position);
 }
 
@@ -100,20 +100,20 @@ std::unique_ptr<TypedEncodingView<T>> createKeyView(
   NIMBLE_CHECK_FILE_GE(
       data.size(),
       EncodingPrefix::kFixedPrefixSize,
-      "Truncated HierarchicalKeyReader sequence.");
+      "Truncated TrieKeyReader sequence.");
   NIMBLE_CHECK_FILE_EQ(
       EncodingPrefix::dataType(data),
       TypeTraits<T>::dataType,
-      "HierarchicalKeyReader child physical type does not match its level.");
+      "TrieKeyReader child physical type does not match its level.");
   NIMBLE_CHECK_FILE_EQ(
       EncodingPrefix::readRowCount(data, /*useVarint=*/false),
       expectedRows,
-      "HierarchicalKeyReader child row count does not match its directory.");
+      "TrieKeyReader child row count does not match its directory.");
   return nimble::detail::createTypedEncodingView<T>(
       data, &pool, {.cacheEncodingView = cacheEncodingView});
 }
 
-// Type-erases physical widths so one hierarchy can hold mixed-width sequences.
+// Type-erases physical widths so one trie can hold mixed-width sequences.
 class KeySequence {
  public:
   explicit KeySequence(EncodingType encodingType)
@@ -227,8 +227,7 @@ std::unique_ptr<KeySequence> createKeySequence(
         return DataType::Uint64;
       default:
         NIMBLE_UNREACHABLE(
-            "Unsupported HierarchicalKeyReader key value width: {}",
-            keyValueBytes);
+            "Unsupported TrieKeyReader key value width: {}", keyValueBytes);
     }
   }();
   if (expectedDataType == DataType::Uint8) {
@@ -250,7 +249,11 @@ std::unique_ptr<KeySequence> createKeySequence(
 
 // Child offsets of one level: decoded values for a short sequence, the encoded
 // sequence otherwise, or the identity when none are stored, as for the leaf row
-// offsets of distinct keys.
+// offsets of distinct keys. Opening a chunk validates decoded offsets in full,
+// but checks only the first and the last encoded offset, so that a lookup does
+// not decode every offset of the chunk it opens. Each read of encoded offsets
+// checks the entries it returns instead: they stay within the next level, and
+// the entries of a read increase.
 class ChildOffsets {
  public:
   ChildOffsets() = default;
@@ -258,14 +261,21 @@ class ChildOffsets {
   explicit ChildOffsets(Vector<uint32_t> decoded)
       : decoded_{std::move(decoded)} {}
 
-  explicit ChildOffsets(std::unique_ptr<TypedEncodingView<uint32_t>> encoded)
-      : encoded_{std::move(encoded)} {}
+  ChildOffsets(
+      std::unique_ptr<TypedEncodingView<uint32_t>> encoded,
+      uint32_t maxEntry)
+      : encoded_{std::move(encoded)}, maxEntry_{maxEntry} {}
 
   // Returns entry 'index': the first child of value 'index' at the next level
   // or, for leaf row offsets, its first source row.
   uint32_t at(uint32_t index) const {
     if (encoded_ != nullptr) {
-      return encoded_->readAt(index);
+      const auto entry = encoded_->readAt(index);
+      NIMBLE_CHECK_FILE_LE(
+          entry,
+          maxEntry_,
+          "TrieKeyReader child offset exceeds the next level.");
+      return entry;
     }
     if (!decoded_.has_value()) {
       return index;
@@ -280,6 +290,7 @@ class ChildOffsets {
     if (encoded_ != nullptr) {
       encoded_->read(
           begin, static_cast<uint32_t>(entries.size()), entries.data());
+      checkEntries(begin, entries);
       return;
     }
     if (!decoded_.has_value()) {
@@ -293,10 +304,17 @@ class ChildOffsets {
   // Returns the offset range containing `position`.
   uint32_t containingRange(uint32_t position) const {
     if (encoded_ != nullptr) {
+      // The search assumes increasing entries, which the open does not check,
+      // so the range it finds is checked to contain 'position'.
       uint32_t found;
-      return encoded_->lowerBound(
-                 0, encoded_->rowCount(), position + 1, found) -
-          1;
+      const auto upper =
+          encoded_->lowerBound(0, encoded_->rowCount(), position + 1, found);
+      NIMBLE_CHECK_FILE(
+          upper > 0 && upper < encoded_->rowCount() &&
+              at(upper - 1) <= position && position < found &&
+              found <= maxEntry_,
+          "TrieKeyReader child offsets do not increase.");
+      return upper - 1;
     }
     if (!decoded_.has_value()) {
       return position;
@@ -306,8 +324,32 @@ class ChildOffsets {
   }
 
  private:
+  // Checks that the encoded 'entries' read from 'begin' increase, from the
+  // entry before them, and stay within the next level.
+  void checkEntries(uint32_t begin, std::span<const uint32_t> entries) const {
+    if (entries.empty()) {
+      return;
+    }
+    auto previous = begin == 0 ? 0 : encoded_->readAt(begin - 1);
+    NIMBLE_CHECK_FILE(
+        begin == 0 || previous < entries.front(),
+        "TrieKeyReader child offsets do not increase.");
+    for (size_t i = begin == 0 ? 1 : 0; i < entries.size(); ++i) {
+      NIMBLE_CHECK_FILE_LT(
+          previous, entries[i], "TrieKeyReader child offsets do not increase.");
+      previous = entries[i];
+    }
+    NIMBLE_CHECK_FILE_LE(
+        entries.back(),
+        maxEntry_,
+        "TrieKeyReader child offset exceeds the next level.");
+  }
+
   std::optional<Vector<uint32_t>> decoded_;
   std::unique_ptr<TypedEncodingView<uint32_t>> encoded_;
+  // The largest entry of encoded offsets: the value count of the next level,
+  // or the row count for leaf row offsets.
+  uint32_t maxEntry_{0};
 };
 
 // Reads and validates the encoded child offsets of 'numValues' values at one
@@ -329,6 +371,20 @@ ChildOffsets readEncodedOffsets(
   auto encodedOffsets = createKeyView<uint32_t>(
       pool, readSizedSequence(position, end), numValues + 1, cacheEncodingView);
   const auto numOffsets = encodedOffsets->rowCount();
+  if (numOffsets > kMaxDecodedOffsets) {
+    // Reads of the offsets check the entries they return.
+    NIMBLE_CHECK_FILE_EQ(
+        encodedOffsets->readAt(0),
+        0,
+        "TrieKeyReader offsets must start at zero: {}.",
+        description);
+    NIMBLE_CHECK_FILE_EQ(
+        encodedOffsets->readAt(numOffsets - 1),
+        expectedEnd,
+        "TrieKeyReader has an invalid final offset: {}.",
+        description);
+    return ChildOffsets{std::move(encodedOffsets), expectedEnd};
+  }
   // Validates in fixed batches, so a compact sequence that claims a huge row
   // count fails without a matching allocation.
   std::array<uint32_t, 1'024> batch;
@@ -342,13 +398,13 @@ ChildOffsets readEncodedOffsets(
         NIMBLE_CHECK_FILE_EQ(
             batch[i],
             0,
-            "HierarchicalKeyReader offsets must start at zero: {}.",
+            "TrieKeyReader offsets must start at zero: {}.",
             description);
       } else {
         NIMBLE_CHECK_FILE_LT(
             previous,
             batch[i],
-            "HierarchicalKeyReader offsets contain an empty range: {}.",
+            "TrieKeyReader offsets contain an empty range: {}.",
             description);
       }
       previous = batch[i];
@@ -357,11 +413,8 @@ ChildOffsets readEncodedOffsets(
   NIMBLE_CHECK_FILE_EQ(
       previous,
       expectedEnd,
-      "HierarchicalKeyReader has an invalid final offset: {}.",
+      "TrieKeyReader has an invalid final offset: {}.",
       description);
-  if (numOffsets > kMaxDecodedOffsets) {
-    return ChildOffsets{std::move(encodedOffsets)};
-  }
   Vector<uint32_t> decodedOffsets{&pool, numOffsets};
   encodedOffsets->read(0, numOffsets, decodedOffsets.data());
   return ChildOffsets{std::move(decodedOffsets)};
@@ -369,37 +422,33 @@ ChildOffsets readEncodedOffsets(
 
 } // namespace detail
 
-void HierarchicalKeyReader::readLevelWidths(
-    const char*& position,
-    const char* end) {
+void TrieKeyReader::readLevelWidths(const char*& position, const char* end) {
   NIMBLE_CHECK(levelWidths_.empty());
   NIMBLE_CHECK_FILE_GE(
       remainingBytes(position, end),
       numLevels_,
-      "Truncated HierarchicalKeyReader metadata.");
+      "Truncated TrieKeyReader metadata.");
 
   levelWidths_.reserve(numLevels_);
   for (uint32_t level = 0; level < numLevels_; ++level) {
     const auto width = encoding::read<uint8_t>(position);
     NIMBLE_CHECK_FILE(
-        HierarchicalKeyFormat::isSupportedKeyValueBytes(width),
-        "Unsupported HierarchicalKeyReader key value width: {}.",
+        TrieKeyFormat::isSupportedKeyValueBytes(width),
+        "Unsupported TrieKeyReader key value width: {}.",
         width);
     levelWidths_.push_back(width);
   }
 }
 
-void HierarchicalKeyReader::readSequences(
+void TrieKeyReader::readSequences(
     const char*& position,
     const char* end,
     std::span<const uint32_t> levelCounts,
     velox::memory::MemoryPool* pool,
     bool cacheEncodingViews) {
+  NIMBLE_CHECK(childOffsets_.empty(), "Trie child offsets are already read.");
   NIMBLE_CHECK(
-      childOffsets_.empty(), "Hierarchical child offsets are already read.");
-  NIMBLE_CHECK(
-      levelSequences_.empty(),
-      "Hierarchical level sequences are already read.");
+      levelSequences_.empty(), "Trie level sequences are already read.");
   NIMBLE_CHECK_EQ(levelCounts.size(), numLevels_);
   auto& memoryPool = *velox::checkedNotNull(pool);
   childOffsets_.resize(numLevels_);
@@ -435,66 +484,63 @@ void HierarchicalKeyReader::readSequences(
   }
 }
 
-HierarchicalKeyReader::HierarchicalKeyReader(
+TrieKeyReader::TrieKeyReader(
     std::string_view encodedData,
     bool cacheEncodingViews,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool)
     : keyCodec_{velox::checkedNotNull(std::move(keyCodec))} {
   NIMBLE_CHECK_NOT_NULL(pool);
   NIMBLE_CHECK_FILE_GE(
       encodedData.size(),
-      HierarchicalKeyFormat::kHeaderSize,
-      "Truncated HierarchicalKeyReader metadata.");
+      TrieKeyFormat::kHeaderSize,
+      "Truncated TrieKeyReader metadata.");
   const char* position = velox::checkedNotNull(encodedData.data());
   const char* const end = position + encodedData.size();
   const auto formatVersion = encoding::read<uint8_t>(position);
   NIMBLE_CHECK_FILE_EQ(
       formatVersion,
-      HierarchicalKeyFormat::kVersion,
-      "Unsupported HierarchicalKeyReader format version.");
+      TrieKeyFormat::kVersion,
+      "Unsupported TrieKeyReader format version.");
   numLevels_ = encoding::read<uint8_t>(position);
-  NIMBLE_CHECK_FILE_GT(numLevels_, 0, "HierarchicalKeyReader needs a level.");
+  NIMBLE_CHECK_FILE_GT(numLevels_, 0, "TrieKeyReader needs a level.");
   rowCount_ = encoding::readUint32(position);
-  NIMBLE_CHECK_FILE_GT(rowCount_, 0, "HierarchicalKeyReader has no rows.");
+  NIMBLE_CHECK_FILE_GT(rowCount_, 0, "TrieKeyReader has no rows.");
 
   readLevelWidths(position, end);
 
   const auto levelCounts = readLevelValueCounts(position, end, numLevels_);
   NIMBLE_CHECK_FILE_GT(
-      levelCounts.front(),
-      0,
-      "HierarchicalKeyReader root level has no values.");
+      levelCounts.front(), 0, "TrieKeyReader root level has no values.");
   for (uint32_t level = 1; level < numLevels_; ++level) {
     NIMBLE_CHECK_FILE_GE(
         levelCounts[level],
         levelCounts[level - 1],
-        "HierarchicalKeyReader level value counts must be non-decreasing.");
+        "TrieKeyReader level value counts must be non-decreasing.");
   }
   // Child offsets hold one more entry than their level's value count.
   NIMBLE_CHECK_FILE_LT(
       levelCounts.back(),
       std::numeric_limits<uint32_t>::max(),
-      "HierarchicalKeyReader level value count is too large.");
+      "TrieKeyReader level value count is too large.");
   NIMBLE_CHECK_FILE_GE(
       rowCount_,
       levelCounts.back(),
-      "HierarchicalKeyReader has fewer rows than distinct keys.");
+      "TrieKeyReader has fewer rows than distinct keys.");
 
   readSequences(position, end, levelCounts, pool, cacheEncodingViews);
   NIMBLE_CHECK_FILE_EQ(
       remainingBytes(position, end),
       0,
-      "HierarchicalKeyReader contains trailing data.");
+      "TrieKeyReader contains trailing data.");
 }
 
-EncodingType HierarchicalKeyReader::testingValuesEncodingType(
-    uint32_t level) const {
+EncodingType TrieKeyReader::testingValuesEncodingType(uint32_t level) const {
   NIMBLE_CHECK_LT(level, numLevels_, "Level is out of range.");
   return levelSequences_.at(level)->encodingType();
 }
 
-std::pair<uint32_t, uint32_t> HierarchicalKeyReader::seekBounds(
+std::pair<uint32_t, uint32_t> TrieKeyReader::seekBounds(
     std::span<const uint64_t> target) const {
   uint32_t parentIndex{0};
   for (uint32_t level = 0; level < numLevels_; ++level) {
@@ -504,6 +550,12 @@ std::pair<uint32_t, uint32_t> HierarchicalKeyReader::seekBounds(
     const auto runEnd = level == 0
         ? sequence.rowCount()
         : childOffsets_.at(level - 1).at(parentIndex + 1);
+    NIMBLE_CHECK_FILE_LT(
+        runBegin, runEnd, "TrieKeyReader child offsets do not increase.");
+    NIMBLE_CHECK_FILE_LE(
+        runEnd,
+        sequence.rowCount(),
+        "TrieKeyReader child offset exceeds the next level.");
     uint64_t found;
     const auto componentIndex =
         sequence.lowerBound(runBegin, runEnd, target[level], found);
@@ -522,8 +574,7 @@ std::pair<uint32_t, uint32_t> HierarchicalKeyReader::seekBounds(
       childOffsets_.back().at(parentIndex + 1)};
 }
 
-void HierarchicalKeyReader::levelsAt(uint32_t row, std::span<uint64_t> levels)
-    const {
+void TrieKeyReader::levelsAt(uint32_t row, std::span<uint64_t> levels) const {
   NIMBLE_CHECK_LT(row, rowCount_);
   NIMBLE_CHECK_EQ(levels.size(), numLevels_);
   auto componentIndex = childOffsets_.back().containingRange(row);
@@ -535,7 +586,7 @@ void HierarchicalKeyReader::levelsAt(uint32_t row, std::span<uint64_t> levels)
   levels[0] = levelSequences_.at(0)->valueAt(componentIndex);
 }
 
-uint32_t HierarchicalKeyReader::startRowOfSubtree(
+uint32_t TrieKeyReader::startRowOfSubtree(
     uint32_t level,
     uint32_t componentIndex) const {
   for (; level < numLevels_; ++level) {
@@ -544,7 +595,7 @@ uint32_t HierarchicalKeyReader::startRowOfSubtree(
   return componentIndex;
 }
 
-HierarchicalKeyReader::~HierarchicalKeyReader() = default;
+TrieKeyReader::~TrieKeyReader() = default;
 
 namespace {
 
@@ -612,7 +663,7 @@ std::span<uint32_t> childOffsetsSpanScratch(size_t numValues) {
 
 } // namespace
 
-std::optional<uint32_t> HierarchicalKeyReader::seek(
+std::optional<uint32_t> TrieKeyReader::seek(
     std::string_view value,
     bool inclusive) const {
   const auto levels = levelScratch(/*numRows=*/1, numLevels_);
@@ -622,13 +673,13 @@ std::optional<uint32_t> HierarchicalKeyReader::seek(
   return row == rowCount_ ? std::nullopt : std::optional<uint32_t>{row};
 }
 
-std::string HierarchicalKeyReader::get(uint32_t row) const {
+std::string TrieKeyReader::get(uint32_t row) const {
   const auto levels = levelScratch(/*numRows=*/1, numLevels_);
   levelsAt(row, levels);
   return keyCodec_->encodeKey(levels, levelWidths_);
 }
 
-void HierarchicalKeyReader::levelsOf(
+void TrieKeyReader::levelsOf(
     uint32_t startRow,
     uint32_t numRows,
     std::span<uint64_t> levels) const {
@@ -678,9 +729,9 @@ void HierarchicalKeyReader::levelsOf(
   // rows end at the last row, which the last value of every span holds, so the
   // leaf moves at most to the value of the last row, and a level above moves
   // only to the value that holds the moved value of the level below. These hold
-  // for any index that loads: readSequences() checks that the child offsets of
-  // each level start at zero, increase, and end at the number of values of the
-  // next level.
+  // for any index that loads: the child offsets of each level start at zero and
+  // end at the number of values of the next level, containingRange() checks the
+  // range it returns, and read() checks that the offsets it returns increase.
   const uint32_t leaf = numLevels_ - 1;
   auto* output = levels.data();
   for (uint32_t row = startRow; row < startRow + numRows; ++row) {
@@ -703,7 +754,7 @@ void HierarchicalKeyReader::levelsOf(
   }
 }
 
-void HierarchicalKeyReader::readKeys(
+void TrieKeyReader::readKeys(
     uint32_t startRow,
     uint32_t numRows,
     std::vector<std::string_view>& keys,
@@ -726,15 +777,13 @@ void HierarchicalKeyReader::readKeys(
 
 namespace {
 
-// Walks rows, rebuilding each key from its hierarchy components. next() for one
+// Walks rows, rebuilding each key from its trie components. next() for one
 // key finds the components of its row on its own, so it only spares the caller
 // a std::string per row. next() for a batch walks the components of
 // consecutive rows together, through readKeys().
-class HierarchicalKeyReaderCursor final : public KeyCursor {
+class TrieKeyReaderCursor final : public KeyCursor {
  public:
-  HierarchicalKeyReaderCursor(
-      const HierarchicalKeyReader& encoding,
-      uint32_t row)
+  TrieKeyReaderCursor(const TrieKeyReader& encoding, uint32_t row)
       : encoding_{encoding}, rowCount_{encoding.rowCount()}, row_{row} {}
 
   bool hasNext() const override {
@@ -762,7 +811,7 @@ class HierarchicalKeyReaderCursor final : public KeyCursor {
   }
 
  private:
-  const HierarchicalKeyReader& encoding_;
+  const TrieKeyReader& encoding_;
   const uint32_t rowCount_;
   std::string key_;
   uint32_t row_;
@@ -770,13 +819,12 @@ class HierarchicalKeyReaderCursor final : public KeyCursor {
 
 } // namespace
 
-std::unique_ptr<KeyCursor> HierarchicalKeyReader::cursor(
-    uint32_t startRow) const {
+std::unique_ptr<KeyCursor> TrieKeyReader::cursor(uint32_t startRow) const {
   NIMBLE_CHECK_LT(startRow, rowCount_);
-  return std::make_unique<HierarchicalKeyReaderCursor>(*this, startRow);
+  return std::make_unique<TrieKeyReaderCursor>(*this, startRow);
 }
 
-std::vector<std::string> HierarchicalKeyReader::materialize(
+std::vector<std::string> TrieKeyReader::materialize(
     uint32_t startRow,
     uint32_t count) const {
   NIMBLE_CHECK_LE(startRow, rowCount_);
@@ -789,22 +837,22 @@ std::vector<std::string> HierarchicalKeyReader::materialize(
   return keys;
 }
 
-uint32_t HierarchicalKeyReader::rowCount() const {
+uint32_t TrieKeyReader::rowCount() const {
   return rowCount_;
 }
 
-uint32_t HierarchicalKeyReader::numLevels() const {
+uint32_t TrieKeyReader::numLevels() const {
   return numLevels_;
 }
 
-std::unique_ptr<KeyReader> createHierarchicalKeyReader(
+std::unique_ptr<KeyReader> createTrieKeyReader(
     std::string_view encodedKeys,
     const std::function<void*(uint32_t)>& /*stringBufferFactory*/,
     bool cacheEncodingViews,
-    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    std::shared_ptr<const TrieKeyCodec> keyCodec,
     velox::memory::MemoryPool* pool) {
   NIMBLE_CHECK_NOT_NULL(pool);
-  return std::make_unique<HierarchicalKeyReader>(
+  return std::make_unique<TrieKeyReader>(
       encodedKeys, cacheEncodingViews, std::move(keyCodec), pool);
 }
 

@@ -46,6 +46,7 @@ target_link_libraries(
   nimble_serialization_header
   nimble_serializer_options
   nimble_common
+  nimble_compression
   nimble_encodings
   nimble_velox_stream_data
   velox_memory
@@ -77,6 +78,7 @@ target_link_libraries(
   nimble_chunked_stream_payload
   nimble_serialization_header
   nimble_serializer_options
+  nimble_compression
   nimble_encodings
   nimble_legacy
   nimble_velox_common

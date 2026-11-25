@@ -1065,6 +1065,17 @@ class ReaderOptions : public io::ReaderOptions {
     verifyStreamChecksums_ = value;
   }
 
+  /// Whether to read the cluster index key stream of each stripe with the
+  /// stripe's streams, when the file stores its key chunks in stripes.
+  /// Currently only supported by the Nimble index projector path. Default true.
+  bool coLoadKeyStreams() const {
+    return coLoadKeyStreams_;
+  }
+
+  void setCoLoadKeyStreams(bool value) {
+    coLoadKeyStreams_ = value;
+  }
+
   /// Whether to load and initialize the chunk stats during file open.
   /// When true, the chunk stats section is preloaded and the structured
   /// ChunkStats object is created. Default true.
@@ -1140,6 +1151,7 @@ class ReaderOptions : public io::ReaderOptions {
   std::string clusterIndexName_;
   bool preloadIndex_{false};
   bool verifyStreamChecksums_{false};
+  bool coLoadKeyStreams_{true};
   bool loadChunkStats_{true};
   bool allowEmptyFile_{false};
   const FileHandle* fileHandle_{nullptr};

@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <cstring>
 #include <numeric>
 #include <span>
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -23,6 +24,7 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
@@ -63,6 +65,15 @@ class VarintEncoding final
       std::span<const physicalType> values,
       Buffer& buffer,
       const Encoding::Options& options = {});
+
+  /// Slices rows [offset, offset + length) by copying their varint bytes. The
+  /// slice keeps the source baseline.
+  static std::string_view slice(
+      std::string_view encoded,
+      uint32_t offset,
+      uint32_t length,
+      Buffer& buffer,
+      const Encoding::Options& options);
 
   static uint64_t estimateSize(const Statistics<physicalType>& statistics) {
     // First (7 bit) bucket produces 1 byte number.
@@ -207,6 +218,59 @@ std::string_view VarintEncoding<T>::encode(
   NIMBLE_DCHECK_EQ(pos - reserved, encodingSize, "Encoding size mismatch.");
   // Adding 7 bytes, to allow bulk materialization to access the last 64 bit
   // word, even if it is not full.
+  return {reserved, encodingSize};
+}
+
+template <typename T>
+std::string_view VarintEncoding<T>::slice(
+    std::string_view encoded,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  auto data = encoded;
+  const auto prefix = EncodingPrefix::consume(data, options.useVarintRowCount);
+  const char* rowCountPos = prefix.data() + EncodingPrefix::kRowCountOffset;
+  uint32_t rowCount;
+  if (options.useVarintRowCount) {
+    rowCount = varint::readVarint32(&rowCountPos);
+  } else {
+    std::memcpy(&rowCount, rowCountPos, sizeof(rowCount));
+  }
+  EncodingPrefix::checkSliceRange(rowCount, offset, length);
+
+  // Every varint takes at least one byte, so a range with more rows than the
+  // remaining bytes cannot be in the stream.
+  NIMBLE_CHECK_FILE_LE(
+      static_cast<uint64_t>(VarintEncoding<T>::kPrefixSize) + offset + length,
+      data.size(),
+      "Varint slice range exceeds the encoded data.");
+  physicalType baseline;
+  std::memcpy(&baseline, data.data(), sizeof(baseline));
+  data.remove_prefix(sizeof(baseline));
+  const char* sourcePos = data.data();
+  const char* encodedEnd = sourcePos + data.size();
+  const char* sliceBegin =
+      varint::bulkVarintSkip(offset, sourcePos, encodedEnd);
+  const char* sliceEnd = varint::bulkVarintSkip(length, sliceBegin, encodedEnd);
+  const std::string_view values{
+      sliceBegin, static_cast<size_t>(sliceEnd - sliceBegin)};
+
+  const auto encodingSize =
+      EncodingPrefix::serializedSize(length, options.useVarintRowCount) +
+      VarintEncoding<T>::kPrefixSize + values.size();
+  char* reserved = buffer.reserve(encodingSize);
+  char* pos = reserved;
+  EncodingPrefix::serialize(
+      EncodingType::Varint,
+      TypeTraits<T>::dataType,
+      length,
+      options.useVarintRowCount,
+      pos);
+  encoding::write(baseline, pos);
+  encoding::writeBytes(values, pos);
+  NIMBLE_CHECK_EQ(
+      pos - reserved, encodingSize, "Varint encoding size mismatch.");
   return {reserved, encodingSize};
 }
 } // namespace facebook::nimble

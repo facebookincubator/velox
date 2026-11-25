@@ -146,8 +146,9 @@ class DirectDataInput : public DataInput {
     int32_t maxCoalesceDistance{kDefaultCoalesceDistance};
     int64_t maxCoalesceBytes{velox::io::ReaderOptions::kDefaultCoalesceBytes};
 
-    /// Passed to every read of the file. The stats and pool inside it must
-    /// outlive this input.
+    /// Passed to every read of the file, unless an active
+    /// velox::ScopedFileIoContext replaces it. The stats and pool inside it
+    /// must outlive this input.
     velox::FileIoContext fileIoContext{};
   };
 
@@ -244,7 +245,8 @@ class DirectDataInput : public DataInput {
   velox::memory::MemoryPool* const pool_;
   // IO statistics for tracking read bytes, latency, and gaps.
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
-  // Passed to every read of 'file_'.
+  // Passed to every read of 'file_', unless an active
+  // velox::ScopedFileIoContext replaces it.
   const velox::FileIoContext fileIoContext_;
   // I/O alignment for file offsets and read sizes.
   const uint64_t alignment_;
@@ -297,8 +299,9 @@ class CachedDataInput final : public DataInput {
     velox::StringIdLease fileId;
     /// Statistics receiving storage-read and memory-hit counters.
     std::shared_ptr<velox::io::IoStatistics> ioStats;
-    /// Passed to every read of the file. The stats and pool inside it must
-    /// outlive this input.
+    /// Passed to every read of the file, unless an active
+    /// velox::ScopedFileIoContext replaces it. The stats and pool inside it
+    /// must outlive this input.
     velox::FileIoContext fileIoContext{};
   };
 
@@ -404,7 +407,8 @@ class CachedDataInput final : public DataInput {
   const velox::StringIdLease fileId_;
   // IO statistics for storage reads, cache hits, and logical bytes.
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
-  // Passed to every read of 'file_'.
+  // Passed to every read of 'file_', unless an active
+  // velox::ScopedFileIoContext replaces it.
   const velox::FileIoContext fileIoContext_;
   // Required alignment for file offsets, read sizes, and destination buffers.
   const uint64_t alignment_;

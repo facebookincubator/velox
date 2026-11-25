@@ -64,6 +64,21 @@ NimbleIndexProjector::RowProjectionResult projectRows(
     const index::IndexLookup::LookupRequest& request,
     const NimbleIndexProjector::Options& options);
 
+// Rows in each batch of makeEvenKeyBatches().
+constexpr vector_size_t kEvenKeyBatchRows{100};
+
+// Returns 'numBatches' batches of kEvenKeyBatchRows rows whose keys are the
+// even numbers from 0 up, each row's value ten times its key. Written one
+// stripe per batch, stripe s holds keys 200 * s to 200 * s + 198, so an odd key
+// falls in a stripe without being in the file.
+std::vector<RowVectorPtr> makeEvenKeyBatches(
+    velox::test::VectorMaker& vectorMaker,
+    int64_t numBatches);
+
+// Returns the values makeEvenKeyBatches() gives the keys in [lowerKey,
+// upperKey).
+std::vector<int32_t> evenKeyValues(int64_t lowerKey, int64_t upperKey);
+
 // Adapts the coroutine iterator API to synchronous assertions in this test.
 class TestNimbleIterator final {
  public:
@@ -74,8 +89,17 @@ class TestNimbleIterator final {
     iterator_->seek(bounds);
   }
 
+  // Positions the iterator at the rows whose key equals 'encodedKey'. The
+  // keys of the test files sort bytewise, so the key followed by a zero byte
+  // is the next key.
   void seek(std::string encodedKey) {
-    iterator_->seek(std::move(encodedKey));
+    auto upperKey = encodedKey;
+    upperKey.push_back('\0');
+    iterator_->seek(
+        velox::serializer::EncodedKeyBounds{
+            .lowerKey = std::move(encodedKey),
+            .upperKey = std::move(upperKey),
+        });
   }
 
   void seekToFirst() {
@@ -194,6 +218,15 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
   // Opens the file in sinkData_ directly, without a projector.
   std::shared_ptr<TabletReader> openSinkTablet();
 
+  // Returns how many bytes the cached tablet of the file in sinkData_ has read
+  // for its cluster index. The tablet reader cache replaces the IO statistics
+  // of a projector's reader options, so the cache entry is what counts them.
+  uint64_t indexBytesRead();
+
+  // Returns the bytes of stream 'keyStreamId', the cluster index key stream,
+  // of stripe 'stripe' of the file in sinkData_, without its stream trailer.
+  std::string_view stripeKeyStream(uint32_t keyStreamId, uint32_t stripe);
+
  public:
   static std::vector<TestParam> getTestParams();
 
@@ -260,20 +293,25 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
       std::shared_ptr<velox::ReadFile> readFile,
       std::string_view id);
 
+  // Creates a projector that co-loads key streams when 'coLoadKeyStreams' is
+  // set. See NimbleIndexProjector::create().
   std::unique_ptr<NimbleIndexProjector> createProjector(
       const std::vector<Subfield>& projectedSubfields,
+      bool coLoadKeyStreams = true,
       bool setDataIoStats = true,
       bool setMetadataIoStats = true,
       bool setIndexIoStats = true);
 
-  // Creates the iterator with the cacheEncodingView of the test parameter.
+  // Creates the iterator with the cacheEncodingView of the test parameter,
+  // over a projector that co-loads key streams when 'coLoadKeyStreams' is set.
   template <typename IteratorFactory>
   std::unique_ptr<NimbleIterator> createIterator(
       IteratorFactory iteratorFactory,
       const std::vector<Subfield>& projectedSubfields,
-      NimbleIterator::Options options) {
+      NimbleIterator::Options options,
+      bool coLoadKeyStreams = true) {
     options.cacheEncodingView = currentTestParam().cacheEncodingView;
-    auto projector = createProjector(projectedSubfields);
+    auto projector = createProjector(projectedSubfields, coLoadKeyStreams);
     return iteratorFactory(std::move(projector), leafPool_.get(), options);
   }
 
@@ -284,13 +322,15 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
   // Creates a row iterator over the entries of 'compactRowDecoder()'.
   std::unique_ptr<NimbleIterator> createRowIterator(
       const std::vector<Subfield>& projectedSubfields,
-      const NimbleIterator::Options& options);
+      const NimbleIterator::Options& options,
+      bool coLoadKeyStreams = true);
 
   // Creates a row iterator over the entries that 'entryDecoder' decodes.
   std::unique_ptr<NimbleIterator> createEntryIterator(
       const std::vector<Subfield>& projectedSubfields,
       const NimbleIterator::EntryDecoder& entryDecoder,
-      const NimbleIterator::Options& options);
+      const NimbleIterator::Options& options,
+      bool coLoadKeyStreams = true);
 
   std::unique_ptr<NimbleIndexProjector> createProjectorWithFileHandle(
       const std::vector<Subfield>& projectedSubfields,
@@ -299,7 +339,8 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
       bool setMetadataIoStats = true,
       bool setIndexIoStats = true,
       bool cacheData = false,
-      bool verifyStreamChecksums = false);
+      bool verifyStreamChecksums = false,
+      bool coLoadKeyStreams = true);
 
   void configureReaderOptions(
       dwio::common::ReaderOptions& readerOptions,

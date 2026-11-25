@@ -15,8 +15,12 @@
  */
 #pragma once
 
+#include <functional>
+#include <limits>
 #include <memory>
 #include <span>
+#include <string_view>
+#include <type_traits>
 
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -29,6 +33,7 @@ template <typename T>
 class DictionaryEncodingView final : public TypedEncodingView<T> {
  public:
   using physicalType = typename TypedEncodingView<T>::physicalType;
+  using TypedEncodingView<T>::read;
 
   DictionaryEncodingView(
       std::string_view data,
@@ -43,6 +48,51 @@ class DictionaryEncodingView final : public TypedEncodingView<T> {
     indices_ = detail::createTypedEncodingView<uint32_t>(
         {pos, this->remainingBytes(pos)}, this->pool_, options);
     NIMBLE_CHECK_NOT_NULL(indices_);
+  }
+
+  /// Reads the alphabet indices of the rows, then their values with one read
+  /// of the alphabet that takes `addStringBuffer`, so that the alphabet passes
+  /// the buffers of the strings.
+  uint32_t read(
+      std::span<const uint32_t> indices,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    ScopedVector<uint32_t> alphabetIndices{
+        indices.size(), this->pool_, this->options_.bufferPool};
+    indices_->readAt(indices, alphabetIndices.data());
+    return alphabet_->read(
+        std::span<const uint32_t>{alphabetIndices.data(), indices.size()},
+        setNull,
+        addStringBuffer,
+        output);
+  }
+
+  /// Does the same as the read of indices above for ordered, disjoint ranges.
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    const auto numRows = this->checkReadRanges(ranges);
+    if (numRows == 0) {
+      return 0;
+    }
+    ScopedVector<uint32_t> alphabetIndices{
+        numRows, this->pool_, this->options_.bufferPool};
+    uint32_t outputOffset{0};
+    for (const auto& range : ranges) {
+      indices_->read(
+          range.startRow,
+          range.numRows(),
+          alphabetIndices.data() + outputOffset);
+      outputOffset += range.numRows();
+    }
+    return alphabet_->read(
+        std::span<const uint32_t>{alphabetIndices.data(), numRows},
+        setNull,
+        addStringBuffer,
+        output);
   }
 
  private:
@@ -87,6 +137,7 @@ template <typename T>
 class SharedDictionaryEncodingView final : public TypedEncodingView<T> {
  public:
   using physicalType = typename TypedEncodingView<T>::physicalType;
+  using TypedEncodingView<T>::read;
 
   SharedDictionaryEncodingView(
       std::string_view data,
@@ -113,6 +164,59 @@ class SharedDictionaryEncodingView final : public TypedEncodingView<T> {
         indices_->rowCount(),
         this->rowCount_,
         "Shared dictionary index count differs from row count.");
+  }
+
+  /// Reads the alphabet indices of string rows, then their strings with one
+  /// read of the alphabet that passes the buffers that hold them to
+  /// `addStringBuffer`. Reads other values as the base view does.
+  uint32_t read(
+      std::span<const uint32_t> indices,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      if (addStringBuffer != nullptr) {
+        NIMBLE_CHECK_LE(indices.size(), std::numeric_limits<uint32_t>::max());
+        ScopedVector<uint32_t> alphabetIndices{
+            indices.size(), this->pool_, this->options_.bufferPool};
+        indices_->readAt(indices, alphabetIndices.data());
+        alphabet_->readStrings(
+            std::span<const uint32_t>{alphabetIndices.data(), indices.size()},
+            addStringBuffer,
+            static_cast<std::string_view*>(output));
+        return static_cast<uint32_t>(indices.size());
+      }
+    }
+    return EncodingView::read(indices, setNull, addStringBuffer, output);
+  }
+
+  /// Does the same as the read of indices above for ordered, disjoint ranges.
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      if (addStringBuffer != nullptr) {
+        const auto numRows = this->checkReadRanges(ranges);
+        ScopedVector<uint32_t> alphabetIndices{
+            numRows, this->pool_, this->options_.bufferPool};
+        uint32_t outputOffset{0};
+        for (const auto& range : ranges) {
+          indices_->read(
+              range.startRow,
+              range.numRows(),
+              alphabetIndices.data() + outputOffset);
+          outputOffset += range.numRows();
+        }
+        alphabet_->readStrings(
+            std::span<const uint32_t>{alphabetIndices.data(), numRows},
+            addStringBuffer,
+            static_cast<std::string_view*>(output));
+        return numRows;
+      }
+    }
+    return TypedEncodingView<T>::read(ranges, setNull, addStringBuffer, output);
   }
 
  private:

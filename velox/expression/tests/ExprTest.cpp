@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <gmock/gmock.h>
 #include <cstdint>
 #include <exception>
 #include <fstream>
@@ -32,6 +33,7 @@
 #include "velox/expression/ConjunctExpr.h"
 #include "velox/expression/ConstantExpr.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FieldReference.h"
 #include "velox/expression/SwitchExpr.h"
 #include "velox/functions/Udf.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -5491,6 +5493,32 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
             {false, 2000},
             {true, 0},
             {true, 2000}}));
+
+TEST_F(ExprTest, fieldsReadForAllPassingRows) {
+  const auto rowType = ROW({"a", "b", "c"}, BIGINT());
+  auto fieldNames = [&](const std::string& sql) {
+    auto exprSet = compileExpression(sql, rowType);
+    std::vector<std::string> names;
+    for (const auto* field : exprSet->expr(0)->fieldsReadForAllPassingRows()) {
+      names.push_back(field->field());
+    }
+    return names;
+  };
+
+  // Each input of an AND reads its fields for every row that passes.
+  EXPECT_THAT(
+      fieldNames("a > 10 AND b > 20"), testing::UnorderedElementsAre("a", "b"));
+
+  // A field under a conditional may be read for only some of the passing rows.
+  EXPECT_THAT(
+      fieldNames("a > 10 AND if(b > 20, c < 30, c > 5)"),
+      testing::ElementsAre("a"));
+
+  // Only an AND reads its fields for every passing row.
+  EXPECT_THAT(fieldNames("a > 10 OR b > 20"), testing::IsEmpty());
+  EXPECT_THAT(
+      fieldNames("a > 10 OR if(b > 20, c < 30, c < 5)"), testing::IsEmpty());
+}
 
 TEST_F(ExprTest, disablePeeling) {
   // Verify that peeling is disabled when the config is set by checking whether

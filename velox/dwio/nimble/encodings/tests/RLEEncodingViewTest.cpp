@@ -18,7 +18,11 @@
 
 #include <bit>
 #include <limits>
+#include <span>
+#include <string_view>
+#include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
@@ -31,6 +35,46 @@ using RLEEncodingViewTest = nimble::test::EncodingViewTest;
 TEST_P(RLEEncodingViewTest, readsRleEncoding) {
   expectReads<nimble::RLEEncoding<int32_t>>(
       makeVector({1, 1, 1, 2, 2, 3, 3, 3, 3, 4}), {9, 0, 4, 5, 8, 2});
+}
+
+TEST_P(RLEEncodingViewTest, readsNoRowsOfStrings) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  const auto encoded =
+      nimble::test::Encoder<nimble::RLEEncoding<std::string_view>>::encode(
+          *buffer_,
+          makeVector<std::string_view>({"a", "a", "b", "b", "b", "c"}),
+          nimble::CompressionType::Uncompressed,
+          options);
+  const auto view = nimble::createEncodingView(encoded, pool_.get(), options);
+  std::vector<velox::BufferPtr> buffers;
+  const auto addStringBuffer = [&](velox::BufferPtr buffer) {
+    buffers.emplace_back(std::move(buffer));
+  };
+  std::string_view output;
+
+  // A read of strings given addStringBuffer reads the value of each run of its
+  // rows, so a read of no rows reads no run and passes no buffer.
+  {
+    EXPECT_EQ(
+        view->read(
+            std::span<const nimble::RowRange>{},
+            /*setNull=*/[](uint32_t) {},
+            addStringBuffer,
+            &output),
+        0);
+    EXPECT_THAT(buffers, testing::IsEmpty());
+  }
+  {
+    EXPECT_EQ(
+        view->read(
+            std::span<const uint32_t>{},
+            /*setNull=*/[](uint32_t) {},
+            addStringBuffer,
+            &output),
+        0);
+    EXPECT_THAT(buffers, testing::IsEmpty());
+  }
 }
 
 TEST_P(RLEEncodingViewTest, readsPhysicalNestedDeltaBlockValues) {

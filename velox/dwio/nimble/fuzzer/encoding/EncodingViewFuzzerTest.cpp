@@ -18,8 +18,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
+#include <functional>
 #include <random>
 #include <type_traits>
 
@@ -183,13 +185,19 @@ std::vector<uint32_t> makeProbeRows(std::mt19937& rng, uint32_t rowCount) {
   return rows;
 }
 
+// Draws an iteration's options and compressor from the fuzzer's generator, so
+// the draws repeat with the seed.
+using IterationSettings = std::function<
+    void(std::mt19937& rng, Encoding::Options&, CompressionType&)>;
+
 template <typename EncodingClass>
 void runEncodingViewFuzzer(
     uint32_t iterations,
     uint32_t maxRows,
     uint32_t seed,
     Encoding::Options options,
-    CompressionType compressionType) {
+    CompressionType compressionType,
+    const IterationSettings& iterationSettings = nullptr) {
   using T = typename EncodingClass::cppDataType;
   auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
   auto dataBuffer = std::make_unique<Buffer>(*pool);
@@ -205,6 +213,9 @@ void runEncodingViewFuzzer(
 
   for (uint32_t iter = 0; iter < iterations; ++iter) {
     dataBuffer->reset();
+    if (iterationSettings) {
+      iterationSettings(rng, options, compressionType);
+    }
     const auto rowCount = 1 + folly::Random::rand32(rng) % maxRows;
     auto datasets =
         makeDatasets<EncodingClass>(*pool, rng, rowCount, dataBuffer.get());
@@ -216,8 +227,12 @@ void runEncodingViewFuzzer(
 
       for (const auto useVarint : {false, true}) {
         SCOPED_TRACE(
-            ::testing::Message() << "iter=" << iter << " useVarint="
-                                 << useVarint << " rowCount=" << data.size());
+            ::testing::Message()
+            << "iter=" << iter << " useVarint=" << useVarint << " rowCount="
+            << data.size() << " compression=" << toString(compressionType)
+            << " typedLanes=" << options.fixedBitWidthTypedLanes
+            << " typedLanesMinValues="
+            << options.fixedBitWidthTypedLanesMinValues);
         options.useVarintRowCount = useVarint;
         Buffer encodeBuffer(*pool);
         std::string_view serialized;
@@ -421,13 +436,29 @@ template <typename E>
 class FixedBitWidthEncodingViewFuzzerTest : public ::testing::Test {};
 TYPED_TEST_SUITE(FixedBitWidthEncodingViewFuzzerTest, FixedBitWidthViewTypes);
 
+// Each iteration draws the compressor (none, Zstd or OpenZL) and typed lanes
+// with a floor of 0 to 512 values. OpenZL reads the payload's data type, so
+// with lanes on, integer chunks of 16 or more bits are read as typed lanes.
 TYPED_TEST(FixedBitWidthEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
       FLAGS_view_fuzzer_seed,
       Encoding::Options{},
-      CompressionType::Uncompressed);
+      CompressionType::Uncompressed,
+      [](std::mt19937& rng,
+         Encoding::Options& options,
+         CompressionType& compressionType) {
+        constexpr std::array kCompressionTypes{
+            CompressionType::Uncompressed,
+            CompressionType::Zstd,
+            CompressionType::OpenZL};
+        compressionType = kCompressionTypes
+            [folly::Random::rand32(rng) % kCompressionTypes.size()];
+        options.fixedBitWidthTypedLanes = folly::Random::oneIn(2, rng);
+        options.fixedBitWidthTypedLanesMinValues =
+            folly::Random::rand32(513, rng);
+      });
 }
 
 using PforViewTypes = ::testing::Types<

@@ -27,7 +27,7 @@
 #include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/common/ExtractionUtils.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileDataSource.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Mutation.h"
@@ -803,111 +803,6 @@ TEST_F(TestReader, testBlockedIoCallbackFiredBlocking) {
   EXPECT_GE(metricToIncrement, 0);
 }
 
-TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredNonBlocking) {
-  RowReaderOptions rowReaderOpts;
-  std::optional<uint64_t> metricToIncrement;
-
-  rowReaderOpts.setBlockedOnIoCallback(
-      [&metricToIncrement](
-          std::chrono::high_resolution_clock::duration blockedTime) {
-        const auto blockedTimeMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(blockedTime)
-                .count();
-        if (metricToIncrement) {
-          *metricToIncrement += blockedTimeMs;
-        } else {
-          metricToIncrement = blockedTimeMs;
-        }
-      });
-  rowReaderOpts.setEagerFirstStripeLoad(false);
-
-  dwio::common::ReaderOptions readerOpts{pool()};
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
-
-  auto reader = DwrfReader::create(
-      createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
-      readerOpts);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
-  EXPECT_EQ(metricToIncrement, std::nullopt);
-  VectorPtr batch;
-
-  auto units = rowReader->prefetchUnits().value();
-
-  // Blocking prefetch all stripes
-  for (auto& unit : units) {
-    unit.prefetch();
-    // Since these are not blocking a read, metric should not be incremented.
-    EXPECT_EQ(metricToIncrement, std::nullopt);
-  }
-
-  do {
-    bool result = rowReader->next(1000, batch);
-    if (!result) {
-      break;
-    }
-  } while (true);
-
-  // Reading prefetched stripes should not increment metric, but it should set
-  // the metric from nullopt to 0, indicating we've hit the read path
-  EXPECT_EQ(metricToIncrement, 0);
-}
-
-TEST_F(TestReader, DISABLED_testBlockedIoCallbackFiredWithFirstStripeLoad) {
-  RowReaderOptions rowReaderOpts;
-  std::optional<uint64_t> metricToIncrement;
-
-  rowReaderOpts.setBlockedOnIoCallback(
-      [&metricToIncrement](
-          std::chrono::high_resolution_clock::duration blockedTime) {
-        const auto blockedTimeMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(blockedTime)
-                .count();
-        if (metricToIncrement) {
-          *metricToIncrement += blockedTimeMs;
-        } else {
-          metricToIncrement = blockedTimeMs;
-        }
-      });
-
-  rowReaderOpts.setEagerFirstStripeLoad(true);
-
-  dwio::common::ReaderOptions readerOpts{pool()};
-  readerOpts.setDataIoStats(dataIoStats_);
-  readerOpts.setMetadataIoStats(metadataIoStats_);
-
-  auto reader = DwrfReader::create(
-      createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
-      readerOpts);
-  EXPECT_EQ(metricToIncrement, std::nullopt);
-  auto rowReader = reader->createRowReader(rowReaderOpts);
-  // Expect metric has now been populated, due to the initial blocking IO of
-  // loadCurrentStripe()
-  EXPECT_GE(metricToIncrement, 0);
-  auto metricAfterFirstStripe = metricToIncrement;
-  VectorPtr batch;
-
-  auto units = rowReader->prefetchUnits().value();
-  EXPECT_EQ(metricToIncrement, metricAfterFirstStripe);
-
-  // Blocking prefetch all stripes
-  for (auto& unit : units) {
-    unit.prefetch();
-    // Since these are not blocking a read, metric should not be incremented
-    EXPECT_EQ(metricToIncrement, metricAfterFirstStripe);
-  }
-
-  do {
-    bool result = rowReader->next(1000, batch);
-    if (!result) {
-      break;
-    }
-  } while (true);
-
-  // Reading prefetched stripes should not affect metric
-  EXPECT_EQ(metricToIncrement, metricAfterFirstStripe);
-}
-
 TEST_F(TestReader, testEstimatedSize) {
   dwio::common::ReaderOptions readerOpts{pool()};
   readerOpts.setDataIoStats(dataIoStats_);
@@ -962,8 +857,8 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields = makeSubfields({"a", "b.b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfieldsByName = groupSubfields(subfields);
-  auto scanSpec = velox::connector::makeScanSpec(
-      outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
+  auto scanSpec = velox::connector::FileDataSource::makeScanSpec(
+      outputType, subfieldsByName, {}, schema, {}, {}, {}, true, pool());
   readerOpts.setScanSpec(scanSpec);
 
   auto reader = DwrfReader::create(
@@ -982,8 +877,8 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields2 = makeSubfields({"a", "b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields2ByName = groupSubfields(subfields2);
-  auto scanSpec2 = velox::connector::makeScanSpec(
-      outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
+  auto scanSpec2 = velox::connector::FileDataSource::makeScanSpec(
+      outputType, subfields2ByName, {}, schema, {}, {}, {}, true, pool());
   readerOpts2.setScanSpec(scanSpec2);
 
   auto reader2 = DwrfReader::create(
@@ -3655,6 +3550,56 @@ TEST_F(TestReader, readFlatMapsAsFlatMapsWithSharedMapValues) {
       makeFlatVector<int64_t>(10, [](auto row) { return 10 + row; }),
       second->mapValuesAt(0));
   assertEqualVectors(makeFlatVector<int64_t>({8, 9}), values);
+}
+
+TEST_F(TestReader, deltaUpdateOfAllNullColumnWithPreviousBatchHeld) {
+  // Require exclusive ownership, as an updater that modifies values in place.
+  class ExclusiveUpdater : public DeltaColumnUpdater {
+   public:
+    void update(const RowSet& /*rows*/, VectorPtr& result) override {
+      VELOX_CHECK_NOT_NULL(result);
+      VELOX_CHECK_EQ(result.use_count(), 1);
+      ++numUpdates;
+    }
+
+    int32_t numUpdates{0};
+  };
+
+  constexpr vector_size_t kNumRows{100};
+  constexpr vector_size_t kBatchSize{20};
+  auto input = makeRowVector({
+      makeNullConstant(TypeKind::BIGINT, kNumRows),
+      makeFlatVector<int64_t>(kNumRows, std::identity{}),
+  });
+  auto [writer, reader] =
+      createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
+  auto schema = asRowType(input->type());
+  auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+  scanSpec->addAllChildFields(*schema);
+  ExclusiveUpdater updater;
+  scanSpec->childByName("c0")->setDeltaUpdate(&updater);
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setScanSpec(scanSpec);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr batch = BaseVector::create(schema, 0, pool());
+  VectorPtr previousValues;
+  auto expected = makeNullConstant(TypeKind::BIGINT, kBatchSize);
+  int32_t numBatches{0};
+  while (rowReader->next(kBatchSize, batch) > 0) {
+    auto values = BaseVector::loadedVectorShared(
+        batch->asUnchecked<RowVector>()->childAt(0));
+    ASSERT_EQ(values->size(), batch->size());
+    assertEqualVectors(expected, values);
+    if (previousValues) {
+      ASSERT_NE(previousValues.get(), values.get());
+      assertEqualVectors(expected, previousValues);
+    }
+    previousValues = std::move(values);
+    ++numBatches;
+  }
+  EXPECT_EQ(numBatches, kNumRows / kBatchSize);
+  EXPECT_EQ(updater.numUpdates, numBatches);
 }
 
 TEST_F(TestReader, readFlatMapsAsFlatMapsReusingBuffers) {

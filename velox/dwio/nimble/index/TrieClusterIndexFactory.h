@@ -26,7 +26,7 @@
 
 namespace facebook::nimble::index {
 
-/// Defines the keys of a hierarchical cluster index: the key that the values of
+/// Defines the keys of a trie cluster index: the key that the values of
 /// the levels of a row make, where a seek to a key starts, and the order of the
 /// keys. The writer of the index bounds its partitions and chunks with these
 /// keys, and its readers and key encoder take and return them. The built-in
@@ -36,9 +36,9 @@ namespace facebook::nimble::index {
 /// that format.
 ///
 /// For the levels [7, 1] of widths [4, 1], Nimble's key is 00 00000007 00 01.
-class HierarchicalKeyCodec {
+class TrieKeyCodec {
  public:
-  virtual ~HierarchicalKeyCodec() = default;
+  virtual ~TrieKeyCodec() = default;
 
   /// Returns the size of a key whose levels are 'levelWidths' bytes wide.
   virtual size_t keySize(std::span<const uint8_t> levelWidths) const = 0;
@@ -98,24 +98,24 @@ class HierarchicalKeyCodec {
 };
 
 /// Returns the codec of Nimble's key encoding, which every factory of the
-/// built-in index shares. An index that nests the built-in hierarchical cluster
+/// built-in index shares. An index that nests the built-in trie cluster
 /// index, such as a weighted cluster index, reads and writes its keys with it.
-const std::shared_ptr<const HierarchicalKeyCodec>& nimbleKeyCodec();
+const std::shared_ptr<const TrieKeyCodec>& nimbleKeyCodec();
 
-/// Creates the writers, readers and key encoders of a hierarchical cluster
+/// Creates the writers, readers and key encoders of a trie cluster
 /// index, whose keys its codec defines. An index over keys of another format
 /// registers a factory of its codec under its own name.
-class HierarchicalClusterIndexFactory : public ClusterIndexFactory {
+class TrieClusterIndexFactory : public ClusterIndexFactory {
  public:
-  /// Creates the factory of the built-in index, kHierarchicalClusterIndexName,
+  /// Creates the factory of the built-in index, kTrieClusterIndexName,
   /// whose codec is Nimble's key encoding. It takes only complete keys.
-  HierarchicalClusterIndexFactory();
+  TrieClusterIndexFactory();
 
   /// Creates the factory of the index named 'name', whose keys 'keyCodec'
   /// defines.
-  explicit HierarchicalClusterIndexFactory(
+  explicit TrieClusterIndexFactory(
       std::string name,
-      std::shared_ptr<const HierarchicalKeyCodec> keyCodec);
+      std::shared_ptr<const TrieKeyCodec> keyCodec);
 
   std::string_view name() const override;
 
@@ -150,14 +150,14 @@ class HierarchicalClusterIndexFactory : public ClusterIndexFactory {
   const KeyComparator* keyComparator() const override;
 
   /// Returns the codec of the index. Test-only.
-  const std::shared_ptr<const HierarchicalKeyCodec>& testingKeyCodec() const;
+  const std::shared_ptr<const TrieKeyCodec>& testingKeyCodec() const;
 
  private:
   // Names the index in the registry and in the index descriptors of files.
   const std::string name_;
   // Defines the keys that the writer, the readers and the key encoder of the
   // index take and return.
-  const std::shared_ptr<const HierarchicalKeyCodec> keyCodec_;
+  const std::shared_ptr<const TrieKeyCodec> keyCodec_;
 };
 
 } // namespace facebook::nimble::index

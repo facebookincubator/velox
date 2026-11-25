@@ -62,6 +62,8 @@ jobs:
         id: changes
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
           BASE_REF: ${{ github.base_ref }}
           HEAD_REF: ${{ github.head_ref }}
           PR_OWNER: ${{ github.event.pull_request.head.repo.owner.login }}
@@ -72,7 +74,7 @@ jobs:
           if [[ "$JOB_TRIGGER" == "pull_request" ]]; then
             source .github/scripts/gh-api-retry.sh
             merge_base_commit=$(gh_api -q '.merge_base_commit.sha' \
-              /repos/facebookincubator/velox/compare/facebookincubator:$BASE_REF...$PR_OWNER:$HEAD_REF \
+              /repos/$REPO/compare/$REPO_OWNER:$BASE_REF...$PR_OWNER:$HEAD_REF \
             )
 
             range="$merge_base_commit..$HEAD_SHA"
@@ -111,9 +113,9 @@ jobs:
     needs: get-changes
     # Always runs — this is the selective-build consumer pre-approval
     # (cmake-targets non-empty -> targeted) and the full coverage post-
-    # approval / on push (cmake-targets empty -> full build). The repo
+    # approval / on push (cmake-targets empty -> full build). The fork
     # check prevents errors when forks fast-forward their main branch.
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:adapters
     defaults:
@@ -581,7 +583,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
     # Runs in both modes. It is the only Linux debug build, and
     # DEBUG_ONLY_TEST tests run only in debug builds.
-    if: ${{ github.repository == 'facebookincubator/velox' }}
+    if: ${{ !github.event.repository.fork }}
     name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -865,7 +867,7 @@ jobs:
     container: ghcr.io/facebookincubator/velox-dev:fedora
     # Gated on is-full-mode so this build-only job runs only after the PR
     # is approved (or on push to main).
-    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
+    if: ${{ inputs.is-full-mode && !github.event.repository.fork }}
     name: Fedora debug
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -998,9 +1000,9 @@ jobs:
     # adapters job. Like ubuntu-debug / fedora-debug, the sanitizer
     # build is part of the post-approval / on-push full-coverage suite
     # (catches memory and UB issues that the release build masks). The
-    # repo check prevents errors when forks fast-forward their main
+    # fork check prevents errors when forks fast-forward their main
     # branch.
-    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
+    if: ${{ inputs.is-full-mode && !github.event.repository.fork }}
     runs-on: 32-core-ubuntu
     container:
       image: ghcr.io/facebookincubator/velox-dev:adapters

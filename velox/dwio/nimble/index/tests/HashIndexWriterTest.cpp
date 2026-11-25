@@ -15,6 +15,7 @@
  */
 
 #include <fmt/format.h>
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <gtest/gtest.h>
 #include <limits>
 

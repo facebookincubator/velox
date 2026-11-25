@@ -423,7 +423,12 @@ void HashProbe::pushdownDynamicFilters() {
             return nullptr;
           }
         }
-        common::FilterPtr filter = hasher.getFilter(false);
+        // A kHash table stops tracking the distinct keys, so only its bloom
+        // filter covers every key.
+        common::FilterPtr filter =
+            table_->hashMode() == BaseHashTable::HashMode::kHash
+            ? nullptr
+            : hasher.getFilter(false);
         if (!filter) {
           filter = hasher.getBloomFilter();
           if (!filter) {
@@ -577,7 +582,7 @@ void HashProbe::asyncWaitForHashTable() {
        isRightSemiFilterJoin(joinType_) ||
        (isRightSemiProjectJoin(joinType_) && !nullAware_) ||
        isRightJoin(joinType_) || isRightAntiJoin(joinType_)) &&
-      table_->hashMode() != BaseHashTable::HashMode::kHash && !isSpillInput() &&
+      !nullAsValue_ && !isSpillInput() &&
       operatorCtx_->driverCtx()
           ->queryConfig()
           .hashProbeDynamicFilterPushdownEnabled() &&
@@ -589,7 +594,9 @@ void HashProbe::asyncWaitForHashTable() {
     // NOTE: this optimization is not applied in the following cases: (1) if the
     // probe input is read from spilled data and there is no upstream operators
     // involved; (2) if there is spill data to restore, then we can't filter
-    // probe inputs solely based on the current table's join keys.
+    // probe inputs solely based on the current table's join keys; (3) if null
+    // keys match each other, because the filters drop probe rows with null
+    // keys.
     pushdownDynamicFilters();
   }
 }

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -27,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -37,9 +39,43 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
+#include "velox/dwio/nimble/encodings/views/DecodedStringBuffers.h"
 
 namespace facebook::nimble::test {
 namespace {
+
+// Returns whether every non-empty string of 'values' lies in one of 'buffers'.
+bool liesIn(
+    std::span<const std::string_view> values,
+    std::span<const velox::BufferPtr> buffers) {
+  return std::all_of(values.begin(), values.end(), [&](std::string_view value) {
+    return value.empty() ||
+        std::any_of(
+               buffers.begin(),
+               buffers.end(),
+               [&](const velox::BufferPtr& buffer) {
+                 const auto* begin = buffer->as<char>();
+                 return value.data() >= begin &&
+                     value.data() + value.size() <= begin + buffer->size();
+               });
+  });
+}
+
+// Returns 'buffers' without repeats, in no particular order.
+std::vector<velox::BufferPtr> distinct(std::vector<velox::BufferPtr> buffers) {
+  std::sort(buffers.begin(), buffers.end());
+  buffers.erase(std::unique(buffers.begin(), buffers.end()), buffers.end());
+  return buffers;
+}
+
+// Returns an addStringBuffer for a read that appends each buffer the read
+// passes to 'buffers'.
+std::function<void(velox::BufferPtr)> appendTo(
+    std::vector<velox::BufferPtr>& buffers) {
+  return [&buffers](velox::BufferPtr buffer) {
+    buffers.push_back(std::move(buffer));
+  };
+}
 
 class FsstEncodingViewTest : public EncodingViewTest {
  protected:
@@ -312,7 +348,13 @@ TEST_P(FsstEncodingViewTest, sparseReadsDecodeOnlyTheirRows) {
   const std::array<RowRange, 2> ranges{
       RowRange{10, 13}, RowRange{4'000, 4'001}};
   std::vector<std::string_view> selected(4);
-  EXPECT_EQ(view->read(ranges, [](uint32_t) {}, selected.data()), 4);
+  EXPECT_EQ(
+      view->read(
+          ranges,
+          [](uint32_t) {},
+          /*addStringBuffer=*/nullptr,
+          selected.data()),
+      4);
   EXPECT_EQ(selected[0], values[10]);
   EXPECT_EQ(selected[1], values[11]);
   EXPECT_EQ(selected[2], values[12]);
@@ -384,7 +426,13 @@ TEST_P(FsstEncodingViewTest, rangeReadDecidesOnceForAllItsRowsOfChunk) {
     }
   }
   std::vector<std::string_view> output(rows.size());
-  EXPECT_EQ(view->read(ranges, [](uint32_t) {}, output.data()), rows.size());
+  EXPECT_EQ(
+      view->read(
+          ranges,
+          [](uint32_t) {},
+          /*addStringBuffer=*/nullptr,
+          output.data()),
+      rows.size());
   for (size_t i = 0; i < rows.size(); ++i) {
     EXPECT_EQ(output[i], values[rows[i]]) << "row " << rows[i];
   }
@@ -402,6 +450,375 @@ TEST_P(FsstEncodingViewTest, rangeReadDecidesOnceForAllItsRowsOfChunk) {
   }
 }
 
+TEST_P(FsstEncodingViewTest, readDecodesItsChunksIntoOneBuffer) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 5'000);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // Reads the rows of 'range' with an addStringBuffer, and returns the
+  // distinct buffers that the read passes, after checking that they hold
+  // every string it returns. A cached view takes the rows of decoded chunks
+  // from the chunks, and passes the buffers of the chunks.
+  const auto passedBuffers = [&](RowRange range) {
+    std::vector<std::string_view> strings(range.numRows());
+    std::vector<velox::BufferPtr> buffers;
+    view->read(
+        std::array<RowRange, 1>{range},
+        [](uint32_t) {},
+        appendTo(buffers),
+        strings.data());
+    EXPECT_TRUE(liesIn(strings, buffers));
+    return distinct(std::move(buffers));
+  };
+
+  // Asks for every row of chunks 0 and 1, and for a few rows of chunk 2, which
+  // a cached view decodes alone, into the view itself.
+  const std::array<RowRange, 2> ranges{
+      RowRange{0, 2'048}, RowRange{2'100, 2'104}};
+  std::vector<std::string_view> output(2'052);
+  EXPECT_EQ(
+      view->read(
+          ranges,
+          [](uint32_t) {},
+          /*addStringBuffer=*/nullptr,
+          output.data()),
+      output.size());
+  for (uint32_t row = 0; row < 2'048; ++row) {
+    EXPECT_EQ(output[row], values[row]) << "row " << row;
+  }
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(output[2'048 + i], values[2'100 + i]) << "row " << 2'100 + i;
+  }
+
+  // Reads every row of chunks 3 and 4 in one range, which a cached view
+  // decodes into a buffer of their own.
+  std::vector<std::string_view> tail(values.size() - 3'072);
+  view->read(3'072, static_cast<uint32_t>(tail.size()), tail.data());
+  for (uint32_t i = 0; i < tail.size(); ++i) {
+    EXPECT_EQ(tail[i], values[3'072 + i]) << "row " << 3'072 + i;
+  }
+  if (!cacheEncodingView()) {
+    return;
+  }
+
+  // One buffer holds chunks 0 and 1, and another one chunks 3 and 4.
+  const auto headBuffers = passedBuffers(RowRange{0, 2'048});
+  const auto tailBuffers =
+      passedBuffers(RowRange{3'072, static_cast<uint32_t>(values.size())});
+  ASSERT_EQ(headBuffers.size(), 1);
+  ASSERT_EQ(tailBuffers.size(), 1);
+  EXPECT_NE(headBuffers[0], tailBuffers[0]);
+}
+
+TEST_P(FsstEncodingViewTest, viewsDecodeIntoTheBuffersTheyShare) {
+  // Few enough rows that the strings of both views fit in the first buffer,
+  // of 32 KB.
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 400);
+
+  // Two chunks of one stream, each with a view of its own.
+  Vector<std::string_view> firstValues{pool_.get()};
+  Vector<std::string_view> secondValues{pool_.get()};
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    (row < 250 ? firstValues : secondValues).push_back(values[row]);
+  }
+  const auto firstEncoded = encodeFsst(firstValues);
+  const auto secondEncoded = encodeFsst(secondValues);
+
+  DecodedStringBuffers decodedStringBuffers{pool_.get()};
+  Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  options.decodedStringBuffers = &decodedStringBuffers;
+  const auto firstView = createEncodingView(firstEncoded, pool_.get(), options);
+  const auto secondView =
+      createEncodingView(secondEncoded, pool_.get(), options);
+
+  // Reads every row of each view, as a scan of the stream does.
+  std::vector<std::string_view> firstOutput(firstValues.size());
+  firstView->read(0, firstView->rowCount(), firstOutput.data());
+  std::vector<std::string_view> secondOutput(secondValues.size());
+  secondView->read(0, secondView->rowCount(), secondOutput.data());
+  EXPECT_TRUE(
+      std::equal(firstOutput.begin(), firstOutput.end(), firstValues.begin()));
+  EXPECT_TRUE(
+      std::equal(
+          secondOutput.begin(), secondOutput.end(), secondValues.begin()));
+
+  // A view without caching decodes each row alone, into the view itself.
+  if (!cacheEncodingView()) {
+    return;
+  }
+
+  // The strings of both views lie in one buffer: reads of every row of each
+  // view given an addStringBuffer take the strings from the decoded chunks
+  // and pass that buffer.
+  std::vector<velox::BufferPtr> buffers;
+  for (const auto* view : {firstView.get(), secondView.get()}) {
+    std::vector<std::string_view> strings(view->rowCount());
+    view->read(
+        std::array<RowRange, 1>{RowRange{0, view->rowCount()}},
+        [](uint32_t) {},
+        appendTo(buffers),
+        strings.data());
+  }
+  buffers = distinct(std::move(buffers));
+  ASSERT_EQ(buffers.size(), 1);
+  EXPECT_TRUE(liesIn(firstOutput, buffers));
+  EXPECT_TRUE(liesIn(secondOutput, buffers));
+}
+
+TEST_P(
+    FsstEncodingViewTest,
+    readWithAddStringBufferDecodesRowsIntoBuffersOfItsOwn) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 5'000);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // Asks for every row of chunks 0 and 1, for part of chunk 2, and for few
+  // enough rows of chunk 4 that a read without addStringBuffer decodes them
+  // alone.
+  const std::array<RowRange, 3> ranges{
+      RowRange{0, 2'048}, RowRange{2'100, 2'600}, RowRange{4'990, 5'000}};
+  std::vector<std::string_view> output(2'048 + 500 + 10);
+  std::vector<velox::BufferPtr> addedBuffers;
+  EXPECT_EQ(
+      view->read(
+          ranges, [](uint32_t) {}, appendTo(addedBuffers), output.data()),
+      output.size());
+  uint32_t outputOffset{0};
+  for (const auto& range : ranges) {
+    for (auto row = range.startRow; row < range.endRow; ++row) {
+      EXPECT_EQ(output[outputOffset++], values[row]) << "row " << row;
+    }
+  }
+
+  // The buffers that the read passes hold every string of the read.
+  ASSERT_FALSE(addedBuffers.empty());
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+
+  // The read cached nothing, so the same read decodes the rows again, into
+  // buffers of its own.
+  std::vector<std::string_view> again(output.size());
+  std::vector<velox::BufferPtr> againBuffers;
+  view->read(ranges, [](uint32_t) {}, appendTo(againBuffers), again.data());
+  EXPECT_EQ(again, output);
+  EXPECT_TRUE(liesIn(again, againBuffers));
+  for (const auto& buffer : againBuffers) {
+    EXPECT_EQ(
+        std::find(addedBuffers.begin(), addedBuffers.end(), buffer),
+        addedBuffers.end());
+  }
+}
+
+TEST_P(
+    FsstEncodingViewTest,
+    readOfRowsWithAddStringBufferDecodesIntoOneBuffer) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 4'096);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // Asks for a few rows of each chunk, from the last to the first, too few for
+  // a cached view to decode the chunks, which a read without addStringBuffer
+  // decodes alone, into the view itself.
+  std::vector<uint32_t> rows;
+  rows.reserve(42);
+  for (uint32_t i = 0; i < 42; ++i) {
+    rows.push_back(4'095 - i * 97);
+  }
+  std::vector<std::string_view> output(rows.size());
+  std::vector<velox::BufferPtr> addedBuffers;
+  EXPECT_EQ(
+      view->read(
+          rows, [](uint32_t) {}, appendTo(addedBuffers), output.data()),
+      rows.size());
+  for (size_t i = 0; i < rows.size(); ++i) {
+    EXPECT_EQ(output[i], values[rows[i]]) << "row " << rows[i];
+  }
+
+  // One buffer holds every string of the read.
+  ASSERT_EQ(addedBuffers.size(), 1);
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+}
+
+TEST_P(FsstEncodingViewTest, readWithAddStringBufferSkipsStringsDecodedAlone) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 2'048);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // A read without addStringBuffer of a few rows decodes them alone, into the
+  // view itself, where no buffer holds them.
+  const std::array<uint32_t, 3> rows{6, 900, 1'504};
+  std::array<std::string_view, 3> alone{};
+  view->readAt(rows, alone.data());
+  EXPECT_THAT(
+      alone, ::testing::ElementsAre(values[6], values[900], values[1'504]));
+
+  // A read of the same rows given an addStringBuffer decodes them again, into
+  // a buffer that it passes, rather than take them from the view.
+  std::array<std::string_view, 3> output{};
+  std::vector<velox::BufferPtr> addedBuffers;
+  EXPECT_EQ(
+      view->read(
+          rows, [](uint32_t) {}, appendTo(addedBuffers), output.data()),
+      rows.size());
+  EXPECT_THAT(
+      output, ::testing::ElementsAre(values[6], values[900], values[1'504]));
+  ASSERT_EQ(addedBuffers.size(), 1);
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+  EXPECT_FALSE(liesIn(alone, addedBuffers));
+}
+
+TEST_P(
+    FsstEncodingViewTest,
+    readWithAddStringBufferTakesStringsOfDecodedChunks) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 3'072);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // A read without addStringBuffer of every row of chunk 1, which a cached
+  // view decodes and caches.
+  std::vector<std::string_view> chunk(1'024);
+  view->read(1'024, 1'024, chunk.data());
+
+  // A read that spans the decoded chunk takes the strings of its rows from it,
+  // decodes chunk 0, of which it asks for every row, and decodes the few rows
+  // of chunk 2 that it asks for into a buffer of its own, instead of into the
+  // view itself. It passes the buffers of the chunks and of its rows.
+  const std::array<RowRange, 2> ranges{
+      RowRange{0, 2'048}, RowRange{2'100, 2'104}};
+  std::vector<std::string_view> output(2'052);
+  std::vector<velox::BufferPtr> addedBuffers;
+  view->read(ranges, [](uint32_t) {}, appendTo(addedBuffers), output.data());
+  EXPECT_TRUE(
+      std::equal(output.begin(), output.begin() + 2'048, values.begin()));
+  for (uint32_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(output[2'048 + i], values[2'100 + i]) << "row " << 2'100 + i;
+  }
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+
+  // A view without caching decodes every row of the read into its region,
+  // whose buffers it passes.
+  if (!cacheEncodingView()) {
+    return;
+  }
+
+  // The region, then the buffers of chunks 0 and 1, which two reads decoded.
+  EXPECT_EQ(addedBuffers.size(), 3);
+  for (uint32_t i = 0; i < chunk.size(); ++i) {
+    EXPECT_EQ(output[1'024 + i].data(), chunk[i].data()) << "row " << 1'024 + i;
+  }
+
+  // The rows of chunk 2 lie in the region, in neither chunk buffer: a read
+  // of chunks 0 and 1 alone takes their rows from the decoded chunks and
+  // passes only the chunk buffers.
+  std::vector<std::string_view> chunks(2'048);
+  std::vector<velox::BufferPtr> chunkBuffers;
+  view->read(
+      std::array<RowRange, 1>{RowRange{0, 2'048}},
+      [](uint32_t) {},
+      appendTo(chunkBuffers),
+      chunks.data());
+  EXPECT_TRUE(liesIn(chunks, chunkBuffers));
+  EXPECT_TRUE(liesIn(std::span{output}.first(2'048), chunkBuffers));
+  EXPECT_FALSE(liesIn(std::span{output}.subspan(2'048), chunkBuffers));
+}
+
+TEST_P(FsstEncodingViewTest, readWithAddStringBufferSpansBuffers) {
+  // FSST encodes each run of eight repeated bytes as one code, so these
+  // strings decode to about eight times their compressed size, about 600 KB.
+  std::vector<std::string> storage;
+  storage.reserve(2'048);
+  Vector<std::string_view> values{pool_.get()};
+  for (uint32_t row = 0; row < 2'048; ++row) {
+    storage.emplace_back(
+        std::string(256 + row % 64, 'a') + std::to_string(row % 10));
+    values.push_back(storage.back());
+  }
+  const auto encoded = encodeFsst(values);
+
+  // Reads every row, so that the region of the read fills the buffer it starts
+  // in and goes on in new ones, whose strings stay where they are decoded.
+  const auto expectReadKeepsStrings = [&](const Encoding::Options& options) {
+    const auto view = createEncodingView(encoded, pool_.get(), options);
+    const std::array<RowRange, 1> ranges{RowRange{0, view->rowCount()}};
+    std::vector<std::string_view> output(values.size());
+    std::vector<velox::BufferPtr> addedBuffers;
+    view->read(ranges, [](uint32_t) {}, appendTo(addedBuffers), output.data());
+    EXPECT_TRUE(std::equal(output.begin(), output.end(), values.begin()));
+    EXPECT_GT(addedBuffers.size(), 1);
+    EXPECT_TRUE(liesIn(output, addedBuffers));
+  };
+  {
+    SCOPED_TRACE("buffer of the view's own");
+    expectReadKeepsStrings({.cacheEncodingView = cacheEncodingView()});
+  }
+  {
+    SCOPED_TRACE("shared buffers");
+    DecodedStringBuffers decodedStringBuffers{pool_.get()};
+    Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+    options.decodedStringBuffers = &decodedStringBuffers;
+    expectReadKeepsStrings(options);
+  }
+}
+
+TEST_P(FsstEncodingViewTest, readsWithAddStringBufferFillTheBuffersViewsShare) {
+  // Few enough rows that the strings of both views fit in the first buffer,
+  // of 32 KB.
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 400);
+  Vector<std::string_view> firstValues{pool_.get()};
+  Vector<std::string_view> secondValues{pool_.get()};
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    (row < 250 ? firstValues : secondValues).push_back(values[row]);
+  }
+  const auto firstEncoded = encodeFsst(firstValues);
+  const auto secondEncoded = encodeFsst(secondValues);
+
+  DecodedStringBuffers decodedStringBuffers{pool_.get()};
+  Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  options.decodedStringBuffers = &decodedStringBuffers;
+  const auto firstView = createEncodingView(firstEncoded, pool_.get(), options);
+  const auto secondView =
+      createEncodingView(secondEncoded, pool_.get(), options);
+
+  // Reads every row of each view, as a scan of the stream does.
+  const auto readAll = [](const EncodingView& view,
+                          std::vector<std::string_view>& output,
+                          std::vector<velox::BufferPtr>& addedBuffers) {
+    const std::array<RowRange, 1> ranges{RowRange{0, view.rowCount()}};
+    output.resize(view.rowCount());
+    view.read(ranges, [](uint32_t) {}, appendTo(addedBuffers), output.data());
+  };
+  std::vector<std::string_view> firstOutput;
+  std::vector<velox::BufferPtr> firstBuffers;
+  readAll(*firstView, firstOutput, firstBuffers);
+  std::vector<std::string_view> secondOutput;
+  std::vector<velox::BufferPtr> secondBuffers;
+  readAll(*secondView, secondOutput, secondBuffers);
+  EXPECT_TRUE(
+      std::equal(firstOutput.begin(), firstOutput.end(), firstValues.begin()));
+  EXPECT_TRUE(
+      std::equal(
+          secondOutput.begin(), secondOutput.end(), secondValues.begin()));
+  EXPECT_TRUE(liesIn(firstOutput, firstBuffers));
+  EXPECT_TRUE(liesIn(secondOutput, secondBuffers));
+
+  // The strings of both reads lie in one buffer.
+  ASSERT_EQ(firstBuffers.size(), 1);
+  EXPECT_EQ(secondBuffers, firstBuffers);
+  EXPECT_TRUE(liesIn(firstOutput, firstBuffers));
+  EXPECT_TRUE(liesIn(secondOutput, firstBuffers));
+}
+
 TEST_P(FsstEncodingViewTest, supportsConcurrentReadsAcrossChunks) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 2'048);
@@ -415,6 +832,68 @@ TEST_P(FsstEncodingViewTest, supportsConcurrentReadsAcrossChunks) {
   }
 
   expectConcurrentReads<FsstEncoding>(values, positions, forceFsstOptions());
+}
+
+TEST_P(FsstEncodingViewTest, supportsConcurrentReadsOfEveryRow) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 5'000);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  const auto numRows = static_cast<uint32_t>(values.size());
+
+  // Every thread reads every row at once, through a range or a list of
+  // ranges, so threads that decode the same chunks race to cache them.
+  expectConcurrent([&](int threadIndex) {
+    std::vector<std::string_view> output(numRows);
+    if (threadIndex % 2 == 0) {
+      view->read(0, numRows, output.data());
+    } else {
+      const std::array<RowRange, 1> ranges{RowRange{0, numRows}};
+      view->read(
+          ranges,
+          [](uint32_t) {},
+          /*addStringBuffer=*/nullptr,
+          output.data());
+    }
+    return std::equal(output.begin(), output.end(), values.begin());
+  });
+}
+
+TEST_P(FsstEncodingViewTest, supportsConcurrentReadsWithAddStringBuffer) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 5'000);
+  const auto encoded = encodeFsst(values);
+
+  // The views decode into buffers of their own: views that share
+  // DecodedStringBuffers must not be read at once.
+  const Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  std::vector<std::unique_ptr<EncodingView>> views;
+  views.reserve(4);
+  for (int i = 0; i < 4; ++i) {
+    views.emplace_back(createEncodingView(encoded, pool_.get(), options));
+  }
+  const auto numRows = static_cast<uint32_t>(values.size());
+
+  // Two threads read each view at once. One decodes every row for its own
+  // read, while the other decodes and caches the chunks, which the first then
+  // takes the strings of its rows from if they are cached before it starts.
+  expectConcurrent([&](int threadIndex) {
+    const auto& view = views[threadIndex / 2 % views.size()];
+    std::vector<std::string_view> output(numRows);
+    if (threadIndex % 2 == 1) {
+      view->read(0, numRows, output.data());
+      return std::equal(output.begin(), output.end(), values.begin());
+    }
+
+    // A read given an addStringBuffer passes buffers that hold all of its
+    // strings.
+    const std::array<RowRange, 1> ranges{RowRange{0, numRows}};
+    std::vector<velox::BufferPtr> addedBuffers;
+    view->read(ranges, [](uint32_t) {}, appendTo(addedBuffers), output.data());
+    return std::equal(output.begin(), output.end(), values.begin()) &&
+        !addedBuffers.empty() && liesIn(output, addedBuffers);
+  });
 }
 
 TEST_P(FsstEncodingViewTest, returnedStringsStayValidAcrossReads) {

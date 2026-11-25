@@ -40,6 +40,7 @@ add_executable(
   BlockBitPackingV2EncodingViewTest.cpp
   ConstantEncodingViewTest.cpp
   ConstantEncodingTest.cpp
+  DecodedStringBuffersTest.cpp
   DictionaryEncodingTest.cpp
   DictionaryEncodingViewTest.cpp
   EliasFanoEncodingTest.cpp
@@ -57,6 +58,7 @@ add_executable(
   EncodingPrefixTest.cpp
   EncodingTypeDispatchTest.cpp
   FixedBitWidthEncodingViewTest.cpp
+  FixedBitWidthTypedLanesTest.cpp
   FsstEncodingTest.cpp
   FsstEncodingViewTest.cpp
   HuffmanEncodingTest.cpp

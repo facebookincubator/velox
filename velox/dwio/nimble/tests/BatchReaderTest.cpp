@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -3909,6 +3910,435 @@ TEST_P(BatchReaderTest, arrayWithOffsetsMultiskips) {
   }
 }
 
+namespace {
+
+using NullableWindow = std::optional<std::vector<std::optional<int64_t>>>;
+
+// Generates sliding window rows: mostly slides of the previous window by a
+// few values, mixed with identical rows, sub-windows, resets, empty rows,
+// null rows and null elements.
+std::vector<NullableWindow> makeSlidingWindows(
+    std::mt19937& rng,
+    uint32_t numRows) {
+  std::vector<NullableWindow> rows;
+  rows.reserve(numRows);
+  std::vector<std::optional<int64_t>> window;
+  int64_t nextValue{0};
+  const auto newValue = [&]() -> std::optional<int64_t> {
+    if (rng() % 20 == 0) {
+      return std::nullopt;
+    }
+    return nextValue++;
+  };
+  for (uint32_t row = 0; row < numRows; ++row) {
+    switch (rng() % 10) {
+      case 0:
+        rows.emplace_back(std::nullopt);
+        continue;
+      case 1:
+        rows.emplace_back(std::vector<std::optional<int64_t>>{});
+        continue;
+      case 2: {
+        window.clear();
+        const auto size = 1 + rng() % 8;
+        for (uint32_t i = 0; i < size; ++i) {
+          window.emplace_back(newValue());
+        }
+        break;
+      }
+      case 3: {
+        if (window.empty()) {
+          break;
+        }
+        const auto begin = static_cast<std::ptrdiff_t>(rng() % window.size());
+        const auto size =
+            static_cast<std::ptrdiff_t>(1 + rng() % (window.size() - begin));
+        rows.emplace_back(
+            std::vector<std::optional<int64_t>>(
+                window.begin() + begin, window.begin() + begin + size));
+        continue;
+      }
+      default: {
+        const auto numDropped = static_cast<std::ptrdiff_t>(
+            std::min<size_t>(rng() % 3, window.size()));
+        window.erase(window.begin(), window.begin() + numDropped);
+        const auto numAdded = rng() % 3;
+        for (uint32_t i = 0; i < numAdded; ++i) {
+          window.emplace_back(newValue());
+        }
+        break;
+      }
+    }
+    rows.emplace_back(window);
+  }
+  return rows;
+}
+
+} // namespace
+
+TEST_P(BatchReaderTest, slidingWindowArray) {
+  const auto rowType = velox::ROW({
+      {"events", velox::ARRAY(velox::BIGINT())},
+  });
+  const uint32_t seed = FLAGS_reader_tests_seed > 0 ? FLAGS_reader_tests_seed
+                                                    : folly::Random::rand32();
+  LOG(INFO) << "seed: " << seed;
+  std::mt19937 rng{seed};
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.slidingWindowArrayColumns.insert("events");
+  const auto generator = [&](const velox::RowTypePtr& /*type*/) {
+    return vectorMaker.rowVector(
+        {"events"},
+        {vectorMaker.arrayVectorNullable<int64_t>(
+            makeSlidingWindows(rng, 1 + rng() % 200))});
+  };
+  for (const bool multiSkip : {false, true}) {
+    SCOPED_TRACE(fmt::format("multiSkip {}", multiSkip));
+    for (int iteration = 0; iteration < 10; ++iteration) {
+      writeAndVerify(
+          rng,
+          *leafPool_,
+          rowType,
+          generator,
+          vectorEquals,
+          /*batchCount=*/10,
+          writerOptions,
+          /*readParams=*/{},
+          /*isKeyPresent=*/nullptr,
+          /*comparator=*/nullptr,
+          multiSkip);
+    }
+  }
+}
+
+TEST_P(BatchReaderTest, slidingWindowArraySharesElements) {
+  const auto rowType = velox::ROW({
+      {"events", velox::ARRAY(velox::BIGINT())},
+  });
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  // Every row slides the previous 100-value window by one value. The file
+  // stores the 1'099 distinct positions once, and the rows read back point
+  // into one shared elements vector of that size.
+  std::mt19937_64 rng{42};
+  std::vector<int64_t> events(1'099);
+  for (auto& event : events) {
+    event = static_cast<int64_t>(rng());
+  }
+  std::vector<std::vector<int64_t>> windows;
+  windows.reserve(1'000);
+  for (std::ptrdiff_t row = 0; row < 1'000; ++row) {
+    windows.emplace_back(events.begin() + row, events.begin() + row + 100);
+  }
+  const auto data = vectorMaker.rowVector(
+      {"events"}, {vectorMaker.arrayVector<int64_t>(windows)});
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.slidingWindowArrayColumns.insert("events");
+  std::string file;
+  nimble::Writer writer(
+      rowType,
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(writerOptions));
+  writer.write(data);
+  writer.close();
+
+  const auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto reader = createBatchReader(readFile, *leafPool_);
+  EXPECT_EQ(
+      reader->schema()->asRow().childAt(0)->kind(),
+      nimble::Kind::SlidingWindowArray);
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader->next(data->size(), result));
+  ASSERT_EQ(result->size(), data->size());
+  for (velox::vector_size_t row = 0; row < data->size(); ++row) {
+    ASSERT_TRUE(vectorEquals(data, result, row)) << "Mismatch at row " << row;
+  }
+  const auto* array =
+      result->as<velox::RowVector>()->childAt(0)->as<velox::ArrayVector>();
+  ASSERT_NE(array, nullptr);
+  EXPECT_EQ(array->elements()->size(), events.size());
+}
+
+TEST_P(BatchReaderTest, slidingWindowArrayMatchesBase) {
+  using Window = std::vector<std::optional<int64_t>>;
+  struct TestParam {
+    std::string testName;
+    std::vector<NullableWindow> rows;
+    // Number of values the file stores for 'rows'.
+    velox::vector_size_t numStoredElements;
+
+    std::string debugString() const {
+      return fmt::format(
+          "{}, numStoredElements {}", testName, numStoredElements);
+    }
+  };
+
+  // Holds rows of 999 zeros, each ending in its own value.
+  std::vector<NullableWindow> repetitiveRows;
+  repetitiveRows.reserve(20);
+  for (int64_t row = 1; row <= 20; ++row) {
+    Window window(1'000, int64_t{0});
+    window.back() = row;
+    repetitiveRows.emplace_back(std::move(window));
+  }
+  const std::vector<TestParam> testSettings = {
+      // The search falls back from the partial match [1, 2, 1] to its border
+      // [1], and the row shares [1, 2, 1, 3] at a slide of two.
+      {"periodicOverlap", {Window{1, 2, 1, 2, 1, 3}, Window{1, 2, 1, 3, 9}}, 7},
+      // The row fits inside the base at a slide of one, past the partial
+      // match [5, 5] at no slide.
+      {"containedAfterPartialMatch",
+       {Window{5, 5, 5, 6, 5, 5}, Window{5, 5, 6}},
+       6},
+      // A null element matches only a null element, not 0.
+      {"nullElement", {Window{7, std::nullopt}, Window{0, 9}}, 4},
+      // A row never starts before the row before it: [1, 2] does not reuse
+      // the stored [1, 2] once [3, 4] starts at offset 2.
+      {"offsetsNeverDecrease",
+       {Window{1, 2, 3, 4}, Window{3, 4}, Window{1, 2}},
+       6},
+      // Every slide matches the zeros and fails at the last base value, so
+      // every row is stored in full.
+      {"repetitiveValues", repetitiveRows, 20'000},
+  };
+
+  const auto rowType = velox::ROW({
+      {"events", velox::ARRAY(velox::BIGINT())},
+  });
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto data = vectorMaker.rowVector(
+        {"events"}, {vectorMaker.arrayVectorNullable<int64_t>(testData.rows)});
+
+    nimble::WriterOptions writerOptions;
+    writerOptions.slidingWindowArrayColumns.insert("events");
+    std::string file;
+    nimble::Writer writer(
+        rowType,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(writerOptions));
+    writer.write(data);
+    writer.close();
+
+    const auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto reader = createBatchReader(readFile, *leafPool_);
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader->next(data->size(), result));
+    ASSERT_EQ(result->size(), data->size());
+    for (velox::vector_size_t row = 0; row < data->size(); ++row) {
+      ASSERT_TRUE(vectorEquals(data, result, row)) << "Mismatch at row " << row;
+    }
+    const auto* array =
+        result->as<velox::RowVector>()->childAt(0)->as<velox::ArrayVector>();
+    ASSERT_NE(array, nullptr);
+    EXPECT_EQ(array->elements()->size(), testData.numStoredElements);
+  }
+}
+
+TEST_P(BatchReaderTest, slidingWindowArrayFloatBits) {
+  const auto rowType = velox::ROW({
+      {"scores", velox::ARRAY(velox::REAL())},
+  });
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const auto nanA = std::bit_cast<float>(uint32_t{0x7fc00001});
+  const auto nanB = std::bit_cast<float>(uint32_t{0x7fc00002});
+  // Row 1 must share only -0.0 with row 0: matching +0.0 to -0.0 or one NaN
+  // payload to another would read back different bits.
+  const std::vector<std::vector<float>> windows{
+      {0.0f, -0.0f},
+      {-0.0f, nanA},
+      {nanB, nanA},
+      {nanA, nanB},
+  };
+  const auto data = vectorMaker.rowVector(
+      {"scores"}, {vectorMaker.arrayVector<float>(windows)});
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.slidingWindowArrayColumns.insert("scores");
+  std::string file;
+  nimble::Writer writer(
+      rowType,
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(writerOptions));
+  writer.write(data);
+  writer.close();
+
+  const auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto reader = createBatchReader(readFile, *leafPool_);
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader->next(data->size(), result));
+  const auto* array =
+      result->as<velox::RowVector>()->childAt(0)->as<velox::ArrayVector>();
+  ASSERT_NE(array, nullptr);
+  const auto* elements = array->elements()->asFlatVector<float>();
+  ASSERT_NE(elements, nullptr);
+  for (size_t row = 0; row < windows.size(); ++row) {
+    SCOPED_TRACE(fmt::format("row {}", row));
+    const auto rowIndex = static_cast<velox::vector_size_t>(row);
+    ASSERT_EQ(array->sizeAt(rowIndex), windows[row].size());
+    const auto offset = array->offsetAt(rowIndex);
+    for (velox::vector_size_t i = 0; i < array->sizeAt(rowIndex); ++i) {
+      EXPECT_EQ(
+          std::bit_cast<uint32_t>(elements->valueAt(offset + i)),
+          std::bit_cast<uint32_t>(windows[row][i]));
+    }
+  }
+}
+
+TEST_P(BatchReaderTest, slidingWindowArrayDictionaryInput) {
+  const auto rowType = velox::ROW({
+      {"events", velox::ARRAY(velox::BIGINT())},
+  });
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  // The dictionary picks base rows 2, 1, null, 0 and 0, so the input rows
+  // slide [1, 2, 3] forward one value at a time. The writer must read each
+  // window at its base row.
+  const auto data = vectorMaker.rowVector(
+      {"events"},
+      {createEncodedDictionaryVectorNullable<int64_t>(
+          {2, 1, std::nullopt, 0, 0}, {{3, 4, 5}, {2, 3, 4}, {1, 2, 3}})});
+  const auto expected = vectorMaker.rowVector(
+      {"events"},
+      {vectorMaker.arrayVectorNullable<int64_t>({
+          std::vector<std::optional<int64_t>>{1, 2, 3},
+          std::vector<std::optional<int64_t>>{2, 3, 4},
+          std::nullopt,
+          std::vector<std::optional<int64_t>>{3, 4, 5},
+          std::vector<std::optional<int64_t>>{3, 4, 5},
+      })});
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.slidingWindowArrayColumns.insert("events");
+  std::string file;
+  nimble::Writer writer(
+      rowType,
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(writerOptions));
+  writer.write(data);
+  writer.close();
+
+  const auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto reader = createBatchReader(readFile, *leafPool_);
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader->next(data->size(), result));
+  ASSERT_EQ(result->size(), expected->size());
+  for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+    ASSERT_TRUE(vectorEquals(expected, result, row))
+        << "Mismatch at row " << row;
+  }
+
+  // The rows share the five distinct values.
+  const auto* array =
+      result->as<velox::RowVector>()->childAt(0)->as<velox::ArrayVector>();
+  ASSERT_NE(array, nullptr);
+  EXPECT_EQ(array->elements()->size(), 5);
+}
+
+TEST_P(BatchReaderTest, slidingWindowArrayDictionaryElements) {
+  const auto rowType = velox::ROW({
+      {"events", velox::ARRAY(velox::BIGINT())},
+  });
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  // The elements are a dictionary over [1, 2, 3, 4, null] that reads
+  // [1, 2, 3, 2, 3, 4, 3, 4, null], so the writer decodes them. The rows
+  // [1, 2, 3], [2, 3, 4] and [3, 4, null] slide forward one value at a time.
+  const std::vector<velox::vector_size_t> dictionaryIndices{
+      0, 1, 2, 1, 2, 3, 2, 3, 4};
+  const auto numElements =
+      static_cast<velox::vector_size_t>(dictionaryIndices.size());
+  auto indices = velox::allocateIndices(numElements, leafPool_.get());
+  std::copy(
+      dictionaryIndices.begin(),
+      dictionaryIndices.end(),
+      indices->asMutable<velox::vector_size_t>());
+  const auto elements = velox::BaseVector::wrapInDictionary(
+      /*nulls=*/nullptr,
+      indices,
+      numElements,
+      vectorMaker.flatVectorNullable<int64_t>({1, 2, 3, 4, std::nullopt}));
+  const std::vector<velox::vector_size_t> offsets{0, 3, 6};
+  const auto data = vectorMaker.rowVector(
+      {"events"}, {vectorMaker.arrayVector(offsets, elements)});
+  const auto expected = vectorMaker.rowVector(
+      {"events"},
+      {vectorMaker.arrayVectorNullable<int64_t>({
+          std::vector<std::optional<int64_t>>{1, 2, 3},
+          std::vector<std::optional<int64_t>>{2, 3, 4},
+          std::vector<std::optional<int64_t>>{3, 4, std::nullopt},
+      })});
+
+  nimble::WriterOptions writerOptions;
+  writerOptions.slidingWindowArrayColumns.insert("events");
+  std::string file;
+  nimble::Writer writer(
+      rowType,
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      std::move(writerOptions));
+  writer.write(data);
+  writer.close();
+
+  const auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto reader = createBatchReader(readFile, *leafPool_);
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader->next(data->size(), result));
+  ASSERT_EQ(result->size(), expected->size());
+  for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+    ASSERT_TRUE(vectorEquals(expected, result, row))
+        << "Mismatch at row " << row;
+  }
+
+  // The rows store [1, 2, 3, 4, null] once.
+  const auto* array =
+      result->as<velox::RowVector>()->childAt(0)->as<velox::ArrayVector>();
+  ASSERT_NE(array, nullptr);
+  EXPECT_EQ(array->elements()->size(), 5);
+}
+
+TEST_P(BatchReaderTest, slidingWindowArrayUnsupported) {
+  {
+    const auto rowType = velox::ROW({
+        {"names", velox::ARRAY(velox::VARCHAR())},
+    });
+    nimble::WriterOptions writerOptions;
+    writerOptions.slidingWindowArrayColumns.insert("names");
+    std::string file;
+    NIMBLE_ASSERT_THROW(
+        nimble::Writer(
+            rowType,
+            std::make_unique<velox::InMemoryWriteFile>(&file),
+            *rootPool_,
+            std::move(writerOptions)),
+        "Sliding window arrays of this element type are not supported");
+  }
+  {
+    const auto rowType = velox::ROW({
+        {"events", velox::ARRAY(velox::BIGINT())},
+    });
+    nimble::WriterOptions writerOptions;
+    writerOptions.slidingWindowArrayColumns.insert("events");
+    writerOptions.dictionaryArrayColumns.insert("events");
+    std::string file;
+    NIMBLE_ASSERT_USER_THROW(
+        nimble::Writer(
+            rowType,
+            std::make_unique<velox::InMemoryWriteFile>(&file),
+            *rootPool_,
+            std::move(writerOptions)),
+        "Column must not be in both dictionaryArrayColumns and "
+        "slidingWindowArrayColumns");
+  }
+}
+
 // convert map to struct
 template <typename T = int32_t>
 bool compareFlatMap(
@@ -6645,7 +7075,7 @@ TEST_P(BatchReaderTest, rangeReads) {
   });
 }
 
-TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
+TEST_P(BatchReaderTest, testScalarFieldLifeCycle) {
   const auto testScalarFieldLifeCycle =
       [&](const std::shared_ptr<const velox::RowType> schema,
           int32_t batchSize,
@@ -6655,18 +7085,21 @@ TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
         EXPECT_TRUE(reader->next(batchSize, result));
         // Hold the reference to values Buffers
         auto child = result->as<velox::RowVector>()->childAt(0);
-        velox::BaseVector* rowPtr = result.get();
         velox::Buffer* rawNulls = child->nulls().get();
         velox::BufferPtr values = child->values();
         // Reset the child so that it can be reused
         child.reset();
+
+        // Observe the RowVector without owning it, so the reader can still
+        // reuse it. The pointer expires when the RowVector is destroyed.
+        std::weak_ptr<velox::BaseVector> row = result;
         EXPECT_TRUE(reader->next(batchSize, result));
         child = result->as<velox::RowVector>()->childAt(0);
         if (rawNulls && child->nulls().get()) {
           EXPECT_EQ(rawNulls, child->nulls().get());
         }
         EXPECT_NE(values.get(), child->values().get());
-        EXPECT_EQ(rowPtr, result.get());
+        EXPECT_EQ(row.lock().get(), result.get());
 
         // Hold the reference to NULL buffer
         velox::BufferPtr nulls = child->nulls();
@@ -6678,7 +7111,7 @@ TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
           EXPECT_NE(nulls.get(), child->nulls().get());
         }
         EXPECT_EQ(rawValues, child->values().get());
-        EXPECT_EQ(rowPtr, result.get());
+        EXPECT_EQ(row.lock().get(), result.get());
 
         rawNulls = nulls.get();
         // Don't release the child ScalarVector to row vector. With
@@ -6687,7 +7120,7 @@ TEST_P(BatchReaderTest, DISABLED_testScalarFieldLifeCycle) {
         EXPECT_TRUE(reader->next(batchSize, result));
         auto child1 = result->as<velox::RowVector>()->childAt(0);
         EXPECT_NE(child, child1);
-        EXPECT_NE(rowPtr, result.get());
+        EXPECT_NE(row.lock().get(), result.get());
       };
 
   const uint32_t seed = FLAGS_reader_tests_seed > 0 ? FLAGS_reader_tests_seed
