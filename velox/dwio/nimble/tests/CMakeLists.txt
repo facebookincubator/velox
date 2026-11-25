@@ -65,6 +65,13 @@ target_link_libraries(
   velox_vector_test_lib
 )
 
+add_library(
+  nimble_hybrid_flat_map_groupings
+  HybridFlatMapGroupings.cpp
+  HybridFlatMapGroupings.h
+)
+target_link_libraries(nimble_hybrid_flat_map_groupings nimble_velox_hybrid_flat_map)
+
 add_executable(
   nimble_velox_tests
   BufferGrowthPolicyTest.cpp
@@ -114,6 +121,7 @@ target_link_libraries(
   nimble_velox_tests
   nimble_velox_common
   nimble_velox_schema_utils
+  nimble_hybrid_flat_map_groupings
   nimble_shared_dictionary_test_utils
   nimble_writer_test_utils
   nimble_batch_reader
