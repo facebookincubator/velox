@@ -124,8 +124,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       int destination);
 
   /// Returns true if the given task can use intra-node transfer.
-  /// Returns false if the task is not yet initialized (placeholder queue
-  /// from early sink connections) or if the task uses broadcast mode
+  /// Returns false if the task is not yet initialized (a Pending entry
+  /// created by early sink connections) or if the task uses broadcast mode
   /// (broadcast shares packed_columns across destinations — the intra-node
   /// source's destructive move would corrupt data for other servers).
   bool canUseIntraNode(std::string_view taskId);

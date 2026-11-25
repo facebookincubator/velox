@@ -105,6 +105,25 @@ void UcxDestinationQueue::deleteResults() {
   queue_.clear();
 }
 
+std::vector<std::shared_ptr<cudf::packed_columns>>
+UcxDestinationQueue::takeQueuedData() {
+  std::vector<std::shared_ptr<cudf::packed_columns>> data;
+  data.reserve(queue_.size());
+  for (auto& page : queue_) {
+    if (page.data != nullptr) {
+      stats_.bytesQueued -= page.data->gpu_data->size();
+      --stats_.packedColumnsQueued;
+      data.push_back(std::move(page.data));
+    }
+  }
+  const bool atEnd = !queue_.empty() && queue_.back().data == nullptr;
+  queue_.clear();
+  if (atEnd) {
+    queue_.push_back(QueuedPage{nullptr, 0});
+  }
+  return data;
+}
+
 UcxDataAvailable UcxDestinationQueue::getAndClearNotify() {
   if (notify_ == nullptr) {
     return UcxDataAvailable();
@@ -201,7 +220,7 @@ bool UcxOutputQueue::removeBoundReader() {
   }
   --numBoundReaders_;
   return state_ == TaskEntryState::kPending && numBoundReaders_ == 0 &&
-      !hasReleasedDestinationLocked();
+      !failedInitialization_ && !hasReleasedDestinationLocked();
 }
 
 bool UcxOutputQueue::hasReleasedDestinationLocked() const {
@@ -217,6 +236,7 @@ void UcxOutputQueue::recordFailedInitialization(
     std::weak_ptr<exec::Task> task) {
   std::lock_guard<std::mutex> l(mutex_);
   removedTask_ = std::move(task);
+  failedInitialization_ = true;
 }
 
 void UcxOutputQueue::markRemoved() {
@@ -690,22 +710,46 @@ void UcxOutputQueue::terminate() {
   std::vector<UcxDataAvailable> pendingCallbacks;
   std::vector<ContinuePromise> promises;
   std::shared_ptr<exec::Task> task;
+  // Chunks no reader will fetch once terminated_ is set. Destroyed after
+  // mutex_ is released.
+  std::vector<std::shared_ptr<cudf::packed_columns>> discardedData;
+  std::vector<std::pair<std::shared_ptr<cudf::packed_columns>, vector_size_t>>
+      discardedBroadcastData;
   {
     std::lock_guard<std::mutex> l(mutex_);
     task = task_;
     terminated_ = true;
+    // Pending queues hold readers, never data.
     clearPendingReadersLocked(pendingCallbacks);
+    int64_t discardedBytes{0};
+    int64_t numDiscarded{0};
     // Fire all pending getData callbacks with nullptr to signal end-of-stream.
     // This handles the case where a producer task fails or is cancelled before
     // noMoreData() is called, preventing consumers from being orphaned.
     for (auto& queue : queues_) {
       if (queue != nullptr) {
+        for (auto& data : queue->takeQueuedData()) {
+          discardedBytes += data->gpu_data->size();
+          ++numDiscarded;
+          discardedData.push_back(std::move(data));
+        }
         queue->enqueueBack(nullptr, /*numRows=*/0);
         pendingCallbacks.push_back(queue->getAndClearNotify());
       }
     }
+    // Broadcast keeps these for destinations not added yet; none will be.
+    // They are not counted in queuedBytes_.
+    discardedBroadcastData = std::move(dataToBroadcast_);
+    dataToBroadcast_.clear();
+    // Subtracts what was discarded rather than resetting the counters: a
+    // chunk that a reader took but whose callback has not run yet is still
+    // counted, and that callback subtracts it.
+    updateStatsWithFreedLocked(discardedBytes, numDiscarded, promises);
     // Release any outstanding producer-side promises (blocked on queue-full).
-    promises = std::move(promises_);
+    for (auto& promise : promises_) {
+      promises.push_back(std::move(promise));
+    }
+    promises_.clear();
   }
 
   if (task && task->isRunning()) {

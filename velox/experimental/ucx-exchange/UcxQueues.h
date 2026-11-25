@@ -113,6 +113,11 @@ class UcxDestinationQueue {
   /// Removes all remaining data from the queue.
   void deleteResults();
 
+  /// Removes the queued data, which no reader will fetch, from the queue and
+  /// its queued stats, and returns it for the caller to destroy outside its
+  /// locks. Keeps an end marker.
+  std::vector<std::shared_ptr<cudf::packed_columns>> takeQueuedData();
+
   /// Returns and clears the notify callback, if any, along with arguments for
   /// the callback.
   UcxDataAvailable getAndClearNotify();
@@ -220,8 +225,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
     return kind_;
   }
 
-  /// Returns true once task metadata has been published via initializeTask()
-  /// (not just a placeholder created by early getData() calls).
+  /// Returns true once task metadata has been published via initializeTask(),
+  /// that is, the entry is no longer a Pending entry created by an early
+  /// server. Stays true once Removed.
   /// This is published before destination queue expansion completes so local
   /// UCX handshakes do not permanently fall back to the remote path.
   bool isInitialized() const {
@@ -302,16 +308,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// @brief Queued bytes over this queue's byte capacity, the task's configured
   /// maxOutputBufferSize. Producers are only blocked after adding data (see
   /// checkBlocked), so the ratio can exceed 1.0. Returns nullopt while the
-  /// capacity is still unknown, which is the case for a placeholder queue
-  /// created by a getData() that arrived before initializeTask() supplied the
-  /// task's query config.
+  /// capacity is still unknown, which is the case for a Pending entry created
+  /// by a server that arrived before initializeTask() supplied the task's query
+  /// config.
   std::optional<double> getUtilization();
 
   /// @brief Whether enough is queued to risk back-pressuring producers soon, or
   /// the last data has been seen. Half the capacity is the threshold, matching
   /// exec::OutputBuffer. Returns nullopt while the capacity is unknown, for the
   /// same reason as getUtilization(): without a capacity there is no ratio to
-  /// compare against, and reporting `false` there would let a placeholder queue
+  /// compare against, and reporting `false` there would let a Pending entry
   /// masquerade as having spare room.
   std::optional<bool> isOverutilized();
 
@@ -386,13 +392,19 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // The servers bound to this entry.
   int32_t numBoundReaders_{0};
 
+  // Set by recordFailedInitialization(). Keeps the Pending entry when its last
+  // server is released, so that its removal can tie the Removed entry to the
+  // Task.
+  bool failedInitialization_{false};
+
   // The output mode (partitioned, broadcast, etc.)
   core::PartitionedOutputNode::Kind kind_{
       core::PartitionedOutputNode::Kind::kPartitioned};
 
   // Set to true once task metadata is available. Lock-free readers
-  // (canUseIntraNode) load with memory_order_acquire so kind_ and task_
-  // written before the store are visible.
+  // (canUseIntraNode) load with memory_order_acquire so that kind_, written
+  // before the store, is visible. They must not read task_, which
+  // markRemoved() resets under mutex_.
   std::atomic<bool> initialized_{false};
 
   // For broadcast: stores data for late-arriving destinations that need

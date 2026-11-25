@@ -794,6 +794,68 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedEntry) {
   }
 }
 
+// A Removed entry outlives its removal while a server is bound to it or its
+// Task lives, but its chunks are unreachable from then on. The removal frees
+// them rather than keeping them for the entry's lifetime.
+TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  {
+    SCOPED_TRACE("partitioned");
+    const std::string taskId = "removedReleasesPartitionedData";
+    auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
+    auto entry = queueManager_->bindReader(taskId, 0);
+    enqueue(taskId, 0, /*size=*/10);
+    enqueue(taskId, 1, /*size=*/10);
+    const auto before = queueManager_->stats(taskId);
+    ASSERT_TRUE(before.has_value());
+    ASSERT_GT(before->bufferedBytes, 0);
+    ASSERT_EQ(before->bufferedPages, 2);
+
+    task->requestAbort().wait();
+    queueManager_->removeTask(taskId);
+    const auto after = entry->stats();
+    EXPECT_EQ(after.bufferedBytes, 0);
+    EXPECT_EQ(after.bufferedPages, 0);
+    EXPECT_EQ(after.totalBytesSent, before->totalBytesSent);
+    EXPECT_EQ(after.totalPagesSent, 2);
+
+    bool receivedEnd{false};
+    entry->getData(0, receiveEndMarker(0, receivedEnd));
+    EXPECT_TRUE(receivedEnd);
+    queueManager_->releaseReader(entry, 0);
+  }
+  {
+    SCOPED_TRACE("broadcast");
+    // Destinations share each broadcast chunk, and the queue keeps it for
+    // destinations that are not added yet, so a chunk that one destination
+    // fetched lives until the others free it.
+    const std::string taskId = "removedReleasesBroadcastData";
+    auto task = initializeTask(
+        taskId,
+        /*numDestinations=*/2,
+        /*numDrivers=*/1,
+        /*cleanup=*/true,
+        core::PartitionedOutputNode::Kind::kBroadcast);
+    auto entry = queueManager_->bindReader(taskId, 0);
+    enqueue(taskId, 0, /*size=*/10);
+    std::weak_ptr<cudf::packed_columns> chunk;
+    entry->getData(
+        0,
+        [&chunk](
+            std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/) { chunk = data; });
+    ASSERT_FALSE(chunk.expired());
+
+    task->requestAbort().wait();
+    queueManager_->removeTask(taskId);
+    EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+    EXPECT_TRUE(chunk.expired());
+    EXPECT_EQ(entry->stats().bufferedBytes, 0);
+    queueManager_->releaseReader(entry, 0);
+  }
+}
+
 // A task whose initializeTask() threw is removed with its entry still Pending,
 // so only the failed initialization knew its Task. The Removed entry must still
 // live as long as the Task rather than until the next removal.
@@ -834,6 +896,40 @@ TEST_F(
        {taskId,
         std::string{"removalAfterFailedInitialization"},
         std::string{"removalAfterTaskDestroyed"}}) {
+    IntraNodeTransferRegistry::getInstance()->clearCancelledTask(removedTaskId);
+  }
+}
+
+// The entry keeps a failed initializeTask() even when its last server closes
+// before the removal, so that the Removed entry lives as long as the Task.
+TEST_F(UcxOutputQueueManagerTest, releasedReaderKeepsFailedInitialization) {
+  const std::string taskId = "failedInitializationWithReader";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto entry = queueManager_->bindReader(taskId, 0);
+  auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
+  VELOX_ASSERT_THROW(
+      queueManager_->initializeTask(
+          task,
+          core::PartitionedOutputNode::Kind::kPartitioned,
+          /*numDestinations=*/-1,
+          /*numDrivers=*/1),
+      "Number of destinations must be non-negative");
+  queueManager_->releaseReader(entry, 0);
+
+  auto pendingEntry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(pendingEntry, entry);
+  EXPECT_EQ(pendingEntry->state(), TaskEntryState::kPending);
+  queueManager_->releaseReader(pendingEntry, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+  queueManager_->removeTask("removalAfterFailedInitialization");
+  auto removedEntry = queueManager_->bindReader(taskId, 0);
+  EXPECT_EQ(removedEntry, entry);
+  EXPECT_EQ(removedEntry->state(), TaskEntryState::kRemoved);
+  queueManager_->releaseReader(removedEntry, 0);
+  for (const auto& removedTaskId :
+       {taskId, std::string{"removalAfterFailedInitialization"}}) {
     IntraNodeTransferRegistry::getInstance()->clearCancelledTask(removedTaskId);
   }
 }
