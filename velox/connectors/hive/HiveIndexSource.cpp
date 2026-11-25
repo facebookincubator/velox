@@ -922,7 +922,7 @@ void HiveIndexSource::init(
   for (const auto& handle : tableHandle_->filterColumnHandles()) {
     auto it = columnHandles.find(handle->name());
     if (it != columnHandles.end()) {
-      connector::checkColumnHandleConsistent(*handle, *it->second);
+      handle->checkConsistentWith(*it->second);
       continue;
     }
     checkColumnHandleIsRegular(*handle);

@@ -110,7 +110,7 @@ FileDataSource::FileDataSource(
     if (!unique) {
       // This should not happen normally, but there are cases where we get
       // duplicate assignments for partitioning columns.
-      checkColumnHandleConsistent(*handle, *it->second);
+      handle->checkConsistentWith(*it->second);
       VELOX_CHECK_EQ(
           handle->columnType(),
           FileColumnHandle::ColumnType::kPartitionKey,
@@ -123,7 +123,7 @@ FileDataSource::FileDataSource(
   for (auto& handle : tableHandle_->filterColumnHandles()) {
     auto it = columnHandles.find(handle->name());
     if (it != columnHandles.end()) {
-      checkColumnHandleConsistent(*handle, *it->second);
+      handle->checkConsistentWith(*it->second);
       continue;
     }
     processColumnHandle(handle);

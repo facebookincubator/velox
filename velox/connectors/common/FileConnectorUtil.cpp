@@ -625,24 +625,6 @@ void processFieldSpec(
 
 } // namespace
 
-void checkColumnHandleConsistent(
-    const FileColumnHandle& x,
-    const FileColumnHandle& y) {
-  VELOX_CHECK_EQ(
-      x.columnType(),
-      y.columnType(),
-      "Inconsistent column handle type: {}, expected {}, got {}",
-      x.name(),
-      FileColumnHandle::columnTypeName(x.columnType()),
-      FileColumnHandle::columnTypeName(y.columnType()));
-  VELOX_CHECK(
-      x.dataType()->equivalent(*y.dataType()),
-      "Inconsistent column handle data type: {}, expected {}, got {}",
-      x.name(),
-      x.dataType()->toString(),
-      y.dataType()->toString());
-}
-
 std::shared_ptr<common::ScanSpec> makeScanSpec(
     const RowTypePtr& rowType,
     const folly::F14FastMap<std::string, std::vector<const common::Subfield*>>&
