@@ -361,10 +361,13 @@ stable bounds, and <code class="docutils literal notranslate"><span class="pre">
 Minus one, the default, keeps the session’s precedence: a positive
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.min_limit</span></code> (default 50) replaces <code class="docutils literal notranslate"><span class="pre">configuredAdaptiveFloor()</span></code>
 and a positive <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.max_limit</span></code> (default 200) replaces
-<code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code>. Zero or more lets the function’s bounds win, since
-session properties apply to every function in the query while a function
-declares bounds for its own backend, and <code class="docutils literal notranslate"><span class="pre">max_limit</span></code> no longer applies. A
-positive value caps <code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code>, the smaller winning, and is the
+<code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code>. With <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.tighten_limit</span></code> set to true,
+<code class="docutils literal notranslate"><span class="pre">max_limit</span></code> can only lower <code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code> instead of replacing it:
+the smaller of the two applies.
+<code class="docutils literal notranslate"><span class="pre">hard_limit</span></code> of zero or more lets the function’s bounds win, since session
+properties apply to every function in the query while a function declares
+bounds for its own backend, and <code class="docutils literal notranslate"><span class="pre">max_limit</span></code> no longer applies. A positive
+value caps <code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code>, the smaller winning, and is the
 ceiling when the function declares none. Zero adds no session ceiling: with no
 function ceiling, the window starts at 200 and may grow to the 1,000,000 safety
 ceiling. To use the function’s bounds and keep a cap, set <code class="docutils literal notranslate"><span class="pre">hard_limit</span></code> to the
@@ -409,7 +412,7 @@ divide: pacing time over attached time is the share of attached time spent
 pacing, and the window integral over attached seconds is the average committed
 window in thousandths of a unit; recovery growth counts once the limiter commits
 it to the window. Prestissimo publishes them as <code class="docutils literal notranslate"><span class="pre">RPC.&lt;planNodeId&gt;.&lt;name&gt;</span></code>.</p>
-<p>To see whether a query’s session limits replaced its function’s bounds, compare
+<p>To see whether a query’s session limits changed its function’s bounds, compare
 <code class="docutils literal notranslate"><span class="pre">rpcFunctionCeiling</span></code> with <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterHardLimit</span></code>, and
 <code class="docutils literal notranslate"><span class="pre">rpcFunctionFloorMilli</span></code> with <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterFloorMilli</span></code>. The function’s
 stats appear only when it declares that bound. <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterFloorMilli</span></code> is

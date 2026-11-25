@@ -317,10 +317,13 @@ stable bounds, and ``rpc.ratelimiter.hard_limit`` selects whose bounds win.
 Minus one, the default, keeps the session's precedence: a positive
 ``rpc.ratelimiter.min_limit`` (default 50) replaces ``configuredAdaptiveFloor()``
 and a positive ``rpc.ratelimiter.max_limit`` (default 200) replaces
-``configuredCeiling()``. Zero or more lets the function's bounds win, since
-session properties apply to every function in the query while a function
-declares bounds for its own backend, and ``max_limit`` no longer applies. A
-positive value caps ``configuredCeiling()``, the smaller winning, and is the
+``configuredCeiling()``. With ``rpc.ratelimiter.tighten_limit`` set to true,
+``max_limit`` can only lower ``configuredCeiling()`` instead of replacing it:
+the smaller of the two applies.
+``hard_limit`` of zero or more lets the function's bounds win, since session
+properties apply to every function in the query while a function declares
+bounds for its own backend, and ``max_limit`` no longer applies. A positive
+value caps ``configuredCeiling()``, the smaller winning, and is the
 ceiling when the function declares none. Zero adds no session ceiling: with no
 function ceiling, the window starts at 200 and may grow to the 1,000,000 safety
 ceiling. To use the function's bounds and keep a cap, set ``hard_limit`` to the
@@ -369,7 +372,7 @@ pacing, and the window integral over attached seconds is the average committed
 window in thousandths of a unit; recovery growth counts once the limiter commits
 it to the window. Prestissimo publishes them as ``RPC.<planNodeId>.<name>``.
 
-To see whether a query's session limits replaced its function's bounds, compare
+To see whether a query's session limits changed its function's bounds, compare
 ``rpcFunctionCeiling`` with ``rpcRateLimiterHardLimit``, and
 ``rpcFunctionFloorMilli`` with ``rpcRateLimiterFloorMilli``. The function's
 stats appear only when it declares that bound. ``rpcRateLimiterFloorMilli`` is
