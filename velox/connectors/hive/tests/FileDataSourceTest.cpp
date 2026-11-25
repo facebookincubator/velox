@@ -142,6 +142,7 @@ class FileDataSourceTest : public exec::test::HiveConnectorTestBase {
         .connectorPool(pool_.get())
         .sessionProperties(config_.get())
         .expressionEvaluator(std::move(evaluator))
+        .queryConfig(&queryCtx_->queryConfig())
         .queryId("FileDataSourceTest")
         .taskId("FileDataSourceTest")
         .planNodeId("scan")

@@ -154,6 +154,7 @@ TEST_F(CustomMemoryHierarchyTest, connectorContextUsesOperatorCustomPools) {
 
     EXPECT_EQ(firstConnector->memoryPool(), first.pool());
     EXPECT_EQ(secondConnector->memoryPool(), second.pool());
+    EXPECT_EQ(&firstConnector->queryConfig(), &queryCtx->queryConfig());
     EXPECT_EQ(firstConnector->customMemoryPool("missing"), nullptr);
     if (tags.empty()) {
       EXPECT_EQ(firstConnector->customMemoryPool("gpu"), nullptr);

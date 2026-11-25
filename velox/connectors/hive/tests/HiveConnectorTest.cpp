@@ -689,6 +689,7 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
       /*storageParameters=*/{},
       "test_db");
   const config::ConfigBase sessionProperties({});
+  const core::QueryConfig queryConfig{{}};
   auto connector = ConnectorRegistry::tryGet(kHiveConnectorId);
 
   // Returns the options of each file a new data source opens for its split,
@@ -706,6 +707,7 @@ TEST_F(HiveConnectorTest, setFileReadOpsForwardsToFileSystem) {
                                      .operatorPool(pool_.get())
                                      .connectorPool(pool_.get())
                                      .sessionProperties(&sessionProperties)
+                                     .queryConfig(&queryConfig)
                                      .queryId("query.HiveConnectorTest")
                                      .taskId("task.HiveConnectorTest")
                                      .planNodeId("planNodeId.HiveConnectorTest")
@@ -764,10 +766,12 @@ TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
       /*storageParameters=*/{},
       "test_db");
   const config::ConfigBase sessionProperties({});
+  const core::QueryConfig queryConfig{{}};
   const auto connectorQueryCtx = ConnectorQueryCtx::Builder()
                                      .operatorPool(pool_.get())
                                      .connectorPool(pool_.get())
                                      .sessionProperties(&sessionProperties)
+                                     .queryConfig(&queryConfig)
                                      .queryId("query.HiveConnectorTest")
                                      .taskId("task.HiveConnectorTest")
                                      .planNodeId("planNodeId.HiveConnectorTest")

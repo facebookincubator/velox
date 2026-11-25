@@ -66,11 +66,13 @@ TEST_F(CudfSplitReaderTest, setsPushdownFilterAfterReadingMetadata) {
 
   auto properties = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
+  const core::QueryConfig queryConfig{{}};
   auto connectorQueryCtx =
       ::facebook::velox::connector::ConnectorQueryCtx::Builder()
           .operatorPool(pool_.get())
           .connectorPool(pool_.get())
           .sessionProperties(properties.get())
+          .queryConfig(&queryConfig)
           .queryId("query.CudfSplitReaderTest")
           .taskId("task.CudfSplitReaderTest")
           .planNodeId("plan.CudfSplitReaderTest")
@@ -141,11 +143,13 @@ TEST_F(CudfSplitReaderTest, timestampTypeFollowsSession) {
           const std::unordered_map<std::string, std::string>& session) {
         auto sessionProperties = std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>(session));
+        const core::QueryConfig queryConfig{{}};
         auto connectorQueryCtx =
             ::facebook::velox::connector::ConnectorQueryCtx::Builder()
                 .operatorPool(pool_.get())
                 .connectorPool(pool_.get())
                 .sessionProperties(sessionProperties.get())
+                .queryConfig(&queryConfig)
                 .queryId("query.CudfSplitReaderTest")
                 .taskId("task.CudfSplitReaderTest")
                 .planNodeId("plan.CudfSplitReaderTest")

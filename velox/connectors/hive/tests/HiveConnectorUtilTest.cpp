@@ -110,6 +110,7 @@ class HiveConnectorUtilTest : public exec::test::HiveConnectorTestBase {
       std::make_shared<velox::io::IoStatistics>();
   std::shared_ptr<velox::io::IoStatistics> metadataIoStats_ =
       std::make_shared<velox::io::IoStatistics>();
+  const core::QueryConfig queryConfig_{{}};
 };
 
 TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
@@ -118,6 +119,7 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
                                .operatorPool(pool_.get())
                                .connectorPool(pool_.get())
                                .sessionProperties(&sessionProperties)
+                               .queryConfig(&queryConfig_)
                                .queryId("query.HiveConnectorUtilTest")
                                .taskId("task.HiveConnectorUtilTest")
                                .planNodeId("planNodeId.HiveConnectorUtilTest")
@@ -338,6 +340,55 @@ TEST_F(HiveConnectorUtilTest, configureReaderOptions) {
   checkColumnMappingMode();
 }
 
+TEST_F(HiveConnectorUtilTest, configureReaderOptionsSessionTimezone) {
+  const config::ConfigBase sessionProperties({});
+  const auto hiveConfig =
+      std::make_shared<hive::HiveConfig>(std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>()));
+  const auto tableHandle = makeTableHandle();
+  const auto split = makeHiveConnectorSplit("/tmp/file");
+
+  // Returns the reader options configured for a context built with
+  // 'queryConfig'.
+  const auto configure = [&](const core::QueryConfig& queryConfig) {
+    const auto connectorQueryCtx =
+        connector::ConnectorQueryCtx::Builder()
+            .operatorPool(pool_.get())
+            .connectorPool(pool_.get())
+            .sessionProperties(&sessionProperties)
+            .queryConfig(&queryConfig)
+            .queryId("query.HiveConnectorUtilTest")
+            .taskId("task.HiveConnectorUtilTest")
+            .planNodeId("planNodeId.HiveConnectorUtilTest")
+            .build();
+    dwio::common::ReaderOptions readerOptions(pool_.get());
+    configureReaderOptions(
+        hiveConfig,
+        connectorQueryCtx.get(),
+        tableHandle,
+        split,
+        split->serdeParameters,
+        readerOptions);
+    return readerOptions;
+  };
+
+  {
+    const auto readerOptions = configure(core::QueryConfig{{}});
+    EXPECT_EQ(readerOptions.sessionTimezone(), nullptr);
+    EXPECT_FALSE(readerOptions.adjustTimestampToTimezone());
+  }
+  {
+    const auto readerOptions = configure(
+        core::QueryConfig{{
+            {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+            {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+        }});
+    ASSERT_NE(readerOptions.sessionTimezone(), nullptr);
+    EXPECT_EQ(readerOptions.sessionTimezone()->name(), "America/Los_Angeles");
+    EXPECT_TRUE(readerOptions.adjustTimestampToTimezone());
+  }
+}
+
 TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
   config::ConfigBase sessionProperties{
       std::unordered_map<std::string, std::string>{
@@ -352,6 +403,7 @@ TEST_F(HiveConnectorUtilTest, footerSpeculativeIoSizeByFormat) {
                                .operatorPool(pool_.get())
                                .connectorPool(pool_.get())
                                .sessionProperties(&sessionProperties)
+                               .queryConfig(&queryConfig_)
                                .queryId("query.HiveConnectorUtilTest")
                                .taskId("task.HiveConnectorUtilTest")
                                .planNodeId("planNodeId.HiveConnectorUtilTest")
@@ -503,6 +555,7 @@ TEST_F(HiveConnectorUtilTest, cacheMetadataSessionOverride) {
                                  .operatorPool(pool_.get())
                                  .connectorPool(pool_.get())
                                  .sessionProperties(&sessionProperties)
+                                 .queryConfig(&queryConfig_)
                                  .queryId("query.HiveConnectorUtilTest")
                                  .taskId("task.HiveConnectorUtilTest")
                                  .planNodeId("planNodeId.HiveConnectorUtilTest")
@@ -552,6 +605,7 @@ TEST_F(HiveConnectorUtilTest, cacheIndexSessionOverride) {
                                  .operatorPool(pool_.get())
                                  .connectorPool(pool_.get())
                                  .sessionProperties(&sessionProperties)
+                                 .queryConfig(&queryConfig_)
                                  .queryId("query.HiveConnectorUtilTest")
                                  .taskId("task.HiveConnectorUtilTest")
                                  .planNodeId("planNodeId.HiveConnectorUtilTest")
@@ -610,6 +664,7 @@ TEST_F(HiveConnectorUtilTest, cacheRetention) {
                                  .operatorPool(pool_.get())
                                  .connectorPool(pool_.get())
                                  .sessionProperties(&sessionProperties)
+                                 .queryConfig(&queryConfig_)
                                  .queryId("query.HiveConnectorUtilTest")
                                  .taskId("task.HiveConnectorUtilTest")
                                  .planNodeId("planNodeId.HiveConnectorUtilTest")
