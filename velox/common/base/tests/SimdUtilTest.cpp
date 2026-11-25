@@ -367,6 +367,26 @@ void testFilter(std::initializer_list<T> data) {
   }
 }
 
+// Filters with every lane mask, so each permutation table entry is used.
+template <typename T>
+void testFilterAllMasks() {
+  constexpr int32_t kNumLanes = xsimd::batch<T>::size;
+  T values[kNumLanes];
+  for (int32_t i = 0; i < kNumLanes; ++i) {
+    values[i] = static_cast<T>(i + 1);
+  }
+  const auto data = xsimd::load_unaligned(values);
+  for (int32_t mask = 0; mask < (1 << kNumLanes); ++mask) {
+    const auto result = simd::filter(data, mask);
+    int32_t numSelected = 0;
+    for (int32_t i = 0; i < kNumLanes; ++i) {
+      if (mask & (1 << i)) {
+        ASSERT_EQ(result.get(numSelected++), values[i]) << "mask " << mask;
+      }
+    }
+  }
+}
+
 } // namespace
 
 TEST_F(SimdUtilTest, filter16) {
@@ -405,6 +425,14 @@ TEST_F(SimdUtilTest, filterFloat) {
 
 TEST_F(SimdUtilTest, filterDouble) {
   testFilter<double>({std::nan("nan"), 23456, 111, 32000});
+}
+
+TEST_F(SimdUtilTest, filterAllMasks) {
+  testFilterAllMasks<int16_t>();
+  testFilterAllMasks<int32_t>();
+  testFilterAllMasks<int64_t>();
+  testFilterAllMasks<float>();
+  testFilterAllMasks<double>();
 }
 
 TEST_F(SimdUtilTest, misc) {

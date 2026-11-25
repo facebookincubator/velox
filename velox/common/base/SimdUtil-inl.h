@@ -1051,6 +1051,23 @@ struct Permute<T, A, 4> {
         _mm_permutevar_ps(reinterpret_cast<__m128>(data.data), idx));
   }
 #endif
+
+#if XSIMD_WITH_NEON64
+  // Lane i takes data[idx[i]]. TBL selects bytes, so each 32-bit index i
+  // expands to the byte indices 4i, 4i + 1, 4i + 2 and 4i + 3.
+  static xsimd::batch<T, A> apply(
+      xsimd::batch<T, A> data,
+      xsimd::batch<int32_t, A> idx,
+      const xsimd::neon&) {
+    const uint8x16_t byteIndices = vreinterpretq_u8_u32(vmlaq_n_u32(
+        vdupq_n_u32(0x0302'0100),
+        vreinterpretq_u32_s32(idx.data),
+        0x0404'0404));
+    using ByteBatch = xsimd::batch<uint8_t, A>;
+    return xsimd::bitwise_cast<xsimd::batch<T, A>>(ByteBatch(
+        vqtbl1q_u8(xsimd::bitwise_cast<ByteBatch>(data).data, byteIndices)));
+  }
+#endif
 };
 
 } // namespace detail
@@ -1346,6 +1363,24 @@ struct Filter<T, A, 2> {
       }
     }
     return xsimd::load_unaligned(compressed);
+  }
+#endif
+
+#if XSIMD_WITH_NEON64
+  // Narrows the byteSetBits permutation of the eight lanes to 16-bit lane
+  // indices and compacts the selected lanes with one TBL.
+  static xsimd::batch<T, A>
+  apply(xsimd::batch<T, A> data, int mask, const xsimd::neon&) {
+    const int32_t* laneIndices = byteSetBits[mask & 0xFF];
+    const uint16x8_t shortIndices = vuzp1q_u16(
+        vreinterpretq_u16_s32(vld1q_s32(laneIndices)),
+        vreinterpretq_u16_s32(vld1q_s32(laneIndices + 4)));
+    // Each 16-bit index i expands to the byte indices 2i and 2i + 1.
+    const uint8x16_t byteIndices = vreinterpretq_u8_u16(
+        vmlaq_n_u16(vdupq_n_u16(0x0100), shortIndices, 0x0202));
+    using ByteBatch = xsimd::batch<uint8_t, A>;
+    return xsimd::bitwise_cast<xsimd::batch<T, A>>(ByteBatch(
+        vqtbl1q_u8(xsimd::bitwise_cast<ByteBatch>(data).data, byteIndices)));
   }
 #endif
 };

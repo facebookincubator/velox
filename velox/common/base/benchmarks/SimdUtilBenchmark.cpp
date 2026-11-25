@@ -78,6 +78,40 @@ class FromBitMask {
   uint64_t inputs_[kSize];
 };
 
+template <typename T>
+class Filter {
+ public:
+  Filter(const char* name, std::default_random_engine& gen) {
+    std::uniform_int_distribution<int32_t> valueDist(-1'000, 1'000);
+    std::uniform_int_distribution<int32_t> maskDist(0, (1 << kNumLanes) - 1);
+    for (int i = 0; i < kSize * kNumLanes; ++i) {
+      values_[i] = static_cast<T>(valueDist(gen));
+    }
+    for (int i = 0; i < kSize; ++i) {
+      masks_[i] = maskDist(gen);
+    }
+    folly::addBenchmark(__FILE__, name, [this] { return run(); });
+  }
+
+ private:
+  unsigned run() {
+    xsimd::batch<T> ans(T{});
+    for (int i = 0; i < kSize; ++i) {
+      ans = ans ^
+          simd::filter(
+                xsimd::batch<T>::load_unaligned(values_ + i * kNumLanes),
+                masks_[i]);
+    }
+    folly::doNotOptimizeAway(ans);
+    return kSize;
+  }
+
+  static constexpr int kNumLanes = xsimd::batch<T>::size;
+  static constexpr int kSize = 4 << 10;
+  T values_[kSize * kNumLanes];
+  int32_t masks_[kSize];
+};
+
 } // namespace
 } // namespace facebook::velox
 
@@ -89,6 +123,11 @@ int main(int argc, char* argv[]) {
   VELOX_BENCHMARK(LeadingMask<int64_t>, leadingMaskInt64, gen);
   VELOX_BENCHMARK(FromBitMask<int32_t>, fromBitMaskInt32, gen);
   VELOX_BENCHMARK(FromBitMask<int64_t>, fromBitMaskInt64, gen);
+  VELOX_BENCHMARK(Filter<int16_t>, filterInt16, gen);
+  VELOX_BENCHMARK(Filter<int32_t>, filterInt32, gen);
+  VELOX_BENCHMARK(Filter<int64_t>, filterInt64, gen);
+  VELOX_BENCHMARK(Filter<float>, filterFloat, gen);
+  VELOX_BENCHMARK(Filter<double>, filterDouble, gen);
   folly::runBenchmarks();
   return 0;
 }
