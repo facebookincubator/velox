@@ -15,6 +15,7 @@
 add_executable(
   ucx_exchange_test
   UcxChannelStateTest.cpp
+  UcxExchangeProtocolTest.cpp
   UcxOutputQueueManagerTest.cpp
   UcxPartitionedOutputTest.cpp
   UcxExchangeTest.cpp

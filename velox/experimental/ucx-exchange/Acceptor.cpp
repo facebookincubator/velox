@@ -34,13 +34,15 @@ void Acceptor::cStyleAMCallback(
       std::dynamic_pointer_cast<ucxx::Buffer>(request->getRecvBuffer());
   VELOX_CHECK_NOT_NULL(buffer, "AMCallback: failed to get receive buffer.");
   // Validate buffer size BEFORE casting to prevent reading past buffer bounds.
+  // A peer of an older protocol version sends kLegacyHandshakeSize bytes, which
+  // hold every field up to workerId.
   VELOX_CHECK_GE(
       buffer->getSize(),
-      sizeof(HandshakeMsg),
-      "AMCallback: received buffer size ({}) is smaller than HandshakeMsg ({}). "
-      "Possible protocol mismatch or truncated message.",
+      kLegacyHandshakeSize,
+      "AMCallback: received buffer size ({}) is smaller than the legacy "
+      "HandshakeMsg ({}). Possible protocol mismatch or truncated message.",
       buffer->getSize(),
-      sizeof(HandshakeMsg));
+      kLegacyHandshakeSize);
   HandshakeMsg* handshakePtr = reinterpret_cast<HandshakeMsg*>(buffer->data());
 
   // Create a exchangeServer based on the information received in the initial

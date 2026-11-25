@@ -490,16 +490,26 @@ void UcxExchangeSource::onMetadata(
     std::shared_ptr<std::vector<uint8_t>> metadataMsg =
         std::static_pointer_cast<std::vector<uint8_t>>(arg);
 
-    auto ptr = std::make_shared<DataAndMetadata>();
+    ProducerMessage message;
+    try {
+      message = decodeProducerMessage(metadataMsg->data(), kMaxMetaBufSize);
+    } catch (const std::exception& e) {
+      std::string errorMsg = fmt::format(
+          "Cannot decode message from producer, host {}:{}, task {}: {}",
+          host_,
+          port_,
+          partitionKey_.toString(),
+          e.what());
+      VLOG(0) << errorMsg;
+      queue_->setError(errorMsg);
+      deliverEndMarker();
+      setState(ReceiverState::Done);
+      communicator_->addToWorkQueue(getSelfPtr());
+      return;
+    }
 
-    ptr->metadata =
-        std::move(MetadataMsg::deserializeMetadataMsg(metadataMsg->data()));
-
-    VLOG(3) << toString()
-            << " Datasize bytes == " << ptr->metadata.dataSizeBytes;
-
-    if (ptr->metadata.atEnd) {
-      // It seems that all data has been transferred
+    if (std::holds_alternative<ChannelOutcome>(message)) {
+      // The producer ended the stream. All data has been transferred.
       atEnd_ = true;
       // enqueue a nullpointer to mark the end for this source.
       VLOG(3) << "There is no more data to transfer for " << toString();
@@ -509,6 +519,12 @@ void UcxExchangeSource::onMetadata(
       // jump out of this function.
       return;
     }
+
+    auto ptr = std::make_shared<DataAndMetadata>();
+    ptr->metadata = std::move(std::get<MetadataMsg>(message));
+
+    VLOG(3) << toString()
+            << " Datasize bytes == " << ptr->metadata.dataSizeBytes;
 
     // REMOTE EXCHANGE PATH: Allocate buffer and receive via UCXX
     // Get a stream from the global stream pool
@@ -631,7 +647,10 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
 }
 
 void UcxExchangeSource::receiveHandshakeResponse() {
-  auto responseBuffer = std::make_shared<HandshakeResponse>();
+  // Zero-filled, because UCXX does not report a message shorter than the
+  // buffer: an older server's 8 bytes leave the version at 0.
+  auto responseBuffer =
+      std::make_shared<std::array<uint8_t, sizeof(HandshakeResponse)>>();
   uint64_t responseTag = getHandshakeResponseTag(partitionKeyHash_);
 
   VLOG(3) << toString()
@@ -645,8 +664,8 @@ void UcxExchangeSource::receiveHandshakeResponse() {
   }
   request_ = endpointRef_->endpoint_
                  ->tagRecvBuilder(
-                     responseBuffer.get(),
-                     sizeof(*responseBuffer),
+                     responseBuffer->data(),
+                     responseBuffer->size(),
                      ucxx::Tag{responseTag},
                      ucxx::TagMaskFull)
                  .callbackFunction(
@@ -691,10 +710,11 @@ void UcxExchangeSource::onHandshakeResponse(
     return;
   }
 
-  std::shared_ptr<HandshakeResponse> response =
-      std::static_pointer_cast<HandshakeResponse>(arg);
+  const auto response = decodeHandshakeResponse(
+      *std::static_pointer_cast<std::array<uint8_t, sizeof(HandshakeResponse)>>(
+          arg));
 
-  isIntraNodeTransfer_ = response->isIntraNodeTransfer;
+  isIntraNodeTransfer_ = response.isIntraNodeTransfer;
 
   VLOG(3) << toString() << " + onHandshakeResponse isIntraNodeTransfer="
           << isIntraNodeTransfer_;

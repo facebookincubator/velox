@@ -312,29 +312,26 @@ void UcxExchangeServer::sendData() {
     }
   } else {
     // REMOTE EXCHANGE PATH: Use UCXX for metadata and data transfer
-    std::shared_ptr<MetadataMsg> metadataMsg = std::make_shared<MetadataMsg>();
+    std::pair<std::shared_ptr<uint8_t>, size_t> serialized;
 
     if (dataPtr_) {
+      MetadataMsg metadataMsg;
       // Copy metadata (not move) because in broadcast mode, the same
       // packed_columns may be shared across multiple destination queues.
       // Metadata is small (CPU-side), so copying is negligible.
-      metadataMsg->cudfMetadata =
+      metadataMsg.cudfMetadata =
           std::make_unique<std::vector<uint8_t>>(*dataPtr_->metadata);
-      metadataMsg->dataSizeBytes = dataPtr_->gpu_data->size();
-      metadataMsg->numRows = dataNumRows_;
-      metadataMsg->remainingBytes = {};
-      metadataMsg->atEnd = false;
+      metadataMsg.dataSizeBytes = dataPtr_->gpu_data->size();
+      metadataMsg.numRows = dataNumRows_;
+      metadataMsg.remainingBytes = {};
+      serialized = metadataMsg.serialize();
     } else {
       VLOG(3) << "@" << partitionKey_.taskId << " Final exchange for "
               << partitionKey_.toString();
-      metadataMsg->cudfMetadata = nullptr;
-      metadataMsg->dataSizeBytes = 0;
-      metadataMsg->numRows = 0;
-      metadataMsg->remainingBytes = {};
-      metadataMsg->atEnd = true;
+      serialized = serializeEndMessage(ChannelOutcome::clean());
     }
 
-    auto [serializedMetadata, serMetaSize] = metadataMsg->serialize();
+    auto [serializedMetadata, serMetaSize] = std::move(serialized);
 
     // send metadata.
     uint64_t metadataTag =

@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <cstdint>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -27,6 +28,8 @@ namespace facebook::velox::ucx_exchange {
 struct PartitionKey {
   std::string taskId;
   uint32_t destination;
+
+  bool operator==(const PartitionKey& other) const = default;
 
   // Less-than operator
   bool operator<(const PartitionKey& other) const {
