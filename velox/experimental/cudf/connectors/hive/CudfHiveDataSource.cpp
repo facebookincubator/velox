@@ -41,6 +41,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/ExprOptimizer.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/type/Filter.h"
 
@@ -312,7 +313,7 @@ ScanFilters splitAndFoldFilters(
   // remaining filter into subfield filters, as the CPU data source does.
   filters.sampleRate = tableHandle.sampleRate();
   const auto remainingFilter =
-      facebook::velox::connector::extractFiltersFromRemainingFilter(
+      facebook::velox::exec::ExprToSubfieldFilterParser::extractFilters(
           tableHandle.remainingFilter(),
           expressionEvaluator,
           filters.subfieldFilters,
