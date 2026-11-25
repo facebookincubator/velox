@@ -131,11 +131,10 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
   if (rebuildScanSpec) {
-    auto newScanSpec = connector::makeScanSpec(
+    auto newScanSpec = makeScanSpec(
         readerOutputType_,
         subfields_,
         fileScanState_->filters,
-        /*indexColumns=*/{},
         tableHandle_->dataColumns(),
         partitionKeys_,
         infoColumns_,
