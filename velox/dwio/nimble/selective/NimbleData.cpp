@@ -96,6 +96,12 @@ NimbleData::NimbleData(
           flatMapType.nullsDescriptor(), /*decodeValuesWithNulls=*/false);
       break;
     }
+    case Kind::HybridFlatMap: {
+      auto& hybridFlatMapType = nimbleType->asHybridFlatMap();
+      nullsDecoder_ = makeDecoder(
+          hybridFlatMapType.nullsDescriptor(), /*decodeValuesWithNulls=*/false);
+      break;
+    }
     default:
       NIMBLE_UNSUPPORTED("{}", toString(nimbleType->kind()));
   }

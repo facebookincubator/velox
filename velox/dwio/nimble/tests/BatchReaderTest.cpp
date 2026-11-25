@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <folly/system/HardwareConcurrency.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <array>
 #include <atomic>
@@ -63,6 +64,7 @@
 #include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/tests/HybridFlatMapGroupings.h"
 #include "velox/dwio/nimble/tests/SharedDictionaryTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/CppToType.h"
@@ -632,6 +634,8 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
   void verifyFlatMapNullValuesThenNonNullAcrossChunks();
 
   void verifyFlatMapAllNullValuesAcrossChunks();
+
+  void verifyHybridFlatMapNullAndEmptyMaps();
 
   nimble::WriterOptions createFlatMapWriterOptions() const {
     nimble::WriterOptions options;
@@ -5112,6 +5116,161 @@ TEST_P(BatchReaderChunkedTest, flatMapAllNullValuesAcrossChunks) {
   verifyFlatMapAllNullValuesAcrossChunks();
 }
 
+void BatchReaderTest::verifyHybridFlatMapNullAndEmptyMaps() {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const auto makeStripe = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"hybrid_map"},
+        {vectorMaker.mapVectorFromJson<int32_t, int64_t>(maps)});
+  };
+  std::vector<std::string> manyMaps;
+  for (int32_t row = 0; row < 20; ++row) {
+    manyMaps.push_back(row % 3 == 0 ? "null" : fmt::format("{{1: {}}}", row));
+  }
+  manyMaps[1] = "{1: null}";
+  manyMaps[2] = "{1: 2, 7: 72}";
+  // Key 7 is in Default, which also gains 9 and 11 in later stripes. Stripes 1
+  // and 2 have no keys, so only their nulls streams are written. Stripe 3 has
+  // only Default keys, so the explicit group has no streams there.
+  const std::vector<velox::VectorPtr> stripes{
+      makeStripe({"{1: 10, 7: 70}", "null", "{}", "{2: null}"}),
+      makeStripe({"null", "null"}),
+      makeStripe({"{}", "{}"}),
+      makeStripe({"{7: 71}", "{9: 90}"}),
+      makeStripe({"{11: 110}", "{1: 11}"}),
+      makeStripe(manyMaps),
+  };
+
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.hybridFlatMapColumns.emplace(
+      "hybrid_map",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1", "2"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  writerOptions.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  // With chunking on, the last stripe's nulls stream and explicit group
+  // value stream exceed this size and split into several chunks.
+  writerOptions.maxStreamChunkRawSize = 16;
+  const auto file = nimble::test::createNimbleFile(
+      *rootPool_, stripes, std::move(writerOptions), /*flushAfterWrite=*/false);
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  ASSERT_EQ(tablet->stripeCount(), stripes.size());
+
+  auto reader = createBatchReader(readFile, *leafPool_);
+  const auto& hybridMap =
+      reader->schema()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(hybridMap.groupCount(), 2);
+  EXPECT_THAT(hybridMap.groupAt(0).groupKeys, testing::ElementsAre("1", "2"));
+  EXPECT_THAT(
+      hybridMap.defaultGroup().groupKeys, testing::ElementsAre("7", "9", "11"));
+
+  velox::VectorPtr result;
+  for (const auto& expected : stripes) {
+    ASSERT_TRUE(reader->next(expected->size(), result));
+    ASSERT_EQ(result->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(vectorEquals(expected, result, row))
+          << "Mismatch at row " << row;
+    }
+  }
+  EXPECT_FALSE(reader->next(1, result));
+
+  if (enableChunking()) {
+    const auto stripeId = tablet->stripeIdentifier(tablet->stripeCount() - 1);
+    const auto countChunks = [&](const nimble::StreamDescriptor& descriptor) {
+      const std::vector<uint32_t> streamIds{descriptor.offset()};
+      auto streamLoaders = tablet->load(stripeId, streamIds);
+      nimble::InMemoryChunkedStream chunkedStream{
+          *leafPool_, std::move(streamLoaders[0])};
+      uint32_t numChunks{0};
+      while (chunkedStream.hasNext()) {
+        chunkedStream.nextChunk();
+        ++numChunks;
+      }
+      return numChunks;
+    };
+    EXPECT_GT(countChunks(hybridMap.nullsDescriptor()), 1);
+    EXPECT_GT(
+        countChunks(
+            hybridMap.groupAt(0).valueType->asScalar().scalarDescriptor()),
+        1);
+  }
+}
+
+TEST_P(BatchReaderTest, hybridFlatMapNullAndEmptyMaps) {
+  verifyHybridFlatMapNullAndEmptyMaps();
+}
+
+TEST_P(BatchReaderChunkedTest, hybridFlatMapNullAndEmptyMaps) {
+  verifyHybridFlatMapNullAndEmptyMaps();
+}
+
+// A ROW value whose fields are all null is not null. A stripe whose group
+// holds only such values has no value streams for the group: the ROW has no
+// nulls to record, and its fields hold only nulls. The nested ROW `c` follows
+// the same rule, so it is read back as {d: null}, not as null.
+TEST_P(BatchReaderTest, hybridFlatMapRowValuesWithNullFields) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const std::vector<velox::VectorPtr> stripes{
+      vectorMaker.rowVector(
+          {"hybrid_map"},
+          {vectorMaker.mapVector(
+              {0, 1},
+              vectorMaker.flatVector<int32_t>({1}),
+              vectorMaker.rowVector(
+                  {"a", "b", "c"},
+                  {vectorMaker.flatVectorNullable<int64_t>({std::nullopt}),
+                   vectorMaker.flatVectorNullable<velox::StringView>(
+                       {std::nullopt}),
+                   vectorMaker.rowVector(
+                       {"d"},
+                       {vectorMaker.flatVectorNullable<int64_t>(
+                           {std::nullopt})})}))}),
+      vectorMaker.rowVector(
+          {"hybrid_map"},
+          {vectorMaker.mapVector(
+              {0},
+              vectorMaker.flatVector<int32_t>({1}),
+              vectorMaker.rowVector(
+                  {"a", "b", "c"},
+                  {vectorMaker.flatVector<int64_t>({5}),
+                   vectorMaker.flatVector<velox::StringView>({"x"}),
+                   vectorMaker.rowVector(
+                       {"d"}, {vectorMaker.flatVector<int64_t>({7})})}))}),
+  };
+
+  auto writerOptions = createFlatMapWriterOptions();
+  writerOptions.hybridFlatMapColumns.emplace(
+      "hybrid_map",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  writerOptions.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  const auto file = nimble::test::createNimbleFile(
+      *rootPool_, stripes, std::move(writerOptions), /*flushAfterWrite=*/false);
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto reader = createBatchReader(readFile, *leafPool_);
+  velox::VectorPtr result;
+  for (const auto& expected : stripes) {
+    ASSERT_TRUE(reader->next(expected->size(), result));
+    ASSERT_EQ(result->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(vectorEquals(expected, result, row))
+          << "Mismatch at row " << row << ": expected "
+          << expected->toString(row) << " got " << result->toString(row);
+    }
+  }
+  EXPECT_FALSE(reader->next(1, result));
+}
+
 // Verify mixed in-map streams: some keys present in all rows (all-true,
 // skipped), some keys present in only some rows (not all-true, written).
 TEST_P(BatchReaderTest, flatMapSkipAllTrueInMapStreamMixed) {
@@ -6188,9 +6347,14 @@ class TestNimbleReaderFactory {
   velox::memory::MemoryPool* const pool_;
 };
 
+// With `withMap`, appends a MAP(INTEGER, BIGINT) column "m" whose rows cycle
+// through null, empty and non-empty maps, and some of whose values are null.
+// Its values are drawn from the rng only when it is appended, so a seed yields
+// the same vectors for callers without it.
 std::vector<velox::VectorPtr> createSkipSeekVectors(
     velox::memory::MemoryPool& pool,
-    const std::vector<int>& rowsPerStripe) {
+    const std::vector<int>& rowsPerStripe,
+    bool withMap = false) {
   uint32_t seed = FLAGS_reader_tests_seed > 0 ? FLAGS_reader_tests_seed
                                               : folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
@@ -6201,30 +6365,44 @@ std::vector<velox::VectorPtr> createSkipSeekVectors(
 
   for (auto i = 0; i < rowsPerStripe.size(); ++i) {
     std::string s;
-    vectors[i] = vectorMaker.rowVector(
-        {"a", "b", "dictionaryArray"},
-        {vectorMaker.flatVector<int32_t>(
-             rowsPerStripe[i],
-             /* valueAt */
-             [&rng](auto /* row */) { return folly::Random::rand32(rng); },
-             /* isNullAt */ [](auto row) { return row % 2 == 1; }),
-         vectorMaker.flatVector<velox::StringView>(
-             rowsPerStripe[i],
-             /* valueAt */
-             [&s, &rng](auto /* row */) {
-               s = "arf_" + folly::to<std::string>(folly::Random::rand32(rng));
-               return velox::StringView(s.data(), s.size());
-             },
-             /* isNullAt */ [](auto row) { return row % 2 == 1; }),
-         vectorMaker.arrayVector<int32_t>(
-             rowsPerStripe[i],
-             /* sizeAt */
-             [](auto /* row */) { return 1; },
-             /* valueAt */
-             [](auto row) {
-               /* duplicated values to check cache usage */
-               return row / 4;
-             })});
+    std::vector<std::string> names{"a", "b", "dictionaryArray"};
+    std::vector<velox::VectorPtr> children{
+        vectorMaker.flatVector<int32_t>(
+            rowsPerStripe[i],
+            /* valueAt */
+            [&rng](auto /* row */) { return folly::Random::rand32(rng); },
+            /* isNullAt */ [](auto row) { return row % 2 == 1; }),
+        vectorMaker.flatVector<velox::StringView>(
+            rowsPerStripe[i],
+            /* valueAt */
+            [&s, &rng](auto /* row */) {
+              s = "arf_" + folly::to<std::string>(folly::Random::rand32(rng));
+              return velox::StringView(s.data(), s.size());
+            },
+            /* isNullAt */ [](auto row) { return row % 2 == 1; }),
+        vectorMaker.arrayVector<int32_t>(
+            rowsPerStripe[i],
+            /* sizeAt */
+            [](auto /* row */) { return 1; },
+            /* valueAt */
+            [](auto row) {
+              /* duplicated values to check cache usage */
+              return row / 4;
+            })};
+    if (withMap) {
+      names.push_back("m");
+      // A map holds at most three consecutive elements, so keying elements by
+      // index modulo 5 keeps each map's keys distinct.
+      children.push_back(vectorMaker.mapVector<int32_t, int64_t>(
+          rowsPerStripe[i],
+          /* sizeAt */ [](auto row) { return row % 4; },
+          /* keyAt */ [](auto index) { return index % 5 + 1; },
+          /* valueAt */
+          [&rng](auto /* index */) { return folly::Random::rand32(rng); },
+          /* isNullAt */ [](auto row) { return row % 3 == 2; },
+          /* valueIsNullAt */ [](auto index) { return index % 7 == 3; }));
+    }
+    vectors[i] = vectorMaker.rowVector(names, children);
   }
 
   return vectors;
@@ -6698,6 +6876,82 @@ TEST_P(BatchReaderTest, readerSkipUnevenStripesTest) {
     velox::VectorPtr result;
     EXPECT_FALSE(reader.next(1, result));
   }
+}
+
+TEST_P(BatchReaderTest, hybridFlatMapSkipsAndSeeksAcrossStripes) {
+  auto vectors =
+      createSkipSeekVectors(*leafPool_, {12, 15, 25, 18}, /*withMap=*/true);
+  nimble::WriterOptions writerOptions;
+  writerOptions.dictionaryArrayColumns.insert("dictionaryArray");
+  writerOptions.hybridFlatMapColumns.emplace(
+      "m",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1", "2"}, {"4"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  writerOptions.bufferPolicyFactory =
+      nimble::test::stripePerWriteBufferPolicyFactory();
+  // Splits the group value streams into several chunks, so skips cross chunk
+  // boundaries. Key-presence and in-map streams are never chunked.
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.maxStreamChunkRawSize = 32;
+
+  TestNimbleReaderFactory readerFactory(
+      *leafPool_, *rootPool_, vectors, writerOptions);
+  auto reader = readerFactory.createReader();
+
+  // [Stripe# 0, Current Pos: 0], After skip [Stripe# 0, Current Pos: 5]
+  EXPECT_EQ(reader.skipRows(5), 5);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 4,
+      /* expectedNumberOfRows */ 4,
+      /* expectedStripe */ 0,
+      /* expectedRowInStripe */ 5);
+
+  // [Stripe# 0, Current Pos: 9], After skip [Stripe# 2, Current Pos: 7]
+  EXPECT_EQ(reader.skipRows(25), 25);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 10,
+      /* expectedNumberOfRows */ 10,
+      /* expectedStripe */ 2,
+      /* expectedRowInStripe */ 7);
+
+  // [Stripe# 2, Current Pos: 17], After skip [Stripe# 2, Current Pos: 20]
+  EXPECT_EQ(reader.skipRows(3), 3);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 10,
+      /* expectedNumberOfRows */ 5,
+      /* expectedStripe */ 2,
+      /* expectedRowInStripe */ 20);
+
+  // [Stripe# 3, Current Pos: 0], After seek [Stripe# 1, Current Pos: 8]
+  EXPECT_EQ(reader.seekToRow(20), 20);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 10,
+      /* expectedNumberOfRows */ 7,
+      /* expectedStripe */ 1,
+      /* expectedRowInStripe */ 8);
+
+  // [Stripe# 2, Current Pos: 0], After seek [Stripe# 3, Current Pos: 8]
+  EXPECT_EQ(reader.seekToRow(60), 60);
+  readAndVerifyContent(
+      reader,
+      vectors,
+      /* rowsToRead */ 20,
+      /* expectedNumberOfRows */ 10,
+      /* expectedStripe */ 3,
+      /* expectedRowInStripe */ 8);
+
+  velox::VectorPtr result;
+  EXPECT_FALSE(reader.next(1, result));
 }
 
 // this test is created to keep an eye on the default value for T() for

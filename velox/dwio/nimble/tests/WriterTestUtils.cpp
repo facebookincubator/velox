@@ -47,7 +47,8 @@ std::vector<velox::RowVectorPtr> generateBatches(
 ChunkSizeResults validateChunkSize(
     nimble::BatchReader& reader,
     const uint64_t minStreamChunkRawSize,
-    const uint64_t maxStreamChunkRawSize) {
+    const uint64_t maxStreamChunkRawSize,
+    std::vector<folly::F14FastMap<uint32_t, uint32_t>>* chunkCountsPerStripe) {
   constexpr int kRowCountOffset = 2;
   constexpr double kMaxErrorRate = 0.2;
   const auto& tablet = reader.tabletReader();
@@ -72,6 +73,9 @@ ChunkSizeResults validateChunkSize(
   const uint32_t stripeCount = tablet.stripeCount();
   uint32_t maxChunkCount = 0;
   uint32_t minChunkCount = std::numeric_limits<uint32_t>::max();
+  if (chunkCountsPerStripe != nullptr) {
+    chunkCountsPerStripe->assign(stripeCount, {});
+  }
 
   for (uint32_t stripeIndex = 0; stripeIndex < stripeCount; ++stripeIndex) {
     const auto stripeIdentifier = tablet.stripeIdentifier(stripeIndex);
@@ -128,6 +132,10 @@ ChunkSizeResults validateChunkSize(
           "Non null streams should have at least one chunk");
       maxChunkCount = std::max(maxChunkCount, currentStreamChunkCount);
       minChunkCount = std::min(minChunkCount, currentStreamChunkCount);
+      if (chunkCountsPerStripe != nullptr) {
+        (*chunkCountsPerStripe)[stripeIndex][streamId] =
+            currentStreamChunkCount;
+      }
     }
   }
 

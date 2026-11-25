@@ -16,6 +16,8 @@
 
 #include "velox/dwio/nimble/common/HybridFlatMap.h"
 
+#include <algorithm>
+
 #include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -36,6 +38,7 @@ namespace facebook::nimble {
 namespace {
 
 using testing::ElementsAre;
+using testing::IsEmpty;
 
 // Returns the pool that Hybrid FlatMap schemas are read and written with.
 velox::memory::MemoryPool& schemaPool() {
@@ -346,6 +349,22 @@ TEST(HybridFlatMapTest, canonicalStringKeys) {
       "Hybrid FlatMap key cannot be empty.");
 }
 
+// parseKey() gives an integer key its value, as parseCanonicalIntegerKey()
+// does, and returns a view of a String key.
+TEST(HybridFlatMapTest, parseKeyParsesIntegersAndViewsStrings) {
+  EXPECT_EQ(HybridFlatMap::parseKey<int8_t>("-128"), int8_t{-128});
+  EXPECT_EQ(
+      HybridFlatMap::parseKey<int64_t>("9223372036854775807"),
+      std::numeric_limits<int64_t>::max());
+  NIMBLE_ASSERT_USER_THROW(
+      HybridFlatMap::parseKey<int32_t>("07"),
+      "Hybrid FlatMap key '07' is not canonical.");
+  const std::string key{"feature"};
+  const auto view = HybridFlatMap::parseKey<std::string_view>(key);
+  EXPECT_EQ(view, "feature");
+  EXPECT_EQ(view.data(), key.data());
+}
+
 TEST(HybridFlatMapTest, canonicalKeyRejectsUnsupportedKinds) {
   NIMBLE_ASSERT_USER_THROW(
       HybridFlatMap::canonicalKey(ScalarKind::Double, "1"),
@@ -542,6 +561,37 @@ TEST(HybridFlatMapTest, usesKeyPresentListOnlyForKeyListDefault) {
         ScalarKind::Int64, config({{kDefault, {}}}), kKeyList};
     EXPECT_TRUE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
     EXPECT_FALSE(hybridMap.useKeyPresentList(0));
+  }
+}
+
+// A group that lists keys holds the keys it lists. A Default group that lists
+// its keys per decode run holds every key in no other group.
+TEST(HybridFlatMapTest, groupsHoldingKeysFindsTheGroupOfEachKey) {
+  {
+    const auto hybridMap = schemaGroups(
+        ScalarKind::Int32,
+        config({{0, {"1", "5"}}, {1, {"2", "3"}}, {kDefault, {}}}),
+        kKeyList);
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"5"}),
+        (std::vector<bool>{true, false, false}));
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"3", "9"}),
+        (std::vector<bool>{false, true, true}));
+  }
+  {
+    // A bitmap Default lists the keys it recorded, so it holds only those, as
+    // an explicit group does.
+    const auto hybridMap = schemaGroups(
+        ScalarKind::Int32,
+        config({{0, {"1", "5"}}, {kDefault, {"7", "9"}}}),
+        kBitmap);
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"9"}),
+        (std::vector<bool>{false, true}));
+    EXPECT_EQ(
+        hybridMap.groupsHoldingKeys(std::vector<std::string>{"1", "8"}),
+        (std::vector<bool>{true, false}));
   }
 }
 
@@ -1480,6 +1530,246 @@ TEST(HybridFlatMapTest, schemaRejectsKeylessExplicitGroup) {
           encodeRawMetadata({7, HybridFlatMap::kDefaultGroupId}, {0, 0}, {}),
           &schemaPool()),
       "Hybrid FlatMap group must contain at least one key: 7");
+}
+
+// Decodes the layout of a group with `groupKeys` from its key-presence and
+// in-map bits. Counts each present key's values from `inMap`.
+void decodeGroupLayout(
+    const std::vector<bool>& keyPresence,
+    const std::vector<bool>& inMap,
+    bool hasValueStreams,
+    const std::vector<std::string>& groupKeys,
+    HybridFlatMapGroupLayout& layout) {
+  decodeHybridFlatMapGroupLayout(
+      HybridFlatMapGroupMetadata{
+          .numKeys = static_cast<uint32_t>(groupKeys.size()),
+          .numAllKeyPresenceBits = static_cast<uint32_t>(keyPresence.size()),
+          .numSetKeyPresenceBits = static_cast<uint32_t>(
+              std::count(keyPresence.begin(), keyPresence.end(), true)),
+          .numInMap = static_cast<uint32_t>(inMap.size()),
+          .listsKeys = false,
+          .hasValueStreams = hasValueStreams,
+      },
+      [&](uint32_t key) { return keyPresence[key]; },
+      [&](uint32_t /*key*/, uint32_t presentKey, uint32_t /*firstValue*/) {
+        const auto begin = inMap.begin() + presentKey * layout.numNonNullRows;
+        return static_cast<uint32_t>(
+            std::count(begin, begin + layout.numNonNullRows, true));
+      },
+      [&](uint32_t key) { return groupKeys[key]; },
+      layout);
+}
+
+TEST(HybridFlatMapTest, groupLayoutLocatesKeyMajorValues) {
+  const std::vector<bool> inMap{true, false, true, false, true, true};
+  std::vector<std::vector<uint32_t>> calls;
+  HybridFlatMapGroupLayout layout;
+  decodeHybridFlatMapGroupLayout(
+      HybridFlatMapGroupMetadata{
+          .numKeys = 3,
+          .numAllKeyPresenceBits = 3,
+          .numSetKeyPresenceBits = 2,
+          .numInMap = static_cast<uint32_t>(inMap.size()),
+          .listsKeys = false,
+          .hasValueStreams = true,
+      },
+      [](uint32_t key) { return key != 1; },
+      [&](uint32_t key, uint32_t presentKey, uint32_t firstValue) {
+        calls.push_back({key, presentKey, firstValue});
+        const auto begin = inMap.begin() + presentKey * layout.numNonNullRows;
+        return static_cast<uint32_t>(
+            std::count(begin, begin + layout.numNonNullRows, true));
+      },
+      [](uint32_t key) { return std::to_string(key); },
+      layout);
+
+  EXPECT_FALSE(layout.empty());
+  EXPECT_EQ(layout.numNonNullRows, 3);
+  EXPECT_THAT(layout.presentKeys, ElementsAre(0, 2));
+  EXPECT_THAT(layout.valueStarts, ElementsAre(0, 2, 4));
+  EXPECT_EQ(layout.numValues(), 4);
+  const std::vector<std::vector<uint32_t>> expectedCalls{{0, 0, 0}, {2, 1, 2}};
+  EXPECT_EQ(calls, expectedCalls);
+}
+
+TEST(HybridFlatMapTest, groupLayoutTreatsMissingMetadataAsEmpty) {
+  const auto expectEmpty = [](const std::vector<bool>& keyPresence,
+                              const std::vector<std::string>& groupKeys) {
+    // Starts from a filled layout to check that decoding replaces it.
+    HybridFlatMapGroupLayout layout;
+    decodeGroupLayout(
+        /*keyPresence=*/{true},
+        /*inMap=*/{true},
+        /*hasValueStreams=*/true,
+        /*groupKeys=*/{"1"},
+        layout);
+    ASSERT_FALSE(layout.empty());
+
+    decodeGroupLayout(
+        keyPresence,
+        /*inMap=*/{},
+        /*hasValueStreams=*/false,
+        groupKeys,
+        layout);
+    EXPECT_TRUE(layout.empty());
+    EXPECT_EQ(layout.numNonNullRows, 0);
+    EXPECT_THAT(layout.valueStarts, IsEmpty());
+    EXPECT_EQ(layout.numValues(), 0);
+  };
+  {
+    SCOPED_TRACE("noStreams");
+    expectEmpty(/*keyPresence=*/{}, /*groupKeys=*/{"1", "2"});
+  }
+  {
+    SCOPED_TRACE("keyPresenceOnly");
+    expectEmpty(/*keyPresence=*/{true, false}, /*groupKeys=*/{"1", "2"});
+  }
+  {
+    SCOPED_TRACE("keylessCatalog");
+    expectEmpty(/*keyPresence=*/{}, /*groupKeys=*/{});
+  }
+}
+
+TEST(HybridFlatMapTest, groupLayoutExpandsOmittedKeyPresence) {
+  // A group whose values are all null has in-map rows but no value streams.
+  for (const bool hasValueStreams : {true, false}) {
+    SCOPED_TRACE(hasValueStreams);
+    HybridFlatMapGroupLayout layout;
+    decodeGroupLayout(
+        /*keyPresence=*/{},
+        /*inMap=*/{true, false, true, true},
+        hasValueStreams,
+        /*groupKeys=*/{"1", "2"},
+        layout);
+
+    EXPECT_EQ(layout.numNonNullRows, 2);
+    EXPECT_THAT(layout.presentKeys, ElementsAre(0, 1));
+    EXPECT_THAT(layout.valueStarts, ElementsAre(0, 1, 3));
+  }
+}
+
+TEST(HybridFlatMapTest, groupLayoutAcceptsShorterKeyPresence) {
+  // Default keys first seen in later decode runs extend the catalog past the
+  // key-presence bitmaps of earlier runs.
+  HybridFlatMapGroupLayout layout;
+  decodeGroupLayout(
+      /*keyPresence=*/{false, true},
+      /*inMap=*/{true, false, true},
+      /*hasValueStreams=*/true,
+      /*groupKeys=*/{"1", "2", "3"},
+      layout);
+
+  EXPECT_EQ(layout.numNonNullRows, 3);
+  EXPECT_THAT(layout.presentKeys, ElementsAre(1));
+  EXPECT_THAT(layout.valueStarts, ElementsAre(0, 2));
+}
+
+TEST(HybridFlatMapTest, groupLayoutRejectsMalformedMetadata) {
+  const std::vector<std::string> groupKeys{"1", "2"};
+  HybridFlatMapGroupLayout layout;
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({true, true, true}, {true}, false, groupKeys, layout),
+      "Hybrid FlatMap key-presence count exceeds schema key count.");
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({false}, {true}, false, groupKeys, layout),
+      "Hybrid FlatMap group has in-map rows without present keys.");
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({false}, {true}, true, groupKeys, layout),
+      "Hybrid FlatMap group has in-map rows without present keys.");
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({false}, {}, true, groupKeys, layout),
+      "Hybrid FlatMap group has value streams without present keys.");
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({}, {}, true, groupKeys, layout),
+      "Hybrid FlatMap group with present keys is missing in-map rows.");
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({}, {true}, false, groupKeys, layout),
+      "Hybrid FlatMap in-map count is not divisible by present key count.");
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({true}, {false}, false, groupKeys, layout),
+      "Hybrid FlatMap key '1' has no present rows.");
+  NIMBLE_ASSERT_FILE_THROW(
+      decodeGroupLayout({false, true}, {false}, false, groupKeys, layout),
+      "Hybrid FlatMap key '2' has no present rows.");
+}
+
+// Readers count the set key-presence bits themselves, so a count that the
+// bitmap contradicts is a reader bug.
+TEST(HybridFlatMapTest, groupLayoutChecksPresentKeyCount) {
+  const auto decode = [](const std::vector<bool>& keyPresence,
+                         uint32_t numSetKeyPresenceBits) {
+    const std::vector<bool> inMap{true, true};
+    HybridFlatMapGroupLayout layout;
+    decodeHybridFlatMapGroupLayout(
+        HybridFlatMapGroupMetadata{
+            .numKeys = static_cast<uint32_t>(keyPresence.size()),
+            .numAllKeyPresenceBits = static_cast<uint32_t>(keyPresence.size()),
+            .numSetKeyPresenceBits = numSetKeyPresenceBits,
+            .numInMap = static_cast<uint32_t>(inMap.size()),
+            .listsKeys = false,
+            .hasValueStreams = true,
+        },
+        [&](uint32_t key) { return keyPresence[key]; },
+        [&](uint32_t /*key*/, uint32_t presentKey, uint32_t /*firstValue*/) {
+          const auto begin = inMap.begin() + presentKey * layout.numNonNullRows;
+          return static_cast<uint32_t>(
+              std::count(begin, begin + layout.numNonNullRows, true));
+        },
+        [](uint32_t key) { return std::to_string(key); },
+        layout);
+  };
+  {
+    SCOPED_TRACE("more set bits than the count");
+    NIMBLE_ASSERT_THROW(
+        decode({true, true}, /*numSetKeyPresenceBits=*/1),
+        "Hybrid FlatMap present key count does not match the key-presence bitmap.");
+  }
+  {
+    SCOPED_TRACE("fewer set bits than the count");
+    NIMBLE_ASSERT_THROW(
+        decode({true, false}, /*numSetKeyPresenceBits=*/2),
+        "Hybrid FlatMap present key count does not match the key-presence bitmap.");
+  }
+}
+
+TEST(HybridFlatMapTest, groupLayoutCoversListedKeys) {
+  const auto decode = [](uint32_t numListedKeys,
+                         const std::vector<bool>& inMap,
+                         HybridFlatMapGroupLayout& layout) {
+    decodeHybridFlatMapGroupLayout(
+        HybridFlatMapGroupMetadata{
+            .numKeys = numListedKeys,
+            .numAllKeyPresenceBits = 0,
+            .numSetKeyPresenceBits = 0,
+            .numInMap = static_cast<uint32_t>(inMap.size()),
+            .listsKeys = true,
+            .hasValueStreams = !inMap.empty(),
+        },
+        [](uint32_t /*key*/) -> bool {
+          NIMBLE_UNREACHABLE("A key list has no key-presence bitmap.");
+        },
+        [&](uint32_t /*key*/, uint32_t presentKey, uint32_t /*firstValue*/) {
+          const auto begin = inMap.begin() + presentKey * layout.numNonNullRows;
+          return static_cast<uint32_t>(
+              std::count(begin, begin + layout.numNonNullRows, true));
+        },
+        [](uint32_t key) { return std::to_string(key); },
+        layout);
+  };
+
+  // Every listed key is present.
+  HybridFlatMapGroupLayout layout;
+  decode(/*numListedKeys=*/2, {true, false, true, true}, layout);
+  EXPECT_EQ(layout.numNonNullRows, 2);
+  EXPECT_THAT(layout.presentKeys, ElementsAre(0, 1));
+  EXPECT_THAT(layout.valueStarts, ElementsAre(0, 1, 3));
+
+  decode(/*numListedKeys=*/0, {}, layout);
+  EXPECT_TRUE(layout.empty());
+
+  NIMBLE_ASSERT_FILE_THROW(
+      decode(/*numListedKeys=*/1, {}, layout),
+      "Hybrid FlatMap group lists keys without in-map rows.");
 }
 
 } // namespace

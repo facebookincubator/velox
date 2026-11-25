@@ -16,6 +16,7 @@ add_library(
   ChunkedDecoder.cpp
   ColumnReader.cpp
   FlatMapColumnReader.cpp
+  HybridFlatMapColumnReader.cpp
   IntegerColumnReader.cpp
   IntegerColumnReader_processFilter_DropValues.cpp
   IntegerColumnReader_processFilter_ExtractToReader.cpp
@@ -42,6 +43,7 @@ add_library(
   NimbleData.h
   NimbleReaderFuzzerStats.h
   IntegerColumnReader.h
+  HybridFlatMapColumnReader.h
   FloatingPointColumnReader.h
   FlatMapColumnReader.h
   ColumnReader.h
@@ -56,6 +58,7 @@ target_link_libraries(
   nimble_batch_reader
   nimble_writer
   nimble_velox_common
+  nimble_velox_hybrid_flat_map
 )
 
 if(NIMBLE_BUILD_TESTING)
