@@ -986,11 +986,10 @@ void HiveIndexSource::init(
 std::shared_ptr<common::ScanSpec> HiveIndexSource::buildScanSpec(
     const std::unordered_map<std::string, std::optional<std::string>>*
         partitionValues) {
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       readerOutputType_,
       projectedSubfields_,
       filters_,
-      /*indexColumns=*/{},
       tableHandle_->dataColumns(),
       partitionKeyHandles_,
       /*infoColumns=*/{},

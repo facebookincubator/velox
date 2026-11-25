@@ -126,11 +126,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMultilevel) {
             "statsBasedFilterReorderDisabled {}",
             statsBasedFilterReorderDisabled));
 
-    auto scanSpec = connector::makeScanSpec(
+    auto scanSpec = connector::FileDataSource::makeScanSpec(
         rowType,
         groupSubfields(subfields),
         /*subfieldFilters=*/{},
-        /*indexColumns=*/{},
         /*dataColumns=*/nullptr,
         /*partitionKeys=*/{},
         /*infoColumns=*/{},
@@ -169,12 +168,11 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeFields) {
              {"c0c0c2", BIGINT()}})},
        {"c0c1", ROW({{"c0c1c0", BIGINT()}, {"c0c1c1", BIGINT()}})}});
   auto rowType = ROW({{"c0", columnType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0.c0c0.c0c0c0", "c0.c0c0.c0c0c2", "c0.c0c1", "c0.c0c1.c0c1c0"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -196,11 +194,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeArray) {
   auto columnType =
       ARRAY(ROW({{"c0c0", BIGINT()}, {"c0c1", BIGINT()}, {"c0c2", BIGINT()}}));
   auto rowType = ROW({{"c0", columnType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[1].c0c0", "c0[2].c0c2"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -223,11 +220,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeArrayNegative) {
   auto subfields = makeSubfields({"c0[1].c0c0", "c0[-1].c0c2"});
   auto groupedSubfields = groupSubfields(subfields);
   VELOX_ASSERT_USER_THROW(
-      connector::makeScanSpec(
+      connector::FileDataSource::makeScanSpec(
           rowType,
           groupedSubfields,
           /*subfieldFilters=*/{},
-          /*indexColumns=*/{},
           /*dataColumns=*/nullptr,
           /*partitionKeys=*/{},
           /*infoColumns=*/{},
@@ -242,11 +238,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsMergeMap) {
       MAP(BIGINT(),
           ROW({{"c0c0", BIGINT()}, {"c0c1", BIGINT()}, {"c0c2", BIGINT()}}));
   auto rowType = ROW({{"c0", columnType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[10].c0c0", "c0[20].c0c2"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -274,11 +269,10 @@ TEST_F(
     HiveConnectorTest,
     makeScanSpecRequiredSubfieldsFlatMapFeatureSelectionStringKeys) {
   auto rowType = ROW({{"c0", MAP(VARCHAR(), BIGINT())}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[\"foo\"]"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -297,11 +291,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
   auto rowType = ROW({{"c0", columnType}});
   for (auto* path : {"c0", "c0[*]", "c0[*][*]"}) {
     SCOPED_TRACE(path);
-    auto scanSpec = connector::makeScanSpec(
+    auto scanSpec = connector::FileDataSource::makeScanSpec(
         rowType,
         groupSubfields(makeSubfields({path})),
         /*subfieldFilters=*/{},
-        /*indexColumns=*/{},
         /*dataColumns=*/nullptr,
         /*partitionKeys=*/{},
         /*infoColumns=*/{},
@@ -320,11 +313,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
     ASSERT_FALSE(elements->childByName("c0c0")->isConstant());
     ASSERT_FALSE(elements->childByName("c0c1")->isConstant());
   }
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[*][*].c0c0"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -346,11 +338,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsAllSubscripts) {
 TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   auto rowType =
       ROW({{"c0", MAP(REAL(), BIGINT())}, {"c1", MAP(DOUBLE(), BIGINT())}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[0]", "c1[-1]"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -376,12 +367,11 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   ASSERT_FALSE(applyFilter(*keysFilter, -2.0));
 
   // Integer min and max means infinities.
-  scanSpec = connector::makeScanSpec(
+  scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0[-9223372036854775808]", "c1[9223372036854775807]"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -398,12 +388,11 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
                    ->filter();
   ASSERT_TRUE(applyFilter(*keysFilter, 1e100));
   ASSERT_FALSE(applyFilter(*keysFilter, 9223372036854700000.0));
-  scanSpec = connector::makeScanSpec(
+  scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0[9223372036854775807]", "c0[-9223372036854775808]"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -418,11 +407,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsDoubleMapKey) {
   ASSERT_TRUE(applyFilter(*keysFilter, 1e30f));
 
   // Unrepresentable values.
-  scanSpec = connector::makeScanSpec(
+  scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0[-100000000]", "c0[100000000]"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -461,11 +449,10 @@ TEST_F(HiveConnectorTest, makeScanSpecRequiredSubfieldsOnlyInFilters) {
   filters.emplace(Subfield("c0.c0c3"), exec::isNotNull());
   filters.emplace(Subfield("c1.c1c0.c1c0c0"), exec::equal(43));
 
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       readerOutputType,
       groupSubfields(makeSubfields({"c0.c0c1", "c0.c0c3"})),
       filters,
-      /*indexColumns=*/{},
       /*dataColumns=*/ROW({{"c0", c0Type}, {"c1", c1Type}}),
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -543,12 +530,11 @@ TEST_F(HiveConnectorTest, makeScanSpecDuplicateSubfields) {
   auto c0Type = MAP(BIGINT(), MAP(BIGINT(), BIGINT()));
   auto c1Type = MAP(VARCHAR(), MAP(BIGINT(), BIGINT()));
   auto rowType = ROW({{"c0", c0Type}, {"c1", c1Type}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields(
           {"c0[10][1]", "c0[10][2]", "c1[\"foo\"][1]", "c1[\"foo\"][2]"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -566,11 +552,10 @@ TEST_F(HiveConnectorTest, makeScanSpecFilterPartitionKey) {
   auto rowType = ROW({{"c0", BIGINT()}});
   SubfieldFilters filters;
   filters.emplace(Subfield("ds"), exec::equal("2023-10-13"));
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       filters,
-      /*indexColumns=*/{},
       /*dataColumns=*/rowType,
       /*partitionKeys=*/{{"ds", nullptr}},
       /*infoColumns=*/{},
@@ -587,11 +572,10 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
           {ROW(
               {{"c0c0", MAP(BIGINT(), MAP(BIGINT(), BIGINT()))},
                {"c0c1", BIGINT()}})});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0.c0c1"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -604,11 +588,10 @@ TEST_F(HiveConnectorTest, makeScanSpecPrunedMapNonNullMapKey) {
       *c0->childByName("c0c0"), *MAP(BIGINT(), MAP(BIGINT(), BIGINT())));
   ASSERT_FALSE(c0->childByName("c0c1")->isConstant());
 
-  scanSpec = connector::makeScanSpec(
+  scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       groupSubfields(makeSubfields({"c0.c0c0"})),
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -900,11 +883,10 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeepsBothChildren) {
   // does not prune map children.  The extraction is applied post-read.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -937,11 +919,10 @@ TEST_F(HiveConnectorTest, extractionScanSpecSizeKeepsBothChildren) {
   // (extraction is post-read).
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -969,11 +950,10 @@ TEST_F(HiveConnectorTest, extractionScanSpecStructFieldPruning) {
   // Extraction with StructField should prune unneeded fields.
   auto hiveType = ROW({{"x", INTEGER()}, {"y", DOUBLE()}, {"z", VARCHAR()}});
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -1038,11 +1018,10 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterString) {
   // type-preserving.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -1079,11 +1058,10 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterInt) {
   // ScanSpec.
   auto hiveType = MAP(BIGINT(), VARCHAR());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},
@@ -1121,11 +1099,10 @@ TEST_F(HiveConnectorTest, extractionScanSpecMapKeyFilterThenMapKeys) {
   // configure kKeys extraction on the remaining chain.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto rowType = ROW({{"col", hiveType}});
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       rowType,
       /*outputSubfields=*/{},
       /*subfieldFilters=*/{},
-      /*indexColumns=*/{},
       /*dataColumns=*/nullptr,
       /*partitionKeys=*/{},
       /*infoColumns=*/{},

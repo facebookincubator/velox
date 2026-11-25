@@ -27,7 +27,7 @@
 #include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/common/ExtractionUtils.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileDataSource.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Mutation.h"
@@ -857,8 +857,8 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields = makeSubfields({"a", "b.b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfieldsByName = groupSubfields(subfields);
-  auto scanSpec = velox::connector::makeScanSpec(
-      outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
+  auto scanSpec = velox::connector::FileDataSource::makeScanSpec(
+      outputType, subfieldsByName, {}, schema, {}, {}, {}, true, pool());
   readerOpts.setScanSpec(scanSpec);
 
   auto reader = DwrfReader::create(
@@ -877,8 +877,8 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields2 = makeSubfields({"a", "b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields2ByName = groupSubfields(subfields2);
-  auto scanSpec2 = velox::connector::makeScanSpec(
-      outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
+  auto scanSpec2 = velox::connector::FileDataSource::makeScanSpec(
+      outputType, subfields2ByName, {}, schema, {}, {}, {}, true, pool());
   readerOpts2.setScanSpec(scanSpec2);
 
   auto reader2 = DwrfReader::create(
