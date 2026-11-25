@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -134,15 +133,6 @@ bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
               node.rankFunction(), node.partitionKeys(), node.sortingKeys())
               .has_value();
 }
-
-CudfTopNRowNumber::CudfTopNRowNumber(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::TopNRowNumberNode>& node)
-    : CudfTopNRowNumber(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfTopNRowNumberNode>(node)) {}
 
 CudfTopNRowNumber::CudfTopNRowNumber(
     int32_t operatorId,

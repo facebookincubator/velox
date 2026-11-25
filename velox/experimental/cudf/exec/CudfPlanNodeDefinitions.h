@@ -71,6 +71,21 @@ struct CudfPlanNodeLowering {
 const CudfPlanNodeLowering* findCudfPlanNodeLowering(
     const core::PlanNodePtr& node);
 
+/// Returns the cuDF plan node that runs the core plan node 'node', over the
+/// sources of 'node' as they are. The cuDF driver adapter uses this: it
+/// replaces one operator at a time, so it has no rewritten sources. Fails if
+/// 'node' has no lowering. Does not call canRunOnGpu(); the constructor of the
+/// cuDF plan node throws for a node cuDF cannot run.
+core::PlanNodePtr lowerInPlace(const core::PlanNodePtr& node);
+
+/// Same, with the result as 'TCudfNode'.
+template <typename TCudfNode>
+std::shared_ptr<const TCudfNode> lowerInPlace(const core::PlanNodePtr& node) {
+  auto lowered = std::dynamic_pointer_cast<const TCudfNode>(lowerInPlace(node));
+  VELOX_CHECK_NOT_NULL(lowered);
+  return lowered;
+}
+
 /// Returns whether cuDF can run 'filter', 'project', or 'project' over
 /// 'filter' as one CudfFilterProjectNode. One of the two may be null. Sets
 /// 'reason' when it cannot. LocalPlanner fuses a Filter followed by a Project

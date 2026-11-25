@@ -17,7 +17,6 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
@@ -909,15 +908,6 @@ bool canReduceBeEvaluatedByCudf(
 
   return true;
 }
-
-CudfReduce::CudfReduce(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : CudfReduce(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfAggregationNode>(aggregationNode)) {}
 
 CudfReduce::CudfReduce(
     int32_t operatorId,

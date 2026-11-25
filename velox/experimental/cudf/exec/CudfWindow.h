@@ -68,11 +68,6 @@ class CudfWindow : public CudfOperatorBase {
   CudfWindow(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::WindowNode>& windowNode);
-
-  CudfWindow(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       const std::shared_ptr<const CudfWindowNode>& windowNode);
 
   /// Returns true if every window function and frame in the plan node is

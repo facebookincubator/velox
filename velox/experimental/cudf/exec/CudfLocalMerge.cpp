@@ -15,7 +15,6 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfLocalMerge.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -24,15 +23,6 @@
 #include <cudf/merge.hpp>
 
 namespace facebook::velox::cudf_velox {
-
-CudfLocalMerge::CudfLocalMerge(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::LocalMergeNode>& localMergeNode)
-    : CudfLocalMerge(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfLocalMergeNode>(localMergeNode)) {}
 
 CudfLocalMerge::CudfLocalMerge(
     int32_t operatorId,

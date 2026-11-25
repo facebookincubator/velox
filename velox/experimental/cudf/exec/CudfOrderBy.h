@@ -32,11 +32,6 @@ class CudfOrderBy : public CudfOperatorBase {
   CudfOrderBy(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::OrderByNode>& orderByNode);
-
-  CudfOrderBy(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const CudfOrderByNode> orderByNode);
 
   /// Builds the GPU sort appended after a kept UcxExchange operator. Together,

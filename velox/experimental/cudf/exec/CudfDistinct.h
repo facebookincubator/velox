@@ -25,11 +25,6 @@ class CudfDistinct : public CudfOperatorBase {
   CudfDistinct(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::AggregationNode> const& aggregationNode);
-
-  CudfDistinct(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const CudfAggregationNode> aggregationNode);
 
   void initialize() override;

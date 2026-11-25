@@ -30,11 +30,6 @@ class CudfTopN : public CudfOperatorBase {
   CudfTopN(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::TopNNode>& topNNode);
-
-  CudfTopN(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const CudfTopNNode> topNNode);
 
   bool needsInput() const override {

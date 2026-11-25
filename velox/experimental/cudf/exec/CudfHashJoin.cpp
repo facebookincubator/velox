@@ -17,7 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -290,15 +290,6 @@ std::shared_ptr<CudaEvent> CudfHashJoinBridge::getBuildReadyEvent() {
 CudfHashJoinBuild::CudfHashJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::HashJoinNode> joinNode)
-    : CudfHashJoinBuild(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfHashJoinNode>(joinNode)) {}
-
-CudfHashJoinBuild::CudfHashJoinBuild(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
     std::shared_ptr<const CudfHashJoinNode> joinNode)
     // TODO check outputType should be set or not?
     : CudfJoinBuild(
@@ -411,15 +402,6 @@ void CudfHashJoinBuild::buildAndPublish(std::vector<CudfVectorPtr> inputs) {
       std::make_optional(
           std::make_pair(std::move(shared_tbls), std::move(hashObjects))));
 }
-
-CudfHashJoinProbe::CudfHashJoinProbe(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::HashJoinNode> joinNode)
-    : CudfHashJoinProbe(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfHashJoinNode>(joinNode)) {}
 
 CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
@@ -2442,6 +2424,23 @@ bool CudfHashJoinProbe::isFinished() {
   return isFinished;
 }
 
+namespace {
+
+// Returns 'node' as a CudfHashJoinNode: the node itself, or the cuDF plan node
+// that runs a core::HashJoinNode. Returns nullptr for any other node.
+std::shared_ptr<const CudfHashJoinNode> asCudfHashJoinNode(
+    const core::PlanNodePtr& node) {
+  if (auto cudfJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+    return cudfJoin;
+  }
+  if (std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+    return cudf_velox::detail::lowerInPlace<CudfHashJoinNode>(node);
+  }
+  return nullptr;
+}
+
+} // namespace
+
 std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
     exec::DriverCtx* ctx,
     int32_t id,
@@ -2449,11 +2448,7 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toOperator";
   }
-  if (auto rawJoin =
-          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-    return std::make_unique<CudfHashJoinProbe>(id, ctx, rawJoin);
-  }
-  if (auto cudfJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+  if (auto cudfJoin = asCudfHashJoinNode(node)) {
     return std::make_unique<CudfHashJoinProbe>(id, ctx, cudfJoin);
   }
   return nullptr;
@@ -2476,13 +2471,7 @@ exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toOperatorSupplier";
   }
-  if (auto joinNode =
-          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-    return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
-      return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinNode);
-    };
-  }
-  if (auto cudfJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+  if (auto cudfJoin = asCudfHashJoinNode(node)) {
     return [cudfJoin](int32_t operatorId, exec::DriverCtx* ctx) {
       return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, cudfJoin);
     };

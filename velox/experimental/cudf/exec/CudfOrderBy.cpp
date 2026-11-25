@@ -16,7 +16,6 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -26,15 +25,6 @@
 #include <cudf/sorting.hpp>
 
 namespace facebook::velox::cudf_velox {
-
-CudfOrderBy::CudfOrderBy(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::OrderByNode>& orderByNode)
-    : CudfOrderBy(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfOrderByNode>(orderByNode)) {}
 
 CudfOrderBy::CudfOrderBy(
     int32_t operatorId,

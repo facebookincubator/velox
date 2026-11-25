@@ -16,7 +16,6 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -31,15 +30,6 @@
 #include <functional>
 
 namespace facebook::velox::cudf_velox {
-
-CudfMarkDistinct::CudfMarkDistinct(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::MarkDistinctNode>& planNode)
-    : CudfMarkDistinct(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfMarkDistinctNode>(planNode)) {}
 
 CudfMarkDistinct::CudfMarkDistinct(
     int32_t operatorId,

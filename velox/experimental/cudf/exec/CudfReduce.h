@@ -79,11 +79,6 @@ class CudfReduce : public CudfOperatorBase {
   CudfReduce(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::AggregationNode> const& aggregationNode);
-
-  CudfReduce(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const CudfAggregationNode> aggregationNode);
 
   void initialize() override;

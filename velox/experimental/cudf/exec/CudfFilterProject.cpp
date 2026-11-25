@@ -17,7 +17,6 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -110,16 +109,6 @@ std::vector<exec::OperatorStats> splitStats(
 }
 
 } // namespace
-
-CudfFilterProject::CudfFilterProject(
-    int32_t operatorId,
-    velox::exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::FilterNode>& filter,
-    const std::shared_ptr<const core::ProjectNode>& project)
-    : CudfFilterProject(
-          operatorId,
-          driverCtx,
-          toCudfFilterProjectNode(filter, project)) {}
 
 CudfFilterProject::CudfFilterProject(
     int32_t operatorId,

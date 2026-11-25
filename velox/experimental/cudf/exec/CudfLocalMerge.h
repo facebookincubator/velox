@@ -39,11 +39,6 @@ class CudfLocalMerge : public CudfSourceOperatorBase {
   CudfLocalMerge(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::LocalMergeNode>& localMergeNode);
-
-  CudfLocalMerge(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       const std::shared_ptr<const CudfLocalMergeNode>& localMergeNode);
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;

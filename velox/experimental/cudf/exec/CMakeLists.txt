@@ -34,7 +34,6 @@ add_library(
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
   CudfPlanNode.cpp
-  CudfPlanNodeConversion.cpp
   CudfPlanNodeDefinitions.cpp
   CudfPlanNodeTranslator.cpp
   CudfPlanRewriter.cpp

@@ -17,7 +17,6 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -1693,15 +1692,6 @@ bool canGroupbyBeEvaluatedByCudf(
 
   return true;
 }
-
-CudfGroupby::CudfGroupby(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : CudfGroupby(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfAggregationNode>(aggregationNode)) {}
 
 CudfGroupby::CudfGroupby(
     int32_t operatorId,

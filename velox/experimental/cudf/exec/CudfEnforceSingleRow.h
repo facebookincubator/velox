@@ -40,11 +40,6 @@ class CudfEnforceSingleRow : public CudfOperatorBase {
   CudfEnforceSingleRow(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::EnforceSingleRowNode>& planNode);
-
-  CudfEnforceSingleRow(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       const std::shared_ptr<const CudfEnforceSingleRowNode>& planNode);
 
   bool isFilter() const override {

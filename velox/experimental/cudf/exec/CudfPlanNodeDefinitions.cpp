@@ -923,6 +923,13 @@ const CudfPlanNodeLowering* findCudfPlanNodeLowering(
   return nullptr;
 }
 
+core::PlanNodePtr lowerInPlace(const core::PlanNodePtr& node) {
+  VELOX_CHECK_NOT_NULL(node);
+  const auto* lowering = findCudfPlanNodeLowering(node);
+  VELOX_CHECK_NOT_NULL(lowering, "No cuDF plan node for {}", node->name());
+  return lowering->lower(node, node->sources());
+}
+
 bool canRunFilterProjectOnGpu(
     const core::FilterNode* filter,
     const core::ProjectNode* project,

@@ -15,7 +15,6 @@
  */
 
 #include "velox/experimental/cudf/exec/CudfDistinct.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 
@@ -27,15 +26,6 @@
 #include <cudf/stream_compaction.hpp>
 
 namespace facebook::velox::cudf_velox {
-
-CudfDistinct::CudfDistinct(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<core::AggregationNode const> const& aggregationNode)
-    : CudfDistinct(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfAggregationNode>(aggregationNode)) {}
 
 CudfDistinct::CudfDistinct(
     int32_t operatorId,

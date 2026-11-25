@@ -15,7 +15,6 @@
  */
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include <cudf/lists/filling.hpp>
@@ -23,19 +22,6 @@
 #include <utility>
 
 namespace facebook::velox::cudf_velox {
-
-CudfAssignUniqueId::CudfAssignUniqueId(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::AssignUniqueIdNode>& planNode,
-    int32_t uniqueTaskId,
-    std::shared_ptr<std::atomic_int64_t> rowIdPool)
-    : CudfAssignUniqueId(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfAssignUniqueIdNode>(planNode),
-          uniqueTaskId,
-          std::move(rowIdPool)) {}
 
 CudfAssignUniqueId::CudfAssignUniqueId(
     int32_t operatorId,

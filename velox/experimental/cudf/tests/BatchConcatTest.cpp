@@ -150,6 +150,14 @@ class CudfBatchConcatTest : public OperatorTestBase {
     return PlanBuilder(generator).localPartitionRoundRobin(sources).planNode();
   }
 
+  // Returns the CudfBatchConcatNode that the driver adapter puts in front of
+  // the operator of 'plan'.
+  static std::shared_ptr<const CudfBatchConcatNode> concatNode(
+      const core::PlanNodePtr& plan) {
+    return std::make_shared<CudfBatchConcatNode>(
+        plan->id(), plan->sources().at(0));
+  }
+
   // Returns the CudfBatchConcat stats for the given plan node, or nullptr if
   // CudfBatchConcat wasn't inserted for that node.
   std::unique_ptr<PlanNodeStats> getConcatStats(
@@ -181,7 +189,7 @@ TEST_F(CudfBatchConcatTest, singleColumnBearingInputPassesThrough) {
                   .planNode();
   auto task = createTask(plan);
   DriverCtx driverCtx(task, 0, 0, 0, 0);
-  CudfBatchConcat concat(0, &driverCtx, plan);
+  CudfBatchConcat concat(0, &driverCtx, concatNode(plan));
 
   auto cudfInput = toCudfVector(input);
   concat.addInput(cudfInput);
@@ -204,7 +212,7 @@ TEST_F(CudfBatchConcatTest, flushesAtByteTarget) {
   auto plan = createAggregationPlan(input);
   auto task = createTask(plan);
   DriverCtx driverCtx(task, 0, 0, 0, 0);
-  CudfBatchConcat concat(0, &driverCtx, plan);
+  CudfBatchConcat concat(0, &driverCtx, concatNode(plan));
 
   concat.addInput(toCudfVector(input, kTargetBytes / 2));
   EXPECT_TRUE(concat.needsInput());
@@ -244,7 +252,7 @@ TEST_F(CudfBatchConcatTest, byteTargetRetainsSplitTailBytes) {
   auto plan = createAggregationPlan(input);
   auto task = createTask(plan);
   DriverCtx driverCtx(task, 0, 0, 0, 0);
-  CudfBatchConcat concat(0, &driverCtx, plan);
+  CudfBatchConcat concat(0, &driverCtx, concatNode(plan));
 
   concat.addInput(toCudfVector(input, kTargetBytes / 2));
   concat.addInput(toCudfVector(input, kTargetBytes / 2));
@@ -277,7 +285,7 @@ TEST_F(CudfBatchConcatTest, usesRowTargetWhenByteTargetIsNotConfigured) {
   auto plan = createAggregationPlan(input);
   auto task = createTask(plan);
   DriverCtx driverCtx(task, 0, 0, 0, 0);
-  CudfBatchConcat concat(0, &driverCtx, plan);
+  CudfBatchConcat concat(0, &driverCtx, concatNode(plan));
 
   // Large byte estimates must not trigger a flush without a byte target.
   concat.addInput(toCudfVector(input, 1'000'000));
@@ -300,7 +308,7 @@ TEST_F(CudfBatchConcatTest, rejectsZeroByteTarget) {
   updateCudfByteConfig(/*minBytes=*/0, /*maxRows=*/std::nullopt);
 
   VELOX_ASSERT_THROW(
-      CudfBatchConcat(0, &driverCtx, plan),
+      CudfBatchConcat(0, &driverCtx, concatNode(plan)),
       "cuDF BatchConcat minimum byte target must be positive");
 }
 
@@ -320,7 +328,7 @@ TEST_F(CudfBatchConcatTest, zeroColumnVectorsUseRowFallback) {
   auto plan = createAggregationPlan(input);
   auto task = createTask(plan);
   DriverCtx driverCtx(task, 0, 0, 0, 0);
-  CudfBatchConcat concat(0, &driverCtx, plan);
+  CudfBatchConcat concat(0, &driverCtx, concatNode(plan));
 
   concat.addInput(toCudfVector(input));
   EXPECT_TRUE(concat.needsInput());

@@ -45,11 +45,6 @@ class CudfMarkDistinct : public CudfOperatorBase {
   CudfMarkDistinct(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::MarkDistinctNode>& planNode);
-
-  CudfMarkDistinct(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       const std::shared_ptr<const CudfMarkDistinctNode>& planNode);
 
   bool isFilter() const override {

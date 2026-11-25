@@ -27,11 +27,6 @@ class CudfLimit : public CudfOperatorBase {
   CudfLimit(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::LimitNode>& limitNode);
-
-  CudfLimit(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const CudfLimitNode> limitNode);
 
   bool needsInput() const override;

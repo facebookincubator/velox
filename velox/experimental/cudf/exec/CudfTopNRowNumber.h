@@ -42,11 +42,6 @@ class CudfTopNRowNumber : public CudfOperatorBase {
   CudfTopNRowNumber(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::TopNRowNumberNode>& node);
-
-  CudfTopNRowNumber(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       const std::shared_ptr<const CudfTopNRowNumberNode>& node);
 
   /// Checks whether the ranking function and key types are supported on GPU.

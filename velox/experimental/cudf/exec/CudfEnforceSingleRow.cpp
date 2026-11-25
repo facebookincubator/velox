@@ -16,22 +16,12 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include <cudf/table/table.hpp>
 
 namespace facebook::velox::cudf_velox {
-
-CudfEnforceSingleRow::CudfEnforceSingleRow(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::EnforceSingleRowNode>& planNode)
-    : CudfEnforceSingleRow(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfEnforceSingleRowNode>(planNode)) {}
 
 CudfEnforceSingleRow::CudfEnforceSingleRow(
     int32_t operatorId,

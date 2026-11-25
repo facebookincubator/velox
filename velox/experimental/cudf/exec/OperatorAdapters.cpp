@@ -15,26 +15,13 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/CudfAggregation.h"
-#include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
-#include "velox/experimental/cudf/exec/CudfDistinct.h"
-#include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
-#include "velox/experimental/cudf/exec/CudfFilterProject.h"
-#include "velox/experimental/cudf/exec/CudfGroupId.h"
-#include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
-#include "velox/experimental/cudf/exec/CudfLimit.h"
 #include "velox/experimental/cudf/exec/CudfLocalMerge.h"
 #include "velox/experimental/cudf/exec/CudfLocalPartition.h"
-#include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
-#include "velox/experimental/cudf/exec/CudfReduce.h"
-#include "velox/experimental/cudf/exec/CudfTopN.h"
-#include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
-#include "velox/experimental/cudf/exec/CudfWindow.h"
 #include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -96,6 +83,35 @@ bool planNodeCanRunOnGpu(
     return false;
   }
   return lowering->canRunOnGpu(planNode, queryCtx, pool, reason);
+}
+
+// Returns the cuDF operator that runs 'planNode'. Builds the cuDF plan node
+// the way the plan rewriter does and creates the operator from it, so the
+// cuDF operators have no constructor of their own for a core plan node.
+std::unique_ptr<exec::Operator> createLoweredOperator(
+    const core::PlanNodePtr& planNode,
+    exec::DriverCtx* ctx,
+    int32_t operatorId) {
+  auto replacement = cudf_velox::detail::createCudfOperator(
+      cudf_velox::detail::lowerInPlace(planNode), ctx, operatorId);
+  VELOX_CHECK_NOT_NULL(
+      replacement, "No cuDF operator for {}", planNode->name());
+  return replacement;
+}
+
+// Returns the CudfBatchConcat that goes in front of the operator of
+// 'planNode'. Its input is the first source: the only source of an
+// aggregation, or the probe side of a hash join. It keeps the ID of
+// 'planNode', so that its stats stay with that node.
+std::unique_ptr<exec::Operator> createBatchConcat(
+    const core::PlanNodePtr& planNode,
+    exec::DriverCtx* ctx,
+    int32_t operatorId) {
+  return std::make_unique<CudfBatchConcat>(
+      operatorId,
+      ctx,
+      std::make_shared<CudfBatchConcatNode>(
+          planNode->id(), planNode->sources().at(0)));
 }
 
 } // namespace
@@ -250,10 +266,19 @@ class FilterProjectAdapter : public OperatorAdapter {
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
     auto filterPlanNode = filterProjectOp->filterNode();
 
+    // LocalPlanner fuses a Filter and the Project above it into this one
+    // operator, so the two become one cuDF plan node over the input of the
+    // Filter.
+    const auto& source = filterPlanNode != nullptr
+        ? filterPlanNode->sources().at(0)
+        : projectPlanNode->sources().at(0);
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
-        std::make_unique<CudfFilterProject>(
-            operatorId, ctx, filterPlanNode, projectPlanNode));
+        cudf_velox::detail::createCudfOperator(
+            cudf_velox::detail::lowerFilterProject(
+                filterPlanNode, projectPlanNode, source),
+            ctx,
+            operatorId));
     return result;
   }
 };
@@ -310,28 +335,12 @@ class AggregationAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto aggregationPlanNode =
-        std::dynamic_pointer_cast<const core::AggregationNode>(planNode);
-
-    bool isGlobal = aggregationPlanNode->groupingKeys().empty();
-    bool isDistinct = !isGlobal && aggregationPlanNode->aggregates().empty();
-
     std::vector<std::unique_ptr<exec::Operator>> result;
     if (CudfConfig::getInstance().concatOptimizationEnabled) {
-      result.push_back(
-          std::make_unique<CudfBatchConcat>(
-              operatorId, ctx, aggregationPlanNode));
+      result.push_back(createBatchConcat(planNode, ctx, operatorId));
     }
-    if (isGlobal) {
-      result.push_back(
-          std::make_unique<CudfReduce>(operatorId, ctx, aggregationPlanNode));
-    } else if (isDistinct) {
-      result.push_back(
-          std::make_unique<CudfDistinct>(operatorId, ctx, aggregationPlanNode));
-    } else {
-      result.push_back(
-          std::make_unique<CudfGroupby>(operatorId, ctx, aggregationPlanNode));
-    }
+    // The definition of the node picks CudfReduce, CudfDistinct or CudfGroupby.
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -412,12 +421,12 @@ class HashJoinBuildAdapter : public CudfHashJoinBaseAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto joinPlanNode =
-        std::dynamic_pointer_cast<const core::HashJoinNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
-        std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinPlanNode));
+        std::make_unique<CudfHashJoinBuild>(
+            operatorId,
+            ctx,
+            cudf_velox::detail::lowerInPlace<CudfHashJoinNode>(planNode)));
     return result;
   }
 };
@@ -444,16 +453,15 @@ class HashJoinProbeAdapter : public CudfHashJoinBaseAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto joinPlanNode =
-        std::dynamic_pointer_cast<const core::HashJoinNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
     if (CudfConfig::getInstance().concatOptimizationEnabled) {
-      result.push_back(
-          std::make_unique<CudfBatchConcat>(operatorId, ctx, joinPlanNode));
+      result.push_back(createBatchConcat(planNode, ctx, operatorId));
     }
     result.push_back(
-        std::make_unique<CudfHashJoinProbe>(operatorId, ctx, joinPlanNode));
+        std::make_unique<CudfHashJoinProbe>(
+            operatorId,
+            ctx,
+            cudf_velox::detail::lowerInPlace<CudfHashJoinNode>(planNode)));
     return result;
   }
 };
@@ -528,13 +536,13 @@ class NestedLoopJoinBuildAdapter : public CudfNestedLoopJoinBaseAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto joinPlanNode =
-        std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
         std::make_unique<CudfNestedLoopJoinBuild>(
-            operatorId, ctx, joinPlanNode));
+            operatorId,
+            ctx,
+            cudf_velox::detail::lowerInPlace<CudfNestedLoopJoinNode>(
+                planNode)));
     return result;
   }
 };
@@ -562,13 +570,13 @@ class NestedLoopJoinProbeAdapter : public CudfNestedLoopJoinBaseAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto joinPlanNode =
-        std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
         std::make_unique<CudfNestedLoopJoinProbe>(
-            operatorId, ctx, joinPlanNode));
+            operatorId,
+            ctx,
+            cudf_velox::detail::lowerInPlace<CudfNestedLoopJoinNode>(
+                planNode)));
     return result;
   }
 };
@@ -603,12 +611,8 @@ class OrderByAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto orderByPlanNode =
-        std::dynamic_pointer_cast<const core::OrderByNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfOrderBy>(operatorId, ctx, orderByPlanNode));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -642,11 +646,8 @@ class TopNAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto topNPlanNode =
-        std::dynamic_pointer_cast<const core::TopNNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(std::make_unique<CudfTopN>(operatorId, ctx, topNPlanNode));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -690,11 +691,8 @@ class TopNRowNumberAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto node =
-        std::dynamic_pointer_cast<const core::TopNRowNumberNode>(planNode);
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfTopNRowNumber>(operatorId, ctx, node));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -729,12 +727,8 @@ class LimitAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto limitPlanNode =
-        std::dynamic_pointer_cast<const core::LimitNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfLimit>(operatorId, ctx, limitPlanNode));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -887,18 +881,8 @@ class AssignUniqueIdAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto assignUniqueIdPlanNode =
-        std::dynamic_pointer_cast<const core::AssignUniqueIdNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfAssignUniqueId>(
-            operatorId,
-            ctx,
-            assignUniqueIdPlanNode,
-            ctx->task->planFragment().taskUniqueId.value_or(
-                assignUniqueIdPlanNode->taskUniqueId()),
-            ctx->task->uniqueRowIdPool()));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -982,13 +966,8 @@ class MarkDistinctAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto markDistinctPlanNode =
-        std::dynamic_pointer_cast<const core::MarkDistinctNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfMarkDistinct>(
-            operatorId, ctx, markDistinctPlanNode));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -1023,13 +1002,8 @@ class EnforceSingleRowAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto enforceSingleRowPlanNode =
-        std::dynamic_pointer_cast<const core::EnforceSingleRowNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfEnforceSingleRow>(
-            operatorId, ctx, enforceSingleRowPlanNode));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -1113,12 +1087,12 @@ class LocalMergeAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto localMergePlanNode =
-        std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
     result.push_back(
-        std::make_unique<CudfLocalMerge>(operatorId, ctx, localMergePlanNode));
+        std::make_unique<CudfLocalMerge>(
+            operatorId,
+            ctx,
+            cudf_velox::detail::lowerInPlace<CudfLocalMergeNode>(planNode)));
     return result;
   }
 
@@ -1206,12 +1180,8 @@ class WindowAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto windowPlanNode =
-        std::dynamic_pointer_cast<const core::WindowNode>(planNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfWindow>(operatorId, ctx, windowPlanNode));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };
@@ -1246,13 +1216,8 @@ class GroupIdAdapter : public OperatorAdapter {
       const core::PlanNodePtr& planNode,
       exec::DriverCtx* ctx,
       int32_t operatorId) const override {
-    auto groupIdNode =
-        std::dynamic_pointer_cast<const core::GroupIdNode>(planNode);
-    VELOX_CHECK_NOT_NULL(groupIdNode);
-
     std::vector<std::unique_ptr<exec::Operator>> result;
-    result.push_back(
-        std::make_unique<CudfGroupId>(operatorId, ctx, groupIdNode));
+    result.push_back(createLoweredOperator(planNode, ctx, operatorId));
     return result;
   }
 };

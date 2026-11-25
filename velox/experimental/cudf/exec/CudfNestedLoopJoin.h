@@ -113,11 +113,6 @@ class CudfNestedLoopJoinBuild : public CudfJoinBuild {
   CudfNestedLoopJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
-
-  CudfNestedLoopJoinBuild(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const CudfNestedLoopJoinNode> joinNode);
 
  protected:
@@ -169,11 +164,6 @@ class CudfNestedLoopJoinBuild : public CudfJoinBuild {
 class CudfNestedLoopJoinProbe : public CudfOperatorBase {
  public:
   using build_data_type = CudfNestedLoopJoinBridge::build_data_type;
-
-  CudfNestedLoopJoinProbe(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
 
   CudfNestedLoopJoinProbe(
       int32_t operatorId,

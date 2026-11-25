@@ -17,7 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
-#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -143,15 +143,6 @@ std::optional<cuda::stream_ref> CudfNestedLoopJoinBridge::getBuildStream() {
 CudfNestedLoopJoinBuild::CudfNestedLoopJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::NestedLoopJoinNode> joinNode)
-    : CudfNestedLoopJoinBuild(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfNestedLoopJoinNode>(joinNode)) {}
-
-CudfNestedLoopJoinBuild::CudfNestedLoopJoinBuild(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
     std::shared_ptr<const CudfNestedLoopJoinNode> joinNode)
     : CudfJoinBuild(
           operatorId,
@@ -215,15 +206,6 @@ void CudfNestedLoopJoinBuild::buildAndPublish(
 // ============================================================================
 // Performs the actual nested loop join by combining probe batches with
 // build data using cuDF's cross_join or conditional_inner_join APIs.
-
-CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
-    int32_t operatorId,
-    exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::NestedLoopJoinNode> joinNode)
-    : CudfNestedLoopJoinProbe(
-          operatorId,
-          driverCtx,
-          toCudfPlanNode<CudfNestedLoopJoinNode>(joinNode)) {}
 
 CudfNestedLoopJoinProbe::CudfNestedLoopJoinProbe(
     int32_t operatorId,
@@ -1190,16 +1172,30 @@ RowVectorPtr CudfNestedLoopJoinProbe::doGetOutput() {
 }
 
 // BridgeTranslator implementation
+namespace {
+
+// Returns 'node' as a CudfNestedLoopJoinNode: the node itself, or the cuDF
+// plan node that runs a core::NestedLoopJoinNode. Returns nullptr for any
+// other node.
+std::shared_ptr<const CudfNestedLoopJoinNode> asCudfNestedLoopJoinNode(
+    const core::PlanNodePtr& node) {
+  if (auto cudfJoin =
+          std::dynamic_pointer_cast<const CudfNestedLoopJoinNode>(node)) {
+    return cudfJoin;
+  }
+  if (std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
+    return cudf_velox::detail::lowerInPlace<CudfNestedLoopJoinNode>(node);
+  }
+  return nullptr;
+}
+
+} // namespace
+
 std::unique_ptr<exec::Operator> CudfNestedLoopJoinBridgeTranslator::toOperator(
     exec::DriverCtx* ctx,
     int32_t id,
     const core::PlanNodePtr& node) {
-  if (auto rawJoin =
-          std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
-    return std::make_unique<CudfNestedLoopJoinProbe>(id, ctx, rawJoin);
-  }
-  if (auto cudfJoin =
-          std::dynamic_pointer_cast<const CudfNestedLoopJoinNode>(node)) {
+  if (auto cudfJoin = asCudfNestedLoopJoinNode(node)) {
     return std::make_unique<CudfNestedLoopJoinProbe>(id, ctx, cudfJoin);
   }
   return nullptr;
@@ -1217,15 +1213,7 @@ CudfNestedLoopJoinBridgeTranslator::toJoinBridge(
 
 exec::OperatorSupplier CudfNestedLoopJoinBridgeTranslator::toOperatorSupplier(
     const core::PlanNodePtr& node) {
-  if (auto joinNode =
-          std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(node)) {
-    return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
-      return std::make_unique<CudfNestedLoopJoinBuild>(
-          operatorId, ctx, joinNode);
-    };
-  }
-  if (auto cudfJoin =
-          std::dynamic_pointer_cast<const CudfNestedLoopJoinNode>(node)) {
+  if (auto cudfJoin = asCudfNestedLoopJoinNode(node)) {
     return [cudfJoin](int32_t operatorId, exec::DriverCtx* ctx) {
       return std::make_unique<CudfNestedLoopJoinBuild>(
           operatorId, ctx, cudfJoin);

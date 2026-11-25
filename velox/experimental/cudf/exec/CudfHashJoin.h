@@ -105,11 +105,6 @@ class CudfHashJoinBuild : public CudfJoinBuild {
   CudfHashJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::HashJoinNode> joinNode);
-
-  CudfHashJoinBuild(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
       std::shared_ptr<const CudfHashJoinNode> joinNode);
 
  protected:
@@ -134,11 +129,6 @@ class CudfHashJoinBuild : public CudfJoinBuild {
 class CudfHashJoinProbe : public CudfOperatorBase {
  public:
   using hash_type = CudfHashJoinBridge::hash_type;
-
-  CudfHashJoinProbe(
-      int32_t operatorId,
-      exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::HashJoinNode> joinNode);
 
   CudfHashJoinProbe(
       int32_t operatorId,
