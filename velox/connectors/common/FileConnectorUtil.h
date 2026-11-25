@@ -25,11 +25,6 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Reader.h"
 
-namespace facebook::velox::exec {
-class Expr;
-class FieldReference;
-} // namespace facebook::velox::exec
-
 namespace facebook::velox::connector {
 
 class FileColumnHandle;
@@ -211,26 +206,6 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
     core::ExpressionEvaluator* evaluator,
     common::SubfieldFilters& filters,
     double& sampleRate);
-
-/// Determines whether a field referenced in the remaining filter should be
-/// eagerly materialized (loaded upfront) or can be lazily loaded.
-///
-/// Returns true (eager materialization needed) when:
-/// 1. The remaining filter is NOT an AND expression (e.g., OR), because row
-///    access patterns are unpredictable.
-/// 2. The field is used within a conditional sub-expression (IF, CASE, nested
-///    AND/OR) of an AND expression, because the conditional may access rows
-///    unpredictably.
-///
-/// Returns false (lazy loading OK) when the remaining filter is an AND
-/// expression and the field is only used in simple, non-conditional conjuncts.
-///
-/// @param remainingFilter The compiled remaining filter expression.
-/// @param field The field reference to check.
-/// @return true if the field should be eagerly materialized.
-bool shouldEagerlyMaterialize(
-    const exec::Expr& remainingFilter,
-    const exec::FieldReference& field);
 
 /// Creates a point lookup filter from a variant value.
 /// Null values are not allowed.

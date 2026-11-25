@@ -1005,25 +1005,6 @@ core::TypedExprPtr extractFiltersFromRemainingFilter(
       expr, evaluator, /*negated=*/false, filters, sampleRate);
 }
 
-bool shouldEagerlyMaterialize(
-    const exec::Expr& remainingFilter,
-    const exec::FieldReference& field) {
-  const auto isMember = [](const std::vector<exec::FieldReference*>& fields,
-                           const exec::FieldReference& field) {
-    return std::find(fields.begin(), fields.end(), &field) != fields.end();
-  };
-
-  if (!remainingFilter.evaluatesArgumentsOnNonIncreasingSelection()) {
-    return true;
-  }
-  for (auto& input : remainingFilter.inputs()) {
-    if (isMember(input->distinctFields(), field) && input->hasConditionals()) {
-      return true;
-    }
-  }
-  return false;
-}
-
 namespace {
 template <TypeKind kind>
 std::unique_ptr<common::Filter> createRangeFilterInternal(
