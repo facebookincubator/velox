@@ -47,71 +47,57 @@ namespace {
 //   using CoreNode = ...;  // The core plan node.
 //   using CudfNode = ...;  // The cuDF plan node that runs it.
 //
-//   // Whether cuDF can run 'node'. Sets 'reason' when it cannot. A rule that
-//   // depends only on the fields of the cuDF plan node is a static function
-//   // of CudfNode, which its constructor checks too, so that a cuDF plan node
-//   // an engine builds directly cannot skip it. A rule that needs 'queryCtx'
-//   // and 'pool', such as whether cuDF can evaluate an expression, is here.
-//   static bool canRunOnGpu(
-//       const std::shared_ptr<const CoreNode>& node,
+//   // Why cuDF cannot run the core plan node 'node', or std::nullopt. A rule
+//   // that depends only on the fields of the cuDF plan node is a static
+//   // function of CudfNode, which its constructor checks too, so that a cuDF
+//   // plan node an engine builds directly cannot skip it. A rule that needs
+//   // 'queryCtx' and 'pool', such as whether cuDF can evaluate an expression,
+//   // is here.
+//   static std::optional<std::string> unsupportedReason(
+//       const CoreNode& node,
 //       core::QueryCtx* queryCtx,
-//       memory::MemoryPool* pool,
-//       std::string* reason);
+//       memory::MemoryPool* pool);
 //
 //   // The cuDF plan node for 'node' over 'source'. Does not rewrite 'source'.
 //   static std::shared_ptr<const CudfNode> lower(
 //       const std::shared_ptr<const CoreNode>& node,
 //       core::PlanNodePtr source);
 //
-//   // The operator that runs 'node'.
+//   // Optional. The operator that runs 'node'. Most operators are constructed
+//   // from (operatorId, driverCtx, node); definitions() names the operator
+//   // type of those, and they have no createOperator().
 //   static std::unique_ptr<exec::Operator> createOperator(
 //       const std::shared_ptr<const CudfNode>& node,
 //       exec::DriverCtx* driverCtx,
 //       int32_t operatorId);
 //
-//   // Optional. Why cuDF cannot run the cuDF plan node 'node' with the session
-//   // settings of 'queryCtx', or std::nullopt. Applies the rules of
-//   // canRunOnGpu() that need 'queryCtx' and 'pool', for validateCudfPlan(),
-//   // which starts from a cuDF plan node. canRunOnGpu() and this function
-//   // share one implementation, so the two cannot drift apart.
+//   // Optional. The same as the first function for the cuDF plan node 'node',
+//   // for validateCudfPlan(). Applies the rules that need 'queryCtx' and
+//   // 'pool'; the constructor of 'node' has checked the others. The two
+//   // overloads share one implementation, so they cannot drift apart.
 //   static std::optional<std::string> unsupportedReason(
 //       const CudfNode& node,
 //       core::QueryCtx* queryCtx,
 //       memory::MemoryPool* pool);
 //
-// CoreNode, canRunOnGpu() and lower() are for the plan rewriter and the cuDF
-// driver adapter, which start from a core plan node. CudfNode and
-// createOperator() are for CudfPlanNodeTranslator, which starts from a cuDF
-// plan node. A definition has one group, the other, or both. definitions() at
-// the end of this file lists every definition and says which groups it has, so
-// a definition that lacks a member it is listed with does not compile.
+// CoreNode, unsupportedReason() of a core plan node and lower() are for the
+// plan rewriter and the cuDF driver adapter, which start from a core plan
+// node. CudfNode and the operator are for CudfPlanNodeTranslator, which starts
+// from a cuDF plan node. A definition has one group, the other, or both.
+// definitions() at the end of this file lists every definition and says which
+// groups it has, so a definition that lacks a member it is listed with does not
+// compile.
 //
 // A node with more than one source takes them as a vector in lower().
 
-// canRunOnGpu() of a node that has no rule of its own: cuDF runs it whenever
-// it supports the input and output types.
+// unsupportedReason() of a node that has no rule of its own: cuDF runs it
+// whenever it supports the input and output types.
 template <typename TCoreNode>
-bool noPlacementRule(
-    const std::shared_ptr<const TCoreNode>& /*node*/,
+std::optional<std::string> noRule(
+    const TCoreNode& /*node*/,
     core::QueryCtx* /*queryCtx*/,
-    memory::MemoryPool* /*pool*/,
-    std::string* /*reason*/) {
-  return true;
-}
-
-bool reject(std::string* reason, std::string message) {
-  if (reason != nullptr) {
-    *reason = std::move(message);
-  }
-  return false;
-}
-
-// Returns true if 'unsupported' has no reason. Otherwise sets 'reason' to it
-// and returns false.
-bool accept(
-    const std::optional<std::string>& unsupported,
-    std::string* reason) {
-  return !unsupported.has_value() || reject(reason, *unsupported);
+    memory::MemoryPool* /*pool*/) {
+  return std::nullopt;
 }
 
 // Runs as CudfReduce without grouping keys, as CudfDistinct with grouping keys
@@ -119,14 +105,6 @@ bool accept(
 struct AggregationDefinition {
   using CoreNode = core::AggregationNode;
   using CudfNode = CudfAggregationNode;
-
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
-      core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool,
-      std::string* reason) {
-    return accept(unsupportedReason(*node, queryCtx, pool), reason);
-  }
 
   // Serves CoreNode and CudfNode, which have the same accessors.
   template <typename TNode>
@@ -184,7 +162,7 @@ struct AggregationDefinition {
 // Returns why cuDF cannot run 'filter' followed by 'projections' over an input
 // of 'inputType', or std::nullopt. 'filter' is null when there is no filter.
 // 'projections' is empty when there is no projection.
-std::optional<std::string> filterProjectUnsupportedReason(
+std::optional<std::string> filterProjectRule(
     const RowTypePtr& inputType,
     const core::TypedExprPtr& filter,
     const std::vector<core::TypedExprPtr>& projections,
@@ -221,23 +199,16 @@ std::optional<std::string> filterProjectUnsupportedReason(
 // One cuDF plan node and one operator run a Filter, a Project, or a Project
 // over a Filter. FilterDefinition and ProjectDefinition lower one of the two
 // alone. Callers that find a Project over a Filter decide the pair together
-// with detail::canRunFilterProjectOnGpu() and lower it with
+// with detail::filterProjectUnsupportedReason() and lower it with
 // detail::lowerFilterProject().
 struct FilterProjectDefinition {
   using CudfNode = CudfFilterProjectNode;
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfFilterProject>(operatorId, driverCtx, node);
-  }
 
   static std::optional<std::string> unsupportedReason(
       const CudfNode& node,
       core::QueryCtx* queryCtx,
       memory::MemoryPool* pool) {
-    return filterProjectUnsupportedReason(
+    return filterProjectRule(
         node.sources()[0]->outputType(),
         node.filter(),
         node.projections(),
@@ -250,13 +221,12 @@ struct FilterDefinition {
   using CoreNode = core::FilterNode;
   using CudfNode = CudfFilterProjectNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
+  static std::optional<std::string> unsupportedReason(
+      const CoreNode& node,
       core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool,
-      std::string* reason) {
-    return detail::canRunFilterProjectOnGpu(
-        node.get(), nullptr, queryCtx, pool, reason);
+      memory::MemoryPool* pool) {
+    return detail::filterProjectUnsupportedReason(
+        &node, nullptr, queryCtx, pool);
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -270,13 +240,12 @@ struct ProjectDefinition {
   using CoreNode = core::ProjectNode;
   using CudfNode = CudfFilterProjectNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
+  static std::optional<std::string> unsupportedReason(
+      const CoreNode& node,
       core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool,
-      std::string* reason) {
-    return detail::canRunFilterProjectOnGpu(
-        nullptr, node.get(), queryCtx, pool, reason);
+      memory::MemoryPool* pool) {
+    return detail::filterProjectUnsupportedReason(
+        nullptr, &node, queryCtx, pool);
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -290,7 +259,7 @@ struct OrderByDefinition {
   using CoreNode = core::OrderByNode;
   using CudfNode = CudfOrderByNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static constexpr auto unsupportedReason = noRule<CoreNode>;
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
@@ -303,20 +272,13 @@ struct OrderByDefinition {
         node->sortingOrders(),
         node->isPartial());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfOrderBy>(operatorId, driverCtx, node);
-  }
 };
 
 struct TopNDefinition {
   using CoreNode = core::TopNNode;
   using CudfNode = CudfTopNNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static constexpr auto unsupportedReason = noRule<CoreNode>;
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
@@ -330,28 +292,18 @@ struct TopNDefinition {
         node->count(),
         node->isPartial());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfTopN>(operatorId, driverCtx, node);
-  }
 };
 
 struct TopNRowNumberDefinition {
   using CoreNode = core::TopNRowNumberNode;
   using CudfNode = CudfTopNRowNumberNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
+  static std::optional<std::string> unsupportedReason(
+      const CoreNode& node,
       core::QueryCtx* /*queryCtx*/,
-      memory::MemoryPool* /*pool*/,
-      std::string* reason) {
-    return accept(
-        CudfNode::unsupportedReason(
-            node->rankFunction(), node->partitionKeys(), node->sortingKeys()),
-        reason);
+      memory::MemoryPool* /*pool*/) {
+    return CudfNode::unsupportedReason(
+        node.rankFunction(), node.partitionKeys(), node.sortingKeys());
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -368,20 +320,13 @@ struct TopNRowNumberDefinition {
         node->limit(),
         node->generateRowNumber());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfTopNRowNumber>(operatorId, driverCtx, node);
-  }
 };
 
 struct LimitDefinition {
   using CoreNode = core::LimitNode;
   using CudfNode = CudfLimitNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static constexpr auto unsupportedReason = noRule<CoreNode>;
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
@@ -394,20 +339,13 @@ struct LimitDefinition {
         node->count(),
         node->isPartial());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfLimit>(operatorId, driverCtx, node);
-  }
 };
 
 struct AssignUniqueIdDefinition {
   using CoreNode = core::AssignUniqueIdNode;
   using CudfNode = CudfAssignUniqueIdNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static constexpr auto unsupportedReason = noRule<CoreNode>;
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
@@ -437,13 +375,14 @@ struct MarkDistinctDefinition {
   using CoreNode = core::MarkDistinctNode;
   using CudfNode = CudfMarkDistinctNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
+  static std::optional<std::string> unsupportedReason(
+      const CoreNode& node,
       core::QueryCtx* /*queryCtx*/,
-      memory::MemoryPool* /*pool*/,
-      std::string* reason) {
-    return node->masks().empty() ||
-        reject(reason, "MarkDistinct masks are not supported by cuDF");
+      memory::MemoryPool* /*pool*/) {
+    if (node.masks().empty()) {
+      return std::nullopt;
+    }
+    return "MarkDistinct masks are not supported by cuDF";
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -457,20 +396,13 @@ struct MarkDistinctDefinition {
         node->outputType(),
         node->distinctKeys());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfMarkDistinct>(operatorId, driverCtx, node);
-  }
 };
 
 struct EnforceSingleRowDefinition {
   using CoreNode = core::EnforceSingleRowNode;
   using CudfNode = CudfEnforceSingleRowNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static constexpr auto unsupportedReason = noRule<CoreNode>;
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
@@ -478,20 +410,13 @@ struct EnforceSingleRowDefinition {
     return std::make_shared<CudfNode>(
         node->id(), std::move(source), node->outputType());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfEnforceSingleRow>(operatorId, driverCtx, node);
-  }
 };
 
 struct GroupIdDefinition {
   using CoreNode = core::GroupIdNode;
   using CudfNode = CudfGroupIdNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static constexpr auto unsupportedReason = noRule<CoreNode>;
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
@@ -505,25 +430,24 @@ struct GroupIdDefinition {
         node->aggregationInputs(),
         node->numGroupingKeys());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfGroupId>(operatorId, driverCtx, node);
-  }
 };
 
 struct WindowDefinition {
   using CoreNode = core::WindowNode;
   using CudfNode = CudfWindowNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
+  static std::optional<std::string> unsupportedReason(
+      const CoreNode& node,
       core::QueryCtx* /*queryCtx*/,
-      memory::MemoryPool* /*pool*/,
-      std::string* reason) {
-    return CudfWindow::canRunOnGPU(*node, reason);
+      memory::MemoryPool* /*pool*/) {
+    std::string reason;
+    if (CudfWindow::canRunOnGPU(node, &reason)) {
+      return std::nullopt;
+    }
+    if (reason.empty()) {
+      return "Window is not supported by cuDF";
+    }
+    return reason;
   }
 
   static std::shared_ptr<const CudfNode> lower(
@@ -539,13 +463,6 @@ struct WindowDefinition {
         node->windowFunctions(),
         node->inputsSorted());
   }
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfWindow>(operatorId, driverCtx, node);
-  }
 };
 
 // The sources are the probe side and the build side. One join node becomes a
@@ -555,30 +472,30 @@ struct HashJoinDefinition {
   using CoreNode = core::HashJoinNode;
   using CudfNode = CudfHashJoinNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
-      core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool,
-      std::string* reason) {
-    if (!accept(
-            CudfNode::unsupportedReason(
-                node->joinType(),
-                node->isNullAware(),
-                node->filter() != nullptr),
-            reason)) {
-      return false;
-    }
-    return accept(unsupportedReason(*node, queryCtx, pool), reason);
-  }
-
-  // Serves CoreNode and CudfNode, which have the same accessor.
-  template <typename TNode>
   static std::optional<std::string> unsupportedReason(
-      const TNode& node,
+      const CoreNode& node,
       core::QueryCtx* queryCtx,
       memory::MemoryPool* pool) {
-    if (node.filter() == nullptr ||
-        canJoinFilterRunOnGpu(node.filter(), queryCtx, pool)) {
+    if (auto reason = CudfNode::unsupportedReason(
+            node.joinType(), node.isNullAware(), node.filter() != nullptr)) {
+      return reason;
+    }
+    return filterUnsupportedReason(node.filter(), queryCtx, pool);
+  }
+
+  static std::optional<std::string> unsupportedReason(
+      const CudfNode& node,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    return filterUnsupportedReason(node.filter(), queryCtx, pool);
+  }
+
+  // 'filter' is null for a join that has none.
+  static std::optional<std::string> filterUnsupportedReason(
+      const core::TypedExprPtr& filter,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    if (filter == nullptr || canJoinFilterRunOnGpu(filter, queryCtx, pool)) {
       return std::nullopt;
     }
     return "HashJoin join filter cannot be evaluated by cuDF";
@@ -607,28 +524,31 @@ struct NestedLoopJoinDefinition {
   using CoreNode = core::NestedLoopJoinNode;
   using CudfNode = CudfNestedLoopJoinNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
-      core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool,
-      std::string* reason) {
-    if (!accept(
-            CudfNode::unsupportedReason(
-                node->joinType(), node->joinCondition()),
-            reason)) {
-      return false;
-    }
-    return accept(unsupportedReason(*node, queryCtx, pool), reason);
-  }
-
-  // Serves CoreNode and CudfNode, which have the same accessor.
-  template <typename TNode>
   static std::optional<std::string> unsupportedReason(
-      const TNode& node,
+      const CoreNode& node,
       core::QueryCtx* queryCtx,
       memory::MemoryPool* pool) {
-    if (node.joinCondition() == nullptr ||
-        canJoinFilterRunOnGpu(node.joinCondition(), queryCtx, pool)) {
+    if (auto reason = CudfNode::unsupportedReason(
+            node.joinType(), node.joinCondition())) {
+      return reason;
+    }
+    return conditionUnsupportedReason(node.joinCondition(), queryCtx, pool);
+  }
+
+  static std::optional<std::string> unsupportedReason(
+      const CudfNode& node,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    return conditionUnsupportedReason(node.joinCondition(), queryCtx, pool);
+  }
+
+  // 'joinCondition' is null for a cross join.
+  static std::optional<std::string> conditionUnsupportedReason(
+      const core::TypedExprPtr& joinCondition,
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool) {
+    if (joinCondition == nullptr ||
+        canJoinFilterRunOnGpu(joinCondition, queryCtx, pool)) {
       return std::nullopt;
     }
     return "NestedLoopJoin filter cannot be evaluated by cuDF";
@@ -655,7 +575,7 @@ struct LocalMergeDefinition {
   using CoreNode = core::LocalMergeNode;
   using CudfNode = CudfLocalMergeNode;
 
-  static constexpr auto canRunOnGpu = noPlacementRule<CoreNode>;
+  static constexpr auto unsupportedReason = noRule<CoreNode>;
 
   static std::shared_ptr<const CudfNode> lower(
       const std::shared_ptr<const CoreNode>& node,
@@ -673,12 +593,11 @@ struct LocalMergeDefinition {
 struct LocalPartitionDefinition {
   using CoreNode = core::LocalPartitionNode;
 
-  static bool canRunOnGpu(
-      const std::shared_ptr<const CoreNode>& node,
+  static std::optional<std::string> unsupportedReason(
+      const CoreNode& node,
       core::QueryCtx* /*queryCtx*/,
-      memory::MemoryPool* /*pool*/,
-      std::string* reason) {
-    return accept(CudfLocalPartitionNode::unsupportedReason(*node), reason);
+      memory::MemoryPool* /*pool*/) {
+    return CudfLocalPartitionNode::unsupportedReason(node);
   }
 
   static core::PlanNodePtr lower(
@@ -717,13 +636,6 @@ struct ToVeloxDefinition {
 
 struct BatchConcatDefinition {
   using CudfNode = CudfBatchConcatNode;
-
-  static std::unique_ptr<exec::Operator> createOperator(
-      const std::shared_ptr<const CudfNode>& node,
-      exec::DriverCtx* driverCtx,
-      int32_t operatorId) {
-    return std::make_unique<CudfBatchConcat>(operatorId, driverCtx, node);
-  }
 };
 
 // One entry of definitions(): the functions of a definition behind signatures
@@ -746,8 +658,8 @@ struct Entry {
   // Returns why cuDF cannot run a node with the session settings of
   // 'queryCtx'. Returns std::nullopt if it can, and if the node is not the
   // cuDF plan node of the definition. Null if the definition has no
-  // unsupportedReason().
-  std::optional<std::string> (*unsupportedReason)(
+  // unsupportedReason() for its cuDF plan node.
+  std::optional<std::string> (*cudfNodeUnsupportedReason)(
       const core::PlanNodePtr& node,
       core::QueryCtx* queryCtx,
       memory::MemoryPool* pool){nullptr};
@@ -781,18 +693,18 @@ Entry coreNodeAndPlacement() {
     return isExactly<typename TDefinition::CoreNode>(*node) ||
         (isExactly<TSubclasses>(*node) || ...);
   };
-  entry.lowering.canRunOnGpu = [](const core::PlanNodePtr& node,
-                                  core::QueryCtx* queryCtx,
-                                  memory::MemoryPool* pool,
-                                  std::string* reason) -> bool {
-    return TDefinition::canRunOnGpu(
-        coreNode<TDefinition>(node), queryCtx, pool, reason);
+  entry.lowering.unsupportedReason =
+      [](const core::PlanNodePtr& node,
+         core::QueryCtx* queryCtx,
+         memory::MemoryPool* pool) -> std::optional<std::string> {
+    return TDefinition::unsupportedReason(
+        *coreNode<TDefinition>(node), queryCtx, pool);
   };
   entry.lowering.concatFirstSource = false;
   return entry;
 }
 
-// Lists a definition that has CoreNode, canRunOnGpu() and lower(), where
+// Lists a definition that has CoreNode, unsupportedReason() and lower(), where
 // lower() takes all the sources as a vector.
 template <typename TDefinition>
 Entry lowering() {
@@ -819,9 +731,28 @@ Entry unaryLowering() {
   return entry;
 }
 
-// Lists a definition that has CudfNode and createOperator().
-template <typename TDefinition>
+// Lists a definition that has CudfNode and whose operator is 'TOperator',
+// constructed from (operatorId, driverCtx, node).
+template <typename TDefinition, typename TOperator>
 Entry operatorFactory() {
+  Entry entry;
+  entry.createOperator =
+      [](const core::PlanNodePtr& node,
+         exec::DriverCtx* driverCtx,
+         int32_t operatorId) -> std::unique_ptr<exec::Operator> {
+    auto cudfNode =
+        std::dynamic_pointer_cast<const typename TDefinition::CudfNode>(node);
+    if (cudfNode == nullptr) {
+      return nullptr;
+    }
+    return std::make_unique<TOperator>(operatorId, driverCtx, cudfNode);
+  };
+  return entry;
+}
+
+// Lists a definition that has CudfNode and its own createOperator().
+template <typename TDefinition>
+Entry customOperatorFactory() {
   Entry entry;
   entry.createOperator =
       [](const core::PlanNodePtr& node,
@@ -837,19 +768,29 @@ Entry operatorFactory() {
   return entry;
 }
 
-// Lists a definition of a node with one source that has every member.
-template <typename TDefinition>
+// Lists a definition of a node with one source that has the lowering members
+// and whose operator is 'TOperator'.
+template <typename TDefinition, typename TOperator>
 Entry unaryNode() {
   auto entry = unaryLowering<TDefinition>();
-  entry.createOperator = operatorFactory<TDefinition>().createOperator;
+  entry.createOperator =
+      operatorFactory<TDefinition, TOperator>().createOperator;
   return entry;
 }
 
-// Lists unsupportedReason() of a definition, which validateCudfPlan() then
-// applies to its cuDF plan node.
+// Same for a definition that has its own createOperator().
+template <typename TDefinition>
+Entry customUnaryNode() {
+  auto entry = unaryLowering<TDefinition>();
+  entry.createOperator = customOperatorFactory<TDefinition>().createOperator;
+  return entry;
+}
+
+// Lists unsupportedReason() of a definition for its cuDF plan node, which
+// validateCudfPlan() then applies.
 template <typename TDefinition>
 Entry withValidation(Entry entry) {
-  entry.unsupportedReason =
+  entry.cudfNodeUnsupportedReason =
       [](const core::PlanNodePtr& node,
          core::QueryCtx* queryCtx,
          memory::MemoryPool* pool) -> std::optional<std::string> {
@@ -874,23 +815,23 @@ Entry withBatchConcat(Entry entry) {
 const std::vector<Entry>& definitions() {
   static const std::vector<Entry> kDefinitions{
       withValidation<AggregationDefinition>(
-          withBatchConcat(unaryNode<AggregationDefinition>())),
-      unaryNode<OrderByDefinition>(),
-      unaryNode<TopNDefinition>(),
-      unaryNode<TopNRowNumberDefinition>(),
-      unaryNode<LimitDefinition>(),
-      unaryNode<AssignUniqueIdDefinition>(),
-      unaryNode<MarkDistinctDefinition>(),
-      unaryNode<EnforceSingleRowDefinition>(),
-      unaryNode<GroupIdDefinition>(),
-      unaryNode<WindowDefinition>(),
+          withBatchConcat(customUnaryNode<AggregationDefinition>())),
+      unaryNode<OrderByDefinition, CudfOrderBy>(),
+      unaryNode<TopNDefinition, CudfTopN>(),
+      unaryNode<TopNRowNumberDefinition, CudfTopNRowNumber>(),
+      unaryNode<LimitDefinition, CudfLimit>(),
+      customUnaryNode<AssignUniqueIdDefinition>(),
+      unaryNode<MarkDistinctDefinition, CudfMarkDistinct>(),
+      unaryNode<EnforceSingleRowDefinition, CudfEnforceSingleRow>(),
+      unaryNode<GroupIdDefinition, CudfGroupId>(),
+      unaryNode<WindowDefinition, CudfWindow>(),
 
       // Two core plan nodes that share a cuDF plan node and its operator.
       unaryLowering<FilterDefinition>(),
       // lowerFilterProject() keeps what a LazyDereferenceNode adds.
       unaryLowering<ProjectDefinition, core::LazyDereferenceNode>(),
       withValidation<FilterProjectDefinition>(
-          operatorFactory<FilterProjectDefinition>()),
+          operatorFactory<FilterProjectDefinition, CudfFilterProject>()),
 
       // Joins and local exchanges. Their definitions say where their operators
       // are created. The first source of a hash join is the probe side.
@@ -902,9 +843,9 @@ const std::vector<Entry>& definitions() {
       lowering<LocalPartitionDefinition>(),
 
       // cuDF plan nodes that have no core plan node.
-      operatorFactory<FromVeloxDefinition>(),
-      operatorFactory<ToVeloxDefinition>(),
-      operatorFactory<BatchConcatDefinition>(),
+      customOperatorFactory<FromVeloxDefinition>(),
+      customOperatorFactory<ToVeloxDefinition>(),
+      operatorFactory<BatchConcatDefinition, CudfBatchConcat>(),
   };
   return kDefinitions;
 }
@@ -930,12 +871,11 @@ core::PlanNodePtr lowerInPlace(const core::PlanNodePtr& node) {
   return lowering->lower(node, node->sources());
 }
 
-bool canRunFilterProjectOnGpu(
+std::optional<std::string> filterProjectUnsupportedReason(
     const core::FilterNode* filter,
     const core::ProjectNode* project,
     core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
-    std::string* reason) {
+    memory::MemoryPool* pool) {
   VELOX_CHECK(filter != nullptr || project != nullptr);
   // A FilterNode keeps its input type, so the source of the Project gives the
   // input type of a fused FilterProject too.
@@ -943,14 +883,12 @@ bool canRunFilterProjectOnGpu(
       (project != nullptr ? project->sources()[0] : filter->sources()[0])
           ->outputType();
   static const std::vector<core::TypedExprPtr> kNoProjections;
-  return accept(
-      filterProjectUnsupportedReason(
-          inputType,
-          filter != nullptr ? filter->filter() : nullptr,
-          project != nullptr ? project->projections() : kNoProjections,
-          queryCtx,
-          pool),
-      reason);
+  return filterProjectRule(
+      inputType,
+      filter != nullptr ? filter->filter() : nullptr,
+      project != nullptr ? project->projections() : kNoProjections,
+      queryCtx,
+      pool);
 }
 
 std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
@@ -975,10 +913,10 @@ std::optional<std::string> cudfPlanNodeUnsupportedReason(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
   for (const auto& entry : definitions()) {
-    if (entry.unsupportedReason == nullptr) {
+    if (entry.cudfNodeUnsupportedReason == nullptr) {
       continue;
     }
-    if (auto reason = entry.unsupportedReason(node, queryCtx, pool)) {
+    if (auto reason = entry.cudfNodeUnsupportedReason(node, queryCtx, pool)) {
       return reason;
     }
   }

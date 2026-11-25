@@ -434,24 +434,25 @@ core::PlanNodePtr rebuildCoreNode(
   return context.rebuilt;
 }
 
-bool typesSupported(const core::PlanNodePtr& node, std::string* reason) {
+// Returns why cuDF does not support the input or output types of 'node', or
+// std::nullopt if it supports them.
+std::optional<std::string> unsupportedTypeReason(
+    const core::PlanNodePtr& node) {
   if (!isTypeSupportedByCudf(node->outputType())) {
-    *reason = fmt::format(
+    return fmt::format(
         "{} output type is unsupported by cuDF: {}",
         node->name(),
         node->outputType()->toString());
-    return false;
   }
   for (const auto& source : node->sources()) {
     if (!isTypeSupportedByCudf(source->outputType())) {
-      *reason = fmt::format(
+      return fmt::format(
           "{} input type is unsupported by cuDF: {}",
           node->name(),
           source->outputType()->toString());
-      return false;
     }
   }
-  return true;
+  return std::nullopt;
 }
 
 std::shared_ptr<core::QueryCtx> requireQueryCtx(
@@ -605,35 +606,37 @@ class Rewriter {
   // Places 'node' by itself: on the GPU if a definition lowers it and its
   // placement rule allows it, otherwise on the CPU.
   RewriteResult rewriteAlone(const core::PlanNodePtr& node) {
-    std::string reason;
-    if (!typesSupported(node, &reason)) {
-      return rewriteGenericNode(node, reason);
+    if (auto reason = unsupportedReason(node)) {
+      return rewriteGenericNode(node, *reason);
     }
-    if (auto result = rewriteOnGpu(node, &reason)) {
-      return std::move(*result);
-    }
-    return rewriteGenericNode(node, reason);
+    return lowerOnGpu(node);
   }
 
-  // Returns the GPU rewrite of 'node', or std::nullopt with the reason it has
-  // to stay on the CPU.
-  std::optional<RewriteResult> rewriteOnGpu(
-      const core::PlanNodePtr& node,
-      std::string* reason) {
+  // Returns why 'node' has to stay on the CPU, or std::nullopt if it can run
+  // on the GPU by itself.
+  std::optional<std::string> unsupportedReason(
+      const core::PlanNodePtr& node) const {
+    if (auto reason = unsupportedTypeReason(node)) {
+      return reason;
+    }
     const auto* lowering = detail::findCudfPlanNodeLowering(node);
     if (lowering == nullptr) {
-      *reason = fmt::format("{} has no cuDF implementation", node->name());
-      return std::nullopt;
+      return fmt::format("{} has no cuDF implementation", node->name());
     }
-    if (!lowering->canRunOnGpu(node, queryCtx_.get(), pool_.get(), reason)) {
-      return std::nullopt;
-    }
+    return lowering->unsupportedReason(node, queryCtx_.get(), pool_.get());
+  }
+
+  // Returns the GPU rewrite of 'node', for which unsupportedReason() has no
+  // reason.
+  RewriteResult lowerOnGpu(const core::PlanNodePtr& node) {
+    const auto* lowering = detail::findCudfPlanNodeLowering(node);
+    VELOX_CHECK_NOT_NULL(lowering);
     auto sources = rewriteChildren(node->sources(), Mode::kGpu);
     if (lowering->concatFirstSource) {
       sources[0] = addBatchConcat(
           newId(node->id() + "_batch_concat"), std::move(sources[0]));
     }
-    return RewriteResult{lowering->lower(node, std::move(sources)), Mode::kGpu};
+    return {lowering->lower(node, std::move(sources)), Mode::kGpu};
   }
 
   RewriteResult rewriteFilterProject(
@@ -661,14 +664,12 @@ class Rewriter {
       return rewriteAlone(project);
     }
 
-    std::string reason;
-    if (typesSupported(project, &reason) &&
-        detail::canRunFilterProjectOnGpu(
-            filter.get(),
-            project.get(),
-            queryCtx_.get(),
-            pool_.get(),
-            &reason)) {
+    auto reason = unsupportedTypeReason(project);
+    if (!reason.has_value()) {
+      reason = detail::filterProjectUnsupportedReason(
+          filter.get(), project.get(), queryCtx_.get(), pool_.get());
+    }
+    if (!reason.has_value()) {
       return {
           detail::lowerFilterProject(
               filter,
@@ -676,7 +677,7 @@ class Rewriter {
               rewriteNode(filter->sources()[0], Mode::kGpu).node),
           Mode::kGpu};
     }
-    checkCpuFallback(project, reason);
+    checkCpuFallback(project, *reason);
     auto filterSources = rewriteChildren(filter->sources(), Mode::kCpu);
     if (filterSources == filter->sources()) {
       return {project, Mode::kCpu};

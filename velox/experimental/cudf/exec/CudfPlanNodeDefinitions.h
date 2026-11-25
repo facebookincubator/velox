@@ -43,20 +43,19 @@ namespace facebook::velox::cudf_velox::detail {
 
 /// How one type of core plan node becomes a cuDF plan node.
 struct CudfPlanNodeLowering {
-  /// Returns whether cuDF can run 'node'. Sets 'reason' when it cannot. The
-  /// plan rewriter and the cuDF driver adapter both ask here, so the two place
+  /// Returns why cuDF cannot run 'node', or std::nullopt if it can. The plan
+  /// rewriter and the cuDF driver adapter both ask here, so the two place
   /// nodes the same way. Whether cuDF supports the input and output types of
   /// 'node' is a separate check that is the same for every node:
   /// isTypeSupportedByCudf().
-  bool (*canRunOnGpu)(
+  std::optional<std::string> (*unsupportedReason)(
       const core::PlanNodePtr& node,
       core::QueryCtx* queryCtx,
-      memory::MemoryPool* pool,
-      std::string* reason);
+      memory::MemoryPool* pool);
 
   /// Returns the cuDF plan node that runs 'node', with the ID and output type
   /// of 'node' and with 'sources' in place of its sources. Does not rewrite
-  /// 'sources' and does not call canRunOnGpu().
+  /// 'sources' and does not call unsupportedReason().
   core::PlanNodePtr (*lower)(
       const core::PlanNodePtr& node,
       std::vector<core::PlanNodePtr> sources);
@@ -74,8 +73,8 @@ const CudfPlanNodeLowering* findCudfPlanNodeLowering(
 /// Returns the cuDF plan node that runs the core plan node 'node', over the
 /// sources of 'node' as they are. The cuDF driver adapter uses this: it
 /// replaces one operator at a time, so it has no rewritten sources. Fails if
-/// 'node' has no lowering. Does not call canRunOnGpu(); the constructor of the
-/// cuDF plan node throws for a node cuDF cannot run.
+/// 'node' has no lowering. Does not call unsupportedReason(); the constructor
+/// of the cuDF plan node throws for a node cuDF cannot run.
 core::PlanNodePtr lowerInPlace(const core::PlanNodePtr& node);
 
 /// Same, with the result as 'TCudfNode'.
@@ -86,22 +85,21 @@ std::shared_ptr<const TCudfNode> lowerInPlace(const core::PlanNodePtr& node) {
   return lowered;
 }
 
-/// Returns whether cuDF can run 'filter', 'project', or 'project' over
-/// 'filter' as one CudfFilterProjectNode. One of the two may be null. Sets
-/// 'reason' when it cannot. LocalPlanner fuses a Filter followed by a Project
-/// into one operator, so the pair is decided together.
-bool canRunFilterProjectOnGpu(
+/// Returns why cuDF cannot run 'filter', 'project', or 'project' over 'filter'
+/// as one CudfFilterProjectNode, or std::nullopt if it can. One of the two may
+/// be null. LocalPlanner fuses a Filter followed by a Project into one
+/// operator, so the pair is decided together.
+std::optional<std::string> filterProjectUnsupportedReason(
     const core::FilterNode* filter,
     const core::ProjectNode* project,
     core::QueryCtx* queryCtx,
-    memory::MemoryPool* pool,
-    std::string* reason);
+    memory::MemoryPool* pool);
 
 /// Returns the CudfFilterProjectNode over 'source' that runs 'filter',
 /// 'project', or 'project' over 'filter'. One of the two may be null. The
 /// lowering of a Filter or of a Project covers one of them alone. A caller
 /// that finds a Project over a Filter passes both, after
-/// canRunFilterProjectOnGpu() accepts the pair.
+/// filterProjectUnsupportedReason() accepts the pair.
 std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
     const std::shared_ptr<const core::FilterNode>& filter,
     const std::shared_ptr<const core::ProjectNode>& project,
@@ -110,8 +108,9 @@ std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
 /// Returns why cuDF cannot run the built-in cuDF plan node 'node' with the
 /// session settings of 'queryCtx', such as a cast whose result depends on the
 /// session time zone. Returns std::nullopt if it can, and for any other node.
-/// These are the rules of canRunOnGpu() that need 'queryCtx' and 'pool'. The
-/// constructor of the node has already checked the rest.
+/// These are the rules of CudfPlanNodeLowering::unsupportedReason() that need
+/// 'queryCtx' and 'pool'. The constructor of the node has already checked the
+/// rest.
 std::optional<std::string> cudfPlanNodeUnsupportedReason(
     const core::PlanNodePtr& node,
     core::QueryCtx* queryCtx,

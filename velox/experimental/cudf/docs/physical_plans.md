@@ -66,15 +66,17 @@ LocalPlanner has fixed the driver counts.
 `CudfPlanNodeDefinitions.cpp` has one definition for each built-in node. A
 definition says up to three things about its node:
 
-- `canRunOnGpu`: whether cuDF can run a given core plan node.
+- `unsupportedReason`: why cuDF cannot run a given core plan node, if it
+  cannot.
 - `lower`: how to build the cuDF plan node from the core plan node and its
   sources, which the caller has already rewritten.
-- `createOperator`: how to create the operator from the cuDF plan node.
+- The operator that runs the cuDF plan node, or `createOperator` when
+  creating it takes more than the node.
 
 A rule that depends only on the fields of the cuDF plan node, such as the join
 type, is a static `unsupportedReason()` of the node class. The constructor of
 the node throws for the same reason, so a plan that an engine builds from cuDF
-plan nodes cannot skip it. `canRunOnGpu` calls it and adds the rules that need
+plan nodes cannot skip it. The definition calls it and adds the rules that need
 the session settings of the query, such as whether cuDF can evaluate an
 expression. `validateCudfPlan` applies those session rules to the cuDF plan
 node, through the same function.
