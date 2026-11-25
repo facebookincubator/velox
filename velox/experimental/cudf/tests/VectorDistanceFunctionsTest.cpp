@@ -169,12 +169,14 @@ TEST_F(CudfVectorDistanceFunctionsTest, coalesceKeepsLazyDistanceOnCpu) {
   });
   const std::string sql = "coalesce(c0, abs(dot_product(c1, c2)))";
   const auto rowType = asRowType(input->type());
-  EXPECT_FALSE(cudf_velox::canExprRunOnGpu(
-      makeTypedExpr(sql, rowType), execCtx_.queryCtx(), pool()));
-  EXPECT_TRUE(cudf_velox::canExprRunOnGpu(
-      makeTypedExpr("coalesce(dot_product(c1, c2), c0)", rowType),
-      execCtx_.queryCtx(),
-      pool()));
+  EXPECT_FALSE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr(sql, rowType), execCtx_.queryCtx(), pool()));
+  EXPECT_TRUE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr("coalesce(dot_product(c1, c2), c0)", rowType),
+          execCtx_.queryCtx(),
+          pool()));
 
   auto exprSet = compileExpression(sql, rowType);
   auto result = functions::test::FunctionBaseTest::evaluate(*exprSet, input);

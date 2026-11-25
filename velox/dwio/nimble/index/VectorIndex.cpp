@@ -448,7 +448,8 @@ bool ivfPqCandidateBufferFits(
   const auto end = listSizes.begin() + numProbes;
   std::nth_element(listSizes.begin(), end, listSizes.end(), std::greater<>{});
   const auto slots = velox::bits::roundUp(
-      std::accumulate(listSizes.begin(), end, uint64_t{0}), kCandidateAlignment);
+      std::accumulate(listSizes.begin(), end, uint64_t{0}),
+      kCandidateAlignment);
   return static_cast<uint64_t>(numNeighbors) <= slots;
 }
 

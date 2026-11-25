@@ -3561,7 +3561,8 @@ TEST_F(VectorIndexTest, gpuSingleQuerySearchesWideCagraGraphs) {
     EXPECT_TRUE(result.stats().usedGpu);
     EXPECT_EQ(result.totalNumResults(), 10);
 
-    config.searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(4096);
+    config.searchOptions =
+        std::make_shared<VectorIndex::HnswSearchOptions>(4096);
     const auto fallback = index->search(config);
     EXPECT_FALSE(fallback.stats().usedGpu);
     EXPECT_EQ(fallback.totalNumResults(), 10);

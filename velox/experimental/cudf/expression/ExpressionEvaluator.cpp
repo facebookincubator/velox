@@ -2970,7 +2970,9 @@ bool registerBuiltinFunctions(const std::string& prefix) {
         const auto& inputs = expr->inputs();
         return inputs.size() < 2 ||
             std::none_of(
-                inputs.begin() + 1, inputs.end(), containsVectorDistanceCall);
+                   inputs.begin() + 1,
+                   inputs.end(),
+                   containsVectorDistanceCall);
       });
 
   // row_constructor is a special form and doesn't have a prefix in its name.
