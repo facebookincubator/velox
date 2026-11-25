@@ -15,10 +15,20 @@
  */
 #pragma once
 
+#include <functional>
+#include <memory>
+
+#include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::nimble::test {
+
+/// Returns a WriterOptions::bufferPolicyFactory whose policies write the rows
+/// of each write() call as one stripe. Tests use it to place stripe boundaries
+/// for columns that need a buffer policy, such as Hybrid FlatMap columns.
+std::function<std::unique_ptr<BufferPolicy>()>
+stripePerWriteBufferPolicyFactory();
 
 std::string createNimbleFile(
     velox::memory::MemoryPool& memoryPool,
