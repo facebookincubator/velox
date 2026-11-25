@@ -18,6 +18,9 @@
 #include <ucxx/api.h>
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <functional>
+#include <mutex>
 #include <random>
 #include <string>
 #include <string_view>
@@ -119,6 +122,13 @@ class Communicator {
   /// held alive until UCX has fully processed the cancellation.
   /// Must only be called from the Communicator thread.
   void deferRequestCleanup(std::shared_ptr<ucxx::Request> request);
+
+  /// Runs 'action' on the Communicator thread, at the top of a later
+  /// iteration of run(), outside every UCX callback. Safe to call from any
+  /// thread, including from a UCX callback. Use it for work that must not run
+  /// inside UCX progress, such as Task::setError(), which terminates the task
+  /// synchronously.
+  void postToLoop(std::function<void()> action);
 
   /// Returns the URL of the coordinator.
   [[nodiscard]] const std::string& getCoordinatorUrl();
@@ -226,6 +236,15 @@ class Communicator {
   // ensuring the GPU buffers (owned via the request's arg shared_ptr)
   // are not freed prematurely.
   std::vector<std::shared_ptr<ucxx::Request>> deferredRequests_;
+
+  // Runs the actions that postToLoop() added. Called by run() only.
+  void runPostedActions();
+
+  // Protects postedActions_.
+  std::mutex postedActionsMutex_;
+
+  // Actions that postToLoop() added and run() has not run yet.
+  std::deque<std::function<void()>> postedActions_;
 
   // Heartbeat state for diagnostic logging.
   std::chrono::steady_clock::time_point lastHeartbeat_{

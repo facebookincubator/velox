@@ -159,6 +159,19 @@ bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
       queue->kind() != core::PartitionedOutputNode::Kind::kBroadcast;
 }
 
+void UcxOutputQueueManager::failTask(
+    std::string_view taskId,
+    std::string_view error) {
+  auto queue = getQueueIfExists(taskId);
+  auto task = queue != nullptr ? queue->task() : nullptr;
+  if (task == nullptr) {
+    LOG(ERROR) << "Cannot fail UCX producer task " << taskId
+               << ", which has no initialized output on this worker: " << error;
+    return;
+  }
+  task->setError(std::string(error));
+}
+
 void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::string taskIdStr{taskId};
   auto queue =

@@ -20,9 +20,11 @@ add_executable(
   UcxPartitionedOutputTest.cpp
   UcxExchangeTest.cpp
   UcxExchangeTaskTest.cpp
+  UcxProtocolVersionTest.cpp
   UcxExchangeTestBase.cpp
   Main.cpp
   UcxTestHelpers.cpp
+  FakeUcxPeer.cpp
   UcxTestData.cpp
   UcxPartitionedOutputMock.cpp
   SinkDriverMock.cpp

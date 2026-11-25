@@ -191,6 +191,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
     return initialized_.load(std::memory_order_acquire);
   }
 
+  /// Returns the task that initialize() or the constructor supplied, or null
+  /// while this queue is a placeholder.
+  std::shared_ptr<exec::Task> task();
+
   /// @brief When we understand the final number of split groups (for grouped
   /// execution only), we need to update the number of producing drivers here.
   void updateNumDrivers(uint32_t newNumDrivers);

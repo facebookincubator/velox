@@ -99,6 +99,15 @@ std::shared_ptr<facebook::velox::exec::Task> createPartitionedOutputTask(
     const std::unordered_map<std::string, std::string>& extraConfig = {},
     bool replicateNullsAndAny = false);
 
+/// Returns a producer task whose plan ends in a UCX PartitionedOutputNode with
+/// one partition. The task is not started: a test initializes its output with
+/// UcxOutputQueueManager::initializeTask(), drives the output queue directly,
+/// and removes the task from the manager at the end. 'pool' holds the plan's
+/// Values data and must outlive the task.
+std::shared_ptr<exec::Task> makeProducerTask(
+    const std::string& taskId,
+    memory::MemoryPool* pool);
+
 /// @brief Helper function to create a CudfVector for testing.
 /// Uses makeTable when tableGenerator is null, or tableGenerator->makeTable()
 /// when provided.

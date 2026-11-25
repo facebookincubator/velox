@@ -150,6 +150,8 @@ void Communicator::run() {
   const bool blockingMode = CudfConfig::getInstance().ucxxBlockingProgress;
   while (running_) {
     try {
+      runPostedActions();
+
       // Periodic heartbeat for diagnostic logging.
       auto now = std::chrono::steady_clock::now();
       if (now - lastHeartbeat_ >= std::chrono::seconds(5)) {
@@ -351,6 +353,32 @@ void Communicator::deferEndpointCleanup(std::shared_ptr<EndpointRef> ep) {
   VLOG(3) << "Deferring endpoint cleanup to main loop";
   deferredEndpointCleanup_.push(ep);
   signalWorker();
+}
+
+void Communicator::postToLoop(std::function<void()> action) {
+  {
+    std::lock_guard<std::mutex> lock(postedActionsMutex_);
+    postedActions_.push_back(std::move(action));
+  }
+  signalWorker();
+}
+
+void Communicator::runPostedActions() {
+  std::deque<std::function<void()>> actions;
+  {
+    std::lock_guard<std::mutex> lock(postedActionsMutex_);
+    actions.swap(postedActions_);
+  }
+  for (auto& action : actions) {
+    // An action that throws must not end the Communicator loop, which serves
+    // every query on this worker.
+    try {
+      action();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Action posted to the Communicator loop failed: "
+                 << e.what();
+    }
+  }
 }
 
 void Communicator::deferRequestCleanup(std::shared_ptr<ucxx::Request> request) {

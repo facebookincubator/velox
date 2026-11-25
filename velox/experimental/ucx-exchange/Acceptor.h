@@ -25,8 +25,10 @@ namespace facebook::velox::ucx_exchange {
 /// message is received. Handshakes are sent as active messages, using a
 /// worker-wide handler. The acceptor is a passive component that is used by the
 /// Communicator.
-struct Acceptor {
-  // The static callback function for incoming handshake requests.
+class Acceptor {
+ public:
+  /// Handles an incoming handshake. Runs inside UCX progress, so it throws
+  /// nothing: a handshake it cannot handle is logged and dropped.
   static void cStyleAMCallback(
       std::shared_ptr<ucxx::Request> request,
       ucp_ep_h ep);
@@ -41,6 +43,13 @@ struct Acceptor {
   // worker_->progress()), and reads happen in cStyleAMCallback (also fired
   // during worker_->progress()). No mutex needed.
   std::map<ucp_ep_h, std::shared_ptr<EndpointRef>> handleToEndpointRef_;
+
+ private:
+  // Creates a server for a handshake of this protocol version, or refuses a
+  // handshake of another version. May throw; cStyleAMCallback() catches.
+  static void handleHandshake(
+      const std::shared_ptr<ucxx::Request>& request,
+      ucp_ep_h ep);
 };
 
 } // namespace facebook::velox::ucx_exchange

@@ -188,6 +188,11 @@ bool UcxOutputQueue::initialize(
   return true;
 }
 
+std::shared_ptr<exec::Task> UcxOutputQueue::task() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return task_;
+}
+
 void UcxOutputQueue::updateNumDrivers(uint32_t newNumDrivers) {
   bool isNoMoreDrivers{false};
   {

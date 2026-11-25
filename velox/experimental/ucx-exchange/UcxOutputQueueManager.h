@@ -118,6 +118,12 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// source's destructive move would corrupt data for other servers).
   bool canUseIntraNode(std::string_view taskId);
 
+  /// Fails the producer task 'taskId' with 'error' if its output is
+  /// initialized on this worker; otherwise only logs 'error'. Calls
+  /// Task::setError() with no lock held. Task::setError() terminates the task
+  /// synchronously, so this must not be called inside a UCX callback.
+  void failTask(std::string_view taskId, std::string_view error);
+
   /// @brief Removes the queue for the given task from the queue manager.
   /// Calls "terminate" on the queue to awake waiting producers.
   void removeTask(const std::string& taskId) override;

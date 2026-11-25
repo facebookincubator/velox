@@ -351,6 +351,7 @@ void UcxExchangeSource::sendHandshake() {
       sizeof(handshakeReq->taskId) - 1);
   handshakeReq->taskId[sizeof(handshakeReq->taskId) - 1] = '\0';
   handshakeReq->workerId = communicator_->getWorkerId();
+  handshakeReq->protocolVersion = kProtocolVersion;
 
   VLOG(3) << toString() << " Sending handshake with initial value: "
           << partitionKey_.toString() << " to server";
@@ -713,6 +714,25 @@ void UcxExchangeSource::onHandshakeResponse(
   const auto response = decodeHandshakeResponse(
       *std::static_pointer_cast<std::array<uint8_t, sizeof(HandshakeResponse)>>(
           arg));
+
+  // A server of another version, or one that rejects this source, will not
+  // serve it. An unknown status is a rejection too.
+  if (response.status != HandshakeStatus::kAccepted ||
+      response.protocolVersion != kProtocolVersion) {
+    std::string errorMsg = fmt::format(
+        "UCX exchange peers must run the same protocol version: this worker "
+        "runs {}, producer worker {}:{} runs {}",
+        kProtocolVersion,
+        host_,
+        port_,
+        response.protocolVersion);
+    VLOG(0) << errorMsg;
+    queue_->setError(errorMsg);
+    deliverEndMarker();
+    setState(ReceiverState::Done);
+    communicator_->addToWorkQueue(getSelfPtr());
+    return;
+  }
 
   isIntraNodeTransfer_ = response.isIntraNodeTransfer;
 
