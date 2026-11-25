@@ -153,15 +153,6 @@ std::shared_ptr<common::ScanSpec> makeScanSpec(
     bool disableStatsBasedFilterReorder,
     memory::MemoryPool* pool);
 
-std::unique_ptr<dwio::common::BufferedInput> createBufferedInput(
-    const FileHandle& fileHandle,
-    const dwio::common::ReaderOptions& readerOpts,
-    const ConnectorQueryCtx* connectorQueryCtx,
-    std::shared_ptr<io::IoStatistics> ioStatistics,
-    std::shared_ptr<IoStats> ioStats,
-    folly::Executor* executor,
-    const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
-
 /// Given a boolean expression, breaks it up into conjuncts and sorts these into
 /// single-column comparisons with constants (filters), rand() < sampleRate, and
 /// the rest (return value).
