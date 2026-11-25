@@ -2954,11 +2954,10 @@ TEST_F(VectorIndexTest, gpuSearchShortResults) {
         };
         const auto cpuResults = search(/*useGpu=*/false);
         const auto gpuResults = search(/*useGpu=*/true);
-        // cuVS IVF-PQ can return only padding for some queries above k=256,
-        // which sends the batch to the CPU.
-        if (indexType != VectorIndexType::kIvfPq || numNeighbors <= 256) {
-          ASSERT_TRUE(gpuResults.stats().usedGpu);
-        }
+        // One partition is too short for the cuVS IVF-PQ radix selector.
+        EXPECT_EQ(
+            gpuResults.stats().usedGpu,
+            indexType != VectorIndexType::kIvfPq || numNeighbors <= 256);
         ASSERT_EQ(gpuResults.numQueries(), kNumQueries);
         for (size_t queryIndex = 0; queryIndex < kNumQueries; ++queryIndex) {
           const auto gpu = gpuResults.results(queryIndex);
@@ -2983,6 +2982,52 @@ TEST_F(VectorIndexTest, gpuSearchShortResults) {
         }
       }
     }
+  }
+}
+
+TEST_F(VectorIndexTest, gpuIvfPqCandidateBufferLimit) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{1'000};
+  constexpr uint32_t kNumPartitions{16};
+  constexpr uint32_t kNumNeighbors{257};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  const auto reader = readIndex(writeIndexFromVectors(
+      makeConfig(
+          VectorIndexType::kIvfPq,
+          VectorDistanceMetric::kL2,
+          kDimensions,
+          kNumPartitions),
+      data));
+  using RowSelection = VectorIndex::SearchConfig::RowSelection;
+  for (const auto& selection :
+       {RowSelection::all(),
+        RowSelection::fromRange(RowRange{0, kNumVectors - 1})}) {
+    VectorIndex::SearchConfig config{
+        .numQueries = 1,
+        .queryVectors = query,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+        .rowSelection = selection,
+    };
+    const auto cpu = reader->search(config);
+    ASSERT_GT(cpu.totalNumResults(), 1);
+    ASSERT_LT(cpu.totalNumResults(), kNumNeighbors);
+
+    config.useGpu = true;
+    const auto fallback = reader->search(config);
+    EXPECT_FALSE(fallback.stats().usedGpu);
+    expectSearchResultsEqual(fallback, cpu);
+
+    // Probing four partitions provides enough slots for the same request.
+    config.searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(4);
+    const auto gpu = reader->search(config);
+    ASSERT_TRUE(gpu.stats().usedGpu);
+    config.useGpu = false;
+    const auto cpuWithMoreProbes = reader->search(config);
+    EXPECT_EQ(gpu.totalNumResults(), cpuWithMoreProbes.totalNumResults());
   }
 }
 

@@ -20,7 +20,9 @@
 #include <cmath>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <limits>
+#include <numeric>
 #include <unordered_set>
 #include <variant>
 
@@ -39,6 +41,7 @@
 #include <faiss/impl/io.h>
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
+#include <faiss/invlists/InvertedLists.h>
 #include <flatbuffers/flatbuffers.h>
 #include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
@@ -429,12 +432,32 @@ void searchFaissIndex(
 }
 
 #ifdef VELOX_ENABLE_FAISS_GPU
+// cuVS copies the same partition sizes and rounds the sum of the largest
+// probed lists to 128 slots. Above k=256, RAFT's radix selector requires
+// at least k slots in this buffer.
+bool ivfPqCandidateBufferFits(
+    const faiss::IndexIVF& index,
+    size_t numProbes,
+    faiss::idx_t numNeighbors) {
+  constexpr size_t kCandidateAlignment{128};
+  std::vector<size_t> listSizes;
+  listSizes.reserve(index.nlist);
+  for (size_t list = 0; list < index.nlist; ++list) {
+    listSizes.push_back(index.invlists->list_size(list));
+  }
+  const auto end = listSizes.begin() + numProbes;
+  std::nth_element(listSizes.begin(), end, listSizes.end(), std::greater<>{});
+  const auto slots = velox::bits::roundUp(
+      std::accumulate(listSizes.begin(), end, uint64_t{0}), kCandidateAlignment);
+  return static_cast<uint64_t>(numNeighbors) <= slots;
+}
+
 // Returns the IVF options when the batch has a GPU implementation, or null
 // when it must run on the CPU.
 const VectorIndex::IvfSearchOptions* gpuIvfSearchOptions(
     const VectorIndex::SearchConfig& config,
     VectorIndexType indexType,
-    size_t numPartitions,
+    const faiss::IndexIVF& index,
     faiss::idx_t maxNumNeighbors) {
   if (!config.useGpu || !isIvfIndexType(indexType) ||
       !GpuVectorIndex::supports(indexType) ||
@@ -444,6 +467,7 @@ const VectorIndex::IvfSearchOptions* gpuIvfSearchOptions(
   const auto* ivfOptions =
       velox::checkedPointerCast<const VectorIndex::IvfSearchOptions>(
           config.searchOptions.get());
+  const auto numPartitions = index.nlist;
   // cuVS IVF-RaBitQ has no row filter. Above its block-sort limit, partial
   // probing can also leave the cuVS selector with fewer than k candidates.
   // Decide before constructing the GPU index.
@@ -461,6 +485,13 @@ const VectorIndex::IvfSearchOptions* gpuIvfSearchOptions(
   if (ivfOptions->maxCodes != 0 || numProbes == 0 ||
       numProbes > static_cast<uint64_t>(GpuVectorIndex::maxSelection()) ||
       maxNumNeighbors > GpuVectorIndex::maxSelection()) {
+    return nullptr;
+  }
+  // With all partitions probed, k is already capped at the index size.
+  constexpr faiss::idx_t kMaxIvfPqWarpSelection{256};
+  if (indexType == VectorIndexType::kIvfPq && numProbes < numPartitions &&
+      maxNumNeighbors > kMaxIvfPqWarpSelection &&
+      !ivfPqCandidateBufferFits(index, numProbes, maxNumNeighbors)) {
     return nullptr;
   }
   return ivfOptions;
@@ -1012,16 +1043,15 @@ VectorIndex::SearchResults VectorIndex::search(
   SearchStats searchStats;
 #ifdef VELOX_ENABLE_FAISS_GPU
   if (isIvfIndexType(indexType_)) {
-    const auto numPartitions =
-        velox::checkedPointerCast<const faiss::IndexIVF>(faissIndex_.get())
-            ->nlist;
-    const auto* ivfOptions = gpuIvfSearchOptions(
-        config, indexType_, numPartitions, maxNumNeighbors);
+    const auto& ivfIndex =
+        *velox::checkedPointerCast<const faiss::IndexIVF>(faissIndex_.get());
+    const auto* ivfOptions =
+        gpuIvfSearchOptions(config, indexType_, ivfIndex, maxNumNeighbors);
     const auto* gpu = ivfOptions != nullptr ? gpuIndex() : nullptr;
     if (gpu != nullptr) {
       searchGpuIndex(
           *gpu,
-          numPartitions,
+          ivfIndex.nlist,
           numVectors_,
           numQueries,
           ivfOptions->numProbes,
