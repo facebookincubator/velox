@@ -1580,7 +1580,14 @@ Spark-specific Configuration
      - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
        Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
        Set to true to match Spark 3.x's replacement behavior for the supported charsets.
-       Additional JDK charset names and aliases remain unsupported in either mode.
+       This setting does not enable additional JDK charset names or aliases.
+   * - spark.legacy_java_charsets
+     - bool
+     - false
+     - If true, the Spark :spark:func:`encode` function accepts JDK 17-verified aliases for its standard charsets and its documented single-byte charset subset.
+       Corresponds to Spark's ``spark.sql.legacy.javaCharsets`` setting.
+       Spark accepts any JDK charset with that setting enabled; Velox raises an error for names outside its documented subset.
+       Dotless i (U+0131) and long s (U+017F) variants are rejected even where JDK 17 accepts them.
    * - spark.legacy_date_formatter
      - bool
      - false

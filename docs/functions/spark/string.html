@@ -214,14 +214,37 @@ Supported charsets (case-insensitive) are <code class="docutils literal notransl
 <code class="docutils literal notranslate"><span class="pre">UTF-8</span></code>, <code class="docutils literal notranslate"><span class="pre">UTF-16BE</span></code>, <code class="docutils literal notranslate"><span class="pre">UTF-16LE</span></code>, <code class="docutils literal notranslate"><span class="pre">UTF-16</span></code>, and <code class="docutils literal notranslate"><span class="pre">UTF-32</span></code>. Throws
 an exception when <code class="docutils literal notranslate"><span class="pre">charset</span></code> is not supported or a character cannot be
 represented by the selected charset, following Spark 4.0’s default behavior.
-Other charset names and aliases are not supported.
-<code class="docutils literal notranslate"><span class="pre">spark.legacy_coding_error_action</span></code> corresponds to Spark 4.0’s
-<code class="docutils literal notranslate"><span class="pre">spark.sql.legacy.codingErrorAction</span></code>. When enabled,
-unmappable characters in <code class="docutils literal notranslate"><span class="pre">US-ASCII</span></code> and <code class="docutils literal notranslate"><span class="pre">ISO-8859-1</span></code> are replaced with
-<code class="docutils literal notranslate"><span class="pre">?</span></code>. Spark 3.x always replaces unmappable characters; set
+Other charset names and aliases require the opt-in setting below.</p>
+<p>With <code class="docutils literal notranslate"><span class="pre">spark.legacy_java_charsets</span></code> enabled, also accepts JDK 17 names and
+aliases for these standard charsets and the following single-byte encoders:
+<code class="docutils literal notranslate"><span class="pre">IBM037</span></code>, <code class="docutils literal notranslate"><span class="pre">IBM437</span></code>, <code class="docutils literal notranslate"><span class="pre">ISO-8859-2</span></code> through <code class="docutils literal notranslate"><span class="pre">ISO-8859-9</span></code>,
+<code class="docutils literal notranslate"><span class="pre">x-iso-8859-11</span></code>, <code class="docutils literal notranslate"><span class="pre">ISO-8859-13</span></code>, <code class="docutils literal notranslate"><span class="pre">ISO-8859-15</span></code>, <code class="docutils literal notranslate"><span class="pre">ISO-8859-16</span></code>,
+<code class="docutils literal notranslate"><span class="pre">KOI8-R</span></code>, <code class="docutils literal notranslate"><span class="pre">KOI8-U</span></code>, and <code class="docutils literal notranslate"><span class="pre">windows-1250</span></code> through <code class="docutils literal notranslate"><span class="pre">windows-1258</span></code>.
+This setting corresponds to Spark’s <code class="docutils literal notranslate"><span class="pre">spark.sql.legacy.javaCharsets</span></code>.
+Spark accepts any JDK charset when enabled; Velox raises an error for names
+outside the subset above.
+Names match ASCII case-insensitively and accept the Kelvin sign (U+212A),
+following Spark’s locale-independent lowercasing. Unlike Spark on JDK 17,
+Velox rejects variants containing dotless i (U+0131) or long s (U+017F),
+even for <code class="docutils literal notranslate"><span class="pre">IBM037</span></code>, <code class="docutils literal notranslate"><span class="pre">windows-1255</span></code>, <code class="docutils literal notranslate"><span class="pre">windows-1256</span></code>, and <code class="docutils literal notranslate"><span class="pre">windows-1258</span></code>,
+where JDK 17 accepts such spellings. Names must otherwise match exactly.
+The allowlist and encoder mappings are generated from JDK 17, including
+encoder-only mappings. The initial subset covers the ISO-8859 and
+Windows-125x families above, KOI8-R/U, IBM437 for DOS, and IBM037 for EBCDIC.
+This is an explicit coverage choice, not every encoder that passes the
+generator’s single-byte checks. Other eligible encoders, including
+<code class="docutils literal notranslate"><span class="pre">IBM850</span></code>, <code class="docutils literal notranslate"><span class="pre">IBM852</span></code>, <code class="docutils literal notranslate"><span class="pre">IBM866</span></code>, and <code class="docutils literal notranslate"><span class="pre">x-IBM737</span></code>, remain outside this
+initial subset.
+Unlisted multibyte and stateful encodings, such as <code class="docutils literal notranslate"><span class="pre">Shift_JIS</span></code>, <code class="docutils literal notranslate"><span class="pre">Big5</span></code>,
+<code class="docutils literal notranslate"><span class="pre">GBK</span></code>, <code class="docutils literal notranslate"><span class="pre">EUC-JP</span></code>, <code class="docutils literal notranslate"><span class="pre">EUC-KR</span></code>, and <code class="docutils literal notranslate"><span class="pre">ISO-2022-JP</span></code>, and decode-only
+charsets remain unsupported.</p>
+<p><code class="docutils literal notranslate"><span class="pre">spark.legacy_coding_error_action</span></code> corresponds to Spark 4.0’s
+<code class="docutils literal notranslate"><span class="pre">spark.sql.legacy.codingErrorAction</span></code>. When enabled, unmappable characters
+in the single-byte encoders are replaced with their JDK replacement byte,
+<code class="docutils literal notranslate"><span class="pre">3F</span></code> in hexadecimal. Spark 3.x always replaces unmappable characters; set
 <code class="docutils literal notranslate"><span class="pre">spark.legacy_coding_error_action=true</span></code> to match that behavior for the
 supported charsets. This does not enable additional JDK charset names or
-aliases, which remain errors in either mode.
+aliases. Unsupported charsets remain errors in either mode.
 <code class="docutils literal notranslate"><span class="pre">UTF-16</span></code> prepends a big-endian byte-order mark; <code class="docutils literal notranslate"><span class="pre">UTF-32</span></code> emits big-endian
 data without a byte-order mark. Empty input returns empty output without a
 byte-order mark.
