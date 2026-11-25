@@ -22,8 +22,11 @@
 #include <string>
 #include <vector>
 
+#include <fmt/format.h>
+
 #include "velox/common/file/File.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/reader/BatchReader.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
@@ -180,6 +183,92 @@ TEST_F(BufferPolicyTest, writerCutsStripesInsideBatch) {
     offset += result->size();
   }
   EXPECT_EQ(offset, kNumRows);
+}
+
+TEST_F(BufferPolicyTest, writerWritesHybridFlatMapStripeAsOneBatch) {
+  // Five 2-row batches under a large target form one stripe of five inputs.
+  // Each batch adds keys the earlier ones lacked.
+  constexpr int32_t kNumBatches{5};
+  constexpr int32_t kBatchRows{2};
+  std::vector<velox::RowVectorPtr> batches;
+  for (int32_t batch = 0; batch < kNumBatches; ++batch) {
+    const int32_t firstRow = batch * kBatchRows;
+    batches.push_back(vectorMaker_->rowVector(
+        {"id", "features"},
+        {vectorMaker_->flatVector<int64_t>(
+             kBatchRows, [&](auto row) { return firstRow + row; }),
+         vectorMaker_->mapVector<int32_t, int64_t>(
+             kBatchRows,
+             [&](auto row) { return (firstRow + row) % 4 + 1; },
+             [&](auto row, auto index) { return (firstRow + row + index) % 6; },
+             [&](auto row, auto index) {
+               return (firstRow + row) * 10 + index;
+             })}));
+  }
+
+  for (const auto mode :
+       {HybridFlatMap::KeyPresenceMode::kBitmap,
+        HybridFlatMap::KeyPresenceMode::kKeyList}) {
+    SCOPED_TRACE(fmt::format("keyPresenceMode {}", mode));
+    WriterOptions options;
+    options.bufferPolicyFactory = [] {
+      return std::make_unique<StripeRawSizeBufferPolicy>(1 << 20);
+    };
+    options.hybridFlatMapColumns.emplace(
+        "features",
+        HybridFlatMap{
+            ScalarKind::Int32,
+            {{.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+            mode});
+    std::string file;
+    Writer writer{
+        batches[0]->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options)};
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+
+    velox::InMemoryReadFile readFile{file};
+    BatchReader reader{&readFile, *leafPool_};
+    ASSERT_EQ(reader.tabletReader().stripeCount(), 1);
+    EXPECT_TRUE(reader.schema()->asRow().childAt(1)->isHybridFlatMap());
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(kNumBatches * kBatchRows, result));
+    ASSERT_EQ(result->size(), kNumBatches * kBatchRows);
+    for (velox::vector_size_t row = 0; row < result->size(); ++row) {
+      EXPECT_TRUE(result->equalValueAt(
+          batches[row / kBatchRows].get(), row, row % kBatchRows))
+          << "row " << row;
+    }
+  }
+}
+
+TEST_F(BufferPolicyTest, writerRejectsHybridFlatMapWithoutBufferPolicy) {
+  const auto batch = vectorMaker_->rowVector(
+      {"features"},
+      {vectorMaker_->mapVector<int32_t, int64_t>(
+          1,
+          [](auto /*row*/) { return 1; },
+          [](auto /*row*/, auto /*index*/) { return 1; },
+          [](auto /*row*/, auto /*index*/) { return 1; })});
+  WriterOptions options;
+  options.hybridFlatMapColumns.emplace(
+      "features",
+      HybridFlatMap{
+          ScalarKind::Int32,
+          {{.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+          HybridFlatMap::KeyPresenceMode::kBitmap});
+  std::string file;
+  NIMBLE_ASSERT_USER_THROW(
+      Writer(
+          batch->type(),
+          std::make_unique<velox::InMemoryWriteFile>(&file),
+          *rootPool_,
+          std::move(options)),
+      "Hybrid FlatMap columns require a bufferPolicyFactory.");
 }
 
 } // namespace

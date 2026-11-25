@@ -76,6 +76,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::nimble {
 
@@ -1479,6 +1480,13 @@ DictionaryConfigs collectDictionaryConfigs(
   for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
     const auto subfield = parseValueStreamSubfield(columnDictionary.fieldPath);
     const auto& fieldType = resolveValueStreamSubfield(type, subfield);
+    // Hybrid FlatMap splits a column's values into one stream per group, while
+    // a shared dictionary configuration targets a single stream.
+    NIMBLE_USER_CHECK(
+        !context.hasHybridFlatMapNodeId(
+            type.childByName(subfield.baseName())->id()),
+        "Shared dictionary column cannot target a Hybrid FlatMap column: {}.",
+        columnDictionary.fieldPath);
     const auto& valueType =
         resolveDictionaryValueType(fieldType, columnDictionary.fieldPath);
     const auto valueNodeId = static_cast<uint32_t>(valueType.id());
@@ -1641,6 +1649,9 @@ void configureAddedType(
             flatMapKeyEncodingLayouts) {
   if (type.kind() == Kind::Row) {
     streamContext(type.asRow().nullsDescriptor()).setIsNullStream(true);
+  } else if (type.kind() == Kind::HybridFlatMap) {
+    streamContext(type.asHybridFlatMap().nullsDescriptor())
+        .setIsNullStream(true);
   } else if (type.kind() == Kind::FlatMap) {
     streamContext(type.asFlatMap().nullsDescriptor()).setIsNullStream(true);
     FlatmapEncodingLayoutContext::KeyEncodingMap keyEncodings;
@@ -1754,6 +1765,9 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
           });
     }
   }
+
+  context.addHybridFlatMapColumns(
+      *type, context.options().hybridFlatMapColumns);
 
   if (context.options().enableStatsCollection) {
     context.initStatsCollectors(type);
@@ -1990,8 +2004,13 @@ void initializeEncodingLayouts(
         NIMBLE_UNREACHABLE("Flatmap handled already");
       }
       case Kind::HybridFlatMap: {
-        NIMBLE_UNSUPPORTED(
-            "Hybrid FlatMap is supported only by the serialized-value writer.");
+        // As for FlatMap, a layout captured while the column was a MAP is not
+        // replayed.
+        if (encodingLayoutTree.schemaKind() == Kind::Map) {
+          break;
+        }
+        NIMBLE_NOT_IMPLEMENTED(
+            "Hybrid FlatMap encoding layout replay is not implemented yet.");
       }
     }
 #undef SET_STREAM_CONTEXT
@@ -2041,6 +2060,72 @@ std::unique_ptr<index::VectorIndexWriter> createVectorIndexWriter(
   NIMBLE_CHECK_NOT_NULL(
       writer, "Vector index writer factory returned a null writer");
   return writer;
+}
+
+// Copies into `result` the fields of `input`'s top-level null rows, which
+// RowVector::copy() leaves at their defaults. The root field writer writes
+// those fields when it ignores top-level nulls.
+void copyFieldsOfNullRows(
+    const velox::BaseVector& input,
+    velox::vector_size_t sourceRow,
+    velox::vector_size_t targetRow,
+    velox::vector_size_t numRows,
+    velox::RowVector& result) {
+  if (!input.mayHaveNulls()) {
+    return;
+  }
+  const velox::DecodedVector decoded{input};
+  const auto* base = decoded.base()->as<velox::RowVector>();
+  NIMBLE_CHECK_NOT_NULL(base, "Writer input must be a ROW vector.");
+  for (velox::vector_size_t row = 0; row < numRows; ++row) {
+    if (!decoded.isNullAt(sourceRow + row)) {
+      continue;
+    }
+    for (velox::column_index_t column = 0; column < result.childrenSize();
+         ++column) {
+      result.childAt(column)->copy(
+          base->childAt(column).get(),
+          targetRow + row,
+          decoded.index(sourceRow + row),
+          /*count=*/1);
+    }
+  }
+}
+
+// Returns the rows of `range` as one vector. A stripe stores one key-major
+// batch of each Hybrid FlatMap column, so the field writers must see a
+// stripe's rows in one write. With 3 rows from one input and 2 from another,
+// returns a 5-row vector in range order.
+velox::VectorPtr concatenateRange(
+    const BufferRange& range,
+    velox::memory::MemoryPool* pool) {
+  NIMBLE_CHECK(!range.inputs.empty(), "BufferRange must not be empty");
+  const auto& firstInput = range.inputs[0];
+  if (range.inputs.size() == 1) {
+    NIMBLE_CHECK_EQ(range.rowRanges.size(), 1);
+    const auto& rowRange = range.rowRanges[0];
+    return firstInput->slice(
+        static_cast<velox::vector_size_t>(rowRange.startRow),
+        static_cast<velox::vector_size_t>(rowRange.numRows()));
+  }
+  velox::vector_size_t numRows{0};
+  for (const auto& rowRange : range.rowRanges) {
+    numRows += static_cast<velox::vector_size_t>(rowRange.numRows());
+  }
+  auto result = velox::BaseVector::create<velox::RowVector>(
+      firstInput->type(), numRows, pool);
+  velox::vector_size_t targetRow{0};
+  for (size_t i = 0; i < range.inputs.size(); ++i) {
+    const auto& rowRange = range.rowRanges[i];
+    const auto startRow = static_cast<velox::vector_size_t>(rowRange.startRow);
+    const auto numRangeRows =
+        static_cast<velox::vector_size_t>(rowRange.numRows());
+    result->copy(range.inputs[i].get(), targetRow, startRow, numRangeRows);
+    copyFieldsOfNullRows(
+        *range.inputs[i], startRow, targetRow, numRangeRows, *result);
+    targetRow += numRangeRows;
+  }
+  return result;
 }
 } // namespace
 
@@ -2259,6 +2344,12 @@ Writer::Writer(
       !context_->options().enableChunkStats ||
           context_->options().enableChunking,
       "Chunk stats require chunking to be enabled.");
+  // A FlushPolicy ends a stripe only after several write() batches reached the
+  // field writers, so their key-major Hybrid FlatMap batches would share it.
+  if (!context_->options().hybridFlatMapColumns.empty()) {
+    NIMBLE_USER_CHECK_NOT_NULL(
+        bufferPolicy_, "Hybrid FlatMap columns require a bufferPolicyFactory.");
+  }
 
   // Register handler for dynamically discovered FlatMap keys before creating
   // the writer tree, so that predefined keys also trigger the handler.
@@ -2339,6 +2430,16 @@ bool Writer::flushInputBuffers(bool finalize) {
         range.inputs.size(),
         range.rowRanges.size(),
         "BufferRange inputs and rowRanges must be parallel arrays");
+    if (!context_->options().hybridFlatMapColumns.empty()) {
+      auto batch = concatenateRange(range, &(*context_->bufferMemoryPool()));
+      // The Hybrid FlatMap field writer takes one write per stripe, and a
+      // stripe without rows is never flushed to reset it.
+      if (batch->size() > 0) {
+        writeBatch(batch);
+        anyStripeFlushed = writeStripe() || anyStripeFlushed;
+      }
+      continue;
+    }
     for (size_t i = 0; i < range.inputs.size(); ++i) {
       const auto& rowRange = range.rowRanges[i];
       writeBatch(range.inputs[i]->slice(rowRange.startRow, rowRange.numRows()));
@@ -2372,6 +2473,13 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
     NIMBLE_USER_CHECK(
         !batchHasTopLevelNulls,
         "Nimble files with chunk stats cannot contain top-level null rows");
+  }
+  // The Hybrid FlatMap batch reader rejects the scatter bitmap that top-level
+  // null rows produce.
+  if (!context_->options().hybridFlatMapColumns.empty()) {
+    NIMBLE_USER_CHECK(
+        !batchHasTopLevelNulls,
+        "Nimble files with Hybrid FlatMap columns cannot contain top-level null rows");
   }
   hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
 }
