@@ -352,8 +352,7 @@ IDs.</p>
 <span class="w">               </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_NATION</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="s">"n_regionkey"</span><span class="p">},</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span>
 <span class="w">           </span><span class="p">.</span><span class="n">capturePlanNodeId</span><span class="p">(</span><span class="n">nationScanId</span><span class="p">)</span>
 <span class="w">           </span><span class="p">.</span><span class="n">hashJoin</span><span class="p">(</span>
-<span class="w">               </span><span class="p">{</span><span class="s">"n_regionkey"</span><span class="p">},</span>
-<span class="w">               </span><span class="p">{</span><span class="s">"r_regionkey"</span><span class="p">},</span>
+<span class="w">               </span><span class="s">"n_regionkey = r_regionkey"</span><span class="p">,</span>
 <span class="w">               </span><span class="n">PlanBuilder</span><span class="p">(</span><span class="n">planNodeIdGenerator</span><span class="p">)</span>
 <span class="w">                   </span><span class="p">.</span><span class="n">tpchTableScan</span><span class="p">(</span>
 <span class="w">                       </span><span class="n">tpch</span><span class="o">::</span><span class="n">Table</span><span class="o">::</span><span class="n">TBL_REGION</span><span class="p">,</span>
@@ -361,7 +360,6 @@ IDs.</p>
 <span class="w">                       </span><span class="mi">1</span><span class="w"> </span><span class="cm">/*scaleFactor*/</span><span class="p">)</span>
 <span class="w">                   </span><span class="p">.</span><span class="n">capturePlanNodeId</span><span class="p">(</span><span class="n">regionScanId</span><span class="p">)</span>
 <span class="w">                   </span><span class="p">.</span><span class="n">planNode</span><span class="p">(),</span>
-<span class="w">               </span><span class="s">""</span><span class="p">,</span><span class="w"> </span><span class="c1">// extra filter</span>
 <span class="w">               </span><span class="p">{</span><span class="s">"r_name"</span><span class="p">})</span>
 <span class="w">           </span><span class="p">.</span><span class="n">singleAggregation</span><span class="p">({</span><span class="s">"r_name"</span><span class="p">},</span><span class="w"> </span><span class="p">{</span><span class="s">"count(1) as nation_cnt"</span><span class="p">})</span>
 <span class="w">           </span><span class="p">.</span><span class="n">orderBy</span><span class="p">({</span><span class="s">"r_name"</span><span class="p">},</span><span class="w"> </span><span class="nb">false</span><span class="p">)</span>
