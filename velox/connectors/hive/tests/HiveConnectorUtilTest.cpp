@@ -805,43 +805,6 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
   }
 }
 
-TEST_F(HiveConnectorUtilTest, checkColumnHandleConsistent) {
-  // Create two consistent column handles
-  auto handle1 = std::make_shared<hive::HiveColumnHandle>(
-      "col1",
-      connector::FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
-      BIGINT());
-  auto handle2 = std::make_shared<hive::HiveColumnHandle>(
-      "col1",
-      connector::FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
-      BIGINT());
-
-  // Should not throw for consistent handles
-  EXPECT_NO_THROW(connector::checkColumnHandleConsistent(*handle1, *handle2));
-
-  // Test inconsistent column type
-  auto handlePartition = std::make_shared<hive::HiveColumnHandle>(
-      "col1",
-      connector::FileColumnHandle::ColumnType::kPartitionKey,
-      BIGINT(),
-      BIGINT());
-  VELOX_ASSERT_THROW(
-      connector::checkColumnHandleConsistent(*handle1, *handlePartition),
-      "Inconsistent column handle type: col1, expected Regular, got PartitionKey");
-
-  // Test inconsistent data type
-  auto handleVarchar = std::make_shared<hive::HiveColumnHandle>(
-      "col1",
-      connector::FileColumnHandle::ColumnType::kRegular,
-      VARCHAR(),
-      VARCHAR());
-  VELOX_ASSERT_THROW(
-      connector::checkColumnHandleConsistent(*handle1, *handleVarchar),
-      "Inconsistent column handle data type: col1, expected BIGINT, got VARCHAR");
-}
-
 TEST_F(HiveConnectorUtilTest, makeScanSpecWithIndexColumns) {
   // Data columns schema - all columns available in the file.
   const auto dataColumns = ROW(

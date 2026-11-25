@@ -101,12 +101,6 @@ struct SpecialColumnNames {
   std::optional<std::string> readRange;
 };
 
-/// Check that two FileColumnHandle instances are consistent in terms of
-/// column type, data type, and file type. Throw if inconsistent.
-void checkColumnHandleConsistent(
-    const FileColumnHandle& x,
-    const FileColumnHandle& y);
-
 /// Creates a ScanSpec for reading data from files.
 ///
 /// The ScanSpec describes which columns to read and what filters to apply.
