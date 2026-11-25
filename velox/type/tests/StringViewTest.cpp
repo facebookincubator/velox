@@ -21,11 +21,7 @@
 #include <sstream>
 #include <tuple>
 
-#include "velox/common/base/SimdUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/memory/RawVector.h"
-#include "velox/common/testutil/PageBeforeGuard.h"
-#include "velox/common/time/Timer.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox {
@@ -260,27 +256,6 @@ TEST(StringView, negativeSizes) {
   EXPECT_NO_THROW(StringView(nullptr, 0));
 }
 
-int32_t linearSearchSimple(
-    StringView key,
-    const StringView* strings,
-    const int32_t* indices,
-    int32_t numStrings) {
-  if (indices) {
-    for (auto i = 0; i < numStrings; ++i) {
-      if (strings[indices[i]] == key) {
-        return i;
-      }
-    }
-  } else {
-    for (auto i = 0; i < numStrings; ++i) {
-      if (strings[i] == key) {
-        return i;
-      }
-    }
-  }
-  return -1;
-}
-
 TEST(StringView, makeInline) {
   const std::string_view shortString = "hola";
 
@@ -300,144 +275,6 @@ TEST(StringView, makeInline) {
           std::string_view("slightly longer non-inlinable string")),
       "StringView::makeInline() requires an input string that fits inline");
 #endif
-}
-
-TEST(StringView, linearSearch) {
-  constexpr int32_t kSize = 1003;
-  std::vector<raw_vector<char>> data(kSize);
-  std::vector<StringView> stringViews(kSize);
-  // Distinct values with sizes from 0 to 50.
-  for (auto i = 0; i < 1000; ++i) {
-    std::string string = fmt::format("{}-", i);
-    int32_t numRepeats = 1 + i % 10;
-    auto item = string;
-    for (auto repeat = 0; repeat < numRepeats; ++repeat) {
-      string += item;
-    }
-    string.resize(std::min<int32_t>((i >= 50 ? 2 : 0) + string.size(), i % 50));
-    data[i].resize(string.size());
-    if (!string.empty()) {
-      memcpy(data[i].data(), string.data(), string.size());
-    }
-    stringViews[i] = StringView(data[i].data(), data[i].size());
-  }
-  raw_vector<int32_t> indices(kSize);
-  for (auto i = 0; i < kSize; ++i) {
-    indices[i] = 999 - i;
-  }
-
-  uint64_t simdUsec = 0;
-  uint64_t loopUsec = 0;
-  uint64_t simdIndicesUsec = 0;
-  uint64_t loopIndicesUsec = 0;
-  for (auto counter = 0; counter < 10; ++counter) {
-    {
-      MicrosecondTimer t(&simdUsec);
-      EXPECT_EQ(
-          -1,
-          StringView::linearSearch(
-              stringViews[11], stringViews.data(), nullptr, 10));
-      for (auto i = 0; i < kSize; ++i) {
-        auto testIndex = (i * 1) % kSize;
-        auto index = StringView::linearSearch(
-            stringViews[testIndex],
-            stringViews.data(),
-            nullptr,
-            stringViews.size());
-        EXPECT_TRUE(stringViews[testIndex] == stringViews[index]);
-      }
-    }
-    {
-      MicrosecondTimer t(&loopUsec);
-      EXPECT_EQ(
-          -1,
-          linearSearchSimple(stringViews[11], stringViews.data(), nullptr, 10));
-      for (auto i = 0; i < kSize; ++i) {
-        auto testIndex = (i * 1) % kSize;
-        auto index = linearSearchSimple(
-            stringViews[testIndex],
-            stringViews.data(),
-            nullptr,
-            stringViews.size());
-        EXPECT_TRUE(stringViews[testIndex] == stringViews[index]);
-      }
-    }
-
-    {
-      MicrosecondTimer t(&simdIndicesUsec);
-      EXPECT_EQ(
-          -1,
-          StringView::linearSearch(
-              stringViews[indices[11]],
-              stringViews.data(),
-              indices.data(),
-              10));
-      for (auto i = 0; i < kSize; ++i) {
-        auto testIndex = (i * 1) % kSize;
-        auto index = StringView::linearSearch(
-            stringViews[testIndex],
-            stringViews.data(),
-            indices.data(),
-            stringViews.size());
-        EXPECT_TRUE(stringViews[testIndex] == stringViews[indices[index]]);
-      }
-    }
-    {
-      MicrosecondTimer t(&loopIndicesUsec);
-      EXPECT_EQ(
-          -1,
-          linearSearchSimple(
-              stringViews[indices[11]],
-              stringViews.data(),
-              indices.data(),
-              10));
-      for (auto i = 0; i < kSize; ++i) {
-        auto testIndex = (i * 1) % kSize;
-        auto index = linearSearchSimple(
-            stringViews[testIndex],
-            stringViews.data(),
-            indices.data(),
-            stringViews.size());
-        EXPECT_TRUE(stringViews[testIndex] == stringViews[indices[index]]);
-      }
-    }
-  }
-  LOG(INFO) << "StringView search: SIMD: " << simdUsec << " / "
-            << simdIndicesUsec << " scalar: " << loopUsec << " / "
-            << loopIndicesUsec;
-}
-
-TEST(StringView, linearSearchBodiesAtEndOfMapping) {
-  // String bodies that wrap external memory may end right before an unmapped
-  // page. Comparing them must stay within their bytes.
-  const std::string text = "a string too long to inline";
-  common::testutil::PageBeforeGuard keyPage;
-  common::testutil::PageBeforeGuard matchPage;
-  auto atEnd = [&](const common::testutil::PageBeforeGuard& page) {
-    const auto body = page.copyToEnd(text);
-    return StringView(body.data(), body.size());
-  };
-  // String 2 holds the key's text at another address, so its header matches
-  // and the search compares the bodies. String 1 has the same header and a
-  // different body.
-  const StringView key = atEnd(keyPage);
-  const std::vector<StringView> strings = {
-      StringView("a string of other length"),
-      StringView("a string too long to inlinX"),
-      atEnd(matchPage),
-      StringView("another string, also long"),
-  };
-  ASSERT_FALSE(key.isInline());
-  ASSERT_NE(key.data(), strings[2].data());
-
-  EXPECT_EQ(
-      StringView::linearSearch(key, strings.data(), nullptr, strings.size()),
-      2);
-  const std::vector<int32_t> indices = {3, 2, 1, 0};
-  EXPECT_EQ(
-      StringView::linearSearch(
-          key, strings.data(), indices.data(), indices.size()),
-      1);
 }
 
 } // namespace
