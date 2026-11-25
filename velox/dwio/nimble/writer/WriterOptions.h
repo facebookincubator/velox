@@ -18,6 +18,7 @@
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/MetricsLogger.h"
 #include "velox/dwio/nimble/common/NimbleConfig.h"
 #include "velox/dwio/nimble/common/SharedDictionaryConfig.h"
@@ -270,6 +271,18 @@ struct WriterOptions {
   /// cannot read the files it writes. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   folly::F14FastSet<std::string> slidingWindowArrayColumns{};
+
+  /// Top-level MAP columns written as Hybrid FlatMaps, each grouping its keys
+  /// as its HybridFlatMap says. Each grouping lists its groups in ascending
+  /// group ID order, ending with Default, which may be the only group and then
+  /// holds every key. A stripe stores one key-major batch of each such column,
+  /// so they require bufferPolicyFactory, and the writer writes the rows of
+  /// each emitted BufferRange as one batch. Top-level null rows are rejected
+  /// unless ignoreTopLevelNulls is set. A column listed here cannot also be in
+  /// flatMapColumns, dictionaryArrayColumns or deduplicatedMapColumns, or be
+  /// targeted by a shared dictionary.
+  /// Experimental: Hybrid FlatMap files are not production-ready yet.
+  folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
 
   /// The metric logger would come populated with access descriptor information,
   /// application generated query id or specific sampling configs.

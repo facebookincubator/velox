@@ -18,6 +18,7 @@
 #include <velox/type/StringView.h>
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <numeric>
 #include <optional>
 
@@ -5889,6 +5890,9 @@ class HybridFlatMapGroupReader {
           const auto rowCount = decoder->remainingRows();
           values.resize(rowCount);
           if (rowCount > 0) {
+            // Decoders take an empty vector and add the buffers that back the
+            // decoded strings.
+            std::vector<velox::BufferPtr> stringBuffers;
             decoder->next(
                 rowCount,
                 values.data(),
@@ -5897,8 +5901,12 @@ class HybridFlatMapGroupReader {
                       "Hybrid FlatMap {} stream must not contain nulls.",
                       streamName);
                 },
-                scratchBuffers_,
+                stringBuffers,
                 /*scatterOutputBitmap=*/nullptr);
+            scratchBuffers_.insert(
+                scratchBuffers_.end(),
+                std::make_move_iterator(stringBuffers.begin()),
+                std::make_move_iterator(stringBuffers.end()));
           }
           NIMBLE_CHECK_FILE_EQ(
               decoder->remainingRows(),
