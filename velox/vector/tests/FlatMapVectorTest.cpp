@@ -1330,6 +1330,45 @@ TEST_F(FlatMapVectorTest, resizeWithViewInMaps) {
   EXPECT_EQ(flatMap->sizeAt(1), 2);
 }
 
+TEST_F(FlatMapVectorTest, prepareForReuse) {
+  {
+    VectorPtr vector = maker_.flatMapVector<int64_t, int64_t>({
+        {{1, 10}, {2, 20}},
+        {{2, 30}},
+    });
+    BaseVector::prepareForReuse(vector, 3);
+    ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    auto* flatMap = vector->asUnchecked<FlatMapVector>();
+    ASSERT_EQ(flatMap->size(), 3);
+    ASSERT_EQ(flatMap->numDistinctKeys(), 2);
+    for (column_index_t channel = 0; channel < flatMap->numDistinctKeys();
+         ++channel) {
+      const auto* inMap = flatMap->rawInMapsAt(channel);
+      ASSERT_NE(inMap, nullptr);
+      EXPECT_EQ(bits::countBits(inMap, 0, flatMap->size()), 0);
+    }
+    for (vector_size_t row = 0; row < flatMap->size(); ++row) {
+      EXPECT_EQ(flatMap->sizeAt(row), 0);
+    }
+  }
+  {
+    auto source = maker_.flatMapVector<int64_t, int64_t>({{{1, 10}}});
+    VectorPtr vector = std::make_shared<FlatMapVector>(
+        pool(),
+        source->type(),
+        nullptr,
+        source->size(),
+        source->distinctKeys(),
+        std::vector<VectorPtr>{source->mapValuesAt(0)},
+        std::vector<BufferPtr>{});
+    vector->prepareForReuse();
+    EXPECT_EQ(vector->asUnchecked<FlatMapVector>()->numDistinctKeys(), 0);
+    EXPECT_EQ(source->numDistinctKeys(), 1);
+    test::assertEqualVectors(
+        maker_.flatMapVector<int64_t, int64_t>({{{1, 10}}}), source);
+  }
+}
+
 TEST_F(FlatMapVectorTest, primitiveKeys) {
   // bigint key.
   auto flatMapVector = maker_.flatMapVector<int64_t, double>({

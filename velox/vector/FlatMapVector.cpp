@@ -363,6 +363,35 @@ vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
   return size;
 }
 
+void FlatMapVector::prepareForReuse() {
+  BaseVector::prepareForReuse();
+
+  bool keepKeys = distinctKeys_.use_count() == 1 && keyIndex_.use_count() == 1;
+  for (column_index_t channel = 0; keepKeys && channel < mapValues_.size();
+       ++channel) {
+    keepKeys = BaseVector::recursivelyReusable(mapValues_[channel]) &&
+        (channel >= inMaps_.size() || inMaps_[channel] == nullptr ||
+         inMaps_[channel]->isMutable());
+  }
+  if (!keepKeys) {
+    setDistinctKeys(BaseVector::create(keyType(), 0, pool_));
+    return;
+  }
+
+  inMaps_.resize(mapValues_.size());
+  for (column_index_t channel = 0; channel < mapValues_.size(); ++channel) {
+    auto& inMap = inMaps_[channel];
+    if (inMap == nullptr || inMap->capacity() < bits::nbytes(size())) {
+      inMap = AlignedBuffer::allocate<bool>(size(), pool_, false);
+    } else {
+      bits::fillBits(inMap->asMutable<uint64_t>(), 0, size(), false);
+    }
+    if (mapValues_[channel] != nullptr) {
+      BaseVector::prepareForReuse(mapValues_[channel], size());
+    }
+  }
+}
+
 void FlatMapVector::resize(vector_size_t newSize, bool setNotNull) {
   const auto oldSize = size();
   BaseVector::resize(newSize, setNotNull);

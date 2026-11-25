@@ -298,6 +298,10 @@ class FlatMapVector : public BaseVector {
   // vectors will remain nullptr), in-map, and top level null buffers.
   void resize(vector_size_t newSize, bool setNotNull = true) override;
 
+  /// Clears every row while keeping the distinct keys and their buffers for
+  /// the next batch when nothing else holds them; drops all keys otherwise.
+  void prepareForReuse() override;
+
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
 
   VectorPtr testingCopyPreserveEncodings(

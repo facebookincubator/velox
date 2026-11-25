@@ -55,6 +55,17 @@ void readCursorAsync(
     uint64_t maxWaitMicros,
     const std::function<void(const RowVectorPtr&)>& onBatch);
 
+/// Runs 'mapPlan' and 'flatMapPlan', the same plan over map and flat map
+/// inputs, with the other settings of 'params'. Checks that their results are
+/// equal row for row, and that columns 'flatMapChannels' of every batch of
+/// 'flatMapPlan' are flat maps, as the plan produced them rather than copies.
+/// Returns the task of 'flatMapPlan'.
+std::shared_ptr<Task> assertFlatMapResults(
+    CursorParameters params,
+    const core::PlanNodePtr& mapPlan,
+    const core::PlanNodePtr& flatMapPlan,
+    const std::vector<column_index_t>& flatMapChannels);
+
 #ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
 // TODO: Remove once Prestissimo migrates.
 /// Legacy query runner. Use AssertQueryBuilder instead.
