@@ -150,6 +150,15 @@ These stats are reported only by TableWriter operator
    * - writeCompressionWallNanos
      - nanos
      - The walltime spent on file write data compression.
+   * - sortWriterDedupedRows
+     -
+     - The number of duplicate rows dropped by the sort writer. Reported only
+       when the session property ``sort_writer_num_unique_key_columns`` is
+       above zero.
+   * - sortWriterDedupeNanos
+     - nanos
+     - The walltime spent by the sort writer on dropping duplicate rows.
+       Reported only when ``sort_writer_num_unique_key_columns`` is above zero.
 
 Nimble Writer
 ~~~~~~~~~~~~~
