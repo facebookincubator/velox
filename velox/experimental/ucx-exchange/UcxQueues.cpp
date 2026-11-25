@@ -746,7 +746,7 @@ void UcxOutputQueue::terminate() {
     clearPendingReadersLocked(pendingCallbacks);
     int64_t discardedBytes{0};
     int64_t numDiscarded{0};
-    // Fire all pending getData callbacks with nullptr to signal end-of-stream.
+    // Fire all pending getData callbacks with a clean end step.
     // This handles the case where a producer task fails or is cancelled before
     // noMoreData() is called, preventing consumers from being orphaned.
     for (auto& queue : queues_) {

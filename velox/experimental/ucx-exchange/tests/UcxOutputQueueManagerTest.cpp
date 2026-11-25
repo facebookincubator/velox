@@ -468,7 +468,10 @@ TEST_F(UcxOutputQueueManagerTest, endStepIsClean) {
   noMoreData(taskId);
 
   std::vector<ReaderStep> steps;
+  // The queue holds a chunk and the end marker: stop after three reads, so that
+  // a regression fails instead of hanging.
   while (steps.empty() || steps.back().kind == ReaderStep::Kind::kChunk) {
+    ASSERT_LT(steps.size(), 3);
     queueManager_->getData(taskId, 0, [&steps](ReaderStep step) {
       steps.push_back(std::move(step));
     });

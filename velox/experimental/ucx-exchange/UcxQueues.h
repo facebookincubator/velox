@@ -37,6 +37,7 @@ namespace facebook::velox::ucx_exchange {
 /// The chunk is a shared_ptr to support broadcast mode, where the same GPU data
 /// is shared across multiple destination queues without copying.
 struct ReaderStep {
+  /// What a step carries.
   enum class Kind : uint8_t {
     /// 'data', 'numRows' and 'remainingBytes' are set.
     kChunk,
@@ -46,7 +47,7 @@ struct ReaderStep {
     kStop,
   };
 
-  /// No default: build steps through the factories.
+  /// Which of the fields below are set. Build steps through the factories.
   Kind kind;
   /// The chunk. kChunk only. It is not named 'chunk', which the factory takes.
   std::shared_ptr<cudf::packed_columns> data;
@@ -59,23 +60,38 @@ struct ReaderStep {
   /// How the channel ended. kEnd only.
   ChannelOutcome outcome;
 
+  /// Returns a kChunk step. 'numRows' is the logical row count of 'chunk', and
+  /// 'remainingBytes' the sizes of the chunks still queued.
   static ReaderStep chunk(
       std::shared_ptr<cudf::packed_columns> chunk,
       vector_size_t numRows,
       std::vector<int64_t> remainingBytes);
 
+  /// Returns a kEnd step that carries 'outcome'.
   static ReaderStep end(ChannelOutcome outcome);
 
+  /// Returns a kStop step.
   static ReaderStep stop();
+
+ private:
+  explicit ReaderStep(Kind kind) : kind(kind) {}
 };
 
 /// @brief Callback function for getting data from the queues.
 using ReaderCallback = std::function<void(ReaderStep step)>;
 
+/// A reader callback together with the step to hand it. A queue returns these
+/// for the caller to notify after it has released its locks.
 struct UcxDataAvailable {
+  /// The reader to notify. Null if no reader waits.
   ReaderCallback callback{nullptr};
+  /// The step for 'callback'. The default is a clean end, which the empty-queue
+  /// paths of deleteResults() and clearPendingReadersLocked() send today.
+  /// TODO(Task 6): give these paths an explicit outcome.
   ReaderStep step{ReaderStep::end(ChannelOutcome::clean())};
 
+  /// Invokes 'callback' with 'step', if there is a callback. Call it without
+  /// holding any lock.
   void notify() {
     if (callback) {
       callback(std::move(step));
@@ -121,6 +137,11 @@ class UcxDestinationQueue {
       vector_size_t numRows);
 
   struct Data {
+    /// The step for the reader. Meaningful if 'immediate', and for
+    /// getAndClearNotify(), which takes the step of a reader that waited. When
+    /// the queue is empty and nobody is served, the default is a clean end.
+    /// TODO(Task 6): give the empty-queue deleteResults() paths an explicit
+    /// outcome.
     ReaderStep step{ReaderStep::end(ChannelOutcome::clean())};
     /// Whether the result is returned immediately without invoking the `notify'
     /// callback.
@@ -130,7 +151,7 @@ class UcxDestinationQueue {
   /// @brief Removes the data from the front of the queue and transfers
   /// ownership to the caller. If there is no data, 'notify' is installed and it
   /// will be called when data becomes available. In this case, 'immediate' is
-  /// false and the step is meaningless.
+  /// false and the step is not to be used.
   [[nodiscard]] Data getData(ReaderCallback notify);
 
   /// Removes all remaining data from the queue.
@@ -141,8 +162,10 @@ class UcxDestinationQueue {
   /// locks. Keeps an end marker.
   std::vector<std::shared_ptr<cudf::packed_columns>> takeQueuedData();
 
-  /// Returns and clears the notify callback, if any, along with arguments for
-  /// the callback.
+  /// Returns and clears the notify callback, if any, along with the step for
+  /// it. On an empty queue, which deleteResults() and the pending-reader
+  /// clearing reach, the step is a clean end today.
+  /// TODO(Task 6): give those paths an explicit outcome.
   UcxDataAvailable getAndClearNotify();
 
   /// Finishes this destination buffer, set finished stats.
@@ -291,9 +314,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// available. Otherwise, installs 'notify' until data becomes available.
   /// Unpublished readers wait for initialize() or updateOutputBuffers() to
   /// publish their destination and backfill any broadcast data and end marker.
-  /// Invokes 'notify' with nullptr when the final count excludes the reader,
-  /// results have been deleted, or the queue has terminated. Negative
-  /// destinations also receive nullptr.
+  /// Invokes 'notify' with a clean kEnd step when the final count excludes the
+  /// reader, results have been deleted, or the queue has terminated. Negative
+  /// destinations also receive a clean kEnd step.
   void getData(int destination, ReaderCallback notify);
 
   /// @brief Indicates that a driver is done and won't enqueue any more data.
