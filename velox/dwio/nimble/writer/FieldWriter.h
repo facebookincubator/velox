@@ -236,8 +236,18 @@ class FieldWriterContext {
     hybridFlatMaps_.reserve(size);
   }
 
-  /// Returns regular FlatMap node IDs used by file-writer raw-size accounting.
-  /// Hybrid FlatMap is serialized-value-only and is intentionally excluded.
+  /// Registers each Hybrid FlatMap column of `root` after checking its
+  /// configuration. `root` must be a ROW type unless `columns` is empty. Call
+  /// it after registering the FlatMap, dictionary-array and deduplicated-map
+  /// nodes, so a column that also uses one of those options is rejected.
+  void addHybridFlatMapColumns(
+      const velox::dwio::common::TypeWithId& root,
+      const folly::F14FastMap<std::string, HybridFlatMap>& columns);
+
+  /// Returns the node IDs of FlatMap columns for getRawSizeFromVector(), which
+  /// needs them to size a FlatMap column given as a ROW with one field per key
+  /// instead of a MAP. Hybrid FlatMap columns are left out: their input must
+  /// be a MAP, and the writer rejects a ROW.
   inline folly::F14FastSet<uint32_t> flatMapNodeIds() const {
     folly::F14FastSet<uint32_t> ids;
     ids.reserve(flatMapNodes_.size());
