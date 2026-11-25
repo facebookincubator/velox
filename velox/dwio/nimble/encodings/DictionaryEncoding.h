@@ -65,6 +65,7 @@ class DictionaryEncoding
       const Encoding::Options& options = {});
 
   ~DictionaryEncoding() override {
+    this->releaseVectorBuffer(alphabet_);
     this->releaseBuffer(indicesBuffer_);
   }
 
@@ -289,7 +290,7 @@ DictionaryEncoding<T>::DictionaryEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
-      alphabet_{this->pool_} {
+      alphabet_{this->template getVectorBuffer<T>()} {
   const auto* pos = data.data() + this->dataOffset();
   const uint32_t alphabetSize = encoding::readUint32(pos);
   alphabetEncoding_ = EncodingFactory().create(
