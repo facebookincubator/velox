@@ -25,7 +25,10 @@
 #include <folly/Executor.h>
 #include <folly/ScopeGuard.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/synchronization/Baton.h>
 #include <folly/synchronization/EventCount.h>
+#include <gflags/gflags.h>
+#include <glog/logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest-spi.h>
@@ -34,11 +37,14 @@
 #include <chrono>
 #include <cstdlib>
 #include <future>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string_view>
+#include <thread>
 #include <variant>
 #include <vector>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/OutputTransportRegistry.h"
@@ -374,59 +380,381 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(generateTestParams()),
     ExchangeTestParamsPrinter());
 
+namespace {
+
+// Packs a 'numRows'-row table of UcxTestData::kTestRowType, as a producer would
+// enqueue it.
+std::unique_ptr<cudf::packed_columns> makePackedColumns(vector_size_t numRows) {
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+  auto table = makeTable(numRows, UcxTestData::kTestRowType, stream);
+  auto packed =
+      std::make_unique<cudf::packed_columns>(cudf::pack(table->view(), stream));
+  stream.sync();
+  return packed;
+}
+
+// Returns a 'numRows'-row table as a source puts it into the exchange queue.
+PackedTableWithStreamPtr makePackedTable(vector_size_t numRows) {
+  auto packed = makePackedColumns(numRows);
+  const auto view = cudf::unpack(*packed);
+  return std::make_unique<PackedTableWithStream>(
+      std::make_unique<cudf::packed_table>(
+          cudf::packed_table{view, std::move(*packed)}),
+      cuda::stream_ref{cudaStream_t{cudaStreamDefault}},
+      numRows);
+}
+
+UcxExchangeQueue::SourceId addSource(UcxExchangeQueue& queue) {
+  std::lock_guard<std::mutex> l(queue.mutex());
+  return queue.addSourceLocked();
+}
+
+// Puts 'table' from source 'id' into 'queue' and wakes the consumers that
+// enqueueTable() returns. Returns false if the queue refused the table, which
+// then stays in 'table'.
+bool enqueue(
+    UcxExchangeQueue& queue,
+    UcxExchangeQueue::SourceId id,
+    PackedTableWithStreamPtr& table) {
+  std::vector<ContinuePromise> promises;
+  const bool taken = queue.enqueueTable(id, table, promises);
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
+  return taken;
+}
+
+// Dequeues one table for consumer 0.
+PackedTableWithStreamPtr dequeue(UcxExchangeQueue& queue, bool& atEnd) {
+  std::lock_guard<std::mutex> l(queue.mutex());
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  ContinuePromise stalePromise = ContinuePromise::makeEmpty();
+  return queue.dequeueLocked(0, &atEnd, &future, &stalePromise);
+}
+
+// Runs 'first' and 'second' on two threads that start together.
+void runConcurrently(
+    const std::function<void()>& first,
+    const std::function<void()>& second) {
+  folly::Baton<> startFirst;
+  folly::Baton<> startSecond;
+  std::thread firstThread([&] {
+    startFirst.wait();
+    first();
+  });
+  std::thread secondThread([&] {
+    startSecond.wait();
+    second();
+  });
+  startFirst.post();
+  startSecond.post();
+  firstThread.join();
+  secondThread.join();
+}
+
+// The number of times each close race runs.
+constexpr int32_t kNumRaceIterations{1'000};
+
+} // namespace
+
 // size() and empty() read a counter maintained under the queue's mutex rather
 // than the deque, so that the Communicator progress thread can poll the depth
 // lock-free. Covers that the counter stays in step with every mutation.
 TEST(UcxExchangeQueueTest, sizeTracksQueuedTables) {
   UcxExchangeQueue queue{/*numberOfConsumers=*/1};
-  std::vector<ContinuePromise> promises;
-  {
-    std::lock_guard<std::mutex> l(queue.mutex());
-    queue.addSourceLocked();
-    EXPECT_EQ(queue.size(), 0);
-    EXPECT_TRUE(queue.empty());
-
-    for (int32_t expected = 1; expected <= 3; ++expected) {
-      queue.enqueueLocked(std::make_unique<PackedTableWithStream>(), promises);
-      EXPECT_EQ(queue.size(), expected);
-    }
-    EXPECT_FALSE(queue.empty());
-
-    bool atEnd{false};
-    ContinueFuture future = ContinueFuture::makeEmpty();
-    ContinuePromise stalePromise = ContinuePromise::makeEmpty();
-    EXPECT_NE(queue.dequeueLocked(0, &atEnd, &future, &stalePromise), nullptr);
-    EXPECT_FALSE(atEnd);
-    EXPECT_EQ(queue.size(), 2);
-
-    // The end-of-stream marker counts a source as completed instead of being
-    // queued, so the depth must not move.
-    queue.enqueueLocked(nullptr, promises);
-    EXPECT_EQ(queue.size(), 2);
-  }
-
-  // setError() discards the queued tables, because an errored queue is never
-  // consumed from.
-  queue.setError("Producer failed");
+  const auto first = addSource(queue);
+  const auto second = addSource(queue);
+  queue.sourceOpened(first);
+  queue.sourceOpened(second);
   EXPECT_EQ(queue.size(), 0);
   EXPECT_TRUE(queue.empty());
+
+  for (int32_t expected = 1; expected <= 3; ++expected) {
+    auto table = makePackedTable(100);
+    ASSERT_TRUE(enqueue(queue, first, table));
+    EXPECT_EQ(queue.size(), expected);
+  }
+  EXPECT_FALSE(queue.empty());
+
+  bool atEnd{false};
+  EXPECT_NE(dequeue(queue, atEnd), nullptr);
+  EXPECT_FALSE(atEnd);
+  EXPECT_EQ(queue.size(), 2);
+
+  // A clean end leaves the queued tables to be read.
+  queue.end(first, ChannelOutcome::clean());
+  EXPECT_EQ(queue.size(), 2);
+
+  // An error frees them, because a failed consumer reads nothing more.
+  queue.end(second, ChannelOutcome::producerError("Producer failed"));
+  EXPECT_EQ(queue.size(), 0);
+  EXPECT_TRUE(queue.empty());
+  EXPECT_EQ(queue.totalBytes(), 0);
 }
 
 TEST(UcxExchangeQueueTest, closeResetsSize) {
   UcxExchangeQueue queue{/*numberOfConsumers=*/1};
-  std::vector<ContinuePromise> promises;
-  {
-    std::lock_guard<std::mutex> l(queue.mutex());
-    queue.addSourceLocked();
-    queue.enqueueLocked(std::make_unique<PackedTableWithStream>(), promises);
-    queue.enqueueLocked(std::make_unique<PackedTableWithStream>(), promises);
-    EXPECT_EQ(queue.size(), 2);
+  const auto source = addSource(queue);
+  queue.sourceOpened(source);
+  for (int32_t i = 0; i < 2; ++i) {
+    auto table = makePackedTable(100);
+    ASSERT_TRUE(enqueue(queue, source, table));
   }
+  EXPECT_EQ(queue.size(), 2);
+  EXPECT_GT(queue.totalBytes(), 0);
 
   // close() discards whatever is still queued.
   queue.close();
   EXPECT_EQ(queue.size(), 0);
   EXPECT_TRUE(queue.empty());
+  EXPECT_EQ(queue.totalBytes(), 0);
+}
+
+TEST(UcxExchangeQueueTest, cleanEndsFinishConsumer) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto first = addSource(queue);
+  const auto second = addSource(queue);
+  queue.sourceOpened(first);
+  queue.sourceOpened(second);
+  queue.end(first, ChannelOutcome::clean());
+  queue.end(second, ChannelOutcome::clean());
+
+  // More sources may still come.
+  bool atEnd{true};
+  EXPECT_EQ(dequeue(queue, atEnd), nullptr);
+  EXPECT_FALSE(atEnd);
+
+  queue.noMoreSources();
+  EXPECT_EQ(dequeue(queue, atEnd), nullptr);
+  EXPECT_TRUE(atEnd);
+  EXPECT_EQ(queue.sourceState(first), SourceState::kEnded);
+  EXPECT_EQ(queue.sourceState(second), SourceState::kEnded);
+}
+
+TEST(UcxExchangeQueueTest, noSourcesFinishesAtOnce) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  queue.noMoreSources();
+  bool atEnd{false};
+  EXPECT_EQ(dequeue(queue, atEnd), nullptr);
+  EXPECT_TRUE(atEnd);
+}
+
+TEST(UcxExchangeQueueTest, producerErrorFailsConsumer) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto source = addSource(queue);
+  queue.noMoreSources();
+  queue.sourceOpened(source);
+  queue.end(source, ChannelOutcome::producerError("Injected producer error"));
+  // A later end of the same source does not replace the first.
+  queue.end(source, ChannelOutcome::clean());
+
+  bool atEnd{false};
+  VELOX_ASSERT_THROW(dequeue(queue, atEnd), "Injected producer error");
+  EXPECT_TRUE(atEnd);
+  EXPECT_EQ(queue.sourceState(source), SourceState::kEnded);
+}
+
+// A consumer that closed, for instance after a satisfied LIMIT, ignores the
+// errors of the producers it no longer reads.
+TEST(UcxExchangeQueueTest, errorAfterCloseIsIgnored) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto source = addSource(queue);
+  queue.noMoreSources();
+  queue.sourceOpened(source);
+  queue.close();
+  queue.end(source, ChannelOutcome::producerError("Injected producer error"));
+
+  bool atEnd{false};
+  EXPECT_EQ(dequeue(queue, atEnd), nullptr);
+  EXPECT_TRUE(atEnd);
+  EXPECT_EQ(queue.sourceState(source), SourceState::kReleased);
+}
+
+TEST(UcxExchangeQueueTest, terminalClientErrorIsNotMaskedByClose) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto source = addSource(queue);
+  queue.sourceOpened(source);
+  queue.end(
+      source,
+      ChannelOutcome::transportError(
+          "downstream CUDA stream synchronization failed"));
+  queue.close();
+
+  bool atEnd{false};
+  VELOX_ASSERT_THROW(
+      dequeue(queue, atEnd), "downstream CUDA stream synchronization failed");
+  EXPECT_TRUE(atEnd);
+}
+
+TEST(UcxExchangeQueueTest, closeTellsServersOfSourcesNotEnded) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto registered = addSource(queue);
+  const auto open = addSource(queue);
+  const auto ended = addSource(queue);
+  queue.sourceOpened(open);
+  queue.sourceOpened(ended);
+  queue.end(ended, ChannelOutcome::clean());
+
+  EXPECT_THAT(queue.close(), testing::ElementsAre(registered, open));
+  EXPECT_TRUE(queue.isClosed());
+  for (const auto source : {registered, open, ended}) {
+    EXPECT_EQ(queue.sourceState(source), SourceState::kReleased);
+  }
+  // Every entry is Released already.
+  EXPECT_THAT(queue.close(), testing::IsEmpty());
+}
+
+TEST(UcxExchangeQueueTest, tableAfterCloseIsFreed) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto source = addSource(queue);
+  queue.sourceOpened(source);
+  queue.close();
+
+  auto table = makePackedTable(100);
+  EXPECT_FALSE(enqueue(queue, source, table));
+  EXPECT_NE(table, nullptr);
+  EXPECT_EQ(queue.size(), 0);
+  EXPECT_EQ(queue.totalBytes(), 0);
+}
+
+TEST(UcxExchangeQueueTest, tableAfterOtherSourceFailedIsFreed) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto failed = addSource(queue);
+  const auto running = addSource(queue);
+  queue.sourceOpened(failed);
+  queue.sourceOpened(running);
+  queue.end(failed, ChannelOutcome::transportError("Injected receive error"));
+
+  auto table = makePackedTable(100);
+  EXPECT_FALSE(enqueue(queue, running, table));
+  EXPECT_NE(table, nullptr);
+  EXPECT_EQ(queue.size(), 0);
+  EXPECT_EQ(queue.totalBytes(), 0);
+}
+
+TEST(UcxExchangeQueueTest, tableOfUnopenedSourceIsRefused) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  {
+    const auto source = addSource(queue);
+    auto table = makePackedTable(100);
+    EXPECT_FALSE(enqueue(queue, source, table));
+    EXPECT_NE(table, nullptr);
+  }
+  {
+    const auto source = addSource(queue);
+    queue.sourceOpened(source);
+    queue.end(source, ChannelOutcome::clean());
+    auto table = makePackedTable(100);
+    EXPECT_FALSE(enqueue(queue, source, table));
+    EXPECT_NE(table, nullptr);
+  }
+  EXPECT_EQ(queue.size(), 0);
+  EXPECT_EQ(queue.totalBytes(), 0);
+}
+
+// Only one of a clean end and a close is counted, and the consumer finishes
+// without an error either way.
+TEST(UcxExchangeQueueTest, cleanEndRacesClose) {
+  for (int32_t i = 0; i < kNumRaceIterations; ++i) {
+    UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+    const auto source = addSource(queue);
+    queue.sourceOpened(source);
+    queue.noMoreSources();
+
+    runConcurrently(
+        [&] { queue.end(source, ChannelOutcome::clean()); },
+        [&] { queue.close(); });
+
+    // close() releases an Ended entry, too.
+    ASSERT_EQ(queue.sourceState(source), SourceState::kReleased);
+    bool atEnd{false};
+    ASSERT_EQ(dequeue(queue, atEnd), nullptr);
+    ASSERT_TRUE(atEnd);
+  }
+}
+
+// The first decision wins: an error decided before the close fails the
+// consumer, and one that comes after it is ignored. Either way the consumer
+// ends, and the source is Released.
+TEST(UcxExchangeQueueTest, producerErrorRacesClose) {
+  // Every dequeue that throws logs the error; keep the loop quiet.
+  gflags::FlagSaver flagSaver;
+  FLAGS_minloglevel = google::GLOG_FATAL;
+  for (int32_t i = 0; i < kNumRaceIterations; ++i) {
+    UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+    const auto source = addSource(queue);
+    queue.sourceOpened(source);
+    queue.noMoreSources();
+
+    runConcurrently(
+        [&] {
+          queue.end(
+              source, ChannelOutcome::producerError("Injected producer error"));
+        },
+        [&] { queue.close(); });
+
+    ASSERT_EQ(queue.sourceState(source), SourceState::kReleased);
+    bool atEnd{false};
+    try {
+      ASSERT_EQ(dequeue(queue, atEnd), nullptr);
+    } catch (const VeloxException& e) {
+      ASSERT_THAT(e.message(), testing::HasSubstr("Injected producer error"));
+    }
+    ASSERT_TRUE(atEnd);
+  }
+}
+
+// A table that arrives as the consumer closes is either refused, and freed by
+// its source, or taken and then freed by close().
+TEST(UcxExchangeQueueTest, tableInFlightRacesClose) {
+  for (int32_t i = 0; i < kNumRaceIterations; ++i) {
+    UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+    const auto source = addSource(queue);
+    queue.sourceOpened(source);
+    queue.noMoreSources();
+
+    auto table = makePackedTable(100);
+    bool taken{false};
+    bool keptByCaller{false};
+    runConcurrently(
+        [&] {
+          taken = enqueue(queue, source, table);
+          keptByCaller = table != nullptr;
+          table.reset();
+        },
+        [&] { queue.close(); });
+
+    ASSERT_NE(taken, keptByCaller);
+    ASSERT_EQ(queue.size(), 0);
+    ASSERT_EQ(queue.totalBytes(), 0);
+    bool atEnd{false};
+    ASSERT_EQ(dequeue(queue, atEnd), nullptr);
+    ASSERT_TRUE(atEnd);
+  }
+}
+
+// A source added after the close only tells its producer that the consumer is
+// gone; the consumer does not wait for it.
+TEST(UcxExchangeQueueTest, sourceAddedAfterCloseIsReleased) {
+  UcxExchangeQueue queue{/*numberOfConsumers=*/1};
+  const auto source = addSource(queue);
+  queue.sourceOpened(source);
+  queue.end(source, ChannelOutcome::clean());
+  queue.noMoreSources();
+  bool atEnd{false};
+  EXPECT_EQ(dequeue(queue, atEnd), nullptr);
+  EXPECT_TRUE(atEnd);
+
+  queue.close();
+  UcxExchangeQueue::SourceId lateSource;
+  {
+    std::lock_guard<std::mutex> l(queue.mutex());
+    lateSource = queue.addReleasedSourceLocked();
+  }
+  EXPECT_EQ(queue.sourceState(lateSource), SourceState::kReleased);
+  atEnd = false;
+  EXPECT_EQ(dequeue(queue, atEnd), nullptr);
+  EXPECT_TRUE(atEnd);
 }
 
 TEST_P(UcxExchangeTest, basicTest) {
@@ -1167,6 +1495,148 @@ TEST_F(UcxExchangeFocusedTest, sharedClientSurvivesOneExchangeClose) {
   EXPECT_EQ(rowsReceived, static_cast<uint64_t>(numChunks) * numRowsPerChunk);
 
   queueManager()->removeTask(srcTaskId);
+}
+
+namespace {
+
+// Drives 'exchange' until it finishes or has returned at least 'maxRows' rows,
+// and returns the rows it read. Fails if a wait for data takes longer than
+// 'maxWait', so that a stream that never ends fails the case instead of
+// hanging the binary.
+uint64_t drainToEnd(
+    UcxExchange& exchange,
+    uint64_t maxRows,
+    std::chrono::seconds maxWait) {
+  uint64_t numRows{0};
+  while (numRows < maxRows && !exchange.isFinished()) {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    if (exchange.isBlocked(&future) != BlockingReason::kNotBlocked) {
+      if (!std::move(future).wait(maxWait)) {
+        VELOX_FAIL("Exchange made no progress");
+      }
+      continue;
+    }
+    if (auto result = exchange.getOutput()) {
+      auto cudfResult =
+          std::dynamic_pointer_cast<cudf_velox::CudfVector>(result);
+      VELOX_CHECK_NOT_NULL(cudfResult);
+      numRows += cudfResult->getTableView().num_rows();
+    }
+  }
+  return numRows;
+}
+
+} // namespace
+
+// A producer whose connection closes before it sent all its output must fail
+// its consumer. The close reaches the consumer through
+// EndpointRef::closeAndDrainCommunicators(), as when the producer's worker
+// dies; treating it as a clean end of stream would drop the rest of the rows.
+TEST_F(UcxExchangeFocusedTest, endpointClosedMidStreamFailsConsumer) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "endpointClosedSrc";
+  const std::string sinkTaskId = taskPrefix + "endpointClosedSink";
+  const int partitionId = 0;
+
+  auto rowType = UcxTestData::kTestRowType;
+  auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  // Removes the producer even when an assertion ends the case early: the
+  // process-wide queue manager would otherwise keep its Task until static
+  // destruction, after the memory manager it allocates from is gone.
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  // One page, and no noMoreData(): the producer is still running.
+  queueManager()->enqueue(
+      srcTaskId, partitionId, makePackedColumns(100), /*numRows=*/100);
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask =
+      createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  EXPECT_EQ(
+      drainToEnd(exchange, /*maxRows=*/100, std::chrono::seconds(30)), 100);
+
+  // Close the consumer's connection to the producer the way a dead peer does.
+  std::shared_ptr<EndpointRef> endpoint;
+  ASSERT_TRUE(runOnCommunicator([&endpoint] {
+    auto communicator = Communicator::getInstance();
+    endpoint = communicator->assocEndpointRef(
+        nullptr, HostPort{"127.0.0.1", communicator->getListenerPort()});
+    if (endpoint != nullptr) {
+      communicator->deferEndpointCleanup(endpoint);
+    }
+  }));
+  ASSERT_NE(endpoint, nullptr);
+
+  VELOX_ASSERT_THROW(
+      drainToEnd(
+          exchange,
+          /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+          std::chrono::seconds(30)),
+      "Connection to producer closed before it sent all its data, host 127.0.0.1:");
+  exchange.close();
+}
+
+// A producer the consumer cannot connect to must fail the consumer, rather than
+// end its stream as if the producer had sent nothing. The host name below is
+// rejected by getaddrinfo locally, without a DNS round trip, so endpoint
+// creation fails at once.
+TEST_F(UcxExchangeFocusedTest, unresolvableProducerHostFailsConsumer) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string sinkTaskId = taskPrefix + "unreachableSink";
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      sinkTaskId, UcxTestData::kTestRowType, /*partitionId=*/0, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  const auto url = fmt::format(
+      "http://bad_host!:{}/v1/task/{}/results/0",
+      UcxExchangeTestEnvironment::splitUrlPort(),
+      taskPrefix + "unreachableProducer");
+  exchangeClient->addRemoteTaskId(url);
+  exchangeClient->noMoreRemoteTasks();
+
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  VELOX_ASSERT_THROW(
+      drainToEnd(
+          exchange,
+          /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+          std::chrono::seconds(30)),
+      "Failed to connect to producer, host bad_host!:");
+  exchange.close();
 }
 
 // Test that verifies intra-node exchange does not livelock when a producing
@@ -2012,6 +2482,57 @@ TEST_F(
   EXPECT_TRUE(waitForServerDestroyed(session->server));
   EXPECT_TRUE(queueManager()->isFinished(session->taskId));
   EXPECT_EQ(destinationState(session->taskId), DestinationState::kReleased);
+}
+
+// An endpoint that closes before a source's stream ended fails the consumer
+// with the endpoint's close reason, unless the consumer closed first.
+TEST_F(
+    UcxExchangeFocusedTest,
+    terminalMetadataEndpointCloseReportsActiveSourceError) {
+  for (bool consumerClosed : {false, true}) {
+    SCOPED_TRACE(consumerClosed);
+    auto queue = std::make_shared<UcxExchangeQueue>(1);
+    UcxExchangeQueue::SourceId sourceId;
+    {
+      std::lock_guard<std::mutex> lock(queue->mutex());
+      sourceId = queue->addSourceLocked();
+    }
+    queue->noMoreSources();
+    ASSERT_TRUE(runOnCommunicator([queue, sourceId, consumerClosed] {
+      auto communicator = Communicator::getInstance();
+      auto source = UcxExchangeSource::create(
+          "consumer",
+          "http://127.0.0.1:12345/v1/task/producer/results/0",
+          queue,
+          sourceId);
+      communicator->unregister(source);
+      // Exercise endpoint cleanup before a receive is posted. There is no
+      // receive callback that could otherwise report the lost connection.
+      EndpointRef endpoint{nullptr};
+      endpoint.addCommElem(source);
+      if (consumerClosed) {
+        // As UcxExchangeClient::close() does.
+        queue->close();
+        source->close();
+        communicator->unregister(source);
+      }
+      endpoint.closeAndDrainCommunicators();
+      communicator->unregister(source);
+    }));
+    std::lock_guard<std::mutex> lock(queue->mutex());
+    bool atEnd = false;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    ContinuePromise stalePromise = ContinuePromise::makeEmpty();
+    if (consumerClosed) {
+      EXPECT_EQ(
+          queue->dequeueLocked(0, &atEnd, &future, &stalePromise), nullptr);
+      EXPECT_TRUE(atEnd);
+    } else {
+      VELOX_ASSERT_THROW(
+          queue->dequeueLocked(0, &atEnd, &future, &stalePromise),
+          "Connection to producer closed before it sent all its data, host 127.0.0.1:12348, task producer/0: UCX endpoint closed");
+    }
+  }
 }
 
 // A closed endpoint Releases the destination of every server on it. A chunk

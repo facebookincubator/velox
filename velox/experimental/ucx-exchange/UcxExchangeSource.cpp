@@ -72,14 +72,16 @@ UcxExchangeSource::UcxExchangeSource(
     std::string_view host,
     uint16_t port,
     const PartitionKey& partitionKey,
-    const std::shared_ptr<UcxExchangeQueue> queue)
+    const std::shared_ptr<UcxExchangeQueue> queue,
+    UcxExchangeQueue::SourceId sourceId)
     : CommElement(communicator),
       host_(host),
       port_(port),
       taskId_(taskId),
       partitionKey_(partitionKey),
       partitionKeyHash_(fnv1a_32(partitionKey_.toString())),
-      queue_(std::move(queue)) {
+      queue_(std::move(queue)),
+      sourceId_(sourceId) {
   setState(ReceiverState::Created);
 }
 
@@ -87,7 +89,8 @@ UcxExchangeSource::UcxExchangeSource(
 std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
     std::string_view taskId,
     std::string_view url,
-    const std::shared_ptr<UcxExchangeQueue>& queue) {
+    const std::shared_ptr<UcxExchangeQueue>& queue,
+    UcxExchangeQueue::SourceId sourceId) {
   folly::Uri uri(url);
   // Note that there is no distinct schema for the UCXX exchange.
   // The approach is to ignore the schema and not check for HTTP or HTTPS.
@@ -97,8 +100,8 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
   int port = uri.port() + 3;
   std::shared_ptr<Communicator> communicator = Communicator::getInstance();
   auto key = extractTaskAndDestinationId(uri.path());
-  auto source = std::shared_ptr<UcxExchangeSource>(
-      new UcxExchangeSource(communicator, taskId, host, port, key, queue));
+  auto source = std::shared_ptr<UcxExchangeSource>(new UcxExchangeSource(
+      communicator, taskId, host, port, key, queue, sourceId));
   // register the exchange source with the communicator. This makes sure that
   // "progress" is called.
   communicator->registerCommElement(source);
@@ -116,22 +119,36 @@ void UcxExchangeSource::process() {
 
   switch (state_) {
     case ReceiverState::Created: {
-      // Get the endpoint.
+      // Get the endpoint. Creating it throws when the address does not
+      // resolve; the exception must not leave the Communicator thread.
       HostPort hp{host_, port_};
       std::shared_ptr<UcxExchangeSource> selfPtr = getSelfPtr();
-      auto epRef = communicator_->assocEndpointRef(selfPtr, hp);
-      if (epRef) {
-        setEndpoint(epRef);
-        setStateIf(
-            ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
-        sendHandshake();
-      } else {
-        // connection failed.
-        VLOG(0) << toString() << " Failed to connect to " << host_ << ":"
-                << std::to_string(port_);
-        deliverEndMarker();
-        setState(ReceiverState::Done);
+      std::shared_ptr<EndpointRef> epRef;
+      std::optional<std::string> connectError;
+      try {
+        epRef = communicator_->assocEndpointRef(selfPtr, hp);
+        if (epRef == nullptr) {
+          connectError = "no endpoint";
+        }
+      } catch (const VeloxException& e) {
+        connectError = e.message();
+      } catch (const std::exception& e) {
+        connectError = e.what();
       }
+      if (connectError.has_value()) {
+        end(ChannelOutcome::transportError(
+            fmt::format(
+                "Failed to connect to producer, host {}:{}, task {}: {}",
+                host_,
+                port_,
+                partitionKey_.toString(),
+                *connectError)));
+        break;
+      }
+      setEndpoint(epRef);
+      setStateIf(
+          ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
+      sendHandshake();
       communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ReceiverState::WaitingForHandshakeComplete:
@@ -244,25 +261,19 @@ void UcxExchangeSource::close() {
 
   VLOG(1) << toString() << " UcxExchangeSource::close called.";
 
-  // Guarantee the end marker is delivered before transitioning to Done.
-  deliverEndMarker();
-
   // Let the Communicator progress thread do the actual clean-up.
   setState(ReceiverState::Done);
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
 void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
-  if (!closed_.load(std::memory_order_acquire) && !atEnd_) {
-    std::string errorMsg = fmt::format(
-        "Connection to producer closed before it sent all its data, host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        reason);
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-  }
+  end(ChannelOutcome::transportError(
+      fmt::format(
+          "Connection to producer closed before it sent all its data, host {}:{}, task {}: {}",
+          host_,
+          port_,
+          partitionKey_.toString(),
+          reason)));
   close();
 }
 
@@ -325,10 +336,11 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::getSelfPtr() {
 
 void UcxExchangeSource::enqueue(PackedTableWithStreamPtr data) {
   std::vector<velox::ContinuePromise> queuePromises;
-  {
-    std::lock_guard<std::mutex> l(queue_->mutex());
-
-    queue_->enqueueLocked(std::move(data), queuePromises);
+  if (!queue_->enqueueTable(sourceId_, data, queuePromises)) {
+    // The consumer failed or closed. Free the table here, outside the queue's
+    // lock.
+    VLOG(3) << toString() << " exchange queue refused a table, freeing it";
+    data.reset();
   }
   // wake up consumers of the UcxExchangeQueue
   for (auto& promise : queuePromises) {
@@ -336,20 +348,12 @@ void UcxExchangeSource::enqueue(PackedTableWithStreamPtr data) {
   }
 }
 
-void UcxExchangeSource::deliverEndMarker() {
-  if (!registered_.load(std::memory_order_acquire)) {
-    // Never registered with queue -- don't deliver end marker to avoid
-    // spurious numCompleted_ increments.
-    return;
-  }
-  bool expected = false;
-  if (!endMarkerDelivered_.compare_exchange_strong(
-          expected, true, std::memory_order_acq_rel)) {
-    // Already delivered by another thread/path.
-    return;
-  }
-  VLOG(3) << toString() << " delivering end-of-stream marker to queue";
-  enqueue(nullptr);
+void UcxExchangeSource::end(ChannelOutcome outcome) {
+  // The queue logs the error if it decides it.
+  VLOG(3) << toString() << " ends: " << outcome.kind;
+  queue_->end(sourceId_, std::move(outcome));
+  setState(ReceiverState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
 }
 
 void UcxExchangeSource::setEndpoint(std::shared_ptr<EndpointRef> endpointRef) {
@@ -409,7 +413,6 @@ void UcxExchangeSource::onHandshake(
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onHandshake called after close, ignoring";
-    deliverEndMarker();
     return;
   }
   // Guard against replayed callbacks from UCP wireup replay.
@@ -419,17 +422,13 @@ void UcxExchangeSource::onHandshake(
     return;
   }
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to send handshake to host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Failed to send handshake to host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            ucs_status_string(status))));
   } else {
     VLOG(3) << toString() << "+ onHandshake " << ucs_status_string(status);
     // Now wait for the HandshakeResponse from the server
@@ -477,7 +476,6 @@ void UcxExchangeSource::onMetadata(
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onMetadata called after close, ignoring";
-    deliverEndMarker();
     return;
   }
   // Guard against replayed callbacks from UCP wireup replay.
@@ -489,17 +487,13 @@ void UcxExchangeSource::onMetadata(
   VLOG(3) << toString() << " + onMetadata " << ucs_status_string(status);
 
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to receive metadata from host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Failed to receive metadata from host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            ucs_status_string(status))));
   } else {
     VELOX_CHECK_NOT_NULL(arg, "Didn't get metadata");
 
@@ -519,17 +513,13 @@ void UcxExchangeSource::onMetadata(
       decodeError = e.what();
     }
     if (decodeError.has_value()) {
-      std::string errorMsg = fmt::format(
-          "Cannot decode message from producer, host {}:{}, task {}: {}",
-          host_,
-          port_,
-          partitionKey_.toString(),
-          *decodeError);
-      VLOG(0) << errorMsg;
-      queue_->setError(errorMsg);
-      deliverEndMarker();
-      setState(ReceiverState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
+      end(ChannelOutcome::transportError(
+          fmt::format(
+              "Cannot decode message from producer, host {}:{}, task {}: {}",
+              host_,
+              port_,
+              partitionKey_.toString(),
+              *decodeError)));
       return;
     }
 
@@ -538,23 +528,16 @@ void UcxExchangeSource::onMetadata(
       if (outcome.kind == OutcomeKind::kProducerError) {
         // The producer ended early and its output is lost: fail the query
         // rather than end the stream as complete.
-        std::string errorMsg = fmt::format(
-            "Producer failed before sending all its data, host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            outcome.error);
-        VLOG(0) << errorMsg;
-        queue_->setError(errorMsg);
+        end(ChannelOutcome::producerError(
+            fmt::format(
+                "Producer failed before sending all its data, host {}:{}, task {}: {}",
+                host_,
+                port_,
+                partitionKey_.toString(),
+                outcome.error)));
+      } else {
+        end(ChannelOutcome::clean());
       }
-      // The producer ended the stream.
-      atEnd_ = true;
-      // enqueue a nullpointer to mark the end for this source.
-      VLOG(3) << "There is no more data to transfer for " << toString();
-      deliverEndMarker();
-      setStateIf(ReceiverState::WaitingForMetadata, ReceiverState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
-      // jump out of this function.
       return;
     }
 
@@ -578,11 +561,7 @@ void UcxExchangeSource::onMetadata(
           cudf::get_current_device_resource_ref());
     } catch (const rmm::bad_alloc& e) {
       VLOG(0) << toString() << " *** RMM  failed to allocate: " << e.what();
-      queue_->setError("Failed to alloc GPU memory"); // Let the operator know
-                                                      // via the queue
-      deliverEndMarker();
-      setState(ReceiverState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
+      end(ChannelOutcome::transportError("Failed to alloc GPU memory"));
       return;
     }
 
@@ -629,7 +608,6 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onData called after close, ignoring";
-    deliverEndMarker();
     return;
   }
   // Guard against replayed callbacks from UCP wireup replay.
@@ -641,46 +619,44 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
   VLOG(3) << toString() << " + onData " << ucs_status_string(status);
 
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to receive data from host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << toString() << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-  } else {
-    VLOG(3) << toString() << "+ onData " << ucs_status_string(status)
-            << " got chunk: " << sequenceNumber_;
-
-    this->sequenceNumber_++;
-
-    std::shared_ptr<DataAndMetadata> ptr =
-        std::static_pointer_cast<DataAndMetadata>(arg);
-
-    metrics_.numPackedColumns_.addValue(1);
-    metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
-
-    // Create packed_columns from the received metadata and data buffer
-    cudf::packed_columns packedCols(
-        std::move(ptr->metadata.cudfMetadata), std::move(ptr->dataBuf));
-
-    // Unpack to get the table_view and create a packed_table
-    cudf::table_view tableView = cudf::unpack(packedCols);
-    auto packedTable = std::make_unique<cudf::packed_table>(
-        cudf::packed_table{tableView, std::move(packedCols)});
-
-    // Bundle the packed_table with the stream that was used for allocation
-    // and the producer's row count, which the packed table cannot report for
-    // itself when it has no columns.
-    auto data = std::make_unique<PackedTableWithStream>(
-        std::move(packedTable), ptr->stream, ptr->metadata.numRows);
-
-    enqueue(std::move(data));
-    setStateIf(ReceiverState::WaitingForData, ReceiverState::ReadyToReceive);
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Failed to receive data from host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            ucs_status_string(status))));
+    return;
   }
+
+  VLOG(3) << toString() << "+ onData " << ucs_status_string(status)
+          << " got chunk: " << sequenceNumber_;
+
+  this->sequenceNumber_++;
+
+  std::shared_ptr<DataAndMetadata> ptr =
+      std::static_pointer_cast<DataAndMetadata>(arg);
+
+  metrics_.numPackedColumns_.addValue(1);
+  metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
+
+  // Create packed_columns from the received metadata and data buffer
+  cudf::packed_columns packedCols(
+      std::move(ptr->metadata.cudfMetadata), std::move(ptr->dataBuf));
+
+  // Unpack to get the table_view and create a packed_table
+  cudf::table_view tableView = cudf::unpack(packedCols);
+  auto packedTable = std::make_unique<cudf::packed_table>(
+      cudf::packed_table{tableView, std::move(packedCols)});
+
+  // Bundle the packed_table with the stream that was used for allocation
+  // and the producer's row count, which the packed table cannot report for
+  // itself when it has no columns.
+  auto data = std::make_unique<PackedTableWithStream>(
+      std::move(packedTable), ptr->stream, ptr->metadata.numRows);
+
+  enqueue(std::move(data));
+  setStateIf(ReceiverState::WaitingForData, ReceiverState::ReadyToReceive);
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
@@ -723,7 +699,6 @@ void UcxExchangeSource::onHandshakeResponse(
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString()
             << " onHandshakeResponse called after close, ignoring";
-    deliverEndMarker();
     return;
   }
   // Guard against replayed callbacks from UCP wireup replay.
@@ -734,17 +709,13 @@ void UcxExchangeSource::onHandshakeResponse(
   }
 
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to receive HandshakeResponse from host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Failed to receive HandshakeResponse from host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            ucs_status_string(status))));
     return;
   }
 
@@ -756,21 +727,18 @@ void UcxExchangeSource::onHandshakeResponse(
   // serve it. An unknown status is a rejection too.
   if (response.status != HandshakeStatus::kAccepted ||
       response.protocolVersion != kProtocolVersion) {
-    std::string errorMsg = fmt::format(
-        "UCX exchange peers must run the same protocol version: this worker "
-        "runs {}, producer worker {}:{} runs {}",
-        kProtocolVersion,
-        host_,
-        port_,
-        response.protocolVersion);
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::versionMismatch(
+        fmt::format(
+            "UCX exchange peers must run the same protocol version: this worker "
+            "runs {}, producer worker {}:{} runs {}",
+            kProtocolVersion,
+            host_,
+            port_,
+            response.protocolVersion)));
     return;
   }
 
+  queue_->sourceOpened(sourceId_);
   isIntraNodeTransfer_ = response.isIntraNodeTransfer;
 
   VLOG(3) << toString() << " + onHandshakeResponse isIntraNodeTransfer="
@@ -787,7 +755,6 @@ void UcxExchangeSource::waitForIntraNodeData() {
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString()
             << " waitForIntraNodeData called after close, ignoring";
-    deliverEndMarker();
     return;
   }
 
@@ -818,33 +785,23 @@ void UcxExchangeSource::onIntraNodeData(
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onIntraNodeData called after close, ignoring";
-    deliverEndMarker();
     return;
   }
 
   if (atEnd) {
-    // End of stream
-    atEnd_ = true;
     VLOG(3) << toString() << " Intra-node transfer: end of stream";
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::clean());
     return;
   }
 
   if (!data) {
     // Error - should not happen if atEnd is false
-    std::string errorMsg = fmt::format(
-        "Intra-node transfer data is null for task {}, dest {}, seq {}",
-        partitionKey_.taskId,
-        partitionKey_.destination,
-        sequenceNumber_);
-    VLOG(0) << toString() << " " << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Intra-node transfer data is null for task {}, dest {}, seq {}",
+            partitionKey_.taskId,
+            partitionKey_.destination,
+            sequenceNumber_)));
     return;
   }
 

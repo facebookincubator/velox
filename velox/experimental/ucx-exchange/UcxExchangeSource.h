@@ -79,11 +79,15 @@ class UcxExchangeSource
 
   virtual ~UcxExchangeSource() = default;
 
-  // factory method to create a UCX exchange source.
+  /// Creates a UCX exchange source and registers it with the Communicator,
+  /// which may run it at once.
+  /// @param sourceId The id of the source's entry in 'queue', which the caller
+  /// added before.
   static std::shared_ptr<UcxExchangeSource> create(
       std::string_view taskId,
       std::string_view url,
-      const std::shared_ptr<UcxExchangeQueue>& queue);
+      const std::shared_ptr<UcxExchangeQueue>& queue,
+      UcxExchangeQueue::SourceId sourceId);
 
   bool supportsMetrics() const {
     return true;
@@ -99,18 +103,10 @@ class UcxExchangeSource
   /// once it received enough data.
   void close();
 
-  /// Fails the consumer with the endpoint's close 'reason' unless the stream
-  /// ended or the source closed, then closes. Called on the Communicator
-  /// thread.
+  /// Ends the source with a transport error that names the endpoint's close
+  /// 'reason', then closes. The exchange queue ignores the error if the source
+  /// ended or was released already. Called on the Communicator thread.
   void onEndpointClosed(std::string_view reason) override;
-
-  /// @brief Marks this source as registered with the exchange queue.
-  /// Must be called after addSourceLocked() increments numSources_ for this
-  /// source. Without this, deliverEndMarker() will not enqueue the nullptr
-  /// (preventing spurious numCompleted_ increments for unregistered sources).
-  void setRegistered() {
-    registered_.store(true, std::memory_order_release);
-  }
 
   /// @brief Called by UcxExchangeClient::next() on the consumer (driver)
   /// thread to wake up this source after it went dormant due to backpressure.
@@ -170,7 +166,8 @@ class UcxExchangeSource
       std::string_view host,
       uint16_t port,
       const PartitionKey& partitionKey,
-      const std::shared_ptr<UcxExchangeQueue> queue);
+      const std::shared_ptr<UcxExchangeQueue> queue,
+      UcxExchangeQueue::SourceId sourceId);
 
   // Extracts taskId and destinationId from the path part of the task URL
   static PartitionKey extractTaskAndDestinationId(std::string_view path);
@@ -238,12 +235,10 @@ class UcxExchangeSource
   // Removes the state associated with the source, called by the state-machine.
   void cleanUp();
 
-  /// @brief Delivers the nullptr end-of-stream marker to the queue exactly
-  /// once. Safe to call from any thread. Uses atomic CAS on
-  /// endMarkerDelivered_ to guarantee at-most-once delivery.
-  /// Returns early without enqueuing if the source was never registered
-  /// with the queue (i.e., registered_ is false).
-  void deliverEndMarker();
+  // Reports the end of the source to the exchange queue, which keeps the first
+  // end it is told, and moves to Done. Every end of the source goes through
+  // here.
+  void end(ChannelOutcome outcome);
 
   /// @brief Sets the state to "desired" if and only if the current
   /// state is "expected".
@@ -268,19 +263,9 @@ class UcxExchangeSource
 
   // The shared queue of packed tables that all UcxExchangeSources write to
   const std::shared_ptr<UcxExchangeQueue> queue_{nullptr};
+  // The id of this source's entry in 'queue_'.
+  const UcxExchangeQueue::SourceId sourceId_;
   std::atomic<bool> closed_{false};
-  bool atEnd_{false}; // set when "atEnd" is being received.
-
-  /// @brief Guards exactly-once delivery of the nullptr end-of-stream marker.
-  /// Only one thread can win the CAS and call enqueue(nullptr).
-  std::atomic<bool> endMarkerDelivered_{false};
-
-  /// @brief True only after addSourceLocked() has been called for this source.
-  /// Prevents deliverEndMarker() from incrementing numCompleted_ for sources
-  /// that were never registered with the queue (e.g., created after client
-  /// close). Atomic because setRegistered() is called on the driver thread
-  /// while deliverEndMarker() reads it on the Communicator thread.
-  std::atomic<bool> registered_{false};
 
   /// True if the server detected that this source is on the same node.
   /// Set from the isIntraNodeTransfer flag in HandshakeResponse, which the
