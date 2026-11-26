@@ -66,7 +66,7 @@ cmake --build _build/release -j --target=exchange_tests
 
 ## Protocol version
 
-The workers of a UCX exchange speak a versioned wire protocol. The handshake that a consumer sends carries the version, and the producer's response carries it back. `kProtocolVersion` in `UcxExchangeProtocol.h` is 1. The code before this change, which sent no version, is version 0.
+The workers of a UCX exchange speak a versioned wire protocol. The handshake that a consumer sends carries the version, and the producer's response carries it back. `kProtocolVersion` in `UcxExchangeProtocol.h` is 1. Upstream code that sent no version is version 0.
 
 All workers of a cluster must run the same version. Peers of different versions do not exchange data and do not try to understand each other. A rolling upgrade fails every query that spans two versions, until all workers run the same one. Neither worker crashes.
 
@@ -75,7 +75,7 @@ A mismatch fails the query with one of these errors:
 - The consumer reports `UCX exchange peers must run the same protocol version: this worker runs <version>, producer worker <host>:<port> runs <version>`.
 - The producer logs `UCX exchange peers must run the same protocol version: this worker runs <version>, consumer worker <ip> runs <version>` and fails its task with it, if the task has initialized its output.
 
-A version 0 peer knows no versions, so the error appears only on the version 1 side. A version 0 consumer, for example, does not report anything itself. Its query fails through the failed producer task.
+A version 0 peer knows no versions, so it cannot report a mismatch. With a version 0 producer and a version 1 consumer, the consumer fails its query with the version text above. The version 0 producer notices nothing: its task stays running until the coordinator aborts it. With a version 1 producer and a version 0 consumer, the producer still sends its 16-byte response. The consumer's 8-byte receive then fails with a message truncation error, which fails its query without the version text. The version 1 producer logs the version text, and fails its task with it only if the task is initialized on that worker.
 
 ## Code Formatting
 
