@@ -230,7 +230,15 @@ void Communicator::run() {
 
       // Process the work queue. Make sure that communication is progressed
       // after each call to a comms element, otherwise we will deadlock.
-      while (auto comms = workQueue_.pop()) {
+      // Process at most the elements queued when this drain began. An element
+      // that requeues itself while it waits, such as an intra-node server,
+      // would otherwise keep the drain from ever ending and starve posted
+      // actions, deferred endpoint cleanups and the close receive.
+      for (size_t numItems = workQueue_.size(); numItems > 0; --numItems) {
+        auto comms = workQueue_.pop();
+        if (!comms) {
+          break;
+        }
         comms->process();
         ++workItemsProcessed_;
         // Progress after each work item to allow UCXX to advance
