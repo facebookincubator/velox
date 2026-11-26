@@ -351,13 +351,17 @@ void traverseEncodings(
           "Lengths",
           useVarintRowCount,
           visitor);
-      traverseEncodings(
-          FsstEncoding::decodedLengthsEncoding(stream, options),
-          level + 1,
-          1,
-          "DecodedLengths",
-          useVarintRowCount,
-          visitor);
+      const auto decodedLengths =
+          FsstEncoding::decodedLengthsEncoding(stream, options);
+      if (!decodedLengths.empty()) {
+        traverseEncodings(
+            decodedLengths,
+            level + 1,
+            1,
+            "DecodedLengths",
+            useVarintRowCount,
+            visitor);
+      }
       break;
     }
     case EncodingType::SparseBool: {

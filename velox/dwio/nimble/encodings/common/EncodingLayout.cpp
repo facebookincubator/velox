@@ -182,11 +182,15 @@ EncodingLayout EncodingLayoutCapture::capture(
       EncodingPrefix::prefixSize(encoding, options.useVarintRowCount);
   CompressionType compressionType = CompressionType::Uncompressed;
 
-  if (encodingType == EncodingType::FixedBitWidth ||
+  if (encodingType == EncodingType::Fsst) {
+    compressionType =
+        FsstEncoding::parseHeader(encoding, prefixSize).compressionType;
+  } else if (
+      encodingType == EncodingType::FixedBitWidth ||
       encodingType == EncodingType::Trivial ||
       encodingType == EncodingType::BlockBitPacking ||
       encodingType == EncodingType::BlockBitPackingV2 ||
-      encodingType == EncodingType::FOR || encodingType == EncodingType::Fsst) {
+      encodingType == EncodingType::FOR) {
     compressionType =
         encoding::peek<uint8_t, CompressionType>(encoding.data() + prefixSize);
   }
