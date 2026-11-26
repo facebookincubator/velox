@@ -3509,6 +3509,109 @@ TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadSingleFile) {
   }
 }
 
+// Files of old Paimon versions do not record their number of DELETE and
+// UPDATE_BEFORE rows. Paimon Java merges a rawConvertible split of such files
+// anyway, which drops those rows.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadUnknownDeleteRowCount) {
+  const auto rowType = ROW({"id", "value"}, BIGINT());
+  const auto input = makeRowVector(
+      {"id", "value"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30})});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    {
+      const auto files = makeFilePaths(1);
+      auto dataFile = writePrimaryKeyFile(
+          files[0]->getPath(),
+          input,
+          {1, 2, 3},
+          format,
+          {PaimonRowKind::kInsert,
+           PaimonRowKind::kDelete,
+           PaimonRowKind::kUpdateAfter});
+      dataFile.level = 1;
+      dataFile.deleteRowCount = std::nullopt;
+      exec::test::AssertQueryBuilder(makePrimaryKeyScanPlan(rowType, rowType))
+          .split(makePaimonSplit({dataFile}, PaimonTableType::kPrimaryKey))
+          .assertResults({makeRowVector(
+              {"id", "value"},
+              {makeFlatVector<int64_t>({1, 3}),
+               makeFlatVector<int64_t>({10, 30})})});
+    }
+
+    // A partial-update table reads such a split raw only while every file
+    // records the count.
+    {
+      const auto files = makeFilePaths(1);
+      auto dataFile =
+          writePrimaryKeyFile(files[0]->getPath(), input, {1, 2, 3}, format);
+      dataFile.level = 1;
+      const auto plan = makePrimaryKeyScanPlan(
+          rowType, rowType, {{"merge-engine", "partial-update"}});
+      exec::test::AssertQueryBuilder(plan)
+          .split(makePaimonSplit({dataFile}, PaimonTableType::kPrimaryKey))
+          .assertResults({input});
+      dataFile.deleteRowCount = std::nullopt;
+      VELOX_ASSERT_THROW(
+          exec::test::AssertQueryBuilder(plan)
+              .split(makePaimonSplit({dataFile}, PaimonTableType::kPrimaryKey))
+              .copyResults(pool()),
+          "Paimon merge-on-read does not support the merge engine: "
+          "partial-update");
+      exec::test::TaskMonitor::waitForAllTasksDeleted();
+    }
+  }
+}
+
+// Paimon plans a primary-key split as rawConvertible only if no file records
+// DELETE or UPDATE_BEFORE rows, so a split with such a file fails before any
+// read. Append-only files have no such rows, and their count is ignored, as in
+// Paimon Java.
+TEST_F(PaimonConnectorTest, rawConvertibleSplitWithDeleteRowCount) {
+  const auto rowType = ROW({"id", "value"}, BIGINT());
+  const auto input = makeRowVector(
+      {"id", "value"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({10, 20})});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    {
+      const auto files = makeFilePaths(1);
+      auto dataFile = writePrimaryKeyFile(
+          files[0]->getPath(),
+          input,
+          {1, 2},
+          format,
+          {PaimonRowKind::kInsert, PaimonRowKind::kDelete});
+      dataFile.level = 1;
+      dataFile.deleteRowCount = 1;
+      VELOX_ASSERT_USER_THROW(
+          exec::test::AssertQueryBuilder(
+              makePrimaryKeyScanPlan(rowType, rowType))
+              .split(makePaimonSplit({dataFile}, PaimonTableType::kPrimaryKey))
+              .copyResults(pool()),
+          fmt::format(
+              "(1 vs. 0) Paimon rawConvertible split must not have DELETE or "
+              "UPDATE_BEFORE rows: {}",
+              dataFile.path));
+      exec::test::TaskMonitor::waitForAllTasksDeleted();
+    }
+
+    {
+      const auto files = makeFilePaths(1);
+      writeFile(files[0]->getPath(), input, format);
+      PaimonDataFile dataFile;
+      dataFile.path = files[0]->getPath();
+      dataFile.fileFormat = format;
+      dataFile.rowCount = input->size();
+      dataFile.deleteRowCount = 1;
+      exec::test::AssertQueryBuilder(makePaimonScanPlan(rowType))
+          .split(makePaimonSplit({dataFile}, PaimonTableType::kAppendOnly))
+          .assertResults({input});
+    }
+  }
+}
+
 // Keys span the batches of the key reads, and the batches of the data reads
 // span the selected rows of several files.
 TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadAcrossBatches) {
