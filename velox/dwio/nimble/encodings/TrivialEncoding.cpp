@@ -136,6 +136,37 @@ TrivialEncoding<std::string_view>::TrivialEncoding(
   pos_ = blob_;
 }
 
+bool TrivialEncoding<std::string_view>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  row_ = 0;
+  const auto payload = readStringPayload(data, dataOffset());
+  lengths_ =
+      rebindChild(payload.lengths, stringBufferFactory, std::move(lengths_));
+  blob_ = payload.blob.data();
+  releaseBuffer(dataUncompressed_);
+  if (payload.compressionType != CompressionType::Uncompressed) {
+    dataUncompressed_ = Compression::uncompress(
+        *pool_,
+        payload.compressionType,
+        DataType::String,
+        payload.blob,
+        options_.decompressCounter(),
+        options_.bufferPool);
+    blob_ = dataUncompressed_->as<char>();
+    uncompressedDataBytes_ = dataUncompressed_->size();
+  } else {
+    uncompressedDataBytes_ = payload.blob.size();
+  }
+  auto stringBuffer =
+      stringBufferFactory(static_cast<uint32_t>(uncompressedDataBytes_));
+  std::memcpy(stringBuffer, blob_, uncompressedDataBytes_);
+  releaseBuffer(dataUncompressed_);
+  blob_ = static_cast<char*>(stringBuffer);
+  pos_ = blob_;
+  return true;
+}
+
 void TrivialEncoding<std::string_view>::reset() {
   row_ = 0;
   pos_ = blob_;
@@ -320,6 +351,37 @@ TrivialEncoding<bool>::TrivialEncoding(
 
 void TrivialEncoding<bool>::reset() {
   row_ = 0;
+}
+
+bool TrivialEncoding<bool>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& /*stringBufferFactory*/) {
+  row_ = 0;
+  NIMBLE_CHECK_FILE_GE(
+      data.size(), dataOffset() + kPrefixSize, "Truncated trivial encoding");
+  releaseBuffer(uncompressed_);
+  bitmap_ = data.data() + dataOffset() + kPrefixSize;
+  const auto compressionType = static_cast<CompressionType>(data[dataOffset()]);
+  if (compressionType != CompressionType::Uncompressed) {
+    uncompressed_ = Compression::uncompress(
+        *pool_,
+        compressionType,
+        DataType::Undefined,
+        {bitmap_, static_cast<size_t>(data.data() + data.size() - bitmap_)},
+        options_.decompressCounter(),
+        options_.bufferPool);
+    bitmap_ = uncompressed_->as<char>();
+    NIMBLE_CHECK_EQ(
+        bitmap_ + FixedBitArray::bufferSize(rowCount(), 1),
+        uncompressed_->as<char>() + uncompressed_->size(),
+        "Unexpected trivial encoding end");
+  } else {
+    NIMBLE_CHECK_EQ(
+        bitmap_ + FixedBitArray::bufferSize(rowCount(), 1),
+        data.data() + data.size(),
+        "Unexpected trivial encoding end");
+  }
+  return true;
 }
 
 void TrivialEncoding<bool>::skip(uint32_t rowCount) {
