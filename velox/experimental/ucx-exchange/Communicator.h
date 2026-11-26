@@ -258,8 +258,9 @@ class Communicator {
 
   // Cancels 'closeReceive_' and progresses the worker until the receive
   // completes, for at most 3 seconds, so that UCX does not write into
-  // 'closeBuffer_' after the worker is gone. Called by run() on exit.
-  void cancelCloseReceive();
+  // 'closeBuffer_' after the worker is gone. Called by run() on every exit,
+  // so it does not throw.
+  void cancelCloseReceive() noexcept;
 
   // Protects postedActions_.
   std::mutex postedActionsMutex_;
@@ -267,12 +268,14 @@ class Communicator {
   // Actions that postToLoop() added and run() has not run yet.
   std::deque<std::function<void()>> postedActions_;
 
+  // The buffer 'closeReceive_' receives into. The request owns it too, as its
+  // callback data. Declared before 'closeReceive_', so that it is destroyed
+  // after it.
+  std::shared_ptr<CloseMsg> closeBuffer_;
+
   // The one receive of every close message on this worker. Used only on the
   // Communicator thread.
   std::shared_ptr<ucxx::Request> closeReceive_;
-
-  // The buffer 'closeReceive_' receives into.
-  std::shared_ptr<CloseMsg> closeBuffer_;
 
   // Heartbeat state for diagnostic logging.
   std::chrono::steady_clock::time_point lastHeartbeat_{

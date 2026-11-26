@@ -210,7 +210,8 @@ class UcxExchangeSource
   /// @param arg
   void onData(ucs_status_t status, std::shared_ptr<void> arg);
 
-  /// @brief Initiates receiving the HandshakeResponse from server.
+  /// @brief Initiates receiving the HandshakeResponse from server. Posts the
+  /// receive once, from process(); a post that fails ends the source.
   void receiveHandshakeResponse();
 
   /// @brief Called when HandshakeResponse is received from server.
@@ -246,6 +247,16 @@ class UcxExchangeSource
   // Runs process() for a closed source. Returns false if the source is in
   // Created, which connects as usual so that it can send the close message.
   bool processClosed();
+
+  // Returns the completion callback of a request, which runs 'handler' on this
+  // source if the source still exists. No exception may leave a UCX callback,
+  // so one that 'handler' throws ends the source with a transport error.
+  ucxx::RequestCallbackUserFunction completionCallback(
+      void (UcxExchangeSource::*handler)(ucs_status_t, std::shared_ptr<void>));
+
+  // Ends the source with a transport error that names 'error', which a
+  // completion handler threw. Does not throw.
+  void failCompletion(std::string_view error) noexcept;
 
   // Sends the close message to the server. Does not wait for the send to
   // complete; the Communicator keeps the request, and with it the message,
@@ -306,6 +317,10 @@ class UcxExchangeSource
   // the send inside the call that posts it, and the completion posts the
   // response receive in 'request_'.
   std::shared_ptr<ucxx::Request> handshakeRequest_;
+
+  // True once receiveHandshakeResponse() posted the receive of the
+  // HandshakeResponse. Used only on the Communicator thread.
+  bool responseReceivePosted_{false};
 
   // The outstanding receive - there can only be one outstanding receive at any
   // point in time. Used for the handshake response, metadata and data.

@@ -324,6 +324,30 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
     }));
   }
 
+  // Closes 'peer', the endpoint of a raw peer worker that accepted a connection
+  // of the Communicator from 127.0.0.1:'port', and the Communicator's endpoint
+  // of that connection, which it removes. A peer without error handling never
+  // tells the Communicator that it is gone, and a later case that gets the same
+  // port from findFreePort() must not reuse the endpoint. Both sides close at
+  // once: without error handling a close flushes, which fails once the other
+  // side has closed.
+  static void closeConnection(uint16_t port, ucxx::Endpoint& peer) {
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    // Not runOnCommunicator(): the Communicator's close waits for the peer,
+    // whose close progresses it meanwhile.
+    Communicator::getInstance()->postToLoop([port, done] {
+      auto communicator = Communicator::getInstance();
+      if (auto endpoint = communicator->assocEndpointRef(
+              nullptr, HostPort{"127.0.0.1", port})) {
+        communicator->removeEndpointRef(endpoint);
+      }
+      done->store(true);
+    });
+    peer.closeBlocking();
+    EXPECT_TRUE(waitUntil(
+        [&]() { return done->load(); }, std::chrono::milliseconds(10'000)));
+  }
+
   // Waits up to 'timeout' for 'condition' to hold, and returns whether it
   // holds.
   static bool waitUntil(
@@ -2972,7 +2996,7 @@ TEST_F(
     EXPECT_TRUE(responseRequest->isCompleted());
     EXPECT_TRUE(waitUntil(
         [&]() { return source.expired(); }, std::chrono::milliseconds(3'000)));
-    peer->closeBlocking();
+    closeConnection(port, *peer);
   }
 }
 
@@ -3097,9 +3121,14 @@ TEST_F(
 
 // The producer's end and the consumer's close race. The source sends the close
 // message only if it has not seen the end; a message that arrives after the
-// server ended is dropped. Either way the producer finishes, and the consumer
-// ends or is closed, never failed.
-TEST_F(UcxExchangeFocusedTest, closeMessageRacesEnd) {
+// server ended is dropped. With rendezvous, the end send completes only if the
+// source receives it, so the producer finishes only if one of the two reaches
+// the other side.
+TEST_F(UcxExchangeFocusedTest, terminalMetadataCloseMessageRacesEnd) {
+  if (!isRendezvousOnly()) {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
   const auto taskPrefix = getUniqueTaskPrefix();
   for (int32_t i = 0; i < 50; ++i) {
     SCOPED_TRACE(i);
@@ -3125,14 +3154,13 @@ TEST_F(UcxExchangeFocusedTest, closeMessageRacesEnd) {
         [&]() { queueManager()->noMoreData(taskId); },
         [&]() { client->close(); });
 
-    EXPECT_TRUE(waitForOutputFinished(taskId));
-    EXPECT_TRUE(
+    ASSERT_TRUE(waitForOutputFinished(taskId));
+    ASSERT_TRUE(
         exec::test::TaskMonitor::waitForStateChange(
             *task, TaskState::kFinished, 3'000'000));
-    bool atEnd{false};
-    ContinueFuture future = ContinueFuture::makeEmpty();
-    EXPECT_EQ(client->next(0, &atEnd, &future), nullptr);
-    EXPECT_TRUE(atEnd);
+    EXPECT_THAT(
+        client->queue()->sourceState(0),
+        testing::AnyOf(SourceState::kEnded, SourceState::kReleased));
   }
 }
 

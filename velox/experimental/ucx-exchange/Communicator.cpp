@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include <cuda_runtime.h>
+#include <folly/ScopeGuard.h>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
 #include <algorithm>
@@ -96,6 +97,8 @@ std::shared_ptr<Communicator> Communicator::getInstance() {
     instance->listenerCallback(conn_request);
   } catch (const std::exception& e) {
     LOG(ERROR) << "Cannot accept a UCX exchange connection: " << e.what();
+  } catch (...) {
+    LOG(ERROR) << "Cannot accept a UCX exchange connection: unknown exception";
   }
 }
 
@@ -151,8 +154,12 @@ void Communicator::run() {
   ucxx::AmReceiverCallbackInfo info(kAmCallbackOwner, kAmCallbackId);
   worker_->registerAmReceiverCallback(info, &Acceptor::cStyleAMCallback);
 
-  closeBuffer_ = std::make_shared<CloseMsg>();
   postCloseReceive();
+  // Every exit, also by an exception, cancels the receive while the worker
+  // still progresses.
+  SCOPE_EXIT {
+    cancelCloseReceive();
+  };
 
   promise_.setValue();
 
@@ -259,22 +266,25 @@ void Communicator::run() {
       throw;
     }
   }
-  cancelCloseReceive();
   VLOG(3) << "Communicator stopping.";
 }
 
 void Communicator::postCloseReceive() {
-  // A message shorter than the buffer leaves the rest of it as it was.
-  *closeBuffer_ = CloseMsg{};
+  // A new, zero-filled buffer for each receive: a message shorter than the
+  // buffer leaves the rest of it zero.
+  closeBuffer_ = std::make_shared<CloseMsg>();
   try {
     // The receive only records its status. handleCloseReceives() acts on it
-    // in the loop, outside every UCX callback.
+    // in the loop, outside every UCX callback. The request owns the buffer,
+    // and the worker holds the request until it completes, also after a
+    // cancellation that does not complete in time.
     closeReceive_ = worker_
                         ->tagRecvBuilder(
                             closeBuffer_.get(),
                             sizeof(CloseMsg),
                             ucxx::Tag{CLOSE_TAG},
                             ucxx::TagMask{kOperationTagMask})
+                        .callbackData(closeBuffer_)
                         .build();
   } catch (const std::exception& e) {
     // Producers on this worker then learn that a consumer left only when its
@@ -313,18 +323,25 @@ void Communicator::handleCloseReceives() {
   }
 }
 
-void Communicator::cancelCloseReceive() {
+void Communicator::cancelCloseReceive() noexcept {
   if (closeReceive_ == nullptr || closeReceive_->isCompleted()) {
     return;
   }
-  closeReceive_->cancel();
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(3);
-  while (!closeReceive_->isCompleted() &&
-         std::chrono::steady_clock::now() < deadline) {
-    worker_->progress();
+  try {
+    closeReceive_->cancel();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!closeReceive_->isCompleted() &&
+           std::chrono::steady_clock::now() < deadline) {
+      worker_->progress();
+    }
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Cannot cancel the receive of UCX exchange close messages: "
+               << e.what();
   }
   if (!closeReceive_->isCompleted()) {
+    // The request, which owns the buffer, stays with the worker, which
+    // cancels it again when it is destroyed.
     LOG(ERROR) << "The receive of UCX exchange close messages did not complete "
                   "after it was cancelled";
   }

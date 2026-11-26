@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <functional>
 #include <optional>
 #include <thread>
 
@@ -155,7 +156,8 @@ void UcxExchangeSource::process() {
       // Waiting for handshake send completion is handled by callback.
       break;
     case ReceiverState::WaitingForHandshakeResponse:
-      // Waiting for HandshakeResponse is handled by callback.
+      // Posts the receive once; its callback handles the HandshakeResponse.
+      receiveHandshakeResponse();
       break;
     case ReceiverState::ReadyToReceive: {
       // Backpressure: don't post the next receive if the consumer queue is
@@ -220,6 +222,9 @@ bool UcxExchangeSource::processClosed() {
       // server exists. The handshake callbacks, the endpoint's close and the
       // close deadline requeue the source.
       if (!closeDeadlineExpired_.load(std::memory_order_acquire)) {
+        if (getState() == ReceiverState::WaitingForHandshakeResponse) {
+          receiveHandshakeResponse();
+        }
         return true;
       }
       VLOG(1) << toString()
@@ -241,6 +246,45 @@ bool UcxExchangeSource::processClosed() {
       return true;
   }
   VELOX_UNREACHABLE();
+}
+
+ucxx::RequestCallbackUserFunction UcxExchangeSource::completionCallback(
+    void (UcxExchangeSource::*handler)(ucs_status_t, std::shared_ptr<void>)) {
+  // A weak pointer, so that a completion after the source is gone does
+  // nothing.
+  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
+  return [weak, handler](ucs_status_t status, std::shared_ptr<void> arg) {
+    auto self = weak.lock();
+    if (self == nullptr) {
+      return;
+    }
+    try {
+      std::invoke(handler, *self, status, std::move(arg));
+      return;
+    } catch (const VeloxException& e) {
+      // what() of a VeloxException carries its context and stack trace.
+      self->failCompletion(e.message());
+    } catch (const std::exception& e) {
+      self->failCompletion(e.what());
+    } catch (...) {
+      self->failCompletion("unknown exception");
+    }
+  };
+}
+
+void UcxExchangeSource::failCompletion(std::string_view error) noexcept {
+  try {
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Failed to handle a UCX completion from producer, host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            error)));
+  } catch (const std::exception& e) {
+    LOG(ERROR) << toString()
+               << " cannot end after a failed UCX completion: " << e.what();
+  }
 }
 
 void UcxExchangeSource::sendClose() {
@@ -463,8 +507,6 @@ void UcxExchangeSource::sendHandshake() {
   // Create the handshake which will register client's existence with the server
   ucxx::AmReceiverCallbackInfo info(
       communicator_->kAmCallbackOwner, communicator_->kAmCallbackId);
-  // Use weak_ptr to prevent use-after-free if close() is called during callback
-  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
   // Pass handshakeReq as the callback arg to keep the send buffer alive until
   // the async amSend completes. UCXX stores it as shared_ptr<void> but the
   // type-erased deleter still calls ~HandshakeMsg correctly.
@@ -473,12 +515,7 @@ void UcxExchangeSource::sendHandshake() {
           ->amSendBuilder(
               handshakeReq.get(), sizeof(*handshakeReq), UCS_MEMORY_TYPE_HOST)
           .receiverCallbackInfo(info)
-          .callbackFunction(
-              [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                if (auto self = weak.lock()) {
-                  self->onHandshake(status, arg);
-                }
-              })
+          .callbackFunction(completionCallback(&UcxExchangeSource::onHandshake))
           .callbackData(handshakeReq)
           .build();
 }
@@ -509,11 +546,12 @@ void UcxExchangeSource::onHandshake(
             ucs_status_string(status))));
   } else {
     VLOG(3) << toString() << "+ onHandshake " << ucs_status_string(status);
-    // Now wait for the HandshakeResponse from the server
+    // process() posts the receive of the HandshakeResponse, outside the UCX
+    // callback.
     setStateIf(
         ReceiverState::WaitingForHandshakeComplete,
         ReceiverState::WaitingForHandshakeResponse);
-    receiveHandshakeResponse();
+    communicator_->addToWorkQueue(getSelfPtr());
   }
 }
 
@@ -527,25 +565,19 @@ void UcxExchangeSource::getMetadata() {
           << " waiting for metadata for chunk: " << sequenceNumber_
           << " using tag: " << std::hex << metadataTag << std::dec;
 
-  // Use weak_ptr to prevent use-after-free if close() is called during callback
-  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_
-                 ->tagRecvBuilder(
-                     reinterpret_cast<void*>(metadataReq->data()),
-                     kMaxMetaBufSize,
-                     ucxx::Tag{metadataTag},
-                     ucxx::TagMaskFull)
-                 .callbackFunction(
-                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                       if (auto self = weak.lock()) {
-                         self->onMetadata(status, arg);
-                       }
-                     })
-                 .callbackData(metadataReq)
-                 .build();
+  request_ =
+      endpointRef_->endpoint_
+          ->tagRecvBuilder(
+              reinterpret_cast<void*>(metadataReq->data()),
+              kMaxMetaBufSize,
+              ucxx::Tag{metadataTag},
+              ucxx::TagMaskFull)
+          .callbackFunction(completionCallback(&UcxExchangeSource::onMetadata))
+          .callbackData(metadataReq)
+          .build();
 }
 
 void UcxExchangeSource::onMetadata(
@@ -659,26 +691,19 @@ void UcxExchangeSource::onMetadata(
       VLOG(1) << toString() << " onMetadata Invalid previous state ";
       return;
     }
-    // Use weak_ptr to prevent use-after-free if close() is called during
-    // callback
-    std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
     if (request_) {
       completedRequests_.push_back(std::move(request_));
     }
-    request_ = endpointRef_->endpoint_
-                   ->tagRecvBuilder(
-                       ptr->dataBuf->data(),
-                       ptr->metadata.dataSizeBytes,
-                       ucxx::Tag{dataTag},
-                       ucxx::TagMaskFull)
-                   .callbackFunction(
-                       [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                         if (auto self = weak.lock()) {
-                           self->onData(status, arg);
-                         }
-                       })
-                   .callbackData(ptr)
-                   .build();
+    request_ =
+        endpointRef_->endpoint_
+            ->tagRecvBuilder(
+                ptr->dataBuf->data(),
+                ptr->metadata.dataSizeBytes,
+                ucxx::Tag{dataTag},
+                ucxx::TagMaskFull)
+            .callbackFunction(completionCallback(&UcxExchangeSource::onData))
+            .callbackData(ptr)
+            .build();
   }
 }
 
@@ -739,6 +764,10 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
 }
 
 void UcxExchangeSource::receiveHandshakeResponse() {
+  if (responseReceivePosted_) {
+    return;
+  }
+  responseReceivePosted_ = true;
   // Zero-filled, because UCXX does not report a message shorter than the
   // buffer: an older server's 8 bytes leave the version at 0.
   auto responseBuffer =
@@ -749,25 +778,34 @@ void UcxExchangeSource::receiveHandshakeResponse() {
           << " waiting for HandshakeResponse with tag: " << std::hex
           << responseTag << std::dec;
 
-  // Use weak_ptr to prevent use-after-free if close() is called during callback
-  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_
-                 ->tagRecvBuilder(
-                     responseBuffer->data(),
-                     responseBuffer->size(),
-                     ucxx::Tag{responseTag},
-                     ucxx::TagMaskFull)
-                 .callbackFunction(
-                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                       if (auto self = weak.lock()) {
-                         self->onHandshakeResponse(status, arg);
-                       }
-                     })
-                 .callbackData(responseBuffer)
-                 .build();
+  // Called from process(), which must not throw out of the Communicator loop.
+  std::optional<std::string> error;
+  try {
+    request_ = endpointRef_->endpoint_
+                   ->tagRecvBuilder(
+                       responseBuffer->data(),
+                       responseBuffer->size(),
+                       ucxx::Tag{responseTag},
+                       ucxx::TagMaskFull)
+                   .callbackFunction(completionCallback(
+                       &UcxExchangeSource::onHandshakeResponse))
+                   .callbackData(responseBuffer)
+                   .build();
+  } catch (const std::exception& e) {
+    error = e.what();
+  }
+  if (error.has_value()) {
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Failed to receive HandshakeResponse from host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            *error)));
+  }
 }
 
 void UcxExchangeSource::onHandshakeResponse(
