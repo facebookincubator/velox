@@ -516,6 +516,12 @@ These stats are reported only by connector data or index sources.
      - The number of distinct stripes loaded across the lifetime of the index
        reader. Comparing with numStripeLoads (which counts every load call)
        reveals redundant loads of the same stripe.
+   * - numReusedFlatMapKeyNodes
+     -
+     - The number of FlatMap key readers that a stripe reused from an earlier
+       stripe instead of building new ones (Nimble). The index reader keeps the
+       readers of each FlatMap key it read, and rebinds them to the next stripe
+       that has the key. Reported only when greater than zero.
    * - indexStripeLoadWallNanos
      - nanos
      - Wall time spent loading stripes (or equivalent format-specific load
