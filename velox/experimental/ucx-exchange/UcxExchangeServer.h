@@ -114,6 +114,11 @@ class UcxExchangeServer
   // process() with no lock held.
   void onSendFailed(ucs_status_t status);
 
+  // Releases the destination as for a send that failed while the endpoint
+  // stayed open, and fails the producer task with an error that names
+  // 'reason' if the entry decides one. Called with no lock held.
+  void failProducer(std::string_view reason);
+
   /// @brief Completion handler for intra-node transfer after source retrieves
   /// data.
   void onIntraNodeRetrieveComplete();

@@ -23,9 +23,11 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
@@ -93,6 +95,40 @@ class EndpointClosedProbe final : public CommElement {
 
  private:
   folly::Baton<> closed_;
+};
+
+// Throws from process(), as an element does when a post or a serialization
+// fails, and records how the Communicator ends it.
+class ThrowingElement final
+    : public CommElement,
+      public std::enable_shared_from_this<ThrowingElement> {
+ public:
+  explicit ThrowingElement(std::shared_ptr<Communicator> communicator)
+      : CommElement(std::move(communicator)) {}
+
+  void process() override {
+    VELOX_FAIL("Injected process() failure");
+  }
+
+  void onEndpointClosed(std::string_view reason) override {
+    reason_ = std::string(reason);
+    communicator_->unregister(shared_from_this());
+    ended_.post();
+  }
+
+  // Returns the reason the element was ended with, or nullopt if it was not
+  // ended within 'timeout'.
+  std::optional<std::string> waitForEnd(std::chrono::milliseconds timeout) {
+    if (!ended_.try_wait_for(timeout)) {
+      return std::nullopt;
+    }
+    return reason_;
+  }
+
+ private:
+  // Written on the Communicator thread before 'ended_' is posted.
+  std::string reason_;
+  folly::Baton<> ended_;
 };
 
 // Starts a self-requeueing element and waits until the Communicator is
@@ -223,6 +259,22 @@ TEST_F(CommunicatorStallTest, closeMessageHandledWhileAnElementRequeuesItself) {
   EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased)
       << "The close message was not handled within 2 s while an element "
          "requeued itself";
+}
+
+// An element whose process() throws is ended with the error, as if its
+// endpoint closed, and the Communicator keeps serving every other element on
+// this worker.
+TEST_F(CommunicatorStallTest, throwingElementIsEndedAndLoopContinues) {
+  auto communicator = Communicator::getInstance();
+  auto element = std::make_shared<ThrowingElement>(communicator);
+  communicator->registerCommElement(element);
+  EXPECT_EQ(
+      element->waitForEnd(std::chrono::milliseconds(2'000)),
+      "Exchange element failed: Injected process() failure");
+  EXPECT_TRUE(
+      postedActionLatency(communicator, std::chrono::milliseconds(2'000))
+          .has_value())
+      << "The Communicator stopped after an element threw";
 }
 
 } // namespace

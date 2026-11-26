@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
+#include <fmt/format.h>
 #include <glog/logging.h>
 #include "cuda_runtime.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -392,6 +393,23 @@ void UcxExchangeServer::sendData() {
       metadataMsg.dataSizeBytes = dataPtr_->gpu_data->size();
       metadataMsg.numRows = dataNumRows_;
       metadataMsg.remainingBytes = {};
+      const auto metadataSize = metadataMsg.getSerializedSize();
+      if (metadataSize > kMaxMetaBufSize) {
+        // The consumer's receive cannot hold the message. Fail the query, as
+        // for a failed send, with no lock held: Task::setError() must not run
+        // under 'dataMutex_'.
+        dataPtr_.reset();
+        dataNumRows_ = 0;
+        lock.unlock();
+        failProducer(
+            fmt::format(
+                "Chunk metadata exceeds the limit of {} bytes for a UCX exchange message: {} bytes",
+                kMaxMetaBufSize,
+                metadataSize));
+        setState(ServerState::Done);
+        communicator_->addToWorkQueue(getSelfPtr());
+        return;
+      }
       serialized = metadataMsg.serialize();
     } else {
       VLOG(3) << "@" << partitionKey_.taskId << " Final exchange for "
@@ -579,17 +597,20 @@ void UcxExchangeServer::onSendFailed(ucs_status_t status) {
       entry_->consumerGone(partitionKey_.destination);
       break;
     case SendFailureCause::kSendFailed:
-      if (auto error = entry_->sendFailed(
-              partitionKey_.destination, ucs_status_string(status))) {
-        LOG(ERROR) << *error;
-        if (auto task = entry_->task()) {
-          task->setError(*error);
-        }
-      }
+      failProducer(ucs_status_string(status));
       break;
   }
   setState(ServerState::Done);
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeServer::failProducer(std::string_view reason) {
+  if (auto error = entry_->sendFailed(partitionKey_.destination, reason)) {
+    LOG(ERROR) << *error;
+    if (auto task = entry_->task()) {
+      task->setError(*error);
+    }
+  }
 }
 
 void UcxExchangeServer::onIntraNodeRetrieveComplete() {

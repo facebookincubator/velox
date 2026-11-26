@@ -15,11 +15,13 @@
  */
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include <cuda_runtime.h>
+#include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
 #include <algorithm>
 #include <iostream>
+#include <string>
 #include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
@@ -112,6 +114,36 @@ Communicator::~Communicator() {
   context_.reset();
   VLOG(3) << "Communicator destructed";
 }
+
+namespace {
+// Runs 'element's process(). An exception ends only that element, as if its
+// endpoint closed: a server Releases its destination and a source fails its
+// consumer. The loop serves every exchange on this worker, so one element's
+// failure, such as a post that throws, must not stop it.
+void processElement(CommElement& element) {
+  std::string error;
+  try {
+    element.process();
+    return;
+  } catch (const VeloxException& e) {
+    // what() of a VeloxException carries its context and stack trace.
+    error = e.message();
+  } catch (const std::exception& e) {
+    error = e.what();
+  } catch (...) {
+    error = "unknown exception";
+  }
+  LOG(ERROR) << "UCX exchange element failed on the Communicator thread: "
+             << error;
+  try {
+    element.onEndpointClosed(fmt::format("Exchange element failed: {}", error));
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Cannot end a failed UCX exchange element: " << e.what();
+  } catch (...) {
+    LOG(ERROR) << "Cannot end a failed UCX exchange element: unknown exception";
+  }
+}
+} // namespace
 
 /// @brief Run doesn't return until stop() is called.
 /// All operations of the communicator will be carried out in the thread
@@ -239,7 +271,7 @@ void Communicator::run() {
         if (!comms) {
           break;
         }
-        comms->process();
+        processElement(*comms);
         ++workItemsProcessed_;
         // Progress after each work item to allow UCXX to advance
         // its internal state (complete sends/receives, fire callbacks).
@@ -260,10 +292,11 @@ void Communicator::run() {
             deferredRequests_.end());
       }
 
-      // All queues are drained. Now wait for UCXX network events.
-      // In blocking mode, this will block until a UCXX event arrives
-      // or worker_->signal() is called (from addToWorkQueue,
-      // deferEndpointCleanup, or stop).
+      // Progress UCXX network events. The drain above is bounded, so the work
+      // queue may still hold elements. Neither call blocks:
+      // progressWorkerEvent(0) waits on the worker's events with an epoll
+      // timeout of 0. The next iteration therefore takes the remaining work
+      // at once, and none of it is stranded.
       if (blockingMode) {
         worker_->progressWorkerEvent(0);
       } else {

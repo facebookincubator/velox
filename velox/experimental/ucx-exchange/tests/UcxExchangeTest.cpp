@@ -3110,6 +3110,76 @@ TEST_F(UcxExchangeFocusedTest, consumerCloseReleasesProducer) {
   EXPECT_NE(task->state(), TaskState::kFailed);
 }
 
+// A chunk whose cuDF metadata does not fit in a metadata message, as for a
+// very wide table, fails its producer task as a failed send does. The
+// Communicator, which serves every exchange on this worker, keeps running.
+TEST_F(UcxExchangeFocusedTest, oversizedChunkMetadataFailsProducer) {
+  const auto taskPrefix = getUniqueTaskPrefix();
+  {
+    const auto taskId = taskPrefix + "oversizedMetadata";
+    auto task = makeProducerTask(taskId, pool_.get());
+    queueManager()->initializeTask(
+        task,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        /*numDestinations=*/1,
+        /*numDrivers=*/1);
+    SCOPE_EXIT {
+      queueManager()->removeTask(taskId);
+    };
+    auto chunk = makePackedColumns(100);
+    chunk->metadata = std::make_unique<std::vector<uint8_t>>(kMaxMetaBufSize);
+    queueManager()->enqueue(taskId, 0, std::move(chunk), /*numRows=*/100);
+
+    auto client = std::make_shared<UcxExchangeClient>(
+        "oversizedMetadataConsumer",
+        /*destination=*/0,
+        /*numberOfConsumers=*/1);
+    client->addRemoteTaskId(remoteTaskUrl(taskId));
+    client->noMoreRemoteTasks();
+    EXPECT_TRUE(waitUntil(
+        [&]() { return task->state() == TaskState::kFailed; },
+        std::chrono::milliseconds(10'000)));
+    EXPECT_THAT(
+        task->errorMessage(),
+        testing::AllOf(
+            testing::HasSubstr(
+                "Failed to send to consumer over UCX, task " + taskId),
+            testing::HasSubstr(
+                "Chunk metadata exceeds the limit of 1048576 bytes for a UCX "
+                "exchange message: ")));
+    client->close();
+  }
+
+  // A later exchange still runs to its end.
+  const auto taskId = taskPrefix + "afterOversizedMetadata";
+  auto task = makeProducerTask(taskId, pool_.get());
+  queueManager()->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  SCOPE_EXIT {
+    queueManager()->removeTask(taskId);
+  };
+  queueManager()->enqueue(taskId, 0, makePackedColumns(100), /*numRows=*/100);
+  queueManager()->noMoreData(taskId);
+  auto client = std::make_shared<UcxExchangeClient>(
+      "afterOversizedMetadataConsumer",
+      /*destination=*/0,
+      /*numberOfConsumers=*/1);
+  SCOPE_EXIT {
+    client->close();
+  };
+  client->addRemoteTaskId(remoteTaskUrl(taskId));
+  client->noMoreRemoteTasks();
+  auto table = nextTable(*client);
+  ASSERT_NE(table, nullptr);
+  EXPECT_EQ(table->numRows, 100);
+  table.reset();
+  EXPECT_TRUE(waitForOutputFinished(taskId));
+  EXPECT_NE(task->state(), TaskState::kFailed);
+}
+
 // A source that closes before the handshake response arrives does not know
 // whether its server exists. It waits for the response, then sends the close
 // message. If no response arrives within kCloseTimeout, it ends and sends
