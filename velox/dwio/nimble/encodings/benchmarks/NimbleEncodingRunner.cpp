@@ -1059,6 +1059,33 @@ void validatePrefixArtifactStructure(
   require(cursor == artifact.size(), "Prefix payload has trailing bytes");
 }
 
+std::string_view readFsstLengthsChild(
+    std::string_view artifact,
+    size_t& offset,
+    uint32_t rowCount,
+    std::string_view field) {
+  const uint32_t size =
+      readBoundedVarint32(artifact, offset, fmt::format("{} size", field));
+  require(size > 0, fmt::format("{} must not be empty", field));
+  require(
+      size <= artifact.size() - offset,
+      fmt::format("{} exceeds artifact bounds", field));
+  const auto child = artifact.substr(offset, size);
+  offset += size;
+
+  validateUncompressedFixedBitWidthChild<uint32_t>(
+      child, DataType::Uint32, rowCount, field, false);
+  constexpr size_t kBitWidthOffset =
+      EncodingPrefix::kFixedPrefixSize + sizeof(uint8_t) + sizeof(uint32_t);
+  constexpr size_t kPayloadOffset = kBitWidthOffset + sizeof(uint8_t);
+  validateFixedBitArrayPadding(
+      child.substr(kPayloadOffset),
+      rowCount,
+      static_cast<uint8_t>(child[kBitWidthOffset]),
+      field);
+  return child;
+}
+
 void validateFsstArtifactStructure(
     std::string_view artifact,
     uint32_t rowCount) {
@@ -1083,27 +1110,10 @@ void validateFsstArtifactStructure(
       "FSST symbol table exceeds artifact bounds");
   offset += symbolTableSize;
 
-  const uint32_t lengthsSize =
-      readBoundedVarint32(artifact, offset, "FSST lengths child size");
-  require(lengthsSize > 0, "FSST lengths child must not be empty");
-  require(
-      lengthsSize <= artifact.size() - offset,
-      "FSST lengths child exceeds artifact bounds");
-  const auto lengths = artifact.substr(offset, lengthsSize);
-  offset += lengthsSize;
-
-  validateUncompressedFixedBitWidthChild<uint32_t>(
-      lengths, DataType::Uint32, rowCount, "FSST lengths child", false);
-  constexpr size_t kLengthsBitWidthOffset =
-      EncodingPrefix::kFixedPrefixSize + sizeof(uint8_t) + sizeof(uint32_t);
-  constexpr size_t kLengthsPayloadOffset =
-      kLengthsBitWidthOffset + sizeof(uint8_t);
-  const auto bitWidth = static_cast<uint8_t>(lengths[kLengthsBitWidthOffset]);
-  validateFixedBitArrayPadding(
-      lengths.substr(kLengthsPayloadOffset),
-      rowCount,
-      bitWidth,
-      "FSST lengths child");
+  const auto lengths =
+      readFsstLengthsChild(artifact, offset, rowCount, "FSST lengths child");
+  readFsstLengthsChild(
+      artifact, offset, rowCount, "FSST decoded lengths child");
 
   uint64_t totalExpandedBytes{0};
   for (uint32_t row = 0; row < rowCount; ++row) {
@@ -1548,7 +1558,7 @@ EncodingLayout replayLayout(RunnerEncoding encoding) {
           EncodingType::Fsst,
           {},
           CompressionType::Uncompressed,
-          {fixedBitWidthLayout()}};
+          {fixedBitWidthLayout(), fixedBitWidthLayout()}};
     case RunnerEncoding::Nullable:
       return trivialLayout();
     case RunnerEncoding::ALP:

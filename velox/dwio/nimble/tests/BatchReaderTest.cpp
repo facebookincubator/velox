@@ -1503,9 +1503,13 @@ nimble::EncodingLayout makeFsstEncodingLayout() {
       {},
       nimble::CompressionType::Uncompressed,
       {nimble::EncodingLayout{
-          nimble::EncodingType::Trivial,
-          {},
-          nimble::CompressionType::Uncompressed}}};
+           nimble::EncodingType::Trivial,
+           {},
+           nimble::CompressionType::Uncompressed},
+       nimble::EncodingLayout{
+           nimble::EncodingType::Trivial,
+           {},
+           nimble::CompressionType::Uncompressed}}};
 }
 
 // A StripeGroup metadata format: a layout, and for kStreamMajor whether it uses
