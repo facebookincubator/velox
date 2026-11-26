@@ -48,7 +48,8 @@ class FsstEncodingTest : public ::testing::Test {
     CompressionType compressionType;
     std::string_view symbolTable;
     std::string_view lengths;
-    std::string_view decodedLengths;
+    // Absent in the layout without decoded lengths.
+    std::optional<std::string_view> decodedLengths;
     std::string_view blob;
   };
 
@@ -116,10 +117,17 @@ class FsstEncodingTest : public ::testing::Test {
         {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
   }
 
+  // The compression type of a serialized byte, without the decoded lengths
+  // flag.
+  static CompressionType compressionTypeOf(char serialized) {
+    return static_cast<CompressionType>(
+        static_cast<uint8_t>(serialized) & ~FsstEncoding::kDecodedLengthsFlag);
+  }
+
   static CompressionType serializedCompressionType(std::string_view encoded) {
     const auto offset = EncodingPrefix::prefixSize(encoded, false);
     NIMBLE_CHECK_LT(offset, encoded.size());
-    return static_cast<CompressionType>(static_cast<uint8_t>(encoded[offset]));
+    return compressionTypeOf(encoded[offset]);
   }
 
   std::string encodeZeroTerminatedFsst(
@@ -209,7 +217,10 @@ class FsstEncodingTest : public ::testing::Test {
         /*useVarint=*/false,
         position);
     encoding::writeChar(
-        static_cast<char>(CompressionType::Uncompressed), position);
+        static_cast<char>(
+            static_cast<uint8_t>(CompressionType::Uncompressed) |
+            FsstEncoding::kDecodedLengthsFlag),
+        position);
     encoding::writeVarintString(
         {reinterpret_cast<const char*>(symbolTable.data()), symbolTableSize},
         position);
@@ -230,8 +241,12 @@ class FsstEncodingTest : public ::testing::Test {
     auto remaining = encoded.substr(prefixSize);
     const char* cursor = remaining.data();
     NIMBLE_CHECK_NOT_NULL(cursor);
-    const auto compressionType =
-        static_cast<CompressionType>(encoding::readChar(cursor));
+    const auto compressionTypeAndFlag =
+        static_cast<uint8_t>(encoding::readChar(cursor));
+    const bool hasDecodedLengths =
+        (compressionTypeAndFlag & FsstEncoding::kDecodedLengthsFlag) != 0;
+    const auto compressionType = static_cast<CompressionType>(
+        compressionTypeAndFlag & ~FsstEncoding::kDecodedLengthsFlag);
     remaining.remove_prefix(cursor - remaining.data());
     cursor = remaining.data();
     const auto symbolTableSize = varint::readVarint32(&cursor);
@@ -243,11 +258,14 @@ class FsstEncodingTest : public ::testing::Test {
     remaining.remove_prefix(varint::varintSize(lengthsSize));
     const auto lengths = remaining.substr(0, lengthsSize);
     remaining.remove_prefix(lengthsSize);
-    cursor = remaining.data();
-    const auto decodedLengthsSize = varint::readVarint32(&cursor);
-    remaining.remove_prefix(varint::varintSize(decodedLengthsSize));
-    const auto decodedLengths = remaining.substr(0, decodedLengthsSize);
-    remaining.remove_prefix(decodedLengthsSize);
+    std::optional<std::string_view> decodedLengths;
+    if (hasDecodedLengths) {
+      cursor = remaining.data();
+      const auto decodedLengthsSize = varint::readVarint32(&cursor);
+      remaining.remove_prefix(varint::varintSize(decodedLengthsSize));
+      decodedLengths = remaining.substr(0, decodedLengthsSize);
+      remaining.remove_prefix(decodedLengthsSize);
+    }
     return {
         .prefix = encoded.substr(0, prefixSize),
         .compressionType = compressionType,
@@ -271,13 +289,19 @@ class FsstEncodingTest : public ::testing::Test {
       const FsstSections& sections,
       std::string_view symbolTable,
       std::string_view lengths,
-      std::string_view decodedLengths,
+      std::optional<std::string_view> decodedLengths,
       std::string_view blob) {
     std::string rebuilt{sections.prefix};
-    rebuilt.push_back(static_cast<char>(sections.compressionType));
+    rebuilt.push_back(
+        static_cast<char>(
+            static_cast<uint8_t>(sections.compressionType) |
+            (decodedLengths.has_value() ? FsstEncoding::kDecodedLengthsFlag
+                                        : 0)));
     appendSection(rebuilt, symbolTable);
     appendSection(rebuilt, lengths);
-    appendSection(rebuilt, decodedLengths);
+    if (decodedLengths.has_value()) {
+      appendSection(rebuilt, *decodedLengths);
+    }
     rebuilt.append(blob);
     return rebuilt;
   }
@@ -1093,7 +1117,7 @@ TEST_F(FsstEncodingTest, writesCompressionTypeWhenCompressionIsRejected) {
   const char* header =
       encoded.data() + EncodingPrefix::prefixSize(encoded, false);
   EXPECT_EQ(
-      static_cast<CompressionType>(encoding::readChar(header)),
+      compressionTypeOf(encoding::readChar(header)),
       CompressionType::Uncompressed);
   EXPECT_GT(varint::readVarint32(&header), 0);
 
@@ -1165,7 +1189,7 @@ TEST_F(FsstEncodingTest, capturesLengthsLayoutWithVarintHeaderSizes) {
   const char* pos =
       encoded.data() + EncodingPrefix::prefixSize(encoded, /*useVarint=*/false);
   EXPECT_EQ(
-      static_cast<CompressionType>(encoding::readChar(pos)),
+      compressionTypeOf(encoding::readChar(pos)),
       CompressionType::Uncompressed);
   const auto symbolTableSize = varint::readVarint32(&pos);
   ASSERT_GT(symbolTableSize, 0);
@@ -1215,7 +1239,7 @@ TEST_F(FsstEncodingTest, rejectsTruncatedHeadersBeforeExternalConsumers) {
   const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
   const char* cursor = encoded.data() + headerOffset;
   EXPECT_EQ(
-      static_cast<CompressionType>(encoding::readChar(cursor)),
+      compressionTypeOf(encoding::readChar(cursor)),
       CompressionType::Uncompressed);
   const auto symbolTableSize = varint::readVarint32(&cursor);
   const auto symbolTableOffset = static_cast<size_t>(cursor - encoded.data());
@@ -1285,7 +1309,7 @@ TEST_F(FsstEncodingTest, rejectsOverlongHeaderVarints) {
   const auto headerOffset = EncodingPrefix::prefixSize(encoded, false);
   const char* cursor = encoded.data() + headerOffset;
   EXPECT_EQ(
-      static_cast<CompressionType>(encoding::readChar(cursor)),
+      compressionTypeOf(encoding::readChar(cursor)),
       CompressionType::Uncompressed);
   const auto symbolTableSizeOffset =
       static_cast<size_t>(cursor - encoded.data());
@@ -1526,7 +1550,10 @@ TEST_F(FsstEncodingTest, rejectsMalformedDecodedLengthsSection) {
 
   const auto headerUpToLengths = [&] {
     std::string malformed{sections.prefix};
-    malformed.push_back(static_cast<char>(sections.compressionType));
+    malformed.push_back(
+        static_cast<char>(
+            static_cast<uint8_t>(sections.compressionType) |
+            FsstEncoding::kDecodedLengthsFlag));
     appendSection(malformed, sections.symbolTable);
     appendSection(malformed, sections.lengths);
     return malformed;
@@ -1609,7 +1636,7 @@ TEST_F(FsstEncodingTest, rejectsCorruptDecodedLengths) {
   const auto values = toViews(storage);
   Buffer buffer{*pool_};
   const auto encoded = encodeFsst(values, buffer);
-  const auto lengths = decodeLengths(splitFsst(encoded).decodedLengths);
+  const auto lengths = decodeLengths(*splitFsst(encoded).decodedLengths);
 
   const auto expectCorruptRead = [&](std::string_view decodedLengths,
                                      const char* message) {
@@ -1691,7 +1718,7 @@ TEST_F(FsstEncodingTest, rejectsMalformedDecodedLengthsInSlice) {
   const auto values = toViews(storage);
   Buffer buffer{*pool_};
   const auto encoded = encodeFsst(values, buffer);
-  const auto lengths = decodeLengths(splitFsst(encoded).decodedLengths);
+  const auto lengths = decodeLengths(*splitFsst(encoded).decodedLengths);
 
   const auto expectCorruptSlice = [&](std::string_view decodedLengths,
                                       const char* message) {
@@ -3582,6 +3609,136 @@ TEST_F(FsstEncodingTest, replaysDecodedLengthsLayout) {
               std::move(lengthsOnly)},
           rejectedBuffer),
       "Sub-encoding identifier out of range.");
+}
+
+TEST_F(FsstEncodingTest, readsLayoutsWithAndWithoutDecodedLengths) {
+  const auto storage = makePaths(300);
+  const auto values = toViews(storage);
+  const auto numRows = static_cast<uint32_t>(values.size());
+
+  Buffer buffer{*pool_};
+  const auto current = encodeFsst(values, buffer);
+  const auto currentSections = splitFsst(current);
+  ASSERT_TRUE(currentSections.decodedLengths.has_value());
+  const auto older = rebuildFsst(
+      currentSections,
+      currentSections.symbolTable,
+      currentSections.lengths,
+      std::nullopt,
+      currentSections.blob);
+
+  for (const bool hasDecodedLengths : {false, true}) {
+    SCOPED_TRACE(hasDecodedLengths ? "with decoded lengths" : "without");
+    const std::string_view encoded =
+        hasDecodedLengths ? std::string_view{current} : std::string_view{older};
+    const auto prefixSize = EncodingPrefix::prefixSize(encoded, false);
+    EXPECT_EQ(
+        (static_cast<uint8_t>(encoded[prefixSize]) &
+         FsstEncoding::kDecodedLengthsFlag) != 0,
+        hasDecodedLengths);
+    EXPECT_EQ(
+        FsstEncoding::decodedLengthsEncoding(encoded, {}).empty(),
+        !hasDecodedLengths);
+    const auto captured = EncodingLayoutCapture::capture(encoded, {});
+    ASSERT_EQ(captured.childrenCount(), 2);
+    EXPECT_TRUE(captured.child(EncodingIdentifiers::Fsst::Lengths).has_value());
+    EXPECT_EQ(
+        captured.child(EncodingIdentifiers::Fsst::DecodedLengths).has_value(),
+        hasDecodedLengths);
+    EXPECT_EQ(
+        serializedCompressionType(encoded), CompressionType::Uncompressed);
+
+    // Reads decode the same strings with and without the lengths: in batches,
+    // with every row selected, and with a gap in the selection.
+    stringBuffers_.clear();
+    FsstEncoding encoding{*pool_, encoded, createStringBufferFactory()};
+    std::vector<std::string_view> decoded(numRows);
+    encoding.materialize(100, decoded.data());
+    encoding.materialize(numRows - 100, decoded.data() + 100);
+    EXPECT_EQ(decoded, values);
+
+    for (const auto skipRow : {-1, 150}) {
+      encoding.reset();
+      std::vector<vector_size_t> rows(numRows);
+      std::iota(rows.begin(), rows.end(), 0);
+      auto expected = values;
+      if (skipRow >= 0) {
+        rows.erase(rows.begin() + skipRow);
+        expected.erase(expected.begin() + skipRow);
+      }
+      StringReadWithVisitor visitor{rows};
+      ReadWithVisitorParams params;
+      params.numScanned = 0;
+      encoding.readWithVisitor(visitor, params);
+      EXPECT_EQ(visitor.values(), expected) << "skipRow " << skipRow;
+    }
+
+    // A slice keeps the layout of its source.
+    Buffer sliceBuffer{*pool_};
+    const auto sliced = EncodingFactory::slice(
+        encoded,
+        /*offset=*/17,
+        /*length=*/83,
+        sliceBuffer,
+        {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+    EXPECT_EQ(splitFsst(sliced).decodedLengths.has_value(), hasDecodedLengths);
+    stringBuffers_.clear();
+    FsstEncoding slicedEncoding{*pool_, sliced, createStringBufferFactory()};
+    std::vector<std::string_view> slicedValues(83);
+    slicedEncoding.materialize(83, slicedValues.data());
+    EXPECT_EQ(
+        slicedValues,
+        std::vector<std::string_view>(
+            values.begin() + 17, values.begin() + 100));
+  }
+}
+
+TEST_F(FsstEncodingTest, rejectsUnknownCompressionTypeBesideTheFlag) {
+  const auto storage = makePaths(20);
+  const auto values = toViews(storage);
+  Buffer buffer{*pool_};
+  const auto current = encodeFsst(values, buffer);
+  const auto currentSections = splitFsst(current);
+  const auto older = rebuildFsst(
+      currentSections,
+      currentSections.symbolTable,
+      currentSections.lengths,
+      std::nullopt,
+      currentSections.blob);
+  for (const bool hasDecodedLengths : {false, true}) {
+    auto encoded = hasDecodedLengths ? std::string{current} : older;
+    const auto prefixSize = EncodingPrefix::prefixSize(encoded, false);
+    encoded[prefixSize] = static_cast<char>(
+        0x7f | (hasDecodedLengths ? FsstEncoding::kDecodedLengthsFlag : 0));
+    expectMalformedHeaderFromAllApis(
+        encoded, "Unsupported FSST compression type");
+  }
+}
+
+TEST_F(FsstEncodingTest, replaysLayoutCapturedWithoutDecodedLengths) {
+  const auto storage = makePaths(300);
+  const auto values = toViews(storage);
+  Buffer buffer{*pool_};
+  const auto current = encodeFsst(values, buffer);
+  const auto sections = splitFsst(current);
+  const auto older = rebuildFsst(
+      sections,
+      sections.symbolTable,
+      sections.lengths,
+      std::nullopt,
+      sections.blob);
+
+  Buffer replayBuffer{*pool_};
+  const auto replayed = EncodingFactory::encode<std::string_view>(
+      std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
+          EncodingLayoutCapture::capture(older, {}),
+          CompressionOptions{},
+          encodingSelectionPolicyCreator_),
+      values,
+      replayBuffer,
+      {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+  ASSERT_EQ(EncodingPrefix::encodingType(replayed), EncodingType::Fsst);
+  EXPECT_TRUE(splitFsst(replayed).decodedLengths.has_value());
 }
 
 } // namespace
