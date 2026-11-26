@@ -1596,6 +1596,8 @@ void RPCOperator::addLiveProgressStats(
       RuntimeMetric(snapshot.numOverloadedAttempts);
   stats.runtimeStats[RPCOperatorStatNames::kRpcSuccessesAfterOverload] =
       RuntimeMetric(snapshot.numSuccessesAfterOverload);
+  stats.runtimeStats[RPCOperatorStatNames::kRpcBatchOverloadedAttempts] =
+      RuntimeMetric(snapshot.numBatchOverloadedAttempts);
   if (!includeGauges) {
     return;
   }

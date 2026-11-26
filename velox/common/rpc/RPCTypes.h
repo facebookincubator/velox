@@ -380,7 +380,9 @@ struct RPCResponse {
   /// Zero when not reported. Differs from CapacityRetryHint::numInPlaceRetries,
   /// which a caller-retried rejection also carries: that counts every in-place
   /// retry that spends the hint's budget, whatever its cause, so a timed-out
-  /// attempt can count in both.
+  /// attempt can count in both. A transport that reports them for a whole
+  /// multi-row call, such as an async job, puts them on one of the call's
+  /// responses, so that a sum over the responses counts each attempt once.
   int32_t numOverloadedAttempts{0};
 
   /// Returns a successful response containing the function-owned payload.

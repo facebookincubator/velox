@@ -459,7 +459,8 @@ canonical typed overload or a function-specific ``kOverloaded`` verdict causes
 admission backoff. This keeps request-level reliability separate from
 cluster-level flow control. The overloaded attempts a transport reports are
 only counted, in the ``rpcOverloadedAttempts`` and ``rpcSuccessesAfterOverload``
-runtime stats; they do not feed flow control.
+runtime stats, or ``rpcBatchOverloadedAttempts`` for a BATCH flush; they do not
+feed flow control.
 
 Classified row failures reach ``buildOutput()``, where the function applies its
 configured policy by emitting null or error output, or by failing the query.

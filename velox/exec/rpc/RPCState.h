@@ -276,6 +276,9 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     int64_t numOverloadedAttempts{0};
     // Successes whose response reported overloaded attempts.
     int64_t numSuccessesAfterOverload{0};
+    // Transport-reported overloaded attempts summed over completed BATCH
+    // flushes.
+    int64_t numBatchOverloadedAttempts{0};
   };
 
   explicit RPCState(std::shared_ptr<memory::MemoryPool> pool)
@@ -725,6 +728,7 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   // Reported as the OperatorSnapshot fields of the same names.
   int64_t numOverloadedAttempts_{0};
   int64_t numSuccessesAfterOverload_{0};
+  int64_t numBatchOverloadedAttempts_{0};
 
   // Latency-gradient concurrency window, fed RTT via onUnitSample(). Both modes
   // use the same learner; setStreamingMode() only picks the (start, max) pair:

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <exception>
 #include <limits>
+#include <numeric>
 #include <utility>
 
 #include <folly/Random.h>
@@ -790,11 +791,19 @@ void RPCState::addPendingBatch(
                               << completed.responses.size() << " responses";
             completed.charge = state->chargePayloadBytes(retainedBytes);
             completionTimeNs->store(completedAtNs, std::memory_order_relaxed);
+            const auto numOverloadedAttempts = std::accumulate(
+                completed.responses.begin(),
+                completed.responses.end(),
+                int64_t{0},
+                [](int64_t total, const RPCResponse& response) {
+                  return total + response.numOverloadedAttempts;
+                });
 
             std::vector<ContinuePromise> waiters;
             {
               std::lock_guard<std::mutex> l(state->mutex_);
               ++state->numCompletionsSignaled_;
+              state->numBatchOverloadedAttempts_ += numOverloadedAttempts;
               waiters = state->takeWaitersLocked();
             }
             fulfillWaiters(waiters);
@@ -1255,6 +1264,7 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .numCapacityRetryFloorRetries = numCapacityRetryFloorRetries_,
       .numOverloadedAttempts = numOverloadedAttempts_,
       .numSuccessesAfterOverload = numSuccessesAfterOverload_,
+      .numBatchOverloadedAttempts = numBatchOverloadedAttempts_,
   };
 }
 

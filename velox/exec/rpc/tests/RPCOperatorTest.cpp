@@ -1168,6 +1168,24 @@ class PartlyRateLimitedBatchRPCFunction : public RateLimitedBatchRPCFunction {
   }
 };
 
+// Answers every flush as one job whose transport reports
+// kNumOverloadedAttempts overloaded attempts, on the flush's first row.
+class OverloadedAttemptsBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  static constexpr int32_t kNumOverloadedAttempts{3};
+
+  folly::SemiFuture<std::vector<RPCResponse>> flushBatch(
+      int32_t maxRows) override {
+    return DemoBatchRPCFunction::flushBatch(maxRows).deferValue(
+        [](std::vector<RPCResponse> responses) {
+          if (!responses.empty()) {
+            responses.front().numOverloadedAttempts = kNumOverloadedAttempts;
+          }
+          return responses;
+        });
+  }
+};
+
 // Declares a per-request byte budget and reports a fixed number of rows that
 // fit it, so the operator must chunk a large backlog to keep each request
 // under the cap. Records every flush's row count so the test can assert no
@@ -1252,6 +1270,8 @@ class RPCOperatorTest : public OperatorTestBase {
         DemoBatchRPCFunction::signatures());
     registerFunction<PartlyRateLimitedBatchRPCFunction>(
         "partly_rate_limited_batch_rpc");
+    registerFunction<OverloadedAttemptsBatchRPCFunction>(
+        "overloaded_attempts_batch_rpc");
     registerFunction<DemoBatchRPCFunction>("demo_batch_rpc");
     registerFunction<DemoBatchRPCFunction>(
         "demo_batch_rpc_reversed",
@@ -2832,6 +2852,46 @@ TEST_F(RPCOperatorTest, overloadedAttemptsAreCounted) {
   EXPECT_EQ(
       statSum(RPCOperatorStatNames::kRpcOverloadedAttempts),
       OverloadedAttemptsRPCFunction::kNumOverloadedAttempts * kCeiling);
+}
+
+// A BATCH flush's overloaded attempts are counted per flush, apart from the
+// PER_ROW stats, and neither window treats them as an overload.
+TEST_F(RPCOperatorTest, batchOverloadedAttemptsAreCountedApart) {
+  constexpr int64_t kCeiling = 8;
+  constexpr int32_t kNumFlushes = 2;
+  constexpr int32_t kDispatchBatchSize = 4;
+  const DefaultBackendPolicy policy{
+      .adaptive = true, .ceiling = kCeiling, .floor = 1};
+  auto& limiter = sealDefaultBackend(policy);
+
+  std::vector<StringView> prompts(
+      kNumFlushes * kDispatchBatchSize, StringView("retried"));
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>(prompts));
+  auto plan = PlanBuilder()
+                  .values(input)
+                  .rpc(
+                      "overloaded_attempts_batch_rpc(prompt)",
+                      RPCStreamingMode::kBatch,
+                      kDispatchBatchSize)
+                  .planNode();
+  std::shared_ptr<exec::Task> task;
+  ASSERT_EQ(
+      AssertQueryBuilder(plan).configs(sessionFor(policy)).countResults(task),
+      prompts.size());
+  expectRanOnSharedLimiter(task);
+
+  EXPECT_EQ(limiter.stats().limitMilli, kCeiling * 1'000);
+  const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
+  auto statSum = [&](const std::string& key) -> int64_t {
+    return stats.hasCustomStat(key) ? stats.customSum(key) : -1;
+  };
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcCongestionOverloadShrinks), -1);
+  EXPECT_EQ(
+      statSum(RPCOperatorStatNames::kRpcBatchOverloadedAttempts),
+      OverloadedAttemptsBatchRPCFunction::kNumOverloadedAttempts * kNumFlushes);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcOverloadedAttempts), 0);
+  EXPECT_EQ(statSum(RPCOperatorStatNames::kRpcSuccessesAfterOverload), 0);
 }
 
 TEST_F(RPCOperatorTest, batchAdmissionRequiresOneUnitForOneRow) {

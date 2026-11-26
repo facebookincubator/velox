@@ -300,6 +300,10 @@ zero in BATCH mode and for transports that do not report:
   included.
 - `rpcSuccessesAfterOverload` counts successes that needed at least one.
 
+In BATCH mode, `rpcBatchOverloadedAttempts` sums them over each completed flush
+instead, since a flush can be one job for many rows. A transport that reports
+them for a whole job puts them on one of the job's rows.
+
 The counts do not cut the driver window or the shared limiter the way an
 overload error does.
 
