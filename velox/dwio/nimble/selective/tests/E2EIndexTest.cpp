@@ -375,7 +375,8 @@ class E2EIndexTestBase : public ::testing::Test {
           dataIoStats_,
           nullptr,
           ioExecutor_.get(),
-          ioReaderOpts);
+          ioReaderOpts,
+          FileIoContext{.pool = &ioReaderOpts.memoryPool()});
     } else {
       input = std::make_unique<DirectBufferedInput>(
           readFile,
@@ -386,7 +387,8 @@ class E2EIndexTestBase : public ::testing::Test {
           dataIoStats_,
           nullptr,
           ioExecutor_.get(),
-          ioReaderOpts);
+          ioReaderOpts,
+          FileIoContext{.pool = &ioReaderOpts.memoryPool()});
     }
     auto factory = getReaderFactory(FileFormat::NIMBLE);
     return factory->createReader(std::move(input), readerOptions);
@@ -5186,7 +5188,7 @@ TEST_F(E2EIndexTestBase, indexReadersShareCachedTablet) {
                         std::make_unique<BufferedInput>(
                             std::make_shared<InMemoryReadFile>(
                                 std::string_view(sinkData_)),
-                            *leafPool_),
+                            velox::FileIoContext{.pool = leafPool_.get()}),
                         readerOptions);
   EXPECT_EQ(reader->numberOfRows().value(), 3);
   EXPECT_EQ(tabletReaderCache.stats().numLookups, numLookups);

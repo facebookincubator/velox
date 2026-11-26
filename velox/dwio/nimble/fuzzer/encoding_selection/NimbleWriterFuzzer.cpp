@@ -2671,7 +2671,7 @@ void NimbleWriterFuzzer::readAndVerify(
     readerOptions.setScanSpec(scanSpec);
     auto reader = factory->createReader(
         std::make_unique<velox::dwio::common::BufferedInput>(
-            readFile, *leafPool_),
+            readFile, velox::FileIoContext{.pool = leafPool_.get()}),
         readerOptions);
     checkSchema(*reader->rowType());
 
@@ -3418,12 +3418,13 @@ void NimbleWriterFuzzer::verifyPointLookup(
   readerOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   readerOptions.setScanSpec(scanSpec);
   readerOptions.setNimbleLazyFileStats(lazyFileStats);
-  auto reader = velox::dwio::common::getReaderFactory(
-                    velox::dwio::common::FileFormat::NIMBLE)
-                    ->createReader(
-                        std::make_unique<velox::dwio::common::BufferedInput>(
-                            readFile, *leafPool_),
-                        readerOptions);
+  auto reader =
+      velox::dwio::common::getReaderFactory(
+          velox::dwio::common::FileFormat::NIMBLE)
+          ->createReader(
+              std::make_unique<velox::dwio::common::BufferedInput>(
+                  readFile, velox::FileIoContext{.pool = leafPool_.get()}),
+              readerOptions);
   // The file is still read when the connector would skip it, so the row reader
   // is checked to return no rows for it.
   const bool skippedByFileStats = fileSkippedByStats(

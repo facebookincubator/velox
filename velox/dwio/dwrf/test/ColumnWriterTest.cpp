@@ -2029,7 +2029,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
       readerOpts,
       std::make_unique<BufferedInput>(
           std::make_shared<InMemoryReadFile>(std::move(data)),
-          readerOpts.memoryPool()));
+          FileIoContext{.pool = &readerOpts.memoryPool()}));
 }
 
 void removeSizeFromStats(std::string& input) {
