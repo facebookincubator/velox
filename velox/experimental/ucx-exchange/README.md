@@ -64,6 +64,19 @@ There's a common target called `exchange_tests` that builds all of the above:
 cmake --build _build/release -j --target=exchange_tests
 ```
 
+## Protocol version
+
+The workers of a UCX exchange speak a versioned wire protocol. The handshake that a consumer sends carries the version, and the producer's response carries it back. `kProtocolVersion` in `UcxExchangeProtocol.h` is 1. The code before this change, which sent no version, is version 0.
+
+All workers of a cluster must run the same version. Peers of different versions do not exchange data and do not try to understand each other. A rolling upgrade fails every query that spans two versions, until all workers run the same one. Neither worker crashes.
+
+A mismatch fails the query with one of these errors:
+
+- The consumer reports `UCX exchange peers must run the same protocol version: this worker runs <version>, producer worker <host>:<port> runs <version>`.
+- The producer logs `UCX exchange peers must run the same protocol version: this worker runs <version>, consumer worker <ip> runs <version>` and fails its task with it, if the task has initialized its output.
+
+A version 0 peer knows no versions, so the error appears only on the version 1 side. A version 0 consumer, for example, does not report anything itself. Its query fails through the failed producer task.
+
 ## Code Formatting
 
 We use the same code formating as velox.
