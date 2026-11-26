@@ -30,6 +30,12 @@ class ConcatWsCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadataBuilder()
+        .defaultNullBehavior(false)
+        .build();
+  }
+
   static constexpr const char* kConcatWs = "concat_ws";
 };
 } // namespace facebook::velox::functions::sparksql

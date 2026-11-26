@@ -33,6 +33,10 @@ class GetArrayStructFieldsCallToSpecialForm
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadata{};
+  }
+
   static constexpr const char* kGetArrayStructFields =
       "get_array_struct_fields";
 };

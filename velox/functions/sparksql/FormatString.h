@@ -50,6 +50,12 @@ class FormatStringCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadataBuilder()
+        .defaultNullBehavior(false)
+        .build();
+  }
+
   /// Canonical Spark function name.
   static constexpr const char* kFormatString = "format_string";
 

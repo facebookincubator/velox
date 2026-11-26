@@ -70,6 +70,10 @@ class SwitchCallToSpecialForm : public FunctionCallToSpecialForm {
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
+
+  VectorFunctionMetadata metadata() const override {
+    return VectorFunctionMetadataBuilder().defaultNullBehavior(false).build();
+  }
 };
 
 class IfCallToSpecialForm : public SwitchCallToSpecialForm {

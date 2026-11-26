@@ -386,7 +386,7 @@ exec::ExprPtr ConcatWsCallToSpecialForm::constructSpecialForm(
       type,
       std::move(args),
       std::move(concatWsFunction),
-      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
+      metadata(),
       kConcatWs,
       trackCpuUsage);
 }

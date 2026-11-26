@@ -36,6 +36,10 @@ class MakeDecimalCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadata{};
+  }
+
   static constexpr const char* kMakeDecimal = "make_decimal";
 };
 } // namespace facebook::velox::functions::sparksql

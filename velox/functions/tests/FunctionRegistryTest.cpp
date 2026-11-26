@@ -20,6 +20,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/RegisterSpecialForm.h"
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/FunctionRegistry.h"
 #include "velox/functions/Macros.h"
@@ -94,6 +95,12 @@ class FunctionRegistryTest : public testing::Test {
     exec::registerFunctionCallToSpecialForms();
     registerIPAddressType();
     registerIPPrefixType();
+  }
+
+  // Clears all special forms, including the built-ins. The constructor
+  // registers the built-ins again before each test.
+  void TearDown() override {
+    exec::unregisterAllFunctionCallToSpecialForm();
   }
 
   void testResolveVectorFunction(
@@ -677,13 +684,13 @@ TEST_F(FunctionRegistryTest, isDeterministic) {
   functions::prestosql::registerAllScalarFunctions();
   ASSERT_TRUE(isDeterministic("plus").value());
   ASSERT_TRUE(isDeterministic("in").value());
+  ASSERT_TRUE(isDeterministic("cast").value());
 
   ASSERT_FALSE(isDeterministic("rand").value());
   ASSERT_FALSE(isDeterministic("uuid").value());
   ASSERT_FALSE(isDeterministic("shuffle").value());
 
   // Not found functions.
-  ASSERT_FALSE(isDeterministic("cast").has_value());
   ASSERT_FALSE(isDeterministic("not_found_function").has_value());
 }
 
@@ -694,14 +701,93 @@ TEST_F(FunctionRegistryTest, isDefaultNullBehavior) {
   ASSERT_TRUE(isDefaultNullBehavior("eq").value());
   ASSERT_TRUE(isDefaultNullBehavior("plus").value());
   ASSERT_TRUE(isDefaultNullBehavior("substr").value());
+  ASSERT_TRUE(isDefaultNullBehavior("cast").value());
 
   // Functions with non-default null behavior.
   ASSERT_FALSE(isDefaultNullBehavior("distinct_from").value());
   ASSERT_FALSE(isDefaultNullBehavior("in").value());
+  ASSERT_FALSE(isDefaultNullBehavior("coalesce").value());
 
   // Not found functions.
-  ASSERT_FALSE(isDefaultNullBehavior("cast").has_value());
   ASSERT_FALSE(isDefaultNullBehavior("not_found_function").has_value());
+}
+
+// Resolves to BIGINT and keeps the default metadata().
+class UndeclaredCallToSpecialForm : public exec::FunctionCallToSpecialForm {
+ public:
+  TypePtr resolveType(const std::vector<TypePtr>& /*argTypes*/) override {
+    return BIGINT();
+  }
+
+  exec::ExprPtr constructSpecialForm(
+      const TypePtr& /*type*/,
+      std::vector<exec::ExprPtr>&& /*compiledChildren*/,
+      bool /*trackCpuUsage*/,
+      const core::QueryConfig& /*config*/) override {
+    VELOX_UNREACHABLE();
+  }
+};
+
+// Declares the metadata it is constructed with.
+class MetadataCallToSpecialForm : public UndeclaredCallToSpecialForm {
+ public:
+  explicit MetadataCallToSpecialForm(exec::VectorFunctionMetadata metadata)
+      : metadata_{metadata} {}
+
+  exec::VectorFunctionMetadata metadata() const override {
+    return metadata_;
+  }
+
+ private:
+  const exec::VectorFunctionMetadata metadata_;
+};
+
+TEST_F(FunctionRegistryTest, specialFormMetadata) {
+  {
+    // Each property comes from its own field of the declared metadata.
+    exec::registerFunctionCallToSpecialForm(
+        "metadata_form",
+        std::make_unique<MetadataCallToSpecialForm>(
+            exec::VectorFunctionMetadataBuilder()
+                .deterministic(false)
+                .defaultNullBehavior(true)
+                .build()));
+    EXPECT_EQ(isDeterministic("metadata_form"), false);
+    EXPECT_EQ(isDefaultNullBehavior("metadata_form"), true);
+  }
+
+  {
+    // The form answers for its name over a vector function with other
+    // metadata, since expression compilation runs the form.
+    VELOX_REGISTER_VECTOR_FUNCTION(udf_vector_func_one, "shadowed_function");
+    EXPECT_EQ(isDeterministic("shadowed_function"), true);
+    EXPECT_EQ(isDefaultNullBehavior("shadowed_function"), true);
+    exec::registerFunctionCallToSpecialForm(
+        "shadowed_function",
+        std::make_unique<MetadataCallToSpecialForm>(
+            exec::VectorFunctionMetadataBuilder()
+                .deterministic(false)
+                .defaultNullBehavior(false)
+                .build()));
+    EXPECT_EQ(isDeterministic("shadowed_function"), false);
+    EXPECT_EQ(isDefaultNullBehavior("shadowed_function"), false);
+  }
+
+  {
+    // A form that does not implement metadata() fails instead of guessing.
+    exec::registerFunctionCallToSpecialForm(
+        "undeclared_form", std::make_unique<UndeclaredCallToSpecialForm>());
+    VELOX_ASSERT_THROW(
+        isDeterministic("undeclared_form"),
+        "Special form does not implement metadata()");
+  }
+
+  {
+    // row_constructor reports the metadata of the vector function it runs.
+    functions::prestosql::registerAllScalarFunctions();
+    EXPECT_EQ(isDeterministic("row_constructor"), true);
+    EXPECT_EQ(isDefaultNullBehavior("row_constructor"), false);
+  }
 }
 
 TEST_F(FunctionRegistryTest, companionFunction) {

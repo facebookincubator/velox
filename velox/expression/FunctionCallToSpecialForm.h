@@ -16,11 +16,16 @@
 
 #pragma once
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/FunctionMetadata.h"
 #include "velox/type/Type.h"
 #include "velox/type/TypeCoercer.h"
 
 namespace facebook::velox::exec {
+/// Compiles calls to a function name into a special form. The form resolves
+/// the result type, builds the expression and, through metadata(), describes
+/// the call to planners. Register one with registerFunctionCallToSpecialForm.
 class FunctionCallToSpecialForm {
  public:
   virtual ~FunctionCallToSpecialForm() {}
@@ -50,6 +55,14 @@ class FunctionCallToSpecialForm {
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) = 0;
+
+  /// Returns the properties of a call to this form as a whole.
+  /// velox::isDeterministic and velox::isDefaultNullBehavior report them for
+  /// the form's name. Every form must override this.
+  // TODO: Make pure virtual once subclasses outside Velox override it.
+  virtual VectorFunctionMetadata metadata() const {
+    VELOX_FAIL("Special form does not implement metadata()");
+  }
 };
 
 /// Returns the output Type of the SpecialForm associated with the functionName
