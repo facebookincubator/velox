@@ -44,9 +44,14 @@ such operator. The caller sets this field, for example from its own session
 property; the rewriter does not read `cudf.allow_cpu_fallback`, which only the
 general driver adapter uses.
 
-The rewriter and the general driver adapter decide placement with the same
-rules, by asking the definition of each node (see Built-in nodes). A scan has
-no cuDF plan node, so its rule is `isGpuTableScan()` in `GpuPlacement.h`. The
+The rewriter and the general driver adapter both ask the definition of each
+node for its placement rules (see Built-in nodes). They differ for column
+types that cuDF cannot represent. The rewriter looks at the input and output
+types of the node. The driver adapter, for a join, a local partition and a
+local merge, looks at every node below it: each of those runs as two
+operators in two pipelines, which the driver adapter converts separately, and
+both have to make the same choice. A scan has no cuDF plan node, so its rule
+is `isGpuTableScan()` in `GpuPlacement.h`. The
 lookup side of an index lookup join is the exception: the join reads the table
 handle of that scan and gets no vectors from it, so the rewriter leaves the
 scan as it is and `validateCudfPlan` asks for no conversion above it. A
@@ -56,9 +61,11 @@ plan nodes that stay on the CPU are rebuilt with their rewritten sources.
 
 ## Driver counts
 
-`cudf.max_drivers` (`CudfConfig::maxDrivers`) limits the drivers of every
-pipeline that contains a cuDF plan node. Pipelines without one keep the task's
-driver count. When it is unset, both use the task's count. Nodes that must run
+`cudf.max_drivers` (`CudfConfig::maxDrivers`) limits the drivers of a pipeline
+that contains a cuDF plan node. Pipelines without one keep the task's driver
+count. When it is unset, both use the task's count. A pipeline with a table
+writer is the exception: LocalPlanner gives it the writer count of the task
+and does not ask for this limit. Nodes that must run
 single-threaded keep doing so: `CudfLocalMergeNode` and `CudfLocalPartitionNode`
 inherit `requiresSingleThread()` from their core base classes, and the other
 cuDF plan nodes override it the same way as their core counterparts. The limit
@@ -87,8 +94,9 @@ Whether cuDF can run a node is decided by the cuDF plan node, at two points:
   the session settings of a `QueryCtx`, such as an expression that cuDF
   evaluates differently under `legacy_cast`.
 
-The plan rewriter, the cuDF driver adapter and `validateCudfPlan` all build the
-cuDF plan node and ask it. The cuDF operators do not decide again: what remains
+The plan rewriter and the cuDF driver adapter build the cuDF plan node and ask
+it. `validateCudfPlan` asks the cuDF plan nodes of the plan it is given. The
+cuDF operators do not decide again: what remains
 in them are internal checks and limits that depend on the data. The definition
 keeps only what the cuDF plan node cannot know, because lowering does not carry
 it over, such as the masks of a MarkDistinct.
@@ -107,8 +115,11 @@ core plan node. A definition has only the parts that apply to its node:
 
 The list at the end of `CudfPlanNodeDefinitions.cpp` names every definition and
 the parts it has. The rewriter, the conversion functions of the cuDF driver
-adapter and the translator all read that list, so none of them names node
-types. Two cases stay in the rewriter because they involve more than one node:
+adapter and the translator all read that list to build cuDF plan nodes and
+their operators. The driver adapter still has one adapter class for each core
+operator it replaces. The rewriter still names the nodes that have no cuDF
+plan node: scans, exchanges and partitioned output. Two more cases stay in the
+rewriter because they involve more than one node:
 a Project over a Filter becomes one `CudfFilterProjectNode`, and a merge
 exchange over UCX becomes an exchange under a `CudfOrderByNode`. The rewriter
 also decides where a `CudfBatchConcatNode` goes; the list marks the nodes that
