@@ -50,7 +50,7 @@ class RankFunction : public exec::WindowFunction {
       const BufferPtr& /*frameEnds*/,
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
-      VectorPtr& result) override {
+      const VectorPtr& result) override {
     int numRows = peerGroupStarts->size() / sizeof(vector_size_t);
     auto* rawPeerStarts = peerGroupStarts->as<vector_size_t>();
     auto rawValues = result->asFlatVector<TResult>()->mutableRawValues();

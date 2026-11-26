@@ -27,11 +27,11 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/exec/window/SortWindowBuild.h"
 #include "velox/exec/window/VectorWindowPartition.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
-#include "velox/vector/DecodedVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -114,95 +114,38 @@ class WindowTest : public OperatorTestBase {
          makeNullableFlatVector<int64_t>(values)});
   }
 
-  void assertWindowResultBatches(
-      CursorParameters params,
-      const std::string& sql,
-      const std::function<void(const std::vector<RowVectorPtr>&)>& check) {
-    // Keep original outputs, including their encodings, until the query ends.
-    params.copyResult = false;
-    params.maxDrivers = 1;
-    auto [cursor, results] = readCursor(params);
-    test::assertResults(
-        results, params.planNode->outputType(), sql, duckDbQueryRunner_);
-    check(results);
-  }
-
-  void checkPartitionResultEncoding(const RowVectorPtr& batch) {
-    DecodedVector partitions(*batch->childAt(0));
-    vector_size_t numPartitions = 1;
-    for (vector_size_t row = 1; row < batch->size(); ++row) {
-      numPartitions += partitions.valueAt<int32_t>(row) !=
-          partitions.valueAt<int32_t>(row - 1);
-    }
-    for (auto column : {3, 4}) {
-      const auto& result = batch->childAt(column);
-      if (numPartitions == 1) {
-        EXPECT_TRUE(result->isConstantEncoding());
-        continue;
-      }
-      ASSERT_EQ(result->encoding(), VectorEncoding::Simple::DICTIONARY);
-      EXPECT_EQ(result->valueVector()->size(), numPartitions);
-      const auto* indices = result->wrapInfo()->as<vector_size_t>();
-      vector_size_t expectedIndex = 0;
-      for (vector_size_t row = 0; row < batch->size(); ++row) {
-        if (row > 0 &&
-            partitions.valueAt<int32_t>(row) !=
-                partitions.valueAt<int32_t>(row - 1)) {
-          ++expectedIndex;
-        }
-        EXPECT_EQ(indices[row], expectedIndex) << "row " << row;
-      }
-    }
-  }
-
-  void assertPartitionResults(
+  void assertPartitionResultsInBothModes(
       const std::vector<RowVectorPtr>& input,
       const std::vector<std::string>& functions,
-      bool streaming,
-      const std::vector<vector_size_t>& expectedBatchSizes = {}) {
-    PlanBuilder builder;
-    builder.values(input);
-    if (streaming) {
-      builder.streamingWindow(functions);
-    } else {
-      builder.window(functions);
-    }
-    CursorParameters params;
-    params.planNode = builder.planNode();
-    params.queryConfigs = {
-        {core::QueryConfig::kPreferredOutputBatchRows, "4"},
-        {core::QueryConfig::kMaxOutputBatchRows, "4"},
-        {core::QueryConfig::kPreferredOutputBatchBytes, "1048576"}};
-    assertWindowResultBatches(
-        params,
-        fmt::format("SELECT *, {} FROM tmp", folly::join(", ", functions)),
-        [&](const auto& batches) {
-          std::vector<vector_size_t> sizes;
-          for (const auto& batch : batches) {
-            sizes.push_back(batch->size());
-            checkPartitionResultEncoding(batch);
-          }
-          if (!streaming && !expectedBatchSizes.empty()) {
-            EXPECT_EQ(sizes, expectedBatchSizes);
-          }
-        });
-  }
-
-  void testPartitionResultEncoding(
-      const std::vector<vector_size_t>& partitionSizes,
-      const std::vector<vector_size_t>& expectedBatchSizes) {
-    auto data = makePartitionResultInput(partitionSizes);
-    createDuckDbTable({data});
+      const std::function<void(bool, const std::vector<RowVectorPtr>&)>&
+          checkBatches = {}) {
+    createDuckDbTable(input);
+    const auto sql =
+        fmt::format("SELECT *, {} FROM tmp", folly::join(", ", functions));
     for (bool streaming : {false, true}) {
-      for (const auto* frameType : {"rows", "range"}) {
-        SCOPED_TRACE(
-            fmt::format("streaming={}, frame={}", streaming, frameType));
-        std::vector<std::string> functions;
-        for (const auto* function : {"sum(d)", "count(d)"}) {
-          functions.push_back(wholePartitionFunction(function, frameType));
-        }
-        assertPartitionResults(
-            split(data, 2), functions, streaming, expectedBatchSizes);
+      SCOPED_TRACE(fmt::format("streaming={}", streaming));
+      PlanBuilder builder;
+      builder.values(input);
+      if (streaming) {
+        builder.streamingWindow(functions);
+      } else {
+        builder.window(functions);
+      }
+      // Retain the original output vectors until the query finishes.
+      TaskPtr task;
+      auto batches =
+          AssertQueryBuilder(builder.planNode())
+              .config(core::QueryConfig::kPreferredOutputBatchRows, 4)
+              .config(core::QueryConfig::kMaxOutputBatchRows, 4)
+              .results(task);
+      const auto& outputType = builder.planNode()->outputType();
+      ASSERT_TRUE(
+          test::assertEqualResults(
+              duckDbQueryRunner_.execute(sql, outputType),
+              outputType,
+              batches));
+      if (checkBatches) {
+        checkBatches(streaming, batches);
       }
     }
   }
@@ -290,56 +233,90 @@ class TestingRowsStreamingWindowBuild
   }
 };
 
-TEST_F(WindowTest, aggregatePartitionResultSinglePartition) {
-  testPartitionResultEncoding({9}, {4, 4, 1});
+TEST_F(WindowTest, aggregatePartitionResultEncoding) {
+  auto data = makePartitionResultInput({10, 1, 1, 1, 1, 1, 1, 1});
+  assertPartitionResultsInBothModes(
+      {data},
+      {wholePartitionFunction("sum(d)", "rows"),
+       wholePartitionFunction("count(d)", "range")},
+      [](bool streaming, const std::vector<RowVectorPtr>& batches) {
+        ASSERT_GE(batches.size(), 4);
+        if (!streaming) {
+          std::vector<vector_size_t> sizes;
+          for (const auto& batch : batches) {
+            sizes.push_back(batch->size());
+          }
+          ASSERT_THAT(sizes, testing::ElementsAre(4, 4, 4, 4, 1));
+        }
+        using Encoding = VectorEncoding::Simple;
+        for (const auto column : {3, 4}) {
+          EXPECT_EQ(
+              batches[0]->childAt(column)->encoding(), Encoding::CONSTANT);
+          EXPECT_EQ(
+              batches[1]->childAt(column)->encoding(), Encoding::CONSTANT);
+          const auto& dictionary = batches[2]->childAt(column);
+          ASSERT_EQ(dictionary->encoding(), Encoding::DICTIONARY);
+          EXPECT_EQ(dictionary->valueVector()->size(), 3);
+          const auto* indices = dictionary->wrapInfo()->as<vector_size_t>();
+          EXPECT_THAT(
+              std::vector(indices, indices + dictionary->size()),
+              testing::ElementsAre(0, 0, 1, 2));
+          for (size_t batch = 3; batch < batches.size(); ++batch) {
+            EXPECT_EQ(
+                batches[batch]->childAt(column)->encoding(), Encoding::FLAT);
+          }
+        }
+      });
 }
 
-TEST_F(WindowTest, aggregatePartitionResultAcrossPartitions) {
-  testPartitionResultEncoding({3, 4, 5, 1, 1, 2, 2}, {4, 4, 4, 4, 2});
-}
-
-TEST_F(WindowTest, aggregatePartitionResultSingleRowPartitions) {
-  testPartitionResultEncoding({1, 1, 1, 1}, {4});
+TEST_F(WindowTest, aggregatePartitionResultWithoutOrderBy) {
+  auto data = makePartitionResultInput({9, 3});
+#ifndef NDEBUG
+  std::atomic_bool createdRowsStreamingBuild{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild*) {
+            createdRowsStreamingBuild.store(true);
+          }));
+#endif
+  assertPartitionResultsInBothModes(
+      split(data, 2),
+      {"sum(d) over (partition by p range between unbounded preceding and current row)",
+       "count(*) over (partition by p)"},
+      [](bool /*streaming*/, const std::vector<RowVectorPtr>& batches) {
+        ASSERT_GE(batches.size(), 3);
+        for (const auto batch : {0, 1}) {
+          EXPECT_EQ(batches[batch]->size(), 4);
+          for (const auto column : {3, 4}) {
+            EXPECT_TRUE(batches[batch]->childAt(column)->isConstantEncoding());
+          }
+        }
+      });
+#ifndef NDEBUG
+  EXPECT_TRUE(createdRowsStreamingBuild.load());
+#endif
 }
 
 TEST_F(WindowTest, aggregatePartitionResultRetainedComplexValues) {
-  for (const auto& partitionSizes :
-       {std::vector<vector_size_t>{9},
-        std::vector<vector_size_t>{3, 4, 5, 1, 1, 2, 2}}) {
-    auto keys = makePartitionResultInput(partitionSizes);
-    auto strings = makeFlatVector<std::string>(keys->size(), [](auto row) {
-      return std::string(256, 'a' + row % 26) + std::to_string(row);
-    });
-    auto data = makeRowVector(
-        {"p", "s", "d"}, {keys->childAt(0), keys->childAt(1), strings});
-    createDuckDbTable({data});
-    for (bool streaming : {false, true}) {
-      for (const auto* frameType : {"rows", "range"}) {
-        SCOPED_TRACE(
-            fmt::format(
-                "partitions={}, streaming={}, frame={}",
-                partitionSizes.size(),
-                streaming,
-                frameType));
-        std::vector<std::string> functions;
-        for (const auto* function : {"array_agg(d)", "max(d)"}) {
-          functions.push_back(wholePartitionFunction(function, frameType));
-        }
-        // Retain every original batch until execution finishes, then verify
-        // array elements and out-of-line string buffers against DuckDB.
-        assertPartitionResults(split(data, 2), functions, streaming);
-      }
-    }
-  }
+  auto keys = makePartitionResultInput({3, 4, 5, 1, 1, 2, 2});
+  auto strings = makeFlatVector<std::string>(keys->size(), [](auto row) {
+    return std::string(256, 'a' + row % 26) + std::to_string(row);
+  });
+  auto data = makeRowVector(
+      {"p", "s", "d"}, {keys->childAt(0), keys->childAt(1), strings});
+  assertPartitionResultsInBothModes(
+      split(data, 2),
+      {wholePartitionFunction("array_agg(d)", "rows"),
+       wholePartitionFunction("max(d)", "range")});
 }
 
 TEST_F(WindowTest, aggregatePartitionResultMixedFrames) {
   for (bool peers : {false, true}) {
     auto data = makePartitionResultInput({3, 5, 1, 6}, true, peers);
-    createDuckDbTable({data});
     std::vector<std::string> functions = {
-        "sum(d) over (partition by p order by s rows between unbounded preceding and unbounded following)",
-        "count(d) over (partition by p order by s rows between unbounded preceding and unbounded following)",
+        wholePartitionFunction("sum(d)", "rows"),
+        wholePartitionFunction("count(d)", "rows"),
         "sum(d) over (partition by p order by s)"};
     // ROWS frames and row_number require unique ordering against DuckDB.
     if (!peers) {
@@ -347,10 +324,8 @@ TEST_F(WindowTest, aggregatePartitionResultMixedFrames) {
           "sum(d) over (partition by p order by s rows between unbounded preceding and 2 following)");
       functions.push_back("row_number() over (partition by p order by s)");
     }
-    for (bool streaming : {false, true}) {
-      SCOPED_TRACE(fmt::format("streaming={}, peers={}", streaming, peers));
-      assertPartitionResults(split(data, 3), functions, streaming);
-    }
+    SCOPED_TRACE(fmt::format("peers={}", peers));
+    assertPartitionResultsInBothModes(split(data, 3), functions);
   }
 }
 
@@ -467,10 +442,13 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
 
   createDuckDbTable({data});
 
+  const std::vector<std::string> functions = {
+      "row_number() over (partition by p order by s)",
+      wholePartitionFunction("sum(d)", "rows")};
   core::PlanNodeId windowId;
   auto plan = PlanBuilder()
                   .values(split(data, 10))
-                  .window({"row_number() over (partition by p order by s)"})
+                  .window(functions)
                   .capturePlanNodeId(windowId)
                   .planNode();
 
@@ -485,7 +463,8 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
               core::QueryConfig::kWindowSpillMinReadBatchRows, minReadBatchRows)
           .spillDirectory(spillDirectory->getPath())
           .assertResults(
-              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+              fmt::format(
+                  "SELECT *, {} FROM tmp", folly::join(", ", functions)));
 
   const auto stats = exec::PlanNodeStats::extract(task->taskStats(), windowId);
 

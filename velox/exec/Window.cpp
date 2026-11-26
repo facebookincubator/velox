@@ -15,6 +15,7 @@
  */
 #include "velox/exec/Window.h"
 
+#include <algorithm>
 #include <limits>
 
 #include "velox/common/testutil/TestValue.h"
@@ -35,6 +36,24 @@ common::PrefixSortConfig makePrefixSortConfig(
       queryConfig.prefixSortNormalizedKeyMaxBytes(),
       queryConfig.prefixSortMinRows(),
       queryConfig.prefixSortMaxStringPrefixLength()};
+}
+
+bool canReusePartitionResult(
+    const core::WindowNode::Function& function,
+    bool hasOrderBy) {
+  using BoundType = core::WindowNode::BoundType;
+  const auto& frame = function.frame;
+  if (frame.startType != BoundType::kUnboundedPreceding) {
+    return false;
+  }
+
+  // Without ORDER BY, all rows are peers, so RANGE ending at CURRENT ROW
+  // also covers the entire partition.
+  const bool wholePartition = frame.endType == BoundType::kUnboundedFollowing ||
+      (!hasOrderBy && frame.type == core::WindowNode::WindowType::kRange &&
+       frame.endType == BoundType::kCurrentRow);
+  return wholePartition &&
+      getWindowFunctionMetadata(function.functionCall->name()).isAggregate;
 }
 
 } // namespace
@@ -217,7 +236,11 @@ void Window::createWindowFunctions() {
   VELOX_CHECK(windowFrames_.empty());
 
   const auto& inputType = windowNode_->sources()[0]->outputType();
-  for (const auto& windowNodeFunction : windowNode_->windowFunctions()) {
+  const auto& functions = windowNode_->windowFunctions();
+  const bool hasOrderBy = !windowNode_->sortingKeys().empty();
+  reusesPartitionResult_.reserve(functions.size());
+  bool hasReusableResult = false;
+  for (const auto& windowNodeFunction : functions) {
     std::vector<WindowFunctionArg> functionArgs;
     functionArgs.reserve(windowNodeFunction.functionCall->inputs().size());
     for (auto& arg : windowNodeFunction.functionCall->inputs()) {
@@ -241,8 +264,16 @@ void Window::createWindowFunctions() {
             &stringAllocator_,
             operatorCtx_->driverCtx()->queryConfig()));
 
+    const bool reuseResult =
+        canReusePartitionResult(windowNodeFunction, hasOrderBy);
+    reusesPartitionResult_.push_back(reuseResult);
+    hasReusableResult |= reuseResult;
+
     windowFrames_.push_back(
         createWindowFrame(windowNode_, windowNodeFunction.frame, inputType));
+  }
+  if (hasReusableResult) {
+    partitionResults_.resize(functions.size());
   }
 }
 
@@ -330,13 +361,12 @@ void Window::createPeerAndFrameBuffers() {
   validFrames_.reserve(numFuncs);
 
   for (auto i = 0; i < numFuncs; i++) {
-    BufferPtr frameStartBuffer = AlignedBuffer::allocate<vector_size_t>(
-        numRowsPerOutput_, operatorCtx_->pool());
-    BufferPtr frameEndBuffer = AlignedBuffer::allocate<vector_size_t>(
-        numRowsPerOutput_, operatorCtx_->pool());
-    frameStartBuffers_.push_back(frameStartBuffer);
-    frameEndBuffers_.push_back(frameEndBuffer);
-    validFrames_.push_back(SelectivityVector(numRowsPerOutput_));
+    const auto frameCount = reusesPartitionResult_[i] ? 1 : numRowsPerOutput_;
+    frameStartBuffers_.push_back(
+        AlignedBuffer::allocate<vector_size_t>(frameCount, pool()));
+    frameEndBuffers_.push_back(
+        AlignedBuffer::allocate<vector_size_t>(frameCount, pool()));
+    validFrames_.emplace_back(frameCount);
   }
 }
 
@@ -349,6 +379,7 @@ void Window::callResetPartition() {
   partitionOffset_ = 0;
   peerStartRow_ = 0;
   peerEndRow_ = 0;
+  std::fill(partitionResults_.begin(), partitionResults_.end(), nullptr);
   currentPartition_ = nullptr;
   if (windowBuild_->hasNextPartition()) {
     currentPartition_ = windowBuild_->nextPartition();
@@ -578,45 +609,42 @@ void Window::computePeerAndFrameBuffers(
   auto* rawPeerStarts = peerStartBuffer_->asMutable<vector_size_t>();
   auto* rawPeerEnds = peerEndBuffer_->asMutable<vector_size_t>();
 
-  std::vector<vector_size_t*> rawFrameStarts;
-  std::vector<vector_size_t*> rawFrameEnds;
-  rawFrameStarts.reserve(numFuncs);
-  rawFrameEnds.reserve(numFuncs);
-  for (auto i = 0; i < numFuncs; ++i) {
-    frameStartBuffers_[i]->setSize(bufferSize);
-    frameEndBuffers_[i]->setSize(bufferSize);
-
-    auto* rawFrameStart = frameStartBuffers_[i]->asMutable<vector_size_t>();
-    auto* rawFrameEnd = frameEndBuffers_[i]->asMutable<vector_size_t>();
-    rawFrameStarts.push_back(rawFrameStart);
-    rawFrameEnds.push_back(rawFrameEnd);
-  }
-
   std::tie(peerStartRow_, peerEndRow_) = currentPartition_->computePeerBuffers(
       startRow, endRow, peerStartRow_, peerEndRow_, rawPeerStarts, rawPeerEnds);
 
   for (auto i = 0; i < numFuncs; ++i) {
+    if (reusesPartitionResult_[i] && partitionResults_[i]) {
+      continue;
+    }
+
+    const auto frameCount = reusesPartitionResult_[i] ? 1 : numRows;
+    const auto frameBufferSize = frameCount * sizeof(vector_size_t);
+    frameStartBuffers_[i]->setSize(frameBufferSize);
+    frameEndBuffers_[i]->setSize(frameBufferSize);
+    auto* rawFrameStarts = frameStartBuffers_[i]->asMutable<vector_size_t>();
+    auto* rawFrameEnds = frameEndBuffers_[i]->asMutable<vector_size_t>();
+
     const auto& windowFrame = windowFrames_[i];
     // Default all rows to have validFrames. The invalidity of frames is only
     // computed for k rows/range frames at a later point.
-    validFrames_[i].resizeFill(numRows, true);
+    validFrames_[i].resizeFill(frameCount, true);
     updateFrameBounds(
         windowFrame,
         true,
         startRow,
-        numRows,
+        frameCount,
         rawPeerStarts,
         rawPeerEnds,
-        rawFrameStarts[i],
+        rawFrameStarts,
         validFrames_[i]);
     updateFrameBounds(
         windowFrame,
         false,
         startRow,
-        numRows,
+        frameCount,
         rawPeerStarts,
         rawPeerEnds,
-        rawFrameEnds[i],
+        rawFrameEnds,
         validFrames_[i]);
     if (windowFrames_[i].start || windowFrames_[i].end) {
       // k preceding and k following bounds can be problematic. They can go over
@@ -627,9 +655,9 @@ void Window::computePeerAndFrameBuffers(
       // with empty frames.
       computeValidFrames(
           currentPartition_->numRows() - 1,
-          numRows,
-          rawFrameStarts[i],
-          rawFrameEnds[i],
+          frameCount,
+          rawFrameStarts,
+          rawFrameEnds,
           validFrames_[i]);
     }
   }
@@ -651,27 +679,56 @@ void Window::callApplyForPartitionRows(
     vector_size_t startRow,
     vector_size_t endRow,
     vector_size_t resultOffset,
+    vector_size_t partitionResultOffset,
+    bool cachePartitionResult,
     const RowVectorPtr& result) {
-  // NOTE: for a partial window partition, the last row of the previously
-  // processed rows (used for peer group comparison) will be deleted by
-  // computePeerAndFrameBuffers after peer group comparison. Hence we need to
-  // call getInputColumns after computePeerAndFrameBuffers.
+  // For a partial partition, computing peers may release a previously retained
+  // row. Extract the input columns after updating the peer buffers.
   computePeerAndFrameBuffers(startRow, endRow);
-
   getInputColumns(startRow, endRow, resultOffset, result);
-  vector_size_t numFuncs = windowFunctions_.size();
-  for (auto i = 0; i < numFuncs; ++i) {
-    windowFunctions_[i]->apply(
-        peerStartBuffer_,
-        peerEndBuffer_,
-        frameStartBuffers_[i],
-        frameEndBuffers_[i],
-        validFrames_[i],
-        resultOffset,
-        result->childAt(numInputColumns_ + i));
+
+  const auto numRows = endRow - startRow;
+  const auto peerBufferSize = peerStartBuffer_->size();
+  const bool fillsOutput = resultOffset == 0 && numRows == result->size();
+  for (auto i = 0; i < windowFunctions_.size(); ++i) {
+    auto& column = result->childAt(numInputColumns_ + i);
+    const bool reuseResult = reusesPartitionResult_[i];
+    if (!reuseResult || !partitionResults_[i]) {
+      const bool cacheResult = reuseResult && cachePartitionResult;
+      if (cacheResult) {
+        partitionResults_[i] =
+            BaseVector::create(windowFunctions_[i]->resultType(), 1, pool());
+      }
+
+      const auto applyOffset = cacheResult
+          ? 0
+          : (reuseResult ? partitionResultOffset : resultOffset);
+      const auto applyPeerSize =
+          reuseResult ? sizeof(vector_size_t) : peerBufferSize;
+      if (peerStartBuffer_->size() != applyPeerSize) {
+        peerStartBuffer_->setSize(applyPeerSize);
+        peerEndBuffer_->setSize(applyPeerSize);
+      }
+      windowFunctions_[i]->apply(
+          peerStartBuffer_,
+          peerEndBuffer_,
+          frameStartBuffers_[i],
+          frameEndBuffers_[i],
+          validFrames_[i],
+          applyOffset,
+          cacheResult ? partitionResults_[i] : column);
+    }
+
+    if (reuseResult && cachePartitionResult) {
+      const auto& partitionResult = partitionResults_[i];
+      if (fillsOutput && numRows > 1) {
+        column = partitionResult;
+      } else {
+        column->copy(partitionResult.get(), partitionResultOffset, 0, 1);
+      }
+    }
   }
 
-  const vector_size_t numRows = endRow - startRow;
   numProcessedRows_ += numRows;
   partitionOffset_ += numRows;
 
@@ -682,56 +739,96 @@ void Window::callApplyForPartitionRows(
 
 vector_size_t Window::callApplyLoop(
     vector_size_t numOutputRows,
-    const RowVectorPtr& result) {
-  // Compute outputs by traversing as many partitions as possible. This
-  // logic takes care of partial partitions output also.
-  vector_size_t resultIndex = 0;
-  vector_size_t numOutputRowsLeft = numOutputRows;
-
-  // This function requires that the currentPartition_ is available for output.
+    const RowVectorPtr& result,
+    std::vector<PartitionResultRun>& runs) {
+  vector_size_t resultOffset = 0;
+  vector_size_t partitionResultOffset = 0;
+  const bool reuseResults = !partitionResults_.empty();
   VELOX_DCHECK_NOT_NULL(currentPartition_);
-  while (numOutputRowsLeft > 0) {
+  while (resultOffset < numOutputRows) {
+    if (reuseResults && !currentPartition_->complete()) {
+      break;
+    }
+
     const auto numPartitionRows =
         currentPartition_->numRowsForProcessing(partitionOffset_);
-    if (numPartitionRows <= numOutputRowsLeft) {
-      // Current partition can fit completely in the output buffer.
-      // So output all its rows.
+    const auto numRows =
+        std::min(numPartitionRows, numOutputRows - resultOffset);
+    if (numRows > 0) {
+      const bool cachePartitionResult =
+          reuseResults && (partitionOffset_ > 0 || numRows < numPartitionRows);
       callApplyForPartitionRows(
           partitionOffset_,
-          partitionOffset_ + numPartitionRows,
-          resultIndex,
+          partitionOffset_ + numRows,
+          resultOffset,
+          partitionResultOffset,
+          cachePartitionResult,
           result);
-      resultIndex += numPartitionRows;
-      numOutputRowsLeft -= numPartitionRows;
-
-      if (!currentPartition_->complete()) {
-        // There are more data need to process for a partial partition.
-        VELOX_CHECK(currentPartition_->partial());
-        break;
+      if (reuseResults && numRows > 1) {
+        runs.push_back({resultOffset, resultOffset + numRows});
       }
+      resultOffset += numRows;
+      ++partitionResultOffset;
+    }
 
-      callResetPartition();
-      if (currentPartition_ == nullptr) {
-        // The WindowBuild doesn't have any more partitions to process right
-        // now. So break until the next getOutput call.
-        break;
-      }
-    } else {
-      // Current partition can fit only partially in the output buffer.
-      // Call apply for the rows that can fit in the buffer and break from
-      // outputting.
-      callApplyForPartitionRows(
-          partitionOffset_,
-          partitionOffset_ + numOutputRowsLeft,
-          resultIndex,
-          result);
-      numOutputRowsLeft = 0;
+    if (numRows < numPartitionRows) {
+      break;
+    }
+
+    if (!currentPartition_->complete()) {
+      // A partial partition has more rows to process once they arrive.
+      VELOX_CHECK(currentPartition_->partial());
+      break;
+    }
+
+    callResetPartition();
+    if (currentPartition_ == nullptr) {
       break;
     }
   }
 
-  // Return the number of processed rows.
-  return numOutputRows - numOutputRowsLeft;
+  return resultOffset;
+}
+
+void Window::setPartitionResultColumns(
+    const std::vector<PartitionResultRun>& runs,
+    vector_size_t numRows,
+    const RowVectorPtr& result) {
+  if (runs.empty()) {
+    return;
+  }
+
+  const bool constant = runs.front().start == 0 && runs.front().end == numRows;
+  vector_size_t numValues = 1;
+  BufferPtr indices;
+  if (!constant) {
+    indices = allocateIndices(numRows, pool());
+    auto* rawIndices = indices->asMutable<vector_size_t>();
+    vector_size_t row = 0;
+    vector_size_t valueIndex = 0;
+    for (const auto& run : runs) {
+      std::iota(rawIndices + row, rawIndices + run.start, valueIndex);
+      valueIndex += run.start - row;
+      std::fill(rawIndices + run.start, rawIndices + run.end, valueIndex++);
+      row = run.end;
+    }
+    std::iota(rawIndices + row, rawIndices + numRows, valueIndex);
+    numValues = valueIndex + (numRows - row);
+  }
+
+  for (auto i = 0; i < windowFunctions_.size(); ++i) {
+    if (!reusesPartitionResult_[i]) {
+      continue;
+    }
+
+    auto& column = result->childAt(numInputColumns_ + i);
+    if (column->size() != numValues) {
+      column->resize(numValues);
+    }
+    column = constant
+        ? BaseVector::wrapInConstant(numRows, 0, column)
+        : BaseVector::wrapInDictionary(nullptr, indices, numRows, column);
+  }
 }
 
 RowVectorPtr Window::getOutput() {
@@ -755,8 +852,11 @@ RowVectorPtr Window::getOutput() {
     }
   }
 
+  // A whole-partition result needs every input row. On the vector-backed
+  // streaming path this means waiting for the partition's single peer group.
   if (!currentPartition_->complete() &&
-      (currentPartition_->numRowsForProcessing(partitionOffset_) == 0)) {
+      (!partitionResults_.empty() ||
+       currentPartition_->numRowsForProcessing(partitionOffset_) == 0)) {
     return nullptr;
   }
 
@@ -765,7 +865,9 @@ RowVectorPtr Window::getOutput() {
       outputType_, numOutputRows, operatorCtx_->pool());
 
   // Compute the output values of window functions.
-  auto numResultRows = callApplyLoop(numOutputRows, result);
+  std::vector<PartitionResultRun> runs;
+  const auto numResultRows = callApplyLoop(numOutputRows, result, runs);
+  setPartitionResultColumns(runs, numResultRows, result);
   return numResultRows < numOutputRows
       ? std::dynamic_pointer_cast<RowVector>(result->slice(0, numResultRows))
       : result;

@@ -114,10 +114,7 @@ class WindowFunction {
   /// rows of the partition in the order of the ORDER BY clause.
   /// Subsequent calls to apply(...) will not work on a prior
   /// portion of the partition.
-  /// @param result The output batch column to populate. Implementations may
-  /// replace it with an encoded vector, preserving rows before resultOffset
-  /// and the original vector size. Published output must not be modified by
-  /// subsequent calls.
+  /// @param result : The vector of result values to be populated.
   virtual void apply(
       const BufferPtr& peerGroupStarts,
       const BufferPtr& peerGroupEnds,
@@ -125,7 +122,7 @@ class WindowFunction {
       const BufferPtr& frameEnds,
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
-      VectorPtr& result) = 0;
+      const VectorPtr& result) = 0;
 
   static std::unique_ptr<WindowFunction> create(
       const std::string& name,

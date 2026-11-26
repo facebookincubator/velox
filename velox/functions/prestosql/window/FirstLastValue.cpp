@@ -57,7 +57,7 @@ class FirstLastValueFunction : public exec::WindowFunction {
       const BufferPtr& frameEnds,
       const SelectivityVector& validRows,
       int32_t resultOffset,
-      VectorPtr& result) override {
+      const VectorPtr& result) override {
     auto numRows = frameStarts->size() / sizeof(vector_size_t);
 
     if (constantValue_) {

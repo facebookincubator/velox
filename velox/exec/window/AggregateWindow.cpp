@@ -116,7 +116,6 @@ class AggregateWindowFunction : public exec::WindowFunction {
     partition_ = partition;
 
     previousFrameMetadata_.reset();
-    partitionResult_.reset();
   }
 
   void apply(
@@ -126,34 +125,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
       const BufferPtr& frameEnds,
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
-      VectorPtr& result) override {
-    if (resultOffset == 0) {
-      batchResultValues_.reset();
-      batchResultIndices_.reset();
-      batchMaterialized_ = false;
-    }
-
-    if (tryApplyPartitionResult(
-            frameStarts, frameEnds, validRows, resultOffset, result)) {
-      // Ordinary aggregation must not resume from state computed for a
-      // different frame, including when a later block leaves the fast path.
-      previousFrameMetadata_.reset();
-      return;
-    }
-
-    // A batch can mix reusable partition results and ordinary frames. Preserve
-    // its existing prefix before returning to the writable output path.
-    if (!batchMaterialized_) {
-      if (result->isConstantEncoding() ||
-          result->encoding() == VectorEncoding::Simple::DICTIONARY) {
-        BaseVector::ensureWritable(
-            SelectivityVector::empty(), resultType_, pool_, result);
-      }
-      batchMaterialized_ = true;
-      batchResultValues_.reset();
-      batchResultIndices_.reset();
-    }
-
+      const VectorPtr& result) override {
     if (handleAllEmptyFrames(validRows, resultOffset, result)) {
       return;
     }
@@ -206,86 +178,6 @@ class AggregateWindowFunction : public exec::WindowFunction {
   }
 
  private:
-  bool tryApplyPartitionResult(
-      const BufferPtr& frameStarts,
-      const BufferPtr& frameEnds,
-      const SelectivityVector& validRows,
-      vector_size_t resultOffset,
-      VectorPtr& result) {
-    if (partition_->partial() || !partition_->complete() ||
-        !validRows.isAllSelected() || validRows.size() == 0) {
-      return false;
-    }
-
-    const auto* starts = frameStarts->as<vector_size_t>();
-    const auto* ends = frameEnds->as<vector_size_t>();
-    const auto lastRow = partition_->numRows() - 1;
-    for (vector_size_t row = 0; row < validRows.size(); ++row) {
-      if (starts[row] != 0 || ends[row] != lastRow) {
-        return false;
-      }
-    }
-
-    if (!partitionResult_) {
-      // A bounded or cumulative frame can reach the complete partition in
-      // its final block. Reuse its accumulated prefix instead of reading it
-      // again merely because the output can now be constant.
-      vector_size_t firstRow = 0;
-      if (previousFrameMetadata_ &&
-          previousFrameMetadata_->incrementalAggregation &&
-          previousFrameMetadata_->firstRow == 0) {
-        firstRow = previousFrameMetadata_->lastRow + 1;
-      } else {
-        aggregate_->destroy(folly::Range<char**>(&rawSingleGroupRow_, 1));
-        aggregate_->initializeNewGroups(
-            &rawSingleGroupRow_, std::vector<vector_size_t>{0});
-        aggregateInitialized_ = true;
-      }
-      if (firstRow <= lastRow) {
-        fillArgVectors(firstRow, lastRow);
-        const auto numRows = lastRow - firstRow + 1;
-        computeAggregate(SelectivityVector(numRows), 0, numRows);
-      }
-      partitionResult_ = aggregateResultVector_;
-    }
-
-    const auto numRows = validRows.size();
-    if (batchMaterialized_) {
-      auto constant = BaseVector::wrapInConstant(numRows, 0, partitionResult_);
-      result->copy(constant.get(), resultOffset, 0, numRows);
-      return true;
-    }
-
-    if (resultOffset == 0) {
-      result = BaseVector::wrapInConstant(result->size(), 0, partitionResult_);
-      return true;
-    }
-
-    vector_size_t index;
-    if (!batchResultValues_) {
-      // The first segment was constant. Promote it only when a second
-      // partition actually contributes to this output batch.
-      batchResultValues_ = BaseVector::create(resultType_, 2, pool_);
-      batchResultValues_->copy(result.get(), 0, 0, 1);
-      batchResultIndices_ = allocateIndices(result->size(), pool_);
-      auto* indices = batchResultIndices_->asMutable<vector_size_t>();
-      std::fill(indices, indices + result->size(), 0);
-      index = 1;
-    } else {
-      index = batchResultValues_->size();
-      batchResultValues_->resize(index + 1);
-    }
-    batchResultValues_->copy(partitionResult_.get(), index, 0, 1);
-    auto* indices = batchResultIndices_->asMutable<vector_size_t>();
-    std::fill(indices + resultOffset, indices + resultOffset + numRows, index);
-
-    // These buffers belong exclusively to the batch being assembled, which
-    // has not been published yet. The next batch starts with fresh buffers.
-    result = BaseVector::wrapInDictionary(
-        nullptr, batchResultIndices_, result->size(), batchResultValues_);
-    return true;
-  }
-
   struct FrameMetadata {
     // Min frame start row required for aggregation.
     vector_size_t firstRow;
@@ -497,15 +389,6 @@ class AggregateWindowFunction : public exec::WindowFunction {
   // Used for per-row aggregate computations.
   // This vector is used to copy from the aggregate to the result.
   VectorPtr aggregateResultVector_;
-
-  // Immutable result for a complete partition. prepareForReuse() allocates a
-  // new aggregateResultVector_ when an output still references this value.
-  VectorPtr partitionResult_;
-
-  // Output assembly state spans partition resets, but never output batches.
-  VectorPtr batchResultValues_;
-  BufferPtr batchResultIndices_;
-  bool batchMaterialized_{false};
 
   // Stores metadata about the previous output block of the partition
   // to optimize aggregate computation and reading argument vectors.
