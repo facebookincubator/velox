@@ -52,6 +52,11 @@ struct CacheRequest {
 
 class CachedBufferedInput : public BufferedInput {
  public:
+  /// Reads 'readFile' with 'fileIoContext', which must set 'pool' and must not
+  /// set 'ioStats': 'ioStats' sets it, and is shared because loads scheduled on
+  /// 'executor' can outlive this input. readerOptions.cacheable() controls
+  /// whether 'cache' keeps the data; fileIoContext.cacheable is only the hint
+  /// passed to the storage layer.
   CachedBufferedInput(
       std::shared_ptr<ReadFile> readFile,
       const MetricsLogPtr& metricsLog,
@@ -63,29 +68,7 @@ class CachedBufferedInput : public BufferedInput {
       std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {})
-      : BufferedInput(
-            std::move(readFile),
-            readerOptions.memoryPool(),
-            metricsLog,
-            ioStatistics.get(),
-            ioStats.get(),
-            kMaxMergeDistance,
-            std::nullopt,
-            std::move(fileReadOps),
-            readerOptions.cacheable()),
-        cache_(cache),
-        fileNum_(std::move(fileNum)),
-        tracker_(std::move(tracker)),
-        groupId_(std::move(groupId)),
-        ioStatistics_(std::move(ioStatistics)),
-        ioStats_(std::move(ioStats)),
-        executor_(executor),
-        fileSize_(input_->getLength()),
-        options_(readerOptions) {
-    VELOX_CHECK_NOT_NULL(cache_, "CachedBufferedInput requires a cache");
-    checkLoadQuantum();
-  }
+      FileIoContext fileIoContext);
 
   CachedBufferedInput(
       std::shared_ptr<ReadFileInputStream> input,

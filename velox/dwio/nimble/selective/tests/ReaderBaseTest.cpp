@@ -23,6 +23,7 @@
 #include <set>
 #include <vector>
 
+#include "folly/CancellationToken.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "velox/common/file/File.h"
 #include "velox/common/file/tests/TestUtils.h"
@@ -48,6 +49,35 @@ enum class CreationMode { kDirect, kCached };
 int32_t sharedDictionaryValue(velox::vector_size_t row) {
   return row % 2 == 0 ? 0 : std::numeric_limits<int32_t>::max();
 }
+
+// Keeps the cancellation token of the last read, so a test can check which
+// query a read belongs to.
+class TokenRecordingReadFile : public velox::InMemoryReadFile {
+ public:
+  using velox::InMemoryReadFile::InMemoryReadFile;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const velox::FileIoContext& context = {}) const override {
+    ++numReads_;
+    lastReadToken_ = context.cancellationToken;
+    return InMemoryReadFile::pread(offset, length, buf, context);
+  }
+
+  uint64_t numReads() const {
+    return numReads_;
+  }
+
+  const folly::CancellationToken& lastReadToken() const {
+    return lastReadToken_;
+  }
+
+ private:
+  mutable uint64_t numReads_{0};
+  mutable folly::CancellationToken lastReadToken_;
+};
 
 } // namespace
 
@@ -189,7 +219,7 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     switch (GetParam()) {
       case CreationMode::kDirect: {
         auto input = std::make_unique<velox::dwio::common::BufferedInput>(
-            readFile, *pool_);
+            readFile, velox::FileIoContext{.pool = pool_.get()});
         return ReaderBase::create(std::move(input), readerOpts);
       }
       case CreationMode::kCached: {
@@ -198,7 +228,7 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
         auto cached = cache_->get(readFile, tabletOpts);
 
         auto input = std::make_unique<velox::dwio::common::BufferedInput>(
-            readFile, *pool_);
+            readFile, velox::FileIoContext{.pool = pool_.get()});
         return ReaderBase::create(std::move(input), cached, readerOpts);
       }
     }
@@ -324,8 +354,8 @@ TEST_F(ReaderBaseCacheLifetimeTest, evictionDoesNotRetireEntryUnderLiveReader) {
   {
     auto cached =
         cache.get(readFile, TabletReader::configureOptions(readerOpts));
-    auto input =
-        std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+    auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+        readFile, velox::FileIoContext{.pool = pool_.get()});
     reader = ReaderBase::create(std::move(input), cached, readerOpts);
   }
   EXPECT_FALSE(released);
@@ -360,7 +390,7 @@ TEST_F(ReaderBaseSharedTabletTest, laterReadersReadNoMetadata) {
     const auto createReader = [&]() {
       return ReaderBase::create(
           std::make_unique<velox::dwio::common::BufferedInput>(
-              readFile, *pool_),
+              readFile, velox::FileIoContext{.pool = pool_.get()}),
           cached,
           readerOpts);
     };
@@ -406,16 +436,16 @@ TEST_P(ReaderBaseTest, equivalentAcrossModes) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData_);
   auto readerOpts = makeReaderOptions();
 
-  auto inputDirect =
-      std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+  auto inputDirect = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile, velox::FileIoContext{.pool = pool_.get()});
   auto direct = ReaderBase::create(std::move(inputDirect), readerOpts);
 
   ensureCache();
   auto tabletOpts = TabletReader::configureOptions(readerOpts);
   auto cached = cache_->get(readFile, tabletOpts);
 
-  auto inputCached =
-      std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+  auto inputCached = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile, velox::FileIoContext{.pool = pool_.get()});
   auto fromCache =
       ReaderBase::create(std::move(inputCached), cached, readerOpts);
 
@@ -745,8 +775,8 @@ TEST_P(StripeStreamsMultiStripeTest, locateStreams) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData_);
   auto opts = makeReaderOptions();
 
-  auto input =
-      std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile, velox::FileIoContext{.pool = pool_.get()});
   auto reader = ReaderBase::create(std::move(input), opts);
   const auto& tablet = reader->tablet();
   ASSERT_EQ(tablet.stripeCount(), 3);
@@ -794,7 +824,7 @@ TEST_P(StripeStreamsMultiStripeTest, preloadCollapsesStripeReads) {
     auto opts = makeReaderOptions();
     opts.setFilePreloadThreshold(preloadThreshold);
     auto input = std::make_unique<velox::dwio::common::BufferedInput>(
-        countingFile, *pool_);
+        countingFile, velox::FileIoContext{.pool = pool_.get()});
     auto reader = ReaderBase::create(std::move(input), opts);
     EXPECT_EQ(reader->tablet().stripeCount(), kStripeCount);
 
@@ -816,6 +846,25 @@ TEST_P(StripeStreamsMultiStripeTest, preloadCollapsesStripeReads) {
 
   EXPECT_EQ(preadsReadingAllStripes(fileData_.size() + 1), 1);
   EXPECT_GE(preadsReadingAllStripes(0), kStripeCount);
+}
+
+TEST_P(StripeStreamsMultiStripeTest, preloadKeepsQueryCancellation) {
+  auto readFile = std::make_shared<TokenRecordingReadFile>(fileData_);
+  auto opts = makeReaderOptions();
+  opts.setFilePreloadThreshold(fileData_.size() + 1);
+  folly::CancellationSource cancellation;
+  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile,
+      velox::FileIoContext{
+          .pool = pool_.get(),
+          .cancellationToken = cancellation.getToken(),
+      });
+
+  ReaderBase::create(std::move(input), opts);
+  ASSERT_EQ(readFile->numReads(), 1);
+
+  cancellation.requestCancellation();
+  EXPECT_TRUE(readFile->lastReadToken().isCancellationRequested());
 }
 
 INSTANTIATE_TEST_CASE_P(

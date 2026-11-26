@@ -60,6 +60,7 @@ std::unique_ptr<FileHandle> FileHandleGenerator::operator()(
       options.extraFileInfo = properties->extraFileInfo;
       options.fileReadOps = properties->fileReadOps;
       options.ioStatistics = properties->ioStatistics;
+      options.cancellationToken = properties->cancellationToken;
     }
     const auto& filename = key.filename;
     fileHandle->file = filesystems::getFileSystem(filename, properties_)

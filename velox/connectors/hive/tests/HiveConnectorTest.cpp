@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/CancellationToken.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -793,6 +794,43 @@ TEST_F(HiveConnectorTest, splitFileReadOpsAddKeys) {
       fileOpens_,
       testing::ElementsAre(
           testing::Field(&filesystems::FileOptions::fileReadOps, expected)));
+}
+
+TEST_F(HiveConnectorTest, queryCancellationReachesFileOpen) {
+  const auto rowType = ROW("c0", BIGINT());
+  const auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 2, 3})));
+  const config::ConfigBase sessionProperties({});
+  folly::CancellationSource cancellation;
+  const auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                                     .operatorPool(pool_.get())
+                                     .connectorPool(pool_.get())
+                                     .sessionProperties(&sessionProperties)
+                                     .queryId("query.HiveConnectorTest")
+                                     .taskId("task.HiveConnectorTest")
+                                     .planNodeId("planNodeId.HiveConnectorTest")
+                                     .cancellationToken(cancellation.getToken())
+                                     .build();
+  auto dataSource = ConnectorRegistry::tryGet(kHiveConnectorId)
+                        ->createDataSource(
+                            rowType,
+                            makeTableHandle(),
+                            allRegularColumns(rowType),
+                            connectorQueryCtx.get());
+  recordFileOpens();
+  dataSource->addSplit(
+      exec::test::HiveConnectorSplitBuilder(
+          tests::utils::FaultyFileSystem::scheme() + filePath->getPath())
+          .fileFormat(dwio::common::FileFormat::DWRF)
+          .build());
+
+  ASSERT_THAT(fileOpens_, testing::SizeIs(1));
+  const auto& openCancellation = fileOpens_[0].cancellationToken;
+  EXPECT_FALSE(openCancellation.isCancellationRequested());
+  cancellation.requestCancellation();
+  EXPECT_TRUE(openCancellation.isCancellationRequested());
 }
 
 /// Verifies that getRuntimeStats() merge logic allows IoStats (ReadFile-layer)

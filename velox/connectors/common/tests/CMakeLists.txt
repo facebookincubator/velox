@@ -11,6 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(velox_buffered_input_builder_test BufferedInputBuilderTest.cpp)
+add_test(velox_buffered_input_builder_test velox_buffered_input_builder_test)
+target_link_libraries(
+  velox_buffered_input_builder_test
+  velox_file_connector
+  velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+)
+
 add_executable(velox_file_connector_test FileConnectorTest.cpp)
 add_test(velox_file_connector_test velox_file_connector_test)
 target_link_libraries(

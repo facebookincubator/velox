@@ -105,7 +105,7 @@ class E2EFilterTest : public E2EFilterTestBase,
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
-            readerOpts.memoryPool()),
+            FileIoContext{.pool = &readerOpts.memoryPool()}),
         readerOpts);
     const auto expected = static_cast<thrift::Encoding>(encoding);
     for (const auto fileEncoding :
@@ -125,7 +125,7 @@ class E2EFilterTest : public E2EFilterTestBase,
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
-            readerOpts.memoryPool()),
+            FileIoContext{.pool = &readerOpts.memoryPool()}),
         readerOpts);
     auto column = std::static_pointer_cast<const ParquetTypeWithId>(
         reader->typeWithId()->childAt(columnIndex));
@@ -905,7 +905,8 @@ TEST_F(E2EFilterTest, combineRowGroup) {
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+      std::make_shared<InMemoryReadFile>(sinkData_),
+      FileIoContext{.pool = &readerOpts.memoryPool()});
   auto reader = makeReader(readerOpts, std::move(input));
   auto parquetReader = dynamic_cast<ParquetReader&>(*reader.get());
   EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 1);
@@ -967,7 +968,7 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(
             std::string(sinkPtr->data(), sinkPtr->size())),
-        readerOptions.memoryPool());
+        FileIoContext{.pool = &readerOptions.memoryPool()});
     auto reader = makeReader(readerOptions, std::move(input));
     auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
     EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);

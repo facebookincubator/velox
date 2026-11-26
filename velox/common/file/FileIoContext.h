@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 
+#include <folly/CancellationToken.h>
 #include <folly/container/F14Map.h>
 #include <folly/io/async/Request.h>
 
@@ -33,15 +34,22 @@ class MemoryPool;
 
 class IoStats;
 
+/// Describes one read to the storage layer. Every ReadFile read (pread,
+/// preadv, preadvAsync) takes one by reference and uses it only until the call
+/// returns; an asynchronous read copies the fields it needs. 'ioStats' and
+/// 'pool' are borrowed: they must outlive the read, which for preadvAsync
+/// lasts until its future completes. Set only the fields the read needs:
+///
+///   file.pread(offset, length, buffer, FileIoContext{.ioStats = &ioStats});
 struct FileIoContext {
   /// Stats for IO operations.
   IoStats* ioStats{nullptr};
 
   /// Options for file read operations.
-  folly::F14FastMap<std::string, std::string> fileOpts;
+  folly::F14FastMap<std::string, std::string> fileOpts{};
 
   /// Tracer for IO operations, providing call stack context.
-  std::shared_ptr<FileIoTracer> ioTracer;
+  std::shared_ptr<FileIoTracer> ioTracer{};
 
   /// When false, hints to the storage layer that this read should not be cached
   /// or should be evicted soon after reading. This is useful for one-time reads
@@ -54,19 +62,9 @@ struct FileIoContext {
   /// the file allocates outside any pool.
   memory::MemoryPool* pool{nullptr};
 
-  FileIoContext() = default;
-
-  explicit FileIoContext(
-      IoStats* stats,
-      folly::F14FastMap<std::string, std::string> fileOpts = {},
-      std::shared_ptr<FileIoTracer> tracer = nullptr,
-      bool cacheable = false,
-      memory::MemoryPool* pool = nullptr)
-      : ioStats(stats),
-        fileOpts(std::move(fileOpts)),
-        ioTracer(std::move(tracer)),
-        cacheable(cacheable),
-        pool(pool) {}
+  /// Cancels this read once the query it belongs to is canceled. See ReadFile
+  /// for what a canceled read does.
+  folly::CancellationToken cancellationToken{};
 };
 
 /// Replaces the FileIoContext of reads that honor it: reads on this thread

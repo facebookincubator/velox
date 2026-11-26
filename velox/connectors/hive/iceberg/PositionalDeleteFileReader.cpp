@@ -100,6 +100,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
   FileProperties fileProperties;
   fileProperties.fileReadOps = fileReadOps;
+  fileProperties.cancellationToken = connectorQueryCtx_->cancellationToken();
   auto deleteFileHandleCachePtr =
       fileHandleFactory_->generate(fileHandleKey, &fileProperties);
   auto deleteFileInput = connector::BufferedInputBuilder::getInstance()->create(

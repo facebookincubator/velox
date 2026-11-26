@@ -268,6 +268,7 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
 
   auto fileProperties = hiveSplit_->properties.value_or(FileProperties{});
+  fileProperties.cancellationToken = connectorQueryCtx_->cancellationToken();
   auto fileHandleCachePtr = fileHandleFactory_->generate(
       fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
   VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());

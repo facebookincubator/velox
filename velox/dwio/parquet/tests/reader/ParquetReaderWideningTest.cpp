@@ -237,7 +237,7 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
   std::string dataBuf(sinkPtr->data(), sinkPtr->size());
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
-      file, readerOptions.memoryPool());
+      file, FileIoContext{.pool = &readerOptions.memoryPool()});
   auto reader =
       std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
 

@@ -254,6 +254,7 @@ void FileSplitReader::createReader(
   // report one data source's reads against another's.
   fileProperties.ioStatistics =
       fileHandleFactory_->maxSize() == 0 ? dataIoStats_.get() : nullptr;
+  fileProperties.cancellationToken = connectorQueryCtx_->cancellationToken();
 
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(

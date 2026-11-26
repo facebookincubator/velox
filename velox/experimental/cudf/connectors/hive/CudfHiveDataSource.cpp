@@ -764,6 +764,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         .filename = split_->filePath,
         .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
     auto fileProperties = FileProperties{};
+    fileProperties.cancellationToken = connectorQueryCtx_->cancellationToken();
     auto const fileHandleCachePtr = fileHandleFactory_->generate(
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     if (fileHandleCachePtr.get() and fileHandleCachePtr.get()->file) {

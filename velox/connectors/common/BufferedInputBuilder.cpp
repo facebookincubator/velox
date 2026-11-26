@@ -68,19 +68,25 @@ BufferedInputBuilder::createDefault(
         std::move(ioStats),
         executor,
         readerOpts,
-        fileReadOps);
+        FileIoContext{
+            .fileOpts = fileReadOps,
+            .cacheable = readerOpts.cacheable(),
+            .pool = &readerOpts.memoryPool(),
+            .cancellationToken = connectorQueryCtx->cancellationToken(),
+        });
   }
   if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE &&
       !readerOpts.nimbleDirectBufferedInputEnabled()) {
     return std::make_unique<dwio::common::BufferedInput>(
         fileHandle.file,
-        readerOpts.memoryPool(),
+        FileIoContext{
+            .ioStats = ioStats.get(),
+            .fileOpts = fileReadOps,
+            .pool = &readerOpts.memoryPool(),
+            .cancellationToken = connectorQueryCtx->cancellationToken(),
+        },
         dwio::common::MetricsLog::voidLog(),
-        ioStatistics.get(),
-        ioStats.get(),
-        dwio::common::BufferedInput::kMaxMergeDistance,
-        std::nullopt,
-        fileReadOps);
+        ioStatistics.get());
   }
   return std::make_unique<dwio::common::DirectBufferedInput>(
       fileHandle.file,
@@ -93,7 +99,11 @@ BufferedInputBuilder::createDefault(
       std::move(ioStats),
       executor,
       readerOpts,
-      fileReadOps);
+      FileIoContext{
+          .fileOpts = fileReadOps,
+          .pool = &readerOpts.memoryPool(),
+          .cancellationToken = connectorQueryCtx->cancellationToken(),
+      });
 }
 
 // static

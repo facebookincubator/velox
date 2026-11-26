@@ -626,6 +626,7 @@ void CudfSplitReader::setupCudfDataSource() {
     auto fileProperties = split_->properties.value_or(FileProperties{});
     // The size can also come from the $file_size info column.
     fileProperties.fileSize = split_->fileSize();
+    fileProperties.cancellationToken = connectorQueryCtx_->cancellationToken();
     fileHandleCachePtr = fileHandleFactory_->generate(
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
