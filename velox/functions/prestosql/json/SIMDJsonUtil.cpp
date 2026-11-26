@@ -40,6 +40,21 @@ simdjson::padded_string_view reusePaddedStringView(
       json.data(), json.length(), json.length() + simdjson::SIMDJSON_PADDING);
 }
 
+simdjson::padded_string_view toPaddedStringView(
+    std::string_view json,
+    std::string& buffer) {
+  const auto paddedSize = json.size() + simdjson::SIMDJSON_PADDING;
+  if (buffer.size() < paddedSize) {
+    buffer.resize(paddedSize);
+  }
+  if (!json.empty()) {
+    memcpy(buffer.data(), json.data(), json.size());
+  }
+  memset(buffer.data() + json.size(), 0, simdjson::SIMDJSON_PADDING);
+  return simdjson::padded_string_view(
+      buffer.data(), json.size(), buffer.size());
+}
+
 simdjson::simdjson_result<simdjson::ondemand::document> simdjsonParseIncomplete(
     const simdjson::padded_string_view& json) {
   thread_local simdjson::ondemand::parser parser;

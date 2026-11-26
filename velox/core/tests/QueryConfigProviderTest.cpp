@@ -96,6 +96,12 @@ TEST_F(QueryConfigProviderTest, knownProperties) {
   EXPECT_EQ(rpcRateLimiterMaxLimit->type, ConfigPropertyType::kInteger);
   EXPECT_EQ(rpcRateLimiterMaxLimit->defaultValue, "200");
 
+  auto rpcRateLimiterTightenLimit =
+      findProp(QueryConfig::kRpcRateLimiterTightenLimit);
+  ASSERT_TRUE(rpcRateLimiterTightenLimit.has_value());
+  EXPECT_EQ(rpcRateLimiterTightenLimit->type, ConfigPropertyType::kBoolean);
+  EXPECT_EQ(rpcRateLimiterTightenLimit->defaultValue, "false");
+
   auto rpcRateLimiterHardLimit =
       findProp(QueryConfig::kRpcRateLimiterHardLimit);
   ASSERT_TRUE(rpcRateLimiterHardLimit.has_value());

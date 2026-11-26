@@ -1412,7 +1412,7 @@ TEST_F(HiveDataSinkTest, parquetRowGroupRows) {
   auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::make_unique<dwio::common::BufferedInput>(
           std::make_shared<LocalReadFile>(filePaths[0]),
-          readerOpts.memoryPool()),
+          FileIoContext{.pool = &readerOpts.memoryPool()}),
       readerOpts);
   const auto fileMeta = reader->fileMetaData();
   ASSERT_EQ(fileMeta.numRowGroups(), 10);
@@ -1468,7 +1468,8 @@ TEST_F(
   ASSERT_EQ(filePaths.size(), 1);
 
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(filePaths[0]), readerOpts.memoryPool());
+      std::make_shared<LocalReadFile>(filePaths[0]),
+      FileIoContext{.pool = &readerOpts.memoryPool()});
   auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::move(bufferedInput), readerOpts);
   auto fileMeta = reader->fileMetaData();

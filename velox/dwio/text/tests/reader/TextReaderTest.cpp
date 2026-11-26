@@ -96,8 +96,8 @@ class TextReaderTest : public testing::Test,
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(type);
     readerOptions.setSerDeOptions(serDeOptions);
-    auto input =
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        readFile, FileIoContext{.pool = pool()});
     return factory->createReader(std::move(input), readerOptions);
   }
 
@@ -2062,7 +2062,7 @@ class TextSplitRowRangeTest : public TextReaderTest {
     dwio::common::ReaderOptions readerOptions(pool());
     readerOptions.setFileSchema(type_);
     auto input = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<LocalReadFile>(path), *pool());
+        std::make_shared<LocalReadFile>(path), FileIoContext{.pool = pool()});
     return factory->createReader(std::move(input), readerOptions);
   }
 

@@ -135,6 +135,11 @@ class NullableEncoding final
     return nonNulls()->dictionaryEntries();
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   // Materializes consecutive rows while keeping the validity stream packed.
   uint32_t contiguousRead(
@@ -223,6 +228,23 @@ void NullableEncoding<T>::reset() {
   row_ = 0;
   nonNullValues_->reset();
   nulls_->reset();
+}
+
+template <typename T>
+bool NullableEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const char* pos = data.data() + this->dataOffset();
+  const uint32_t nonNullsBytes = encoding::readUint32(pos);
+  nonNullValues_ = this->rebindChild(
+      {pos, nonNullsBytes}, stringBufferFactory, std::move(nonNullValues_));
+  pos += nonNullsBytes;
+  nulls_ = this->rebindChild(
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+      stringBufferFactory,
+      std::move(nulls_));
+  row_ = 0;
+  return true;
 }
 
 template <typename T>

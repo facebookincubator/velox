@@ -35,8 +35,10 @@ std::unique_ptr<dwio::common::Reader> NimbleReaderFactory::createReader(
       options, input->getReadFile(), input->getInputStream()->fileIoContext());
 }
 
-void registerNimbleReaderFactory() {
-  dwio::common::registerReaderFactory(std::make_shared<NimbleReaderFactory>());
+void registerNimbleReaderFactory(
+    facebook::nimble::TabletReaderCache* tabletReaderCache) {
+  dwio::common::registerReaderFactory(
+      std::make_shared<NimbleReaderFactory>(tabletReaderCache));
 }
 
 void unregisterNimbleReaderFactory() {

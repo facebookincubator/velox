@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <cuda_runtime.h> // @manual
+#include <fmt/ranges.h>
 #include "velox/common/base/tests/GTestUtils.h"
 
 #include "velox/exec/ExchangeSource.h"
@@ -391,6 +392,78 @@ TEST_P(TableScanTest, filterInScanNull) {
       plan,
       splits,
       "SELECT c0, c1, c1 + 100000000, c2 + 1, c3, c3 + 2, rn FROM tmp where c0 < 500000000 and c1 + 100000000 < 500000000");
+}
+
+TEST_P(TableScanTest, filterInScanInteger) {
+  auto type =
+      ROW({"c0", "c1", "c2", "rn"}, {INTEGER(), INTEGER(), BIGINT(), BIGINT()});
+  auto splits =
+      makeData(type, numBatches_, batchSize_, false, [&](RowVectorPtr row) {
+        makeRange(row, 1'000'000'000, false);
+      });
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(type, {"c0 < 1000000000", "c1 > -1000000000"})
+                  .planNode();
+  assertQuery(
+      plan,
+      splits,
+      "SELECT c0, c1, c2, rn FROM tmp WHERE c0 < 1000000000 AND c1 > -1000000000");
+}
+
+TEST_P(TableScanTest, filterOnlyColumn) {
+  auto type = ROW({"c0", "c1", "c2", "rn"}, BIGINT());
+  auto splits = makeData(type, numBatches_, batchSize_);
+
+  auto plan =
+      PlanBuilder(pool_.get())
+          .tableScan(
+              ROW({"c1", "c2", "rn"}, BIGINT()), {"c0 < 500000000"}, "", type)
+          .planNode();
+  assertQuery(plan, splits, "SELECT c1, c2, rn FROM tmp WHERE c0 < 500000000");
+}
+
+TEST_P(TableScanTest, filterOnlyColumnChainedNull) {
+  auto type = ROW({"c0", "c1", "c2", "rn"}, BIGINT());
+  auto splits = makeData(type, numBatches_, batchSize_, false);
+
+  auto plan = PlanBuilder(pool_.get())
+                  .tableScan(
+                      ROW({"c1", "c2", "rn"}, BIGINT()),
+                      {"c0 < 500000000", "c1 < 700000000"},
+                      "",
+                      type)
+                  .planNode();
+  assertQuery(
+      plan,
+      splits,
+      "SELECT c1, c2, rn FROM tmp WHERE c0 < 500000000 AND c1 < 700000000");
+}
+
+TEST_P(TableScanTest, readerKernelCache) {
+  auto type = ROW({"c0", "c1", "c2", "rn"}, BIGINT());
+  auto splits = makeData(type, numBatches_, batchSize_);
+  auto scan = [&](const std::vector<std::string>& columns) {
+    auto plan =
+        PlanBuilder(pool_.get())
+            .tableScan(ROW(columns, BIGINT()), {"c0 < 500000000"}, "", type)
+            .planNode();
+    return assertQuery(
+        plan,
+        splits,
+        fmt::format(
+            "SELECT {} FROM tmp WHERE c0 < 500000000",
+            fmt::join(columns, ", ")));
+  };
+
+  scan({"c0", "c1", "c2", "rn"});
+  auto task = scan({"rn", "c2", "c1", "c0"});
+
+  // The scan with the columns in a different order reuses the kernels of the
+  // first scan.
+  auto stats = getTableScanRuntimeStats(task);
+  EXPECT_LT(0, stats["wave.numReaderKernels"].sum);
+  EXPECT_EQ(0, stats["wave.numNewReaderKernels"].sum);
 }
 
 TEST_P(TableScanTest, scanAgg) {

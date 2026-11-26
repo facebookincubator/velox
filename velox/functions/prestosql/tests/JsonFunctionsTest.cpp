@@ -1123,6 +1123,47 @@ TEST_F(JsonFunctionsTest, jsonSize) {
   }
 }
 
+TEST_F(JsonFunctionsTest, longRowBeforeShorterRows) {
+  // A function reuses one buffer across the rows of a batch. The second row is
+  // a truncated copy of the first and must not see the bytes the first left.
+  auto data = makeRowVector({makeFlatVector<std::string>(
+      {"[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]",
+       "[1, 2, 3",
+       "[2]",
+       "7"},
+      JSON())});
+  const auto check = [&](const std::string& expression,
+                         const VectorPtr& expected) {
+    SCOPED_TRACE(expression);
+    velox::test::assertEqualVectors(expected, evaluate(expression, data));
+  };
+
+  check(
+      "try(is_json_scalar(c0))",
+      makeNullableFlatVector<bool>({false, std::nullopt, false, true}));
+  check(
+      "json_array_length(c0)",
+      makeNullableFlatVector<int64_t>({20, std::nullopt, 1, std::nullopt}));
+  check(
+      "json_array_contains(c0, 2)",
+      makeNullableFlatVector<bool>({true, std::nullopt, true, std::nullopt}));
+  check(
+      "json_size(c0, '$')",
+      makeNullableFlatVector<int64_t>({20, std::nullopt, 1, 0}));
+  check(
+      "json_extract_scalar(c0, '$[0]')",
+      makeNullableFlatVector<std::string>(
+          {"1", std::nullopt, "2", std::nullopt}));
+  check(
+      "json_extract(c0, '$[0]')",
+      makeNullableFlatVector<std::string>(
+          {"1", std::nullopt, "2", std::nullopt}, JSON()));
+  check(
+      "json_array_get(c0, 0)",
+      makeNullableFlatVector<std::string>(
+          {"1", std::nullopt, "2", std::nullopt}, JSON()));
+}
+
 TEST_F(JsonFunctionsTest, invalidPath) {
   VELOX_ASSERT_THROW(jsonSize(R"([0,1,2])", ""), "Invalid JSON path");
   VELOX_ASSERT_THROW(jsonSize(R"([0,1,2])", "$[]"), "Invalid JSON path");

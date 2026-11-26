@@ -118,8 +118,8 @@ std::unique_ptr<velox::dwio::common::BufferedInput> maybePreloadInput(
       readFile,
       velox::dwio::common::MetricsLog::voidLog(),
       options.dataIoStats().get(),
-      /*ioStats=*/nullptr,
-      input->getInputStream()->fileIoContext().fileOpts)
+      velox::FileIoContext{
+          .fileOpts = input->getInputStream()->fileIoContext().fileOpts})
       .read(
           buffer->asMutable<char>(),
           fileSize,
@@ -127,7 +127,7 @@ std::unique_ptr<velox::dwio::common::BufferedInput> maybePreloadInput(
           velox::dwio::common::LogType::FILE);
   return std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(std::move(buffer)),
-      options.memoryPool());
+      velox::FileIoContext{.pool = &options.memoryPool()});
 }
 } // namespace
 

@@ -54,11 +54,31 @@ StreamData::StreamData(
 
 void StreamData::reset(
     std::string_view data,
-    bool streamEncodingUsesVarintRowCount) {
+    bool streamEncodingUsesVarintRowCount,
+    bool rebindEncoding) {
   readRows_ = 0;
+  if (rebindEncoding && !legacyHeaderless_ && !data.empty() &&
+      useVarintRowCount_ == streamEncodingUsesVarintRowCount &&
+      this->rebindEncoding(data)) {
+    pos_ = data.data();
+    end_ = data.data() + data.size();
+    return;
+  }
   encoding_.reset();
   useVarintRowCount_ = streamEncodingUsesVarintRowCount;
   init(data);
+}
+
+bool StreamData::rebindEncoding(std::string_view data) {
+  if (encoding_ == nullptr) {
+    return false;
+  }
+  const auto stringBufferFactory = [this](uint32_t size) {
+    auto& buffer = stringBuffers_->emplace_back(
+        velox::AlignedBuffer::allocate<char>(size, pool_));
+    return buffer->asMutable<void>();
+  };
+  return encoding_->rebind(data, stringBufferFactory);
 }
 
 void StreamData::skip(uint32_t count) {

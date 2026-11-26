@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <span>
@@ -297,6 +298,10 @@ class ConstantEncodingBase
   }
 
  protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
   static bool isConstant(
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics) {
@@ -324,6 +329,22 @@ class ConstantEncoding : public ConstantEncodingBase<T> {
 //
 // End of public API. Implementation follows.
 //
+
+template <typename T>
+bool ConstantEncodingBase<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const char* pos = data.data() + this->dataOffset();
+  value_ = encoding::read<physicalType>(pos);
+  NIMBLE_CHECK_EQ(
+      pos, data.data() + data.size(), "Unexpected constant encoding end");
+  if constexpr (isStringType<physicalType>()) {
+    auto* stringBuffer = static_cast<char*>(stringBufferFactory(value_.size()));
+    std::memcpy(stringBuffer, value_.data(), value_.size());
+    value_ = std::string_view{stringBuffer, value_.size()};
+  }
+  return true;
+}
 
 template <typename T>
 ConstantEncoding<T>::ConstantEncoding(

@@ -121,7 +121,16 @@ class StreamData {
   /// can visit them with ctz instead of scanning one bool per row.
   void decodeBoolsAsBits(uint32_t count, uint64_t* bits);
 
-  void reset(std::string_view data, bool streamEncodingUsesVarintRowCount);
+  /// Binds the stream to a new segment `data` and rewinds it. With
+  /// `rebindEncoding`, the current encoding is rebound to `data`
+  /// (Encoding::rebind) instead of being rebuilt when `data` holds the
+  /// same encoding and data type, which saves the per-segment setup of
+  /// streams that keep their encoding from segment to segment, e.g. one
+  /// small payload after another.
+  void reset(
+      std::string_view data,
+      bool streamEncodingUsesVarintRowCount,
+      bool rebindEncoding = false);
 
   /// Advance the encoded stream cursor by `count` rows without materializing
   /// output. Uses the encoding's native state-only skip primitive. Only valid
@@ -147,6 +156,10 @@ class StreamData {
   }
 
  private:
+  // Rebinds encoding_ to `data`; returns false when the caller must build a
+  // new encoding.
+  bool rebindEncoding(std::string_view data);
+
   // Initialize with data. For the encoding path, creates the Encoding object.
   // For the legacy headerless path, decompresses if not string/binary type.
   void init(std::string_view data);

@@ -237,7 +237,7 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
   std::string dataBuf(sinkPtr->data(), sinkPtr->size());
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
-      file, readerOptions.memoryPool());
+      file, FileIoContext{.pool = &readerOptions.memoryPool()});
   auto reader =
       std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
 
@@ -1617,19 +1617,6 @@ TEST_F(ParquetReaderWideningTest, tinyintToDoubleWideningWithFilter) {
       writeData, ROW("col", DOUBLE()), exec::greaterThanOrEqual(0), expected);
 }
 
-// DoubleRange filter not yet supported for widened columns. See #16895.
-TEST_F(
-    ParquetReaderWideningTest,
-    DISABLED_intToDoubleWideningWithDoubleRangeFilter) {
-  auto writeData =
-      makeNamedRowVector("col", makeFlatVector<int32_t>({-100, 0, 50, 100}));
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DOUBLE()),
-      exec::greaterThanOrEqualDouble(50.0),
-      makeNamedRowVector("col", makeFlatVector<double>({50.0, 100.0})));
-}
-
 // INT -> Decimal widening + filter.
 TEST_F(ParquetReaderWideningTest, intToDecimalWideningWithFilter) {
   auto writeData =
@@ -1641,52 +1628,6 @@ TEST_F(ParquetReaderWideningTest, intToDecimalWideningWithFilter) {
       exec::greaterThanOrEqual(50),
       makeNamedRowVector(
           "col", makeFlatVector<int64_t>({50, 100}, DECIMAL(10, 0))));
-}
-
-// Scale > 0 not yet supported for filter pushdown with widening. See #16895.
-TEST_F(
-    ParquetReaderWideningTest,
-    DISABLED_intToDecimalWithScaleWideningWithFilter) {
-  auto writeData =
-      makeNamedRowVector("col", makeFlatVector<int32_t>({-100, 0, 50, 100}));
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(12, 2)),
-      exec::greaterThanOrEqual(5'000),
-      makeNamedRowVector(
-          "col", makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(12, 2))));
-}
-
-// HugeintRange filter not yet supported for widened columns. See #16895.
-TEST_F(ParquetReaderWideningTest, DISABLED_bigintToDecimalWideningWithFilter) {
-  auto writeData =
-      makeNamedRowVector("col", makeFlatVector<int64_t>({-100, 0, 50, 100}));
-  // BIGINT -> Decimal(25, 5).
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(25, 5)),
-      exec::greaterThanOrEqualHugeint(int128_t(50) * 100'000),
-      makeNamedRowVector(
-          "col",
-          makeFlatVector<int128_t>(
-              {int128_t(50) * 100'000, int128_t(100) * 100'000},
-              DECIMAL(25, 5))));
-  // BIGINT -> Decimal(38, 0).
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(38, 0)),
-      exec::greaterThanOrEqualHugeint(int128_t(50)),
-      makeNamedRowVector(
-          "col", makeFlatVector<int128_t>({50, 100}, DECIMAL(38, 0))));
-  // BIGINT -> Decimal(21, 1).
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(21, 1)),
-      exec::greaterThanOrEqualHugeint(int128_t(50) * 10),
-      makeNamedRowVector(
-          "col",
-          makeFlatVector<int128_t>(
-              {int128_t(50) * 10, int128_t(100) * 10}, DECIMAL(21, 1))));
 }
 
 // Decimal -> Decimal (short->short) + filter.
@@ -1701,80 +1642,6 @@ TEST_F(ParquetReaderWideningTest, decimalShortToShortWideningWithFilter) {
       exec::greaterThanOrEqual(5'000),
       makeNamedRowVector(
           "col", makeFlatVector<int64_t>({5'000, 10'000}, DECIMAL(10, 2))));
-}
-
-// Scale changed: DECIMAL(7,2) -> DECIMAL(10,4). See #16895.
-TEST_F(
-    ParquetReaderWideningTest,
-    DISABLED_decimalScaleChangeWideningWithFilter) {
-  auto writeData = makeNamedRowVector(
-      "col",
-      makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(7, 2)));
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(10, 4)),
-      exec::greaterThanOrEqual(500'000),
-      makeNamedRowVector(
-          "col",
-          makeFlatVector<int64_t>({500'000, 1'000'000}, DECIMAL(10, 4))));
-}
-
-// Cases have different failure modes: same-scale fails on HugeintRange crash,
-// scale-change fails on unscaled value mismatch. See #16895.
-TEST_F(
-    ParquetReaderWideningTest,
-    DISABLED_decimalShortToLongWideningWithFilter) {
-  auto writeData = makeNamedRowVector(
-      "col",
-      makeFlatVector<int64_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(5, 2)));
-  // Scale unchanged: DECIMAL(5,2) -> DECIMAL(20,2).
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(20, 2)),
-      exec::greaterThanOrEqualHugeint(int128_t(5'000)),
-      makeNamedRowVector(
-          "col", makeFlatVector<int128_t>({5'000, 10'000}, DECIMAL(20, 2))));
-  // Scale changed: DECIMAL(5,2) -> DECIMAL(20,4).
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(20, 4)),
-      exec::greaterThanOrEqualHugeint(int128_t(500'000)),
-      makeNamedRowVector(
-          "col",
-          makeFlatVector<int128_t>({500'000, 1'000'000}, DECIMAL(20, 4))));
-  // Large scale increase: DECIMAL(5,2) -> DECIMAL(10,7).
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(10, 7)),
-      exec::greaterThanOrEqual(500'000'000),
-      makeNamedRowVector(
-          "col",
-          makeFlatVector<int64_t>(
-              {500'000'000, 1'000'000'000}, DECIMAL(10, 7))));
-  // Precision and scale increase: DECIMAL(5,2) -> DECIMAL(12,4).
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(12, 4)),
-      exec::greaterThanOrEqual(500'000),
-      makeNamedRowVector(
-          "col",
-          makeFlatVector<int64_t>({500'000, 1'000'000}, DECIMAL(12, 4))));
-}
-
-// HugeintRange filter with scale change not yet supported. See #16895.
-TEST_F(
-    ParquetReaderWideningTest,
-    DISABLED_decimalLongToLongWideningWithFilter) {
-  auto writeData = makeNamedRowVector(
-      "col",
-      makeFlatVector<int128_t>({-1'000, 0, 5'000, 10'000}, DECIMAL(20, 2)));
-  assertWideningWithFilter(
-      writeData,
-      ROW("col", DECIMAL(22, 4)),
-      exec::greaterThanOrEqualHugeint(int128_t(500'000)),
-      makeNamedRowVector(
-          "col",
-          makeFlatVector<int128_t>({500'000, 1'000'000}, DECIMAL(22, 4))));
 }
 
 // INT32 narrowing + filter.

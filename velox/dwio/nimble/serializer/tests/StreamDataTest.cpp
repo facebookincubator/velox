@@ -28,10 +28,13 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/ConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/StreamData.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
@@ -101,6 +104,53 @@ TEST_F(StreamDataTest, decodeWithoutEncodingThrows) {
           static_cast<uint32_t>(output.size()),
           sizeof(int32_t)),
       "StreamData has no encoding to decode");
+}
+
+TEST_F(StreamDataTest, resetRebindsAlternatingEncodings) {
+  // A stream whose segments alternate between two encodings, as a stream
+  // does across payloads of different shapes, rebuilds its encoding on each
+  // switch, as the current one does not rebind; every segment decodes as its
+  // own.
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto makeValues = [&](const std::vector<int32_t>& values) {
+    Vector<int32_t> vector{pool_.get(), values.size()};
+    std::copy(values.begin(), values.end(), vector.begin());
+    return vector;
+  };
+  const std::vector<int32_t> constantValues{5, 5, 5};
+  const std::vector<int32_t> trivialValues{1, 2};
+  const auto constant = test::Encoder<ConstantEncoding<int32_t>>::encode(
+      buffer, makeValues(constantValues));
+  const auto trivial = test::Encoder<TrivialEncoding<int32_t>>::encode(
+      buffer, makeValues(trivialValues));
+
+  std::vector<BufferPtr> stringBuffers;
+  BufferPtr decompressionBuffer;
+  serde::StreamData stream(
+      constant,
+      ScalarKind::Int32,
+      stringBuffers,
+      pool_.get(),
+      serde::StreamData::Options{
+          .streamEncodingUsesVarintRowCount = false,
+          .decompressionBuffer = &decompressionBuffer});
+  for (int round = 0; round < 3; ++round) {
+    for (const auto& [data, expected] :
+         {std::pair{constant, constantValues},
+          std::pair{trivial, trivialValues}}) {
+      stream.reset(
+          data,
+          /*streamEncodingUsesVarintRowCount=*/false,
+          /*rebindEncoding=*/true);
+      std::vector<int32_t> output(expected.size());
+      stream.decode(
+          output.data(),
+          /*offset=*/0,
+          static_cast<uint32_t>(output.size()),
+          sizeof(int32_t));
+      EXPECT_EQ(output, expected);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1802,6 +1852,33 @@ TEST_F(StreamDataEncodedResetTest, resetUpdatesRowCountEncodingFlag) {
     streamData.reset(fixedEncoded, /*streamEncodingUsesVarintRowCount=*/false);
     expectDecoded(streamData, fixedValues);
   }
+}
+
+// With rebinding, a segment shorter than its encoding prefix is rejected
+// before the stream rebinds or rebuilds its encoding, including
+// one cut inside a multi-byte varint row count.
+TEST_F(StreamDataEncodedResetTest, rebindRejectsTruncatedPrefix) {
+  facebook::nimble::Buffer buffer(*pool_);
+  // 200 rows need a 2-byte varint row count.
+  const std::vector<int32_t> values(200, 7);
+  const auto encoded = encode(values, buffer, /*useVarintRowCount=*/true);
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData streamData(stringBuffers, pool_.get());
+  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/true);
+  expectDecoded(streamData, values);
+
+  NIMBLE_ASSERT_THROW(
+      streamData.reset(
+          encoded.substr(0, 3),
+          /*streamEncodingUsesVarintRowCount=*/true,
+          /*rebindEncoding=*/true),
+      "Truncated uint32 varint.");
+  NIMBLE_ASSERT_THROW(
+      streamData.reset(
+          encoded.substr(0, 1),
+          /*streamEncodingUsesVarintRowCount=*/true,
+          /*rebindEncoding=*/true),
+      "Truncated encoding prefix.");
 }
 
 TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBits) {

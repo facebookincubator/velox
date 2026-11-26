@@ -668,7 +668,8 @@ class JsonFunctionTemplate : public exec::VectorFunction {
         auto pathValue =
             selector->as<ConstantVector<SelectorType>>()->valueAt(0);
         try {
-          nullResult = JsonFunction::process(jsonValue, pathValue, output) !=
+          nullResult = JsonFunction::process(
+                           jsonValue, pathValue, paddedJson_, output) !=
               simdjson::SUCCESS;
         } catch (const VeloxException& e) {
           if (!e.isUserError()) {
@@ -708,6 +709,7 @@ class JsonFunctionTemplate : public exec::VectorFunction {
           JsonFunction::process(
               decodedJson->valueAt<StringView>(row),
               decodedPath->valueAt<SelectorType>(row),
+              paddedJson_,
               output) == simdjson::SUCCESS) {
         resultWriter.current() = output;
         resultWriter.commit(true);
@@ -719,15 +721,21 @@ class JsonFunctionTemplate : public exec::VectorFunction {
   }
 
   JsonParseImpl parser_;
+  // Reused across rows to hold a padded copy of the input JSON.
+  mutable std::string paddedJson_;
 };
 
 struct JsonArrayGetImpl {
-  static simdjson::error_code
-  process(const StringView& jsonArray, int64_t index, std::string& output) {
+  static simdjson::error_code process(
+      const StringView& jsonArray,
+      int64_t index,
+      std::string& paddedJson,
+      std::string& output) {
     simdjson::ondemand::document jsonDoc;
 
-    simdjson::padded_string paddedJson(jsonArray.data(), jsonArray.size());
-    if (auto errorCode = simdjsonParse(paddedJson).get(jsonDoc);
+    if (auto errorCode =
+            simdjsonParse(toPaddedStringView(jsonArray, paddedJson))
+                .get(jsonDoc);
         errorCode != simdjson::SUCCESS) {
       return errorCode;
     }
@@ -771,6 +779,7 @@ struct JsonExtractImpl {
   static simdjson::error_code process(
       const StringView& json,
       const StringView& jsonPath,
+      std::string& paddedJson,
       std::string& output) {
     static constexpr std::string_view kNullString{"null"};
     static constexpr std::string_view emptyArrayString{"[]"};
@@ -826,10 +835,10 @@ struct JsonExtractImpl {
     auto& extractor =
         SIMDJsonExtractor::getInstance(std::string_view(jsonPath));
     bool isDefinitePath = true;
-    simdjson::padded_string paddedJson(json.data(), json.size());
 
     // Check for valid json
-    SIMDJSON_ASSIGN_OR_RAISE(auto doc, simdjsonParse(paddedJson));
+    SIMDJSON_ASSIGN_OR_RAISE(
+        auto doc, simdjsonParse(toPaddedStringView(json, paddedJson)));
     if (auto error = jsonParsingError(doc)) {
       return error;
     }

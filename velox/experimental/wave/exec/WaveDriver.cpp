@@ -813,6 +813,15 @@ void WaveDriver::updateStats() {
       "wave.stagingNanos",
       RuntimeCounter(
           waveStats_.stagingTime.micros * 1000, RuntimeCounter::Unit::kNanos));
+  lockedStats->addRuntimeStat(
+      "wave.numReaderKernels", RuntimeCounter(waveStats_.numReaderKernels));
+  lockedStats->addRuntimeStat(
+      "wave.numNewReaderKernels",
+      RuntimeCounter(waveStats_.numNewReaderKernels));
+  lockedStats->addRuntimeStat(
+      "wave.readerLaunchNanos",
+      RuntimeCounter(
+          waveStats_.readerLaunchMicros * 1000, RuntimeCounter::Unit::kNanos));
   if (FLAGS_wave_transfer_timing) {
     lockedStats->addRuntimeStat(
         "wave.transferWaitNanos",

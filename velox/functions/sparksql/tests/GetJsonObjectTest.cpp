@@ -384,5 +384,19 @@ TEST_F(GetJsonObjectTest, number) {
       "-1234567890123456789012345678901234567890");
 }
 
+TEST_F(GetJsonObjectTest, longRowBeforeShorterRows) {
+  // The function reuses one buffer across rows. The second row is a truncated
+  // copy of the first and must not see the bytes the first left.
+  auto input = makeFlatVector<std::string>(
+      {R"({"name": "Alice", "age": 5, "id": "001"})",
+       R"({"name": "Alice", "age")",
+       R"({"id": "7"})"});
+  auto expected =
+      makeNullableFlatVector<std::string>({"001", std::nullopt, "7"});
+  velox::test::assertEqualVectors(
+      expected,
+      evaluate("get_json_object(c0, '$.id')", makeRowVector({input})));
+}
+
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

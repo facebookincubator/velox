@@ -39,4 +39,49 @@ bool StructColumnReader::isChildConstant(
        childSpec.channel() >= fileType_->size());
 }
 
+void StructColumnReader::addChildren(
+    velox::common::ScanSpec& scanSpec,
+    Path& path,
+    const DefinesMap& defines) {
+  // A reader tree may be constructed while the ScanSpec is being used
+  // for another read. This happens when the next stripe is being
+  // prepared while the previous one is reading.
+  const auto stableChildren = scanSpec.stableChildren();
+  const auto& requestedRow = requestedType_->asRow();
+  const auto& fileRow = fileType_->type()->asRow();
+  for (const auto& childSpec : *stableChildren) {
+    VELOX_CHECK(
+        !childSpec->isConstant() || childSpec->constantValue()->isNullAt(0),
+        "Non-null constant columns are not supported");
+    const auto& name = childSpec->fieldName();
+    const auto fileIdx = fileRow.getChildIdxIfExists(name);
+    // A column that is only filtered on is not in the requested type.
+    const auto requestedIdx = requestedRow.getChildIdxIfExists(name);
+    TypePtr childRequestedType;
+    if (requestedIdx.has_value()) {
+      childRequestedType = requestedRow.childAt(requestedIdx.value());
+    } else {
+      VELOX_CHECK(
+          fileIdx.has_value(),
+          "Column {} is in neither the file nor the output",
+          name);
+      childRequestedType = fileRow.childAt(fileIdx.value());
+    }
+    const bool inFile = fileIdx.has_value() && !childSpec->isConstant();
+    auto childFileType = fileIdx.has_value()
+        ? fileType_->childAt(fileIdx.value())
+        : dwio::common::TypeWithId::create(childRequestedType);
+    path.push_back(std::make_unique<common::Subfield::NestedField>(name));
+    addChild(makeChild(
+        *childSpec,
+        inFile ? static_cast<int32_t>(fileIdx.value()) : -1,
+        childRequestedType,
+        childFileType,
+        path,
+        defines));
+    path.pop_back();
+    childSpec->setSubscript(static_cast<int64_t>(children_.size()) - 1);
+  }
+}
+
 } // namespace facebook::velox::wave

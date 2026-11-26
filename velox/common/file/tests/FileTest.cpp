@@ -51,10 +51,7 @@ TEST(FileIoContextTest, defaultCacheableIsFalse) {
   FileIoContext defaultContext;
   EXPECT_FALSE(defaultContext.cacheable);
 
-  FileIoContext explicitContext(nullptr);
-  EXPECT_FALSE(explicitContext.cacheable);
-
-  FileIoContext cacheableContext(nullptr, {}, nullptr, true);
+  FileIoContext cacheableContext{.cacheable = true};
   EXPECT_TRUE(cacheableContext.cacheable);
 }
 

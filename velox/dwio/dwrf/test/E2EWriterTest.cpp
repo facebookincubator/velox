@@ -76,7 +76,8 @@ class E2EWriterTest : public testing::Test {
     return std::make_unique<dwrf::DwrfReader>(
         opts,
         std::make_unique<BufferedInput>(
-            std::make_shared<InMemoryReadFile>(data), opts.memoryPool()));
+            std::make_shared<InMemoryReadFile>(data),
+            FileIoContext{.pool = &opts.memoryPool()}));
   }
 
   void testFlatMapConfig(
@@ -319,7 +320,8 @@ RowTypePtr readWithFieldIds(
   auto reader = std::make_unique<dwrf::DwrfReader>(
       readerOpts,
       std::make_unique<BufferedInput>(
-          std::make_shared<InMemoryReadFile>(data), readerOpts.memoryPool()));
+          std::make_shared<InMemoryReadFile>(data),
+          FileIoContext{.pool = &readerOpts.memoryPool()}));
   return reader->rowType();
 }
 

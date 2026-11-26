@@ -155,6 +155,11 @@ class DictionaryEncoding
     return indicesEncoding_.get();
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   // Uses unique-value statistics so repeated input values do not skew sampling.
   static uint64_t estimateAlphabetSize(
@@ -310,6 +315,26 @@ DictionaryEncoding<T>::DictionaryEncoding(
 template <typename T>
 void DictionaryEncoding<T>::reset() {
   indicesEncoding_->reset();
+}
+
+template <typename T>
+bool DictionaryEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const auto* pos = data.data() + this->dataOffset();
+  const uint32_t alphabetSize = encoding::readUint32(pos);
+  alphabetEncoding_ = this->rebindChild(
+      {pos, alphabetSize}, stringBufferFactory, std::move(alphabetEncoding_));
+  const uint32_t alphabetCount = alphabetEncoding_->rowCount();
+  alphabet_.resize(alphabetCount);
+  alphabetEncoding_->materialize(alphabetCount, alphabet_.data());
+  pos += alphabetSize;
+  indicesEncoding_ = this->rebindChild(
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+      stringBufferFactory,
+      std::move(indicesEncoding_));
+  filterCacheInitialized_ = false;
+  return true;
 }
 
 template <typename T>

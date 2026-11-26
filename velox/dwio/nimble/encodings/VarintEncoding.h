@@ -90,10 +90,15 @@ class VarintEncoding final
     return EncodingPrefix::kFixedPrefixSize + kPrefixSize + payloadSize;
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   static constexpr int kPrefixSize = sizeof(T);
 
-  const physicalType baseValue_;
+  physicalType baseValue_;
   uint32_t row_{0};
   const char* pos_;
 };
@@ -119,6 +124,16 @@ void VarintEncoding<T>::reset() {
   row_ = 0;
   pos_ = Encoding::data_.data() + this->dataOffset() +
       VarintEncoding<T>::kPrefixSize;
+}
+
+template <typename T>
+bool VarintEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& /*stringBufferFactory*/) {
+  const char* pos = data.data() + this->dataOffset();
+  baseValue_ = encoding::read<physicalType>(pos);
+  reset();
+  return true;
 }
 
 template <typename T>

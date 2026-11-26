@@ -238,7 +238,8 @@ class CacheTest : public ::testing::Test {
         ioStatistics,
         ioStats,
         executor_.get(),
-        readOptions);
+        readOptions,
+        FileIoContext{.pool = &readOptions.memoryPool()});
     data->file = readFile.get();
     for (auto i = 0; i < numColumns; ++i) {
       const int32_t streamIndex = i * (kMaxStreams / numColumns);
@@ -499,7 +500,8 @@ TEST_F(CacheTest, window) {
         opts.setDataIoStats(dataIoStats_);
         opts.setMetadataIoStats(metadataIoStats_);
         return opts;
-      }());
+      }(),
+      FileIoContext{.pool = pool_.get()});
   auto begin = 4 * kMB;
   auto end = 17 * kMB;
   auto stream = input->read(begin, end - begin, LogType::TEST);
@@ -762,7 +764,8 @@ class FileWithReadAhead {
         stats,
         ioStats,
         executor,
-        options_);
+        options_,
+        FileIoContext{.pool = &options_.memoryPool()});
     auto sequential = StreamIdentifier::sequentialFile();
     stream_ = bufferedInput_->enqueue(Region{0, file_->size()}, &sequential);
     VELOX_CHECK(!reinterpret_cast<CacheInputStream*>(stream_.get())
@@ -986,7 +989,8 @@ TEST_F(CacheTest, loadQuotumTooLarge) {
           nullptr,
           nullptr,
           executor_.get(),
-          readOptions),
+          readOptions,
+          FileIoContext{.pool = &readOptions.memoryPool()}),
       "Load quantum exceeded SSD cache entry size limit");
 }
 
@@ -1016,7 +1020,8 @@ TEST_F(CacheTest, ssdReadVerification) {
         opts.setDataIoStats(dataIoStats_);
         opts.setMetadataIoStats(metadataIoStats_);
         return opts;
-      }());
+      }(),
+      FileIoContext{.pool = pool_.get()});
 
   const auto readData = [&](uint32_t numBytesRead) {
     const uint64_t kNumBytesPerRead = 4 << 20;
