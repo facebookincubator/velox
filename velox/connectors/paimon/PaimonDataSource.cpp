@@ -17,6 +17,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonMergeSplitReader.h"
 #include "velox/connectors/paimon/PaimonSplitReader.h"
 #include "velox/connectors/paimon/PaimonTableHandle.h"
 
@@ -54,10 +55,32 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         "Paimon reader does not support changelog files: {}",
         file.path);
   }
-  VELOX_USER_CHECK(
-      paimonSplit->rawConvertible(),
-      "Paimon same-schema append reader requires rawConvertible=true; "
-      "merge-on-read and data-evolution column merging are not implemented yet");
+
+  if (!paimonSplit->rawConvertible()) {
+    // Append-only splits that are not raw convertible come from data
+    // evolution, whose files must be merged by column.
+    if (paimonSplit->tableType() == PaimonTableType::kAppendOnly) {
+      VELOX_NYI(
+          "Paimon data-evolution column merging is not implemented yet: {}",
+          paimonTableHandle_->tableName());
+    }
+    VELOX_USER_CHECK(
+        !paimonTableHandle_->nonPartitionPrimaryKeys().empty(),
+        "Paimon table handle must have primary keys for merge-on-read: {}",
+        paimonTableHandle_->tableName());
+    const auto mergeEngine = paimonTableHandle_->mergeOptions().mergeEngine;
+    if (mergeEngine == PaimonMergeEngine::kPartialUpdate ||
+        mergeEngine == PaimonMergeEngine::kAggregation) {
+      VELOX_NYI(
+          "Paimon merge-on-read does not support the merge engine: {}",
+          mergeEngine);
+    }
+    if (paimonTableHandle_->mergeOptions().sequenceSnapshotOrdering) {
+      VELOX_NYI(
+          "Paimon merge-on-read does not support the table option: "
+          "sequence.snapshot-ordering");
+    }
+  }
   paimonSplit_ = std::move(paimonSplit);
 
   // Use the first file to enter the FileDataSource scan pipeline;
@@ -69,6 +92,23 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
 std::unique_ptr<connector::FileSplitReader>
 PaimonDataSource::createSplitReader() {
+  if (!paimonSplit_->rawConvertible()) {
+    return std::make_unique<PaimonMergeSplitReader>(
+        split_,
+        paimonSplit_,
+        paimonTableHandle_,
+        &partitionKeys_,
+        connectorQueryCtx_,
+        fileConfig_,
+        readerOutputType_,
+        dataIoStats_,
+        metadataIoStats_,
+        ioStats_,
+        fileHandleFactory_,
+        ioExecutor_,
+        fileScanState_->scanSpec);
+  }
+
   return std::make_unique<PaimonSplitReader>(
       split_,
       paimonSplit_,
