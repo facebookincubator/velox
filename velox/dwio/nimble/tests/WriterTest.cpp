@@ -1587,9 +1587,13 @@ TEST_F(WriterTest, fsstEncodingTargetControlsWriterEncoding) {
         {},
         testCase.fsstCompressionType,
         {nimble::EncodingLayout{
-            nimble::EncodingType::Trivial,
-            {},
-            nimble::CompressionType::Uncompressed}}};
+             nimble::EncodingType::Trivial,
+             {},
+             nimble::CompressionType::Uncompressed},
+         nimble::EncodingLayout{
+             nimble::EncodingType::Trivial,
+             {},
+             nimble::CompressionType::Uncompressed}}};
 
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
@@ -1640,6 +1644,10 @@ TEST_F(WriterTest, fsstEncodingTargetControlsWriterEncoding) {
     if (testCase.expectedEncodingType == nimble::EncodingType::Fsst) {
       EXPECT_EQ(
           capture.child(nimble::EncodingIdentifiers::Fsst::Lengths)
+              ->encodingType(),
+          nimble::EncodingType::Trivial);
+      EXPECT_EQ(
+          capture.child(nimble::EncodingIdentifiers::Fsst::DecodedLengths)
               ->encodingType(),
           nimble::EncodingType::Trivial);
     }

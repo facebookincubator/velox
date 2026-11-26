@@ -332,6 +332,10 @@ TEST(EncodingLayoutTests, fsst) {
               nimble::EncodingType::Trivial,
               {},
               nimble::CompressionType::Uncompressed},
+          nimble::EncodingLayout{
+              nimble::EncodingType::Trivial,
+              {},
+              nimble::CompressionType::Uncompressed},
       }};
 
   testSerialization(fsstLayout);
@@ -351,11 +355,17 @@ TEST(EncodingLayoutTests, fsst) {
 
   auto captured = encodeAndCapture<std::string_view>(fsstLayout, data);
   ASSERT_EQ(captured.encodingType(), nimble::EncodingType::Fsst);
-  ASSERT_EQ(captured.childrenCount(), 1);
+  ASSERT_EQ(captured.childrenCount(), 2);
   ASSERT_TRUE(
       captured.child(nimble::EncodingIdentifiers::Fsst::Lengths).has_value());
   EXPECT_EQ(
       captured.child(nimble::EncodingIdentifiers::Fsst::Lengths)
+          ->encodingType(),
+      nimble::EncodingType::Trivial);
+  ASSERT_TRUE(captured.child(nimble::EncodingIdentifiers::Fsst::DecodedLengths)
+                  .has_value());
+  EXPECT_EQ(
+      captured.child(nimble::EncodingIdentifiers::Fsst::DecodedLengths)
           ->encodingType(),
       nimble::EncodingType::Trivial);
 }

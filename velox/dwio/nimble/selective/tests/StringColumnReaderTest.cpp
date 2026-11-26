@@ -265,8 +265,9 @@ EncodingLayout makeFsstEncodingLayout() {
       EncodingType::Fsst,
       {},
       CompressionType::Uncompressed,
-      {EncodingLayout{
-          EncodingType::Trivial, {}, CompressionType::Uncompressed}}};
+      {EncodingLayout{EncodingType::Trivial, {}, CompressionType::Uncompressed},
+       EncodingLayout{
+           EncodingType::Trivial, {}, CompressionType::Uncompressed}}};
 }
 
 TEST_P(StringColumnReaderTest, fsstDecodeCacheUsesReaderOption) {
