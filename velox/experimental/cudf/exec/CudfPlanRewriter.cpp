@@ -467,7 +467,7 @@ class Rewriter {
       : config_(config), queryCtx_(requireQueryCtx(config)) {}
 
   core::PlanNodePtr rewrite(const core::PlanNodePtr& root) {
-    VELOX_USER_CHECK_NOT_NULL(root);
+    VELOX_USER_CHECK_NOT_NULL(root, "cuDF plan to rewrite must not be null");
     std::function<void(const core::PlanNodePtr&)> collect =
         [&](const core::PlanNodePtr& node) {
           VELOX_USER_CHECK(
@@ -502,8 +502,15 @@ class Rewriter {
   // of 'node' needs.
   RewriteResult rewriteImpl(const core::PlanNodePtr& node) {
     if (auto traits = detail::customCudfPlanNodeTraits(node, *queryCtx_)) {
-      VELOX_USER_CHECK_EQ(traits->inputs.size(), node->sources().size());
-      VELOX_USER_CHECK(!(traits->output && traits->outputSource));
+      VELOX_USER_CHECK_EQ(
+          traits->inputs.size(),
+          node->sources().size(),
+          "Incorrect input contract for {} ({})",
+          node->name(),
+          node->id());
+      VELOX_USER_CHECK(
+          !(traits->output && traits->outputSource),
+          "Output contract must be fixed or source-preserving, not both");
       std::vector<core::PlanNodePtr> sources;
       std::vector<Mode> modes;
       for (size_t i = 0; i < traits->inputs.size(); ++i) {
@@ -521,7 +528,12 @@ class Rewriter {
       auto mode = traits->output == VectorRepresentation::kCudf ? Mode::kGpu
                                                                 : Mode::kCpu;
       if (traits->outputSource) {
-        VELOX_USER_CHECK_LT(*traits->outputSource, modes.size());
+        VELOX_USER_CHECK_LT(
+            *traits->outputSource,
+            modes.size(),
+            "Output source of {} ({}) must be one of its sources",
+            node->name(),
+            node->id());
         mode = modes[*traits->outputSource];
       }
       return {
@@ -537,7 +549,8 @@ class Rewriter {
           output->transportKind() == core::TransportKind::kUcx ? Mode::kGpu
                                                                : Mode::kCpu;
       auto source = rewriteNode(output->sources()[0], inputMode);
-      VELOX_USER_CHECK(source.hasOutput);
+      VELOX_USER_CHECK(
+          source.hasOutput, "A terminal sink cannot feed another node");
       return {
           source.node == output->sources()[0]
               ? node

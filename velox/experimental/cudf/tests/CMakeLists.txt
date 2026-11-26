@@ -282,6 +282,18 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_plan_rewriter_hive_test
+  SOURCES Main.cpp PlanRewriterHiveTest.cpp
+  LIBS
+    ${CUDF_TEST_DEFAULT_LIBS}
+    velox_cudf_exec_test_lib
+    velox_cudf_hive_connector
+    velox_dwio_parquet_reader
+    velox_dwio_parquet_writer
+    fmt::fmt
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_presto_page_device_test
   SOURCES Main.cpp PrestoPageDeviceTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_presto_serializer

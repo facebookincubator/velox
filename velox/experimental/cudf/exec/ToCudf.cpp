@@ -341,8 +341,8 @@ struct CudfDriverAdapter {
   }
 };
 
-/// Mechanical construction for the two local-boundary nodes still selected
-/// by core's built-in factories. Placement is already explicit in the plan.
+// Mechanical construction for the two local-boundary nodes still selected
+// by core's built-in factories. Placement is already explicit in the plan.
 struct CudfLocalBoundaryAdapter {
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver)
       const {

@@ -148,7 +148,8 @@ CudfPlanNodeTraits deviceTraits(size_t sources) {
 } // namespace
 
 void registerCudfPlanNodeDescriptor(std::string name, Descriptor descriptor) {
-  VELOX_USER_CHECK_NOT_NULL(descriptor);
+  VELOX_USER_CHECK_NOT_NULL(
+      descriptor, "cuDF plan descriptor must not be null: {}", name);
   std::lock_guard lock(descriptorMutex);
   VELOX_USER_CHECK(
       std::none_of(
@@ -485,9 +486,14 @@ CudfAggregationNode::CudfAggregationNode(
       aggregates_(std::move(aggregates)),
       intermediateTypes_(std::move(intermediateTypes)),
       ignoreNullKeys_(ignoreNullKeys) {
-  VELOX_USER_CHECK_EQ(intermediateTypes_.size(), aggregates_.size());
+  VELOX_USER_CHECK_EQ(
+      intermediateTypes_.size(),
+      aggregates_.size(),
+      "CudfAggregation must have one intermediate type for each aggregate");
   for (size_t i = 0; i < aggregates_.size(); ++i) {
-    VELOX_USER_CHECK_NOT_NULL(intermediateTypes_[i]);
+    VELOX_USER_CHECK_NOT_NULL(
+        intermediateTypes_[i],
+        "CudfAggregation intermediate types must not be null");
     const auto& aggregate = aggregates_[i];
     const auto declaredType = exec::resolveIntermediateType(
         aggregate.call->name(), aggregate.rawInputTypes);
@@ -498,6 +504,67 @@ CudfAggregationNode::CudfAggregationNode(
         declaredType->toString(),
         intermediateTypes_[i]->toString());
   }
+}
+
+core::PlanNodePtr CudfFromVeloxNode::withSources(
+    std::vector<core::PlanNodePtr> sources) const {
+  VELOX_CHECK_EQ(sources.size(), 1);
+  return std::make_shared<CudfFromVeloxNode>(id(), std::move(sources[0]));
+}
+
+core::PlanNodePtr CudfToVeloxNode::withSources(
+    std::vector<core::PlanNodePtr> sources) const {
+  VELOX_CHECK_EQ(sources.size(), 1);
+  return std::make_shared<CudfToVeloxNode>(id(), std::move(sources[0]));
+}
+
+core::PlanNodePtr CudfHashJoinNode::withSources(
+    std::vector<core::PlanNodePtr> sources) const {
+  VELOX_CHECK_EQ(sources.size(), 2);
+  auto copy = std::make_shared<CudfHashJoinNode>(*this);
+  copy->sources_ = std::move(sources);
+  return copy;
+}
+
+core::PlanNodePtr CudfNestedLoopJoinNode::withSources(
+    std::vector<core::PlanNodePtr> sources) const {
+  VELOX_CHECK_EQ(sources.size(), 2);
+  auto copy = std::make_shared<CudfNestedLoopJoinNode>(*this);
+  copy->sources_ = std::move(sources);
+  return copy;
+}
+
+CudfLocalMergeNode::CudfLocalMergeNode(
+    const core::PlanNodeId& id,
+    std::vector<core::PlanNodePtr> sources,
+    RowTypePtr outputType,
+    std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
+    std::vector<core::SortOrder> sortingOrders)
+    : LocalMergeNode(
+          id,
+          std::move(sortingKeys),
+          std::move(sortingOrders),
+          std::move(sources)) {
+  VELOX_USER_CHECK(
+      !this->sources().empty(), "CudfLocalMerge must have at least one source");
+  VELOX_USER_CHECK(
+      *outputType == *this->outputType(),
+      "CudfLocalMerge output type must be the type of its sources: {} vs. {}",
+      outputType->toString(),
+      this->outputType()->toString());
+  VELOX_USER_CHECK_EQ(
+      this->sortingKeys().size(),
+      this->sortingOrders().size(),
+      "Number of sorting keys and sorting orders in CudfLocalMerge must be the same");
+}
+
+core::PlanNodePtr CudfLocalMergeNode::withSources(
+    std::vector<core::PlanNodePtr> sources) const {
+  VELOX_USER_CHECK(
+      !sources.empty(), "CudfLocalMerge must have at least one source");
+  auto type = sources[0]->outputType();
+  return std::make_shared<CudfLocalMergeNode>(
+      id(), std::move(sources), type, sortingKeys(), sortingOrders());
 }
 
 // static
@@ -700,9 +767,16 @@ CudfTopNRowNumberNode::CudfTopNRowNumberNode(
       sortingOrders_(std::move(sortingOrders)),
       limit_(limit),
       generateRowNumber_(generateRowNumber) {
-  VELOX_CHECK_GT(limit_, 0);
-  VELOX_CHECK(!sortingKeys_.empty());
-  VELOX_CHECK_EQ(sortingKeys_.size(), sortingOrders_.size());
+  VELOX_USER_CHECK_GT(
+      limit_,
+      0,
+      "CudfTopNRowNumber must specify greater than zero number of rows to keep");
+  VELOX_USER_CHECK(
+      !sortingKeys_.empty(), "CudfTopNRowNumber must specify sorting keys");
+  VELOX_USER_CHECK_EQ(
+      sortingKeys_.size(),
+      sortingOrders_.size(),
+      "Number of sorting keys and sorting orders in CudfTopNRowNumber must be the same");
   const auto unsupported =
       unsupportedReason(rankFunction_, partitionKeys_, sortingKeys_);
   VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
@@ -868,7 +942,7 @@ void validateCudfPlan(
     const core::PlanNodePtr& plan,
     const core::QueryCtx& queryCtx,
     VectorRepresentation taskOutput) {
-  VELOX_USER_CHECK_NOT_NULL(plan);
+  VELOX_USER_CHECK_NOT_NULL(plan, "cuDF plan to validate must not be null");
   using Output = std::optional<VectorRepresentation>;
   std::unordered_set<core::PlanNodeId> ids;
   std::function<Output(const core::PlanNodePtr&)> visit =
@@ -922,7 +996,12 @@ void validateCudfPlan(
       }
     }
     if (traits.outputSource) {
-      VELOX_USER_CHECK_LT(*traits.outputSource, outputs.size());
+      VELOX_USER_CHECK_LT(
+          *traits.outputSource,
+          outputs.size(),
+          "Output source of {} ({}) must be one of its sources",
+          node->name(),
+          node->id());
       return outputs[*traits.outputSource];
     }
     return traits.output;

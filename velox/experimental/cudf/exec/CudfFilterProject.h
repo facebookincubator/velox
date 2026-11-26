@@ -94,7 +94,7 @@ class CudfFilterProject : public CudfOperatorBase {
 };
 
 /// True when 'projection' is a plan constant over a zero-column 'inputType'.
-/// Shared by FilterProjectAdapter::canRunOnGPU and
+/// Shared by CudfFilterProjectNode::unsupportedReason() and
 /// CudfFilterProject::initialize() so the two checks cannot drift.
 bool isConstantProjectionOverZeroColumns(
     const RowTypePtr& inputType,

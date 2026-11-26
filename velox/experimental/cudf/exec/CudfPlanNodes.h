@@ -257,12 +257,7 @@ class CudfHashJoinNode : public CudfPlanNode {
   bool filterRequiresAst() const;
 
   core::PlanNodePtr withSources(
-      std::vector<core::PlanNodePtr> sources) const override {
-    VELOX_CHECK_EQ(sources.size(), 2);
-    auto copy = std::make_shared<CudfHashJoinNode>(*this);
-    copy->sources_ = std::move(sources);
-    return copy;
-  }
+      std::vector<core::PlanNodePtr> sources) const override;
 
   std::string_view name() const override {
     return "CudfHashJoin";
@@ -373,12 +368,7 @@ class CudfNestedLoopJoinNode : public CudfPlanNode {
       const core::QueryCtx& queryCtx) const override;
 
   core::PlanNodePtr withSources(
-      std::vector<core::PlanNodePtr> sources) const override {
-    VELOX_CHECK_EQ(sources.size(), 2);
-    auto copy = std::make_shared<CudfNestedLoopJoinNode>(*this);
-    copy->sources_ = std::move(sources);
-    return copy;
-  }
+      std::vector<core::PlanNodePtr> sources) const override;
 
   std::string_view name() const override {
     return "CudfNestedLoopJoin";
@@ -580,22 +570,14 @@ class CudfTopNRowNumberNode : public CudfUnaryPlanNode {
 /// hook.
 class CudfLocalMergeNode : public core::LocalMergeNode {
  public:
+  /// Throws if there is no source, if 'outputType' is not the type of the
+  /// sources, or if there is not one sorting order for each sorting key.
   CudfLocalMergeNode(
       const core::PlanNodeId& id,
       std::vector<core::PlanNodePtr> sources,
       RowTypePtr outputType,
       std::vector<core::FieldAccessTypedExprPtr> sortingKeys,
-      std::vector<core::SortOrder> sortingOrders)
-      : LocalMergeNode(
-            id,
-            std::move(sortingKeys),
-            std::move(sortingOrders),
-            std::move(sources)) {
-    VELOX_USER_CHECK(!this->sources().empty());
-    VELOX_USER_CHECK(*outputType == *this->outputType());
-    VELOX_USER_CHECK_EQ(
-        this->sortingKeys().size(), this->sortingOrders().size());
-  }
+      std::vector<core::SortOrder> sortingOrders);
 
   std::string_view name() const override {
     return "CudfLocalMerge";
@@ -607,12 +589,9 @@ class CudfLocalMergeNode : public core::LocalMergeNode {
     VELOX_UNSUPPORTED("CudfLocalMerge plan node is not serializable");
   }
 
-  core::PlanNodePtr withSources(std::vector<core::PlanNodePtr> sources) const {
-    VELOX_USER_CHECK(!sources.empty());
-    auto type = sources[0]->outputType();
-    return std::make_shared<CudfLocalMergeNode>(
-        id(), std::move(sources), type, sortingKeys(), sortingOrders());
-  }
+  /// Returns the same merge over 'sources', with the same ID and sorting
+  /// keys.
+  core::PlanNodePtr withSources(std::vector<core::PlanNodePtr> sources) const;
 };
 
 /// Explicit device-vector local exchange. Retaining the core base lets Task
@@ -975,10 +954,7 @@ class CudfFromVeloxNode : public CudfPlanNode {
   }
 
   core::PlanNodePtr withSources(
-      std::vector<core::PlanNodePtr> sources) const override {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return std::make_shared<CudfFromVeloxNode>(id(), std::move(sources[0]));
-  }
+      std::vector<core::PlanNodePtr> sources) const override;
 
   std::string_view name() const override {
     return "CudfFromVelox";
@@ -1010,10 +986,7 @@ class CudfToVeloxNode : public CudfPlanNode {
   }
 
   core::PlanNodePtr withSources(
-      std::vector<core::PlanNodePtr> sources) const override {
-    VELOX_CHECK_EQ(sources.size(), 1);
-    return std::make_shared<CudfToVeloxNode>(id(), std::move(sources[0]));
-  }
+      std::vector<core::PlanNodePtr> sources) const override;
 
   std::string_view name() const override {
     return "CudfToVelox";

@@ -19,7 +19,7 @@
 
 namespace facebook::velox::cudf_velox {
 
-/// Translates cuDF plan nodes to cuDF operators. Used by LocalPlanner
+/// Translates cuDF plan nodes to cuDF operators for LocalPlanner.
 class CudfPlanNodeTranslator : public exec::Operator::PlanNodeTranslator {
  public:
   std::unique_ptr<exec::Operator> toOperator(

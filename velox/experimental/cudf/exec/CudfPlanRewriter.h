@@ -28,9 +28,12 @@ namespace facebook::velox::cudf_velox {
 /// CudfFromVeloxNode and CudfToVeloxNode convert vectors where the two meet.
 class CudfPlanRewriter {
  public:
+  /// Where a plan node runs.
   enum class ExecutionMode { kCpu, kGpu };
 
+  /// The settings of one rewrite.
   struct Config {
+    /// The kind of vectors the root of the plan has to produce.
     VectorRepresentation taskOutput = VectorRepresentation::kVelox;
     /// Whether a plan node that cuDF cannot run stays on the CPU. When false,
     /// the rewrite fails with a user error that names the node. The caller
@@ -40,6 +43,9 @@ class CudfPlanRewriter {
     std::shared_ptr<core::QueryCtx> queryCtx;
   };
 
+  /// Returns the rewritten plan of 'root', which passes validateCudfPlan().
+  /// Throws a user error if two nodes share an ID, or if cuDF cannot run a
+  /// node and 'config.allowCpuFallback' is false.
   static core::PlanNodePtr rewrite(
       const core::PlanNodePtr& root,
       const Config& config);

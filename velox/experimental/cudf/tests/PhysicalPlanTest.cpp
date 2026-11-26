@@ -38,7 +38,7 @@ using exec::test::PlanBuilder;
 using Kind = VectorRepresentation;
 using Need = InputRepresentation;
 
-/// Represents an application-owned node, with no cuDF base class.
+// Represents an application-owned node, with no cuDF base class.
 class AppNode : public core::PlanNode {
  public:
   AppNode(
@@ -70,7 +70,7 @@ class AppNode : public core::PlanNode {
   const CudfPlanNodeTraits traits_;
 };
 
-/// Represents a partition function that cuDF does not implement.
+// Represents a partition function that cuDF does not implement.
 class AppPartitionFunctionSpec : public core::PartitionFunctionSpec {
  public:
   std::unique_ptr<core::PartitionFunction> create(
@@ -106,7 +106,7 @@ class AppDescriptor : public CudfPlanNodeDescriptor {
     return std::make_shared<AppNode>(
         node->id(),
         std::move(sources),
-        changeSchema_ ? ROW({"changed"}, {BIGINT()}) : node->outputType(),
+        changeSchema_ ? ROW("changed", BIGINT()) : node->outputType(),
         static_cast<const AppNode&>(*node).traits());
   }
 
@@ -455,7 +455,7 @@ TEST_F(PhysicalPlanTest, aggregationConstructsWithoutCpuPlan) {
   auto aggregation = std::make_shared<CudfAggregationNode>(
       "aggregation",
       source,
-      ROW({"s"}, {BIGINT()}),
+      ROW("s", BIGINT()),
       core::AggregationNode::Step::kSingle,
       std::vector<core::FieldAccessTypedExprPtr>{},
       std::vector<core::AggregationNode::Aggregate>{sum},
@@ -709,6 +709,28 @@ TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
       "TopNRowNumber ranking function or key types are not supported by cuDF");
   EXPECT_NE(topNRowNumber(RankFunction::kRowNumber, arrayKey), nullptr);
   EXPECT_NE(topNRowNumber(RankFunction::kRank, key), nullptr);
+
+  auto topNRowNumberWith = [&](Keys sortingKeys, Orders orders, int32_t limit) {
+    return std::make_shared<CudfTopNRowNumberNode>(
+        "topn-row-number",
+        source,
+        input_->rowType(),
+        RankFunction::kRowNumber,
+        Keys{},
+        std::move(sortingKeys),
+        std::move(orders),
+        limit,
+        /*generateRowNumber=*/false);
+  };
+  VELOX_ASSERT_USER_THROW(
+      topNRowNumberWith({key}, {core::kAscNullsLast}, 0),
+      "CudfTopNRowNumber must specify greater than zero number of rows to keep");
+  VELOX_ASSERT_USER_THROW(
+      topNRowNumberWith({}, {}, 1),
+      "CudfTopNRowNumber must specify sorting keys");
+  VELOX_ASSERT_USER_THROW(
+      topNRowNumberWith({key}, {}, 1),
+      "Number of sorting keys and sorting orders in CudfTopNRowNumber must be the same");
 
   // The cuDF aggregation operators produce only the state that the aggregate
   // function declares.
@@ -1061,7 +1083,7 @@ TEST_F(PhysicalPlanTest, concurrentFragmentsShareQueryContext) {
 }
 
 TEST_F(PhysicalPlanTest, httpAndUcxInputContracts) {
-  const auto inputType = ROW({"s"}, {BIGINT()});
+  const auto inputType = ROW("s", BIGINT());
   for (auto transport :
        {core::TransportKind::kInMemory, core::TransportKind::kUcx}) {
     auto plan = PlanBuilder()
@@ -1079,7 +1101,7 @@ TEST_F(PhysicalPlanTest, httpAndUcxInputContracts) {
 }
 
 TEST_F(PhysicalPlanTest, ucxMergeRequiresExplicitSort) {
-  auto type = ROW({"s"}, {BIGINT()});
+  auto type = ROW("s", BIGINT());
   auto merge = std::make_shared<core::MergeExchangeNode>(
       "merge",
       type,

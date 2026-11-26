@@ -82,8 +82,7 @@ bool planNodeCanRunOnGpu(
 }
 
 // Returns the cuDF operator that runs 'planNode'. Builds the cuDF plan node
-// the way the plan rewriter does and creates the operator from it, so the
-// cuDF operators have no constructor of their own for a core plan node.
+// the way the plan rewriter does and creates the operator from it.
 std::unique_ptr<exec::Operator> createLoweredOperator(
     const core::PlanNodePtr& planNode,
     exec::DriverCtx* ctx,

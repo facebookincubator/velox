@@ -114,8 +114,9 @@ std::shared_ptr<const CudfFilterProjectNode> lowerFilterProject(
     core::PlanNodePtr source);
 
 /// Returns the operator that runs the cuDF plan node 'node'. Returns nullptr
-/// for any other node, and for the joins and local exchanges, whose operators
-/// their own translators create.
+/// for any other node. Also returns nullptr for a join, whose operators the
+/// join bridge translators create, and for a local exchange, whose operator
+/// CudfLocalBoundaryAdapter puts in place of the one LocalPlanner creates.
 std::unique_ptr<exec::Operator> createCudfOperator(
     const core::PlanNodePtr& node,
     exec::DriverCtx* driverCtx,

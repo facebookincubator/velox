@@ -24,15 +24,24 @@
 
 namespace facebook::velox::cudf_velox {
 
+/// The kind of vectors a plan node produces: Velox vectors in host memory or
+/// cuDF vectors in GPU memory.
 enum class VectorRepresentation { kVelox, kCudf };
+
+/// The kind of vectors a plan node takes from one source. kEither is for a
+/// node that passes its input through without reading it.
 enum class InputRepresentation { kVelox, kCudf, kEither };
 
 /// Describes the implementation selected by a physical node, independently
 /// of whether its operator launches GPU kernels. Exactly one output form is
 /// used: a fixed representation, an input to preserve, or neither for a sink.
 struct CudfPlanNodeTraits {
+  /// What the node takes from each source, in source order.
   std::vector<InputRepresentation> inputs;
+  /// What the node produces, when that does not depend on its sources.
   std::optional<VectorRepresentation> output;
+  /// Index of the source whose representation the node produces, for a node
+  /// that passes its input through.
   std::optional<size_t> outputSource;
 };
 
@@ -50,6 +59,7 @@ class CudfPlanNode : public core::PlanNode {
     VELOX_UNSUPPORTED("{} plan node is not serializable", name());
   }
 
+  /// Returns what this node takes from each source and what it produces.
   virtual CudfPlanNodeTraits cudfTraits() const = 0;
 
   /// Returns the same physical operation with the supplied sources. Retains
@@ -77,21 +87,31 @@ class CudfPlanNode : public core::PlanNode {
 class CudfPlanNodeDescriptor {
  public:
   virtual ~CudfPlanNodeDescriptor() = default;
+
+  /// Returns whether this descriptor describes 'node'.
   virtual bool canHandle(const core::PlanNode& node) const = 0;
+
+  /// Returns what 'node' takes from each source and what it produces in the
+  /// session of 'queryCtx'.
   virtual CudfPlanNodeTraits traits(
       const core::PlanNode& node,
       const core::QueryCtx& queryCtx) const = 0;
+
+  /// Returns the operation of 'node' over 'sources'. The result must keep the
+  /// ID, the dynamic type and the output schema of 'node'.
   virtual core::PlanNodePtr withSources(
       const core::PlanNodePtr& node,
       std::vector<core::PlanNodePtr> sources) const = 0;
 };
 
-/// Names identify registrations for targeted cleanup. Duplicate names fail;
-/// intrinsic CudfPlanNode contracts take precedence over registered
-/// descriptors.
+/// Registers 'descriptor' under 'name'. Throws if the name is taken. The
+/// contract of a CudfPlanNode takes precedence over a registered descriptor,
+/// and descriptors are asked in registration order.
 void registerCudfPlanNodeDescriptor(
     std::string name,
     std::shared_ptr<const CudfPlanNodeDescriptor> descriptor);
+
+/// Removes the descriptor registered under 'name', if there is one.
 void unregisterCudfPlanNodeDescriptor(const std::string& name);
 
 /// Validates an engine-built or rewritten plan without changing it. A terminal
@@ -107,15 +127,28 @@ void validateCudfPlan(
     VectorRepresentation taskOutput = VectorRepresentation::kVelox);
 
 namespace detail {
+
+/// Returns the traits that 'node' declares, as a CudfPlanNode, a local
+/// boundary node or through a registered descriptor. Returns std::nullopt for
+/// any other node.
 std::optional<CudfPlanNodeTraits> customCudfPlanNodeTraits(
     const core::PlanNodePtr& node,
     const core::QueryCtx& queryCtx);
+
+/// Returns the traits of 'node'. For a core plan node that declares none, a
+/// GPU table scan and a UCX exchange produce cuDF vectors, a UCX partitioned
+/// output takes them, and any other node takes and produces Velox vectors.
 CudfPlanNodeTraits cudfPlanNodeTraits(
     const core::PlanNodePtr& node,
     const core::QueryCtx& queryCtx);
+
+/// Returns 'node' over 'sources', or 'node' itself when the sources are
+/// unchanged. Throws if nothing can rebuild the node, or if the result does
+/// not keep its ID, dynamic type and output schema.
 core::PlanNodePtr rebuildCustomCudfPlanNode(
     const core::PlanNodePtr& node,
     std::vector<core::PlanNodePtr> sources);
+
 } // namespace detail
 
 } // namespace facebook::velox::cudf_velox
