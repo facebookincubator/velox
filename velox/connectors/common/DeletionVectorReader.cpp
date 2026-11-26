@@ -89,7 +89,7 @@ void DeletionVectorReader::ensureLoaded() {
   VELOX_CHECK_NOT_NULL(
       readFile, "Failed to open deletion vector file: {}", path_);
 
-  const FileIoContext ioContext(/*stats=*/nullptr, fileReadOps_);
+  const FileIoContext ioContext{.fileOpts = fileReadOps_};
   auto bitmap = readBitmap(*readFile, ioContext);
   bytes_ = std::move(bitmap.bytes);
   bitmap_ = std::move(bitmap.view);

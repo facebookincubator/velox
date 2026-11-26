@@ -184,7 +184,7 @@ TEST_P(E2EReaderTest, sharedDictionaryFlatmapReadAsStruct) {
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   auto bufferedInput = std::make_unique<BufferedInput>(
-      std::make_shared<LocalReadFile>(path), *pool);
+      std::make_shared<LocalReadFile>(path), FileIoContext{.pool = pool.get()});
   auto reader = DwrfReader::create(std::move(bufferedInput), readerOpts);
 
   RowReaderOptions rowReaderOptions;

@@ -36,6 +36,36 @@ using cache::SsdPin;
 using cache::TrackingId;
 using memory::MemoryAllocator;
 
+CachedBufferedInput::CachedBufferedInput(
+    std::shared_ptr<ReadFile> readFile,
+    const MetricsLogPtr& metricsLog,
+    StringIdLease fileNum,
+    cache::AsyncDataCache* cache,
+    std::shared_ptr<cache::ScanTracker> tracker,
+    StringIdLease groupId,
+    std::shared_ptr<IoStatistics> ioStatistics,
+    std::shared_ptr<velox::IoStats> ioStats,
+    folly::Executor* executor,
+    const io::ReaderOptions& readerOptions,
+    FileIoContext fileIoContext)
+    : BufferedInput(
+          std::move(readFile),
+          detail::withIoStats(std::move(fileIoContext), ioStats.get()),
+          metricsLog,
+          ioStatistics.get()),
+      cache_(cache),
+      fileNum_(std::move(fileNum)),
+      tracker_(std::move(tracker)),
+      groupId_(std::move(groupId)),
+      ioStatistics_(std::move(ioStatistics)),
+      ioStats_(std::move(ioStats)),
+      executor_(executor),
+      fileSize_(input_->getLength()),
+      options_(readerOptions) {
+  VELOX_CHECK_NOT_NULL(cache_, "CachedBufferedInput requires a cache");
+  checkLoadQuantum();
+}
+
 std::unique_ptr<SeekableInputStream> CachedBufferedInput::enqueue(
     Region region,
     const StreamIdentifier* sid = nullptr) {

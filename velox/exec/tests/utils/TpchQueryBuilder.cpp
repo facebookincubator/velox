@@ -79,7 +79,7 @@ void TpchQueryBuilder::readFileSchema(
   std::shared_ptr<ReadFile> readFile;
   readFile.reset(uniqueReadFile.release());
   auto input = std::make_unique<dwio::common::BufferedInput>(
-      readFile, readerOptions.memoryPool());
+      readFile, FileIoContext{.pool = &readerOptions.memoryPool()});
   std::unique_ptr<dwio::common::Reader> reader =
       dwio::common::getReaderFactory(readerOptions.fileFormat())
           ->createReader(std::move(input), readerOptions);

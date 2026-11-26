@@ -39,7 +39,7 @@ std::unique_ptr<dwio::common::BufferedInput> createFileBufferedInput(
     const std::string& path,
     memory::MemoryPool& pool) {
   return std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(path), pool);
+      std::make_shared<LocalReadFile>(path), FileIoContext{.pool = &pool});
 }
 
 class MockStripeStreams : public StripeStreams {
