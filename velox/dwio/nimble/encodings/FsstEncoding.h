@@ -92,8 +92,14 @@ namespace facebook::nimble {
 /// - N bytes: serialized FSST symbol table (~2KB typical)
 /// - varint: lengths encoding size
 /// - M bytes: nested encoding of compressed string lengths
+/// - varint: decoded lengths encoding size
+/// - D bytes: nested encoding of decoded string lengths
 /// - K bytes: concatenated FSST output, optionally compressed by the normal
 ///   Nimble encoding-layer compression policy
+///
+/// Decoded lengths hold the length of each string after decoding. They let a
+/// reader decode many strings with one decoder call and cut the output by
+/// length, instead of calling the decoder once per string.
 ///
 /// Only supports std::string_view data type.
 class FsstEncoding final
@@ -148,7 +154,13 @@ class FsstEncoding final
       std::string_view encoding,
       const Encoding::Options& options = {});
 
-  /// Captures FSST's nested compressed-lengths encoding layout.
+  /// Returns the nested decoded-lengths encoding from serialized FSST data.
+  static std::string_view decodedLengthsEncoding(
+      std::string_view encoding,
+      const Encoding::Options& options);
+
+  /// Captures FSST's nested encoding layouts: the compressed lengths and the
+  /// decoded lengths.
   static void captureNestedEncoding(
       std::string_view encoding,
       std::vector<std::optional<const EncodingLayout>>& children,
@@ -162,6 +174,8 @@ class FsstEncoding final
     std::string_view symbolTable;
     /// Nested encoding for per-row compressed string sizes.
     std::string_view lengths;
+    /// Nested encoding for per-row decoded string sizes.
+    std::string_view decodedLengths;
     /// Serialized blob, which may have secondary encoding-layer compression.
     std::string_view blob;
   };
@@ -186,6 +200,22 @@ class FsstEncoding final
       std::string_view blob,
       size_t blobOffset);
 
+  /// Validates that a string of 'compressedLength' compressed bytes can have
+  /// 'decodedLength' decoded bytes. A code decodes to one to kMaxSymbolLength
+  /// bytes, and an escape of two bytes decodes to one byte.
+  static void validateDecodedLength(
+      uint64_t compressedLength,
+      uint64_t decodedLength) {
+    NIMBLE_CHECK_FILE_LE(
+        decodedLength,
+        compressedLength * kMaxSymbolLength,
+        "FSST decoded length is too long for its compressed length.");
+    NIMBLE_CHECK_FILE_LE(
+        compressedLength,
+        2 * decodedLength,
+        "FSST compressed length is too long for its decoded length.");
+  }
+
   std::string debugString(int offset) const final;
 
  private:
@@ -196,6 +226,20 @@ class FsstEncoding final
   static constexpr size_t kMaxSymbolLength = 8;
 
   static constexpr size_t kStringPageSize = 256 * 1024;
+
+  // Most rows that one decoder call covers. Larger groups save little, since
+  // the call overhead is already spread over this many rows.
+  static constexpr uint32_t kMaxRowsPerDecode = 64;
+
+  // Most decoded bytes that one decoder call covers, unless one row has more.
+  // Bounds the scratch buffer and the unused tail left in a string page.
+  static constexpr size_t kMaxBytesPerDecode = 64 * 1'024;
+
+  // Bytes beyond the decoded size that FSST's decoder may write, which keep it
+  // on its fast path to the end of the input. It stores four 8-byte symbols
+  // per step and needs 32 bytes of room to start one. A step starts only while
+  // at least one decoded byte remains, so one byte less is enough.
+  static constexpr size_t kDecoderSlack = 4 * kMaxSymbolLength - 1;
 
   // Maps a compressed payload to its cached decompressed string for this call.
   struct DecodeCacheEntry {
@@ -400,6 +444,13 @@ class FsstEncoding final
       Buffer& buffer,
       const Encoding::Options& options);
 
+  // Encodes the per-row decoded lengths as the nested decoded lengths stream.
+  static std::string_view encodeDecodedLengths(
+      EncodingSelection<physicalType>& selection,
+      std::span<const physicalType> values,
+      Buffer& buffer,
+      const Encoding::Options& options);
+
   // Encodes the original values with TrivialEncoding after FSST misses its
   // compression target.
   static std::string_view encodeTrivialFallback(
@@ -415,6 +466,32 @@ class FsstEncoding final
   // The caller must first validate the containing range with
   // validateCompressedLengths().
   std::string_view decompressToStringBuffer(std::string_view compressed);
+
+  // Materializes the decoded lengths of the next 'numRows' rows into
+  // decodedLengthBuffer_. Creates the decoded lengths encoding on first use and
+  // skips the rows that reads passed without needing their decoded lengths.
+  void readDecodedLengths(uint32_t numRows);
+
+  // Decodes 'numRows' consecutive rows that start at blobOffset_, given their
+  // compressed and decoded lengths, and advances blobOffset_ past them. Decodes
+  // groups of rows with one decoder call each, and cuts each group's output by
+  // decoded length. Does not advance row_. The caller must first validate the
+  // compressed lengths with validateCompressedLengths().
+  void decodeRows(
+      const uint32_t* compressedLengths,
+      const uint32_t* decodedLengths,
+      uint32_t numRows,
+      std::string_view* output);
+
+  // Reads the visitor's rows, which cover every row of the read range, and
+  // decodes groups of rows ahead with decodeRows(). 'lengths' points at the
+  // compressed length of the first of 'numRows' rows.
+  template <typename V>
+  void readDense(
+      V& visitor,
+      ReadWithVisitorParams& params,
+      const uint32_t* lengths,
+      uint32_t numRows);
 
   // Compares the bytes represented by a row's symbols with a byte range.
   bool testCompressedRange(
@@ -435,8 +512,20 @@ class FsstEncoding final
   // Current row index.
   uint32_t row_{0};
 
+  // Serialized nested encoding for decoded string lengths, and the encoding
+  // itself, which is created when a read first needs decoded lengths.
+  std::string_view decodedLengthsData_;
+  std::unique_ptr<Encoding> decodedLengths_;
+
+  // Row that decodedLengths_ is positioned at. Lags row_ until a read needs
+  // decoded lengths, so reads that decode nothing never create or read them.
+  uint32_t decodedLengthsRow_{0};
+
   // Scratch buffer for materializing lengths.
   Vector<uint32_t> lengthBuffer_;
+
+  // Scratch buffer for materializing decoded lengths.
+  Vector<uint32_t> decodedLengthBuffer_;
 
   // Keeps decompressed values at fixed addresses, in pages from the string
   // buffer factory. Uses scratch space when the current page cannot hold the
@@ -467,6 +556,32 @@ FOLLY_NOINLINE void FsstEncoding::readWithDecodeCache(
 }
 
 template <typename V>
+FOLLY_NOINLINE void FsstEncoding::readDense(
+    V& visitor,
+    ReadWithVisitorParams& params,
+    const uint32_t* lengths,
+    uint32_t numRows) {
+  readDecodedLengths(numRows);
+  const uint32_t* const lengthsEnd = lengths + numRows;
+  const uint32_t* decodedLengths = decodedLengthBuffer_.data();
+  std::array<std::string_view, kMaxRowsPerDecode> decoded;
+  uint32_t numDecoded{0};
+  uint32_t nextDecoded{0};
+  detail::readWithVisitorSlow(visitor, params, nullptr, [&] {
+    if (nextDecoded == numDecoded) {
+      numDecoded = std::min<uint32_t>(
+          kMaxRowsPerDecode, static_cast<uint32_t>(lengthsEnd - lengths));
+      decodeRows(lengths, decodedLengths, numDecoded, decoded.data());
+      lengths += numDecoded;
+      decodedLengths += numDecoded;
+      row_ += numDecoded;
+      nextDecoded = 0;
+    }
+    return decoded[nextDecoded++];
+  });
+}
+
+template <typename V>
 void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
   if (visitor.numRows() == 0) {
     checkReadRange(0, "Reading past end of FSST encoding.");
@@ -477,6 +592,8 @@ void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
   // Pre-materialize all compressed lengths needed for this read.
   const auto endRow = visitor.rowAt(visitor.numRows() - 1);
   auto numSelected = endRow + 1 - params.numScanned;
+  const bool selectsEveryRow =
+      visitor.numRows() - visitor.rowIndex() == numSelected;
   if (auto& nulls = visitor.reader().nullsInReadRange()) {
     numSelected -= velox::bits::countNulls(
         nulls->template as<uint64_t>(), params.numScanned, endRow + 1);
@@ -544,12 +661,16 @@ void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
     }
   }
 
-  if (!options_.fsstDecodeCacheEnabled()) {
+  if (options_.fsstDecodeCacheEnabled()) {
+    readWithDecodeCache(visitor, params, skip, readCompressed);
+  } else if (selectsEveryRow) {
+    // Decode rows ahead only when the read needs every row, since decoding
+    // rows that the read skips would be wasted work.
+    readDense(visitor, params, lengths, static_cast<uint32_t>(numSelected));
+  } else {
     detail::readWithVisitorSlow(visitor, params, skip, [&] {
       return decompressToStringBuffer(readCompressed());
     });
-  } else {
-    readWithDecodeCache(visitor, params, skip, readCompressed);
   }
   checkFinalBlobPosition();
 }

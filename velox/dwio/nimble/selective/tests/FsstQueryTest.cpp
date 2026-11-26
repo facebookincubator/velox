@@ -157,8 +157,15 @@ class FsstQueryTest : public HiveConnectorTestBase,
       const std::vector<RowVectorPtr>& batches) {
     const EncodingLayout trivial{
         EncodingType::Trivial, {}, CompressionType::Uncompressed};
+    std::vector<std::optional<const EncodingLayout>> stringChildren{trivial};
+    if (stringEncoding() == EncodingType::Fsst) {
+      stringChildren.emplace_back(trivial);
+    }
     EncodingLayout strings{
-        stringEncoding(), {}, CompressionType::Uncompressed, {trivial}};
+        stringEncoding(),
+        {},
+        CompressionType::Uncompressed,
+        std::move(stringChildren)};
     if (dictionary()) {
       strings = EncodingLayout{
           EncodingType::Dictionary,
