@@ -654,17 +654,14 @@ class CudfLocalPartitionNode : public core::LocalPartitionNode {
 /// driver. A partial limit applies to each driver by itself.
 class CudfLimitNode : public CudfUnaryPlanNode {
  public:
+  /// Throws if 'count' is not positive, as core::LimitNode does.
   CudfLimitNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
       RowTypePtr outputType,
       int64_t offset,
       int64_t count,
-      bool isPartial)
-      : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
-        offset_(offset),
-        count_(count),
-        isPartial_(isPartial) {}
+      bool isPartial);
 
   core::PlanNodePtr withSources(
       std::vector<core::PlanNodePtr> sources) const override {

@@ -701,6 +701,24 @@ CudfOrderByNode::CudfOrderByNode(
   checkSortingKeys("CudfOrderBy", sortingKeys_, sortingOrders_);
 }
 
+CudfLimitNode::CudfLimitNode(
+    const core::PlanNodeId& id,
+    core::PlanNodePtr source,
+    RowTypePtr outputType,
+    int64_t offset,
+    int64_t count,
+    bool isPartial)
+    : CudfUnaryPlanNode(id, std::move(source), std::move(outputType)),
+      offset_(offset),
+      count_(count),
+      isPartial_(isPartial) {
+  // CudfLimit neither takes input nor finishes when there is nothing to keep.
+  VELOX_USER_CHECK_GT(
+      count_,
+      0,
+      "CudfLimit must specify greater than zero number of rows to keep");
+}
+
 CudfTopNNode::CudfTopNNode(
     const core::PlanNodeId& id,
     core::PlanNodePtr source,

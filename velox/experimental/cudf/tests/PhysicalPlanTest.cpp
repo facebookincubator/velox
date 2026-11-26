@@ -601,6 +601,25 @@ TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
       topN({key}, {core::kAscNullsLast}, 0),
       "CudfTopN must specify greater than zero number of rows to keep");
 
+  // The cuDF limit operator would neither take input nor finish with a count
+  // of zero.
+  auto limit = [&](int64_t count) {
+    return std::make_shared<CudfLimitNode>(
+        "limit",
+        source,
+        input_->rowType(),
+        /*offset=*/0,
+        count,
+        /*isPartial=*/false);
+  };
+  VELOX_ASSERT_USER_THROW(
+      limit(0),
+      "CudfLimit must specify greater than zero number of rows to keep");
+  VELOX_ASSERT_USER_THROW(
+      limit(-1),
+      "CudfLimit must specify greater than zero number of rows to keep");
+  EXPECT_NE(limit(1), nullptr);
+
   // The filter, the projections and their plan node IDs have to agree with
   // each other and with the output type.
   using Id = std::optional<core::PlanNodeId>;
