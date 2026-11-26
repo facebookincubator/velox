@@ -28,6 +28,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/type/TypeUtil.h"
@@ -2443,6 +2444,27 @@ std::shared_ptr<const CudfHashJoinNode> asCudfHashJoinNode(
   return nullptr;
 }
 
+// Returns whether exactly one side of 'joinNode' runs under grouped execution.
+// Same rule as Task::hasMixedExecutionGroupJoin(), which takes only a
+// core::HashJoinNode.
+bool hasMixedExecutionGroupJoin(
+    const exec::Task& task,
+    const CudfHashJoinNode& joinNode) {
+  if (!task.isGroupedExecution()) {
+    return false;
+  }
+  const auto& planFragment = task.planFragment();
+  const auto hasGroupedLeaf = [&](const core::PlanNodePtr& side) {
+    return core::PlanNode::findFirstNode(
+               side.get(), [&](const core::PlanNode* node) {
+                 return node->sources().empty() &&
+                     planFragment.leafNodeRunsGroupedExecution(node->id());
+               }) != nullptr;
+  };
+  return hasGroupedLeaf(joinNode.sources()[0]) !=
+      hasGroupedLeaf(joinNode.sources()[1]);
+}
+
 } // namespace
 
 std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
@@ -2477,6 +2499,14 @@ exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
   }
   if (auto cudfJoin = asCudfHashJoinNode(node)) {
     return [cudfJoin](int32_t operatorId, exec::DriverCtx* ctx) {
+      // LocalPlanner makes this check for a core::HashJoinNode. Such a join
+      // would emit the unmatched build rows once per split group.
+      if (exec::needRightSideJoin(cudfJoin->joinType()) &&
+          hasMixedExecutionGroupJoin(*ctx->task, *cudfJoin)) {
+        VELOX_UNSUPPORTED(
+            "Hash join currently does not support mixed grouped execution for join type {}",
+            core::JoinTypeName::toName(cudfJoin->joinType()));
+      }
       return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, cudfJoin);
     };
   }

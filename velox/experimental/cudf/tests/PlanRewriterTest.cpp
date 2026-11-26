@@ -1115,6 +1115,71 @@ TEST_F(PlanRewriterHiveTest, indexLookupSourceStaysAsIs) {
   EXPECT_TRUE(join->sources()[0]->sources()[0]->is<CudfFilterProjectNode>());
 }
 
+// A right or full join emits the build rows that no probe row matched. With a
+// grouped probe and an ungrouped build, every split group would emit them
+// again, so the task refuses such a join, as it does for a core hash join.
+TEST_F(PlanRewriterHiveTest, hashJoinWithMixedGroupedExecution) {
+  auto rowType = ROW({"c0", "c1"}, BIGINT());
+  auto file = common::testutil::TempFilePath::create();
+  writeToFile(file->getPath(), makeVectors(rowType, 2, 100));
+
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto scan = [&](core::PlanNodeId& scanId) {
+    return PlanBuilder(ids, pool_.get())
+        .startTableScan()
+        .connectorId(cudf_velox::exec::test::kCudfHiveConnectorId)
+        .outputType(rowType)
+        .dataColumns(rowType)
+        .assignments(
+            ::facebook::velox::exec::test::HiveConnectorTestBase::
+                allRegularColumns(rowType))
+        .endTableScan()
+        .capturePlanNodeId(scanId);
+  };
+
+  // Runs the join with two split groups on the probe side and an ungrouped
+  // build side, and returns the number of rows.
+  auto numJoinedRows = [&](core::JoinType joinType) {
+    core::PlanNodeId probeScanId;
+    core::PlanNodeId buildScanId;
+    auto plan =
+        scan(probeScanId)
+            .hashJoin(
+                {"c0"},
+                {"u0"},
+                scan(buildScanId).project({"c0 AS u0", "c1 AS u1"}).planNode(),
+                "",
+                {"c0", "u1"},
+                joinType)
+            .planNode();
+    auto physical = rewriteToCudfPlan(plan);
+    EXPECT_TRUE(physical->sources()[0]->is<CudfHashJoinNode>());
+
+    constexpr int32_t kNumSplitGroups{2};
+    std::vector<::facebook::velox::exec::Split> probeSplits;
+    for (int32_t group = 0; group < kNumSplitGroups; ++group) {
+      probeSplits.emplace_back(
+          makeCudfHiveConnectorSplit(file->getPath()), group);
+    }
+    return AssertQueryBuilder(physical)
+        .splits(probeScanId, std::move(probeSplits))
+        .splits(buildScanId, {makeCudfHiveConnectorSplit(file->getPath())})
+        .executionStrategy(core::ExecutionStrategy::kGrouped)
+        .groupedExecutionLeafNodeIds({probeScanId})
+        .numSplitGroups(kNumSplitGroups)
+        .numConcurrentSplitGroups(1)
+        .countResults();
+  };
+
+  EXPECT_GT(numJoinedRows(core::JoinType::kInner), 0);
+  VELOX_ASSERT_THROW(
+      numJoinedRows(core::JoinType::kRight),
+      "Hash join currently does not support mixed grouped execution for join type RIGHT");
+  VELOX_ASSERT_THROW(
+      numJoinedRows(core::JoinType::kFull),
+      "Hash join currently does not support mixed grouped execution for join type FULL");
+}
+
 TEST_F(PlanRewriterHiveTest, scanWithUnsupportedRemainingFilterStaysOnCpu) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto vectors = makeVectors(rowType, 4, 1'000);
