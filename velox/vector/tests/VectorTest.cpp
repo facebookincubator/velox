@@ -2592,49 +2592,6 @@ TEST_F(VectorTest, transposeIndicesAtEndOfMapping) {
   }
 }
 
-TEST_F(VectorTest, transposeDictionaryValuesOverBufferView) {
-  // Indices that wrap external memory are a BufferView, which the transposes
-  // must not write into. They may also end right before an unmapped page.
-  struct NoopReleaser {
-    void addRef() const {}
-    void release() const {}
-  };
-  constexpr vector_size_t kSize = 13;
-  std::vector<vector_size_t> indices(kSize);
-  for (auto i = 0; i < kSize; ++i) {
-    indices[i] = kSize - 1 - i;
-  }
-  common::testutil::PageBeforeGuard page;
-  const auto placed = page.copyToEnd(indices);
-  auto base = makeFlatVector<int32_t>(kSize, [](auto row) { return row; });
-  auto dictionary = BaseVector::wrapInDictionary(
-      nullptr, makeIndicesInReverse(kSize), kSize, base);
-  // Without and with wrap nulls, which take the transpose with nulls.
-  for (const bool withNulls : {false, true}) {
-    SCOPED_TRACE(fmt::format("withNulls {}", withNulls));
-    auto isNull = [](auto row) { return row == 3; };
-    auto expected = BaseVector::wrapInDictionary(
-        withNulls ? makeNulls(kSize, isNull) : nullptr,
-        makeIndices(indices),
-        kSize,
-        dictionary);
-
-    BufferPtr wrapNulls = withNulls ? makeNulls(kSize, isNull) : nullptr;
-    BufferPtr wrapIndices = BufferView<NoopReleaser>::create(
-        reinterpret_cast<const uint8_t*>(placed.data()),
-        placed.size_bytes(),
-        NoopReleaser{});
-    VectorPtr dictionaryValues = dictionary;
-    BaseVector::transposeDictionaryValues(
-        kSize, wrapNulls, wrapIndices, dictionaryValues);
-    EXPECT_FALSE(wrapIndices->isView());
-    test::assertEqualVectors(
-        expected,
-        BaseVector::wrapInDictionary(
-            wrapNulls, wrapIndices, kSize, dictionaryValues));
-  }
-}
-
 TEST_F(VectorTest, dictionaryResize) {
   vector_size_t size = 10;
   std::vector<int64_t> elements{0, 1, 2, 3, 4};

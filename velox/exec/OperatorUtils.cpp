@@ -305,21 +305,6 @@ vector_size_t processFilterResults(
   }
 }
 
-namespace {
-// Returns the indices of 'mapping' with the padding that the transposes need.
-// A BufferView, such as one over external memory, lacks it, so 'mapping'
-// becomes a copy. Called only when a transpose runs, so that a cached
-// transpose copies nothing.
-const vector_size_t* paddedMapping(
-    BufferPtr& mapping,
-    memory::MemoryPool* pool) {
-  if (mapping->isView()) {
-    mapping = AlignedBuffer::copy(pool, mapping);
-  }
-  return mapping->as<vector_size_t>();
-}
-} // namespace
-
 VectorPtr wrapOne(
     vector_size_t wrapSize,
     BufferPtr wrapIndices,
@@ -361,7 +346,7 @@ VectorPtr wrapOne(
         baseIndices->as<vector_size_t>(),
         rawBaseNulls,
         wrapSize,
-        paddedMapping(wrapIndices, inputVector->pool()),
+        wrapIndices->as<vector_size_t>(),
         rawWrapNulls,
         newIndices->asMutable<vector_size_t>(),
         newNulls->asMutable<uint64_t>());
@@ -383,7 +368,7 @@ VectorPtr wrapOne(
   BaseVector::transposeIndices(
       baseIndices->as<vector_size_t>(),
       wrapSize,
-      paddedMapping(wrapIndices, inputVector->pool()),
+      wrapIndices->as<vector_size_t>(),
       newIndices->asMutable<vector_size_t>());
   // If another column has the same wrapping and does not add nulls, we can use
   // the same transposed indices.

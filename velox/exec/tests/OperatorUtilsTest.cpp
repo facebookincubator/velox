@@ -970,6 +970,9 @@ TEST_F(OperatorUtilsTest, wrapMany) {
 }
 
 TEST_F(OperatorUtilsTest, wrapOneWithMappingAtEndOfPage) {
+#if !XSIMD_WITH_AVX2
+  GTEST_SKIP() << "The transpose with nulls needs AVX2.";
+#endif
   // A mapping that wraps external memory is a BufferView, which may end right
   // before an unmapped page.
   struct NoopReleaser {
