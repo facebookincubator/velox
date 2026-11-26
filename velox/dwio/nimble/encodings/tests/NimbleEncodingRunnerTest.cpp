@@ -228,6 +228,9 @@ struct FsstArtifactOffsets {
   size_t lengthsSize;
   size_t lengths;
   uint32_t lengthsBytes;
+  size_t decodedLengthsSize;
+  size_t decodedLengths;
+  uint32_t decodedLengthsBytes;
   size_t blob;
 };
 
@@ -243,6 +246,10 @@ FsstArtifactOffsets readFsstArtifactOffsets(std::string_view artifact) {
   const uint32_t lengthsBytes = varint::readVarint32(&cursor);
   const size_t lengths = cursor - artifact.data();
   cursor += lengthsBytes;
+  const size_t decodedLengthsSize = cursor - artifact.data();
+  const uint32_t decodedLengthsBytes = varint::readVarint32(&cursor);
+  const size_t decodedLengths = cursor - artifact.data();
+  cursor += decodedLengthsBytes;
   return {
       .compressionType = compressionType,
       .symbolTableSize = symbolTableSize,
@@ -251,6 +258,9 @@ FsstArtifactOffsets readFsstArtifactOffsets(std::string_view artifact) {
       .lengthsSize = lengthsSize,
       .lengths = lengths,
       .lengthsBytes = lengthsBytes,
+      .decodedLengthsSize = decodedLengthsSize,
+      .decodedLengths = decodedLengths,
+      .decodedLengthsBytes = decodedLengthsBytes,
       .blob = static_cast<size_t>(cursor - artifact.data()),
   };
 }
@@ -2205,6 +2215,8 @@ TEST_F(NimbleEncodingRunnerTest, malformedFsstArtifactsAreRejected) {
         offsets.symbolTable + offsets.symbolTableBytes - 1,
         offsets.lengths - 1,
         offsets.lengths + offsets.lengthsBytes - 1,
+        offsets.decodedLengthsSize,
+        offsets.decodedLengths + offsets.decodedLengthsBytes - 1,
         reference.encodedArtifact.size() - 1}) {
     EXPECT_THROW(
         verifyEncodingArtifact(
@@ -2293,6 +2305,13 @@ TEST_F(NimbleEncodingRunnerTest, malformedFsstArtifactsAreRejected) {
   auto zeroLengthsBitWidth = reference.encodedArtifact;
   zeroLengthsBitWidth[offsets.lengths + kLengthsBitWidthOffset] = 0;
 
+  auto zeroDecodedLengths = reference.encodedArtifact;
+  zeroDecodedLengths[offsets.decodedLengthsSize] = 0;
+
+  auto wrongDecodedLengthsEncoding = reference.encodedArtifact;
+  wrongDecodedLengthsEncoding[offsets.decodedLengths] =
+      static_cast<char>(EncodingType::Trivial);
+
   constexpr size_t kLengthsBaselineOffset =
       EncodingPrefix::kFixedPrefixSize + sizeof(uint8_t);
   auto oversizedRowExpansion = reference.encodedArtifact;
@@ -2364,6 +2383,8 @@ TEST_F(NimbleEncodingRunnerTest, malformedFsstArtifactsAreRejected) {
         wrongLengthsRows,
         compressedLengths,
         zeroLengthsBitWidth,
+        zeroDecodedLengths,
+        wrongDecodedLengthsEncoding,
         mismatchedLengthSum,
         escapeAtRowEnd,
         trailingPayload}) {

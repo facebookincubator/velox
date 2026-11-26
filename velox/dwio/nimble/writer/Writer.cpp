@@ -1804,13 +1804,14 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
           // Target only the FSST parent. Its blob, nested streams, and Trivial
           // fallback use the writer's normal encoding-selection settings. A
           // caller-provided encodingLayoutTree is applied later and takes
-          // precedence when it configures the same stream.
+          // precedence when it configures the same stream. Replay needs a slot
+          // for each nested stream: the compressed and the decoded lengths.
           writerStreamContext.setEncoding(
               EncodingLayout{
                   EncodingType::Fsst,
                   {},
                   context.options().compressionOptions.compressionType,
-                  {std::nullopt},
+                  {std::nullopt, std::nullopt},
               });
         }
       });

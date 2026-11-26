@@ -84,6 +84,7 @@ class FsstEncodingViewTest : public EncodingViewTest {
     CompressionType compressionType;
     std::string_view symbolTable;
     std::string_view lengths;
+    std::string_view decodedLengths;
     std::string_view blob;
   };
 
@@ -109,11 +110,17 @@ class FsstEncodingViewTest : public EncodingViewTest {
     remaining.remove_prefix(cursor - remaining.data());
     const auto lengths = remaining.substr(0, lengthsSize);
     remaining.remove_prefix(lengthsSize);
+    cursor = remaining.data();
+    const auto decodedLengthsSize = varint::readVarint32(&cursor);
+    remaining.remove_prefix(cursor - remaining.data());
+    const auto decodedLengths = remaining.substr(0, decodedLengthsSize);
+    remaining.remove_prefix(decodedLengthsSize);
     return {
         .prefix = encoded.substr(0, prefixSize),
         .compressionType = compressionType,
         .symbolTable = symbolTable,
         .lengths = lengths,
+        .decodedLengths = decodedLengths,
         .blob = remaining,
     };
   }
@@ -135,6 +142,7 @@ class FsstEncodingViewTest : public EncodingViewTest {
     rebuilt.push_back(static_cast<char>(sections.compressionType));
     appendSection(symbolTable);
     appendSection(lengths);
+    appendSection(sections.decodedLengths);
     rebuilt.append(blob);
     return rebuilt;
   }
