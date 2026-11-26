@@ -18,6 +18,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
+
 #include "velox/common/base/CheckedArithmetic.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
@@ -547,7 +551,18 @@ DEBUG_ONLY_TEST_P(MemoryPoolTest, memoryLeakCheck) {
   // what(), so the match does not depend on what() building its message.
   // EXPECT_DEATH keeps going when the match fails, so the chunk is freed and
   // destroying 'child' does not abort the test binary.
-  EXPECT_DEATH(child.reset(), "VeloxRuntimeError");
+  EXPECT_DEATH(
+      {
+#ifdef __linux__
+        // The dying process can map tens of GB for the mmap allocator. A core
+        // dump handler that reads the core through a pipe, such as apport,
+        // receives all of it, which can take minutes. A process that is not
+        // dumpable gets no core dump.
+        ::prctl(PR_SET_DUMPABLE, 0);
+#endif
+        child.reset();
+      },
+      "VeloxRuntimeError");
   child->free(oneChunk, kChunkSize);
 }
 
