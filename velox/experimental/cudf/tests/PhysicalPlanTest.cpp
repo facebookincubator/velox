@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -88,8 +89,13 @@ class AppPartitionFunctionSpec : public core::PartitionFunctionSpec {
 
 class AppDescriptor : public CudfPlanNodeDescriptor {
  public:
-  explicit AppDescriptor(bool staleSources = false, bool changeSchema = false)
-      : staleSources_(staleSources), changeSchema_(changeSchema) {}
+  explicit AppDescriptor(
+      bool staleSources = false,
+      bool changeSchema = false,
+      bool changeId = false)
+      : staleSources_(staleSources),
+        changeSchema_(changeSchema),
+        changeId_(changeId) {}
   bool canHandle(const core::PlanNode& node) const override {
     return typeid(node) == typeid(AppNode);
   }
@@ -104,7 +110,7 @@ class AppDescriptor : public CudfPlanNodeDescriptor {
       return node;
     }
     return std::make_shared<AppNode>(
-        node->id(),
+        changeId_ ? node->id() + "-changed" : node->id(),
         std::move(sources),
         changeSchema_ ? ROW("changed", BIGINT()) : node->outputType(),
         static_cast<const AppNode&>(*node).traits());
@@ -113,6 +119,7 @@ class AppDescriptor : public CudfPlanNodeDescriptor {
  private:
   const bool staleSources_;
   const bool changeSchema_;
+  const bool changeId_;
 };
 
 class NativeGpuNode : public CudfUnaryPlanNode {
@@ -355,6 +362,49 @@ TEST_F(PhysicalPlanTest, validationChecksSessionSettings) {
         validateCudfPlan(
             std::make_shared<CudfToVeloxNode>("download", join), *queryCtx_),
         "cuDF cannot run plan node CudfHashJoin (join): HashJoin join filter cannot be evaluated by cuDF");
+
+    // So is the condition of a nested loop join.
+    auto nestedLoopJoin = std::make_shared<CudfNestedLoopJoinNode>(
+        "nested-loop-join",
+        std::make_shared<CudfFromVeloxNode>("nlj-probe-upload", probe),
+        std::make_shared<CudfFromVeloxNode>("nlj-build-upload", build),
+        data->rowType(),
+        core::JoinType::kInner,
+        std::make_shared<core::CastTypedExpr>(
+            BOOLEAN(),
+            std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "s"),
+            /*isTryCast=*/false));
+    VELOX_ASSERT_USER_THROW(
+        validateCudfPlan(
+            std::make_shared<CudfToVeloxNode>("download", nestedLoopJoin),
+            *queryCtx_),
+        "cuDF cannot run plan node CudfNestedLoopJoin (nested-loop-join): NestedLoopJoin filter cannot be evaluated by cuDF");
+  }
+
+  // cuDF has no variance aggregate.
+  {
+    core::AggregationNode::Aggregate variance;
+    variance.call = std::make_shared<core::CallTypedExpr>(
+        DOUBLE(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "k")},
+        "variance");
+    variance.rawInputTypes = {BIGINT()};
+    auto aggregation = std::make_shared<CudfAggregationNode>(
+        "aggregation",
+        std::make_shared<CudfFromVeloxNode>("upload", values()),
+        ROW("v", DOUBLE()),
+        core::AggregationNode::Step::kSingle,
+        std::vector<core::FieldAccessTypedExprPtr>{},
+        std::vector<core::AggregationNode::Aggregate>{variance},
+        std::vector<TypePtr>{
+            exec::resolveIntermediateType("variance", {BIGINT()})},
+        /*ignoreNullKeys=*/false);
+    VELOX_ASSERT_USER_THROW(
+        validateCudfPlan(
+            std::make_shared<CudfToVeloxNode>("download", aggregation),
+            *queryCtx_),
+        "cuDF cannot run plan node CudfAggregation (aggregation): Aggregation cannot be evaluated by cuDF");
   }
 }
 
@@ -482,17 +532,24 @@ TEST_F(PhysicalPlanTest, localMergeSplitsEverySourceWithBoundaryAdapter) {
           std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")},
       std::vector<core::SortOrder>{core::SortOrder(true, false)});
   auto plan = std::make_shared<CudfToVeloxNode>("download", merge);
-  auto task = AssertQueryBuilder(plan).maxDrivers(4).assertResults(
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})}));
+  std::shared_ptr<exec::Task> task;
+  auto results =
+      AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool(), task);
+  // Compares the rows in order, which assertResults() does not.
+  ::facebook::velox::test::assertEqualVectors(
+      makeRowVector({"c0"}, {makeFlatVector<int64_t>({1, 2, 3, 4})}), results);
   EXPECT_EQ(task->taskStats().pipelineStats.size(), 3);
+  int32_t numLocalMerges{0};
   for (const auto& pipeline : task->taskStats().pipelineStats) {
     for (const auto& op : pipeline.operatorStats) {
       EXPECT_NE(op.operatorType, "LocalMerge");
       if (op.operatorType == "CudfLocalMerge") {
+        ++numLocalMerges;
         EXPECT_EQ(op.numDrivers, 1);
       }
     }
   }
+  EXPECT_EQ(numLocalMerges, 1);
 }
 
 TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
@@ -688,12 +745,19 @@ TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
   using RankFunction = core::TopNRowNumberNode::RankFunction;
   auto arrayKey =
       std::make_shared<core::FieldAccessTypedExpr>(ARRAY(BIGINT()), "a");
+  // A source that has both sorting keys used below.
+  auto arrayInput = makeRowVector(
+      {"k", "a"},
+      {makeFlatVector<int64_t>({3, 1, 2}),
+       makeArrayVector<int64_t>({{1}, {2}, {3}})});
+  auto arraySource = std::make_shared<CudfFromVeloxNode>(
+      "array-upload", PlanBuilder().values({arrayInput}).planNode());
   auto topNRowNumber = [&](RankFunction rankFunction,
                            core::FieldAccessTypedExprPtr sortingKey) {
     return std::make_shared<CudfTopNRowNumberNode>(
         "topn-row-number",
-        source,
-        input_->rowType(),
+        arraySource,
+        arrayInput->rowType(),
         rankFunction,
         Keys{},
         Keys{std::move(sortingKey)},
@@ -992,6 +1056,62 @@ TEST_F(PhysicalPlanTest, badRebuilderCannotChangeOutputSchema) {
       "must preserve its output schema");
 }
 
+TEST_F(PhysicalPlanTest, badRebuilderCannotChangeId) {
+  unregisterCudfPlanNodeDescriptor("app-test");
+  registerCudfPlanNodeDescriptor(
+      "app-test", std::make_shared<AppDescriptor>(false, false, true));
+  VELOX_ASSERT_USER_THROW(
+      rewrite(app(values(), Need::kCudf, Kind::kCudf)),
+      "Rebuilding AppForward (app) must preserve its ID and dynamic type");
+}
+
+TEST_F(PhysicalPlanTest, descriptorRegistrationRejectsBadArguments) {
+  VELOX_ASSERT_USER_THROW(
+      registerCudfPlanNodeDescriptor(
+          "app-test", std::make_shared<AppDescriptor>()),
+      "cuDF plan descriptor already registered: app-test");
+  VELOX_ASSERT_USER_THROW(
+      registerCudfPlanNodeDescriptor("null-descriptor", nullptr),
+      "cuDF plan descriptor must not be null: null-descriptor");
+}
+
+// The rewriter and validateCudfPlan() reject the same broken plans.
+TEST_F(PhysicalPlanTest, brokenPlansAreRejected) {
+  auto appNode = [&](const core::PlanNodeId& id,
+                     std::vector<core::PlanNodePtr> sources,
+                     CudfPlanNodeTraits traits) {
+    return std::make_shared<AppNode>(
+        id, std::move(sources), input_->rowType(), std::move(traits));
+  };
+  auto expectRejected = [&](const core::PlanNodePtr& plan,
+                            const std::string& message) {
+    SCOPED_TRACE(message);
+    VELOX_ASSERT_USER_THROW(validateCudfPlan(plan, *queryCtx_), message);
+    VELOX_ASSERT_USER_THROW(rewrite(plan), message);
+  };
+
+  expectRejected(
+      std::make_shared<CudfToVeloxNode>(
+          "same", std::make_shared<CudfFromVeloxNode>("same", values())),
+      "Duplicate plan node ID: same");
+
+  // A node with no output cannot be the source of another node.
+  auto sink = appNode("sink", {values()}, {{Need::kVelox}, {}, {}});
+  expectRejected(
+      appNode("consumer", {sink}, {{Need::kVelox}, Kind::kVelox, {}}),
+      "A terminal sink cannot feed another node");
+
+  expectRejected(
+      appNode("no-inputs", {values()}, {{}, Kind::kVelox, {}}),
+      "Incorrect input contract for AppForward (no-inputs)");
+  expectRejected(
+      appNode("both", {values()}, {{Need::kVelox}, Kind::kVelox, 0}),
+      "Output contract must be fixed or source-preserving, not both");
+  expectRejected(
+      appNode("out-of-range", {values()}, {{Need::kEither}, {}, 3}),
+      "Output source of AppForward (out-of-range) must be one of its sources");
+}
+
 TEST_F(PhysicalPlanTest, unsupportedColumnsCanBeRemovedBeforeGpuExecution) {
   auto maps =
       makeMapVector<int64_t, int64_t>({{{1, 10}}, {{2, 20}}, {{3, 30}}});
@@ -1026,7 +1146,9 @@ TEST_F(PhysicalPlanTest, callerDisablesCpuFallback) {
   };
   auto unsupported = PlanBuilder().values({input_}).rowNumber({}).planNode();
   EXPECT_TRUE(rewrite(unsupported)->is<core::RowNumberNode>());
-  VELOX_ASSERT_THROW(strictRewrite(unsupported), "CPU fallback is disabled");
+  VELOX_ASSERT_USER_THROW(
+      strictRewrite(unsupported),
+      "CPU fallback is disabled for unsupported plan node RowNumber (1)");
 
   // The query config is not consulted.
   queryCtx_ = core::QueryCtx::create(
@@ -1039,7 +1161,9 @@ TEST_F(PhysicalPlanTest, callerDisablesCpuFallback) {
                     *partition->as<core::LocalPartitionNode>())
                     .scaleWriter(true)
                     .build();
-  VELOX_ASSERT_THROW(strictRewrite(scaled), "CPU fallback is disabled");
+  VELOX_ASSERT_USER_THROW(
+      strictRewrite(scaled),
+      "CPU fallback is disabled for unsupported plan node LocalPartition (1)");
 }
 
 TEST_F(PhysicalPlanTest, httpAndUcxOutputContracts) {

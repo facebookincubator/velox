@@ -101,11 +101,11 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
 namespace facebook::velox::cudf_velox::test {
 
 /// Returns 'plan' rewritten into a plan of cuDF plan nodes by
-/// CudfPlanRewriter. Uses a default QueryCtx if 'queryCtx' is null, which is
-/// convenient for tests that run without a task. Production callers use
-/// CudfPlanRewriter with the QueryCtx of the task.
+/// CudfPlanRewriter, for the session settings of 'queryCtx'. A test that runs
+/// the result passes the same QueryCtx to its query builder, so the plan runs
+/// under the settings it was rewritten for.
 core::PlanNodePtr rewriteToCudfPlan(
     const core::PlanNodePtr& plan,
-    std::shared_ptr<core::QueryCtx> queryCtx = nullptr);
+    std::shared_ptr<core::QueryCtx> queryCtx);
 
 } // namespace facebook::velox::cudf_velox::test

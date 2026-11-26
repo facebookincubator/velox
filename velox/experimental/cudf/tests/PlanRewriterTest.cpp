@@ -70,6 +70,7 @@ class PlanRewriterTest
     config.allowCpuFallback = true;
     config.concatOptimizationEnabled = false;
     registerCudf();
+    queryCtx_ = core::QueryCtx::create(executor_.get());
     input_ = makeRowVector(
         {"c0", "c1"},
         {makeFlatVector<int64_t>({1, 2, 1, 3}),
@@ -83,6 +84,7 @@ class PlanRewriterTest
     config.allowCpuFallback = savedFallback_;
     config.concatOptimizationEnabled = savedConcat_;
     input_.reset();
+    queryCtx_.reset();
     OperatorTestBase::TearDown();
   }
 
@@ -90,6 +92,9 @@ class PlanRewriterTest
     core::PlanNodePtr plan;
     std::string physicalNode;
     std::string gpuOperator;
+    // The driver count the task asks for. Above 1 only for plans that return
+    // the same rows with any number of drivers.
+    int32_t maxDrivers{1};
   };
 
   std::unordered_map<std::string, Sample> samples() {
@@ -117,12 +122,23 @@ class PlanRewriterTest
                 PlanBuilder(nestedLoopGenerator).values({build}).planNode(),
                 {"c0", "c1", "u0", "u1"})
             .planNode();
-    auto localMerge =
-        values().orderBy({"c1"}, true).localMerge({"c1"}).planNode();
-    auto localPartition = values()
+    // Every driver of the source pipeline sorts one copy of the input, so the
+    // merge has as many sorted streams as there are drivers.
+    auto localMerge = PlanBuilder()
+                          .values({input_}, /*parallelizable=*/true)
+                          .orderBy({"c1"}, true)
+                          .localMerge({"c1"})
+                          .planNode();
+    // Several batches, so that round robin sends rows to more than one
+    // consumer. The partial and final steps give the same sums however the
+    // rows are spread.
+    auto localPartition = PlanBuilder()
+                              .values({input_, input_, input_})
                               .project({"c0", "c1"})
                               .localPartitionRoundRobin()
-                              .singleAggregation({"c0"}, {"sum(c1)"})
+                              .partialAggregation({"c0"}, {"sum(c1)"})
+                              .localGather()
+                              .finalAggregation()
                               .planNode();
     auto single = makeRowVector({"c0"}, {makeFlatVector<int64_t>({42})});
     return {
@@ -157,8 +173,8 @@ class PlanRewriterTest
         {"Limit",
          {values().limit(0, 2, false).planNode(), "CudfLimit", "CudfLimit"}},
         {"LocalPartition",
-         {localPartition, "CudfLocalPartition", "CudfLocalPartition"}},
-        {"LocalMerge", {localMerge, "CudfLocalMerge", "CudfLocalMerge"}},
+         {localPartition, "CudfLocalPartition", "CudfLocalPartition", 4}},
+        {"LocalMerge", {localMerge, "CudfLocalMerge", "CudfLocalMerge", 4}},
         {"AssignUniqueId",
          {values().assignUniqueId().planNode(),
           "CudfAssignUniqueId",
@@ -328,9 +344,14 @@ class PlanRewriterTest
     // conversions, whose IDs differ between the two paths.
     std::set<std::pair<std::string, std::string>> placement;
     int32_t conversions{0};
+    // The largest driver count of any operator.
+    int32_t numDrivers{0};
   };
 
-  Execution execute(const core::PlanNodePtr& plan, bool useDriverAdapter) {
+  Execution execute(
+      const core::PlanNodePtr& plan,
+      bool useDriverAdapter,
+      int32_t maxDrivers = 1) {
     unregisterCudf();
     CudfConfig::getInstance().enableDriverAdapter = useDriverAdapter;
     registerCudf();
@@ -340,12 +361,13 @@ class PlanRewriterTest
         AssertQueryBuilder(
             useDriverAdapter ? plan : rewriteToCudfPlan(plan, queryCtx))
             .queryCtx(queryCtx)
-            .maxDrivers(1)
+            .maxDrivers(maxDrivers)
             .copyResults(pool(), task);
     Execution execution{results};
     for (const auto& pipeline : task->taskStats().pipelineStats) {
       for (const auto& op : pipeline.operatorStats) {
         execution.operators.insert(op.operatorType);
+        execution.numDrivers = std::max(execution.numDrivers, op.numDrivers);
         if (op.operatorType == "CudfFromVelox" ||
             op.operatorType == "CudfToVelox") {
           ++execution.conversions;
@@ -357,7 +379,51 @@ class PlanRewriterTest
     return execution;
   }
 
+  // Runs 'plan' with cuDF unregistered and returns its rows.
+  RowVectorPtr executeOnCpu(const core::PlanNodePtr& plan, int32_t maxDrivers) {
+    unregisterCudf();
+    std::shared_ptr<::facebook::velox::exec::Task> task;
+    auto results = AssertQueryBuilder(plan)
+                       .queryCtx(core::QueryCtx::create(executor_.get()))
+                       .maxDrivers(maxDrivers)
+                       .copyResults(pool(), task);
+    registerCudf();
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        EXPECT_FALSE(op.operatorType.starts_with("Cudf")) << op.operatorType;
+      }
+    }
+    return results;
+  }
+
+  // Checks that the driver adapter run and the rewriter run of 'plan' both
+  // returned the rows that the plan returns without cuDF. The two cuDF paths
+  // build their operators the same way, so comparing them with each other
+  // would miss a mistake they share. 'ordered' also compares the row order.
+  void expectCpuResults(
+      const core::PlanNodePtr& plan,
+      const Execution& legacy,
+      const Execution& physical,
+      int32_t maxDrivers = 1,
+      bool ordered = false) {
+    const auto reference = executeOnCpu(plan, maxDrivers);
+    for (const auto& [path, results] :
+         {std::pair{"driver adapter", legacy.results},
+          std::pair{"rewriter", physical.results}}) {
+      SCOPED_TRACE(path);
+      if (ordered) {
+        ::facebook::velox::test::assertEqualVectors(reference, results);
+      } else {
+        EXPECT_TRUE(
+            ::facebook::velox::exec::test::assertEqualResults(
+                {reference}, {results}));
+      }
+    }
+  }
+
   RowVectorPtr input_;
+  // The session that plans are rewritten for when a test does not run them.
+  std::shared_ptr<core::QueryCtx> queryCtx_;
 
  private:
   bool savedDriverAdapter_;
@@ -390,7 +456,7 @@ TEST_F(PlanRewriterTest, everyAdapterHasPhysicalPlanCoverage) {
     auto it = cases.find(adapter->name());
     ASSERT_NE(it, cases.end())
         << "Add a physical-plan coverage sample for this adapter";
-    auto rewritten = rewriteToCudfPlan(it->second.plan);
+    auto rewritten = rewriteToCudfPlan(it->second.plan, queryCtx_);
     EXPECT_TRUE(containsNode(rewritten, it->second.physicalNode));
   }
 }
@@ -459,17 +525,18 @@ TEST_F(PlanRewriterTest, batchConcatGoesBelowAggregationAndJoinProbe) {
   const auto cases = samples();
 
   const auto aggregation =
-      rewriteToCudfPlan(cases.at("Aggregation").plan)->sources()[0];
+      rewriteToCudfPlan(cases.at("Aggregation").plan, queryCtx_)->sources()[0];
   ASSERT_TRUE(aggregation->is<CudfAggregationNode>());
   EXPECT_TRUE(aggregation->sources()[0]->is<CudfBatchConcatNode>());
 
-  const auto join =
-      rewriteToCudfPlan(cases.at("HashJoinProbe").plan)->sources()[0];
+  const auto join = rewriteToCudfPlan(cases.at("HashJoinProbe").plan, queryCtx_)
+                        ->sources()[0];
   ASSERT_TRUE(join->is<CudfHashJoinNode>());
   EXPECT_TRUE(join->sources()[0]->is<CudfBatchConcatNode>());
   EXPECT_FALSE(join->sources()[1]->is<CudfBatchConcatNode>());
 
-  const auto limit = rewriteToCudfPlan(cases.at("Limit").plan)->sources()[0];
+  const auto limit =
+      rewriteToCudfPlan(cases.at("Limit").plan, queryCtx_)->sources()[0];
   ASSERT_TRUE(limit->is<CudfLimitNode>());
   EXPECT_FALSE(limit->sources()[0]->is<CudfBatchConcatNode>());
 
@@ -480,16 +547,19 @@ TEST_F(PlanRewriterTest, batchConcatGoesBelowAggregationAndJoinProbe) {
     const auto legacy = execute(plan, true);
     const auto rewritten = execute(plan, false);
     EXPECT_TRUE(rewritten.operators.contains("CudfBatchConcat"));
-    EXPECT_TRUE(
-        ::facebook::velox::exec::test::assertEqualResults(
-            {legacy.results}, {rewritten.results}));
+    expectCpuResults(plan, legacy, rewritten);
   }
 }
 
 TEST_F(PlanRewriterTest, allSupportedLocalPartitionKindsStayOnGpu) {
   for (int kind = 0; kind < 4; ++kind) {
     SCOPED_TRACE(kind);
-    auto builder = PlanBuilder().values({input_}).project({"c0", "c1"});
+    // Several batches and four drivers, so that the rows go to more than one
+    // consumer. The partial and final steps give the same sums however the
+    // rows are spread.
+    constexpr int32_t kNumDrivers{4};
+    auto builder =
+        PlanBuilder().values({input_, input_, input_}).project({"c0", "c1"});
     if (kind == 0) {
       builder.localGather();
     } else if (kind == 1) {
@@ -499,33 +569,49 @@ TEST_F(PlanRewriterTest, allSupportedLocalPartitionKindsStayOnGpu) {
     } else {
       builder.localPartitionRoundRobinRow();
     }
-    auto plan = builder.singleAggregation({"c0"}, {"sum(c1)"}).planNode();
-    auto physical = rewriteToCudfPlan(plan);
-    auto aggregation = physical->sources()[0];
-    ASSERT_TRUE(aggregation->is<CudfAggregationNode>());
-    ASSERT_TRUE(aggregation->sources()[0]->is<core::LocalPartitionNode>());
-    EXPECT_TRUE(
-        aggregation->sources()[0]->sources()[0]->is<CudfFilterProjectNode>());
-    auto legacy = execute(plan, true);
-    auto rewritten = execute(plan, false);
+    auto plan = builder.partialAggregation({"c0"}, {"sum(c1)"})
+                    .localGather()
+                    .finalAggregation()
+                    .planNode();
+    auto physical = rewriteToCudfPlan(plan, queryCtx_);
+    auto finalAggregation = physical->sources()[0];
+    ASSERT_TRUE(finalAggregation->is<CudfAggregationNode>());
+    auto gather = finalAggregation->sources()[0];
+    ASSERT_TRUE(gather->is<CudfLocalPartitionNode>());
+    auto partialAggregation = gather->sources()[0];
+    ASSERT_TRUE(partialAggregation->is<CudfAggregationNode>());
+    auto partition = partialAggregation->sources()[0];
+    ASSERT_TRUE(partition->is<CudfLocalPartitionNode>());
+    EXPECT_TRUE(partition->sources()[0]->is<CudfFilterProjectNode>());
+    auto legacy = execute(plan, true, kNumDrivers);
+    auto rewritten = execute(plan, false, kNumDrivers);
     EXPECT_TRUE(legacy.operators.contains("CudfLocalPartition"));
     EXPECT_TRUE(rewritten.operators.contains("CudfLocalPartition"));
-    EXPECT_TRUE(
-        ::facebook::velox::exec::test::assertEqualResults(
-            {legacy.results}, {rewritten.results}));
+    // Only a gather leaves its consumer with one driver.
+    const auto numConsumerDrivers = kind == 0 ? 1 : kNumDrivers;
+    EXPECT_EQ(legacy.numDrivers, numConsumerDrivers);
+    EXPECT_EQ(rewritten.numDrivers, numConsumerDrivers);
+    expectCpuResults(plan, legacy, rewritten, kNumDrivers);
   }
 }
 
 TEST_F(PlanRewriterTest, physicalExecutionMatchesDriverAdapter) {
+  // The samples whose plan returns its rows in order.
+  const std::unordered_set<std::string> sorted{"OrderBy", "TopN", "LocalMerge"};
   for (const auto& [name, sample] : samples()) {
     SCOPED_TRACE(name);
-    auto legacy = execute(sample.plan, true);
+    auto legacy = execute(sample.plan, true, sample.maxDrivers);
     ASSERT_TRUE(legacy.operators.contains(sample.gpuOperator));
-    auto physical = execute(sample.plan, false);
+    auto physical = execute(sample.plan, false, sample.maxDrivers);
     ASSERT_TRUE(physical.operators.contains(sample.gpuOperator));
-    EXPECT_TRUE(
-        ::facebook::velox::exec::test::assertEqualResults(
-            {legacy.results}, {physical.results}));
+    EXPECT_EQ(legacy.numDrivers, sample.maxDrivers);
+    EXPECT_EQ(physical.numDrivers, sample.maxDrivers);
+    expectCpuResults(
+        sample.plan,
+        legacy,
+        physical,
+        sample.maxDrivers,
+        sorted.contains(name));
   }
 }
 
@@ -537,9 +623,7 @@ TEST_F(PlanRewriterTest, cpuFallbackMatchesDriverAdapter) {
     EXPECT_TRUE(legacy.operators.contains(sample.cpuOperator));
     EXPECT_EQ(legacy.placement, physical.placement);
     EXPECT_EQ(legacy.conversions, physical.conversions);
-    EXPECT_TRUE(
-        ::facebook::velox::exec::test::assertEqualResults(
-            {legacy.results}, {physical.results}));
+    expectCpuResults(sample.plan, legacy, physical);
   }
 }
 
@@ -668,7 +752,7 @@ TEST_F(PlanRewriterTest, subclassOfCoreNodeStaysOnCpu) {
   auto values = PlanBuilder(ids).values({input_}).planNode();
 
   auto limit = std::make_shared<CustomLimitNode>("limit", 0, 2, false, values);
-  EXPECT_EQ(rewriteToCudfPlan(limit), limit);
+  EXPECT_EQ(rewriteToCudfPlan(limit, queryCtx_), limit);
 
   // The driver adapter leaves its operator on the CPU too.
   {
@@ -711,7 +795,7 @@ TEST_F(PlanRewriterTest, subclassOfCoreNodeStaysOnCpu) {
       "filter", filter->as<core::FilterNode>()->filter(), values);
   auto plan =
       PlanBuilder(customFilter, ids).project({"c0 + 1 AS x"}).planNode();
-  auto physical = rewriteToCudfPlan(plan);
+  auto physical = rewriteToCudfPlan(plan, queryCtx_);
   ASSERT_TRUE(physical->is<CudfToVeloxNode>());
   auto project = physical->sources()[0]->as<CudfFilterProjectNode>();
   ASSERT_NE(project, nullptr);
@@ -813,7 +897,7 @@ TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
 
   auto checkRewrite = [&](const core::PlanNodePtr& plan) {
     SCOPED_TRACE(plan->name());
-    auto physical = rewriteToCudfPlan(plan);
+    auto physical = rewriteToCudfPlan(plan, queryCtx_);
     EXPECT_EQ(physical->id(), plan->id());
     EXPECT_TRUE(typeid(*physical) == typeid(*plan));
     for (const auto& source : physical->sources()) {
@@ -826,9 +910,7 @@ TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
     auto legacy = execute(plan, true);
     auto physical = execute(plan, false);
     EXPECT_EQ(legacy.placement, physical.placement);
-    EXPECT_TRUE(
-        ::facebook::velox::exec::test::assertEqualResults(
-            {legacy.results}, {physical.results}));
+    expectCpuResults(plan, legacy, physical);
   }
   for (const auto& plan : planOnly) {
     auto physical = checkRewrite(plan);
@@ -879,7 +961,7 @@ TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
         /*generateRowNumber=*/true,
         gpuRegion().planNode());
     VELOX_ASSERT_THROW(
-        rewriteToCudfPlan(custom),
+        rewriteToCudfPlan(custom, queryCtx_),
         "No rebuilding support for RowNumber (custom_rn)");
   }
 }
@@ -903,9 +985,7 @@ TEST_F(PlanRewriterTest, aggregationVariants) {
     auto physical = execute(sample.plan, false);
     ASSERT_TRUE(legacy.operators.contains(sample.gpuOperator));
     ASSERT_TRUE(physical.operators.contains(sample.gpuOperator));
-    EXPECT_TRUE(
-        ::facebook::velox::exec::test::assertEqualResults(
-            {legacy.results}, {physical.results}));
+    expectCpuResults(sample.plan, legacy, physical);
   }
 }
 
@@ -915,7 +995,7 @@ TEST_F(PlanRewriterTest, partitionedOutputPreservesRewrittenChildren) {
                   .project({"c0", "c1 + 1 AS x"})
                   .partitionedOutput({}, 1)
                   .planNode();
-  auto rewritten = rewriteToCudfPlan(plan);
+  auto rewritten = rewriteToCudfPlan(plan, queryCtx_);
   ASSERT_TRUE(rewritten->is<core::PartitionedOutputNode>());
   ASSERT_TRUE(rewritten->sources()[0]->is<CudfToVeloxNode>());
   EXPECT_TRUE(containsNode(rewritten, "CudfFilterProject"));
@@ -945,7 +1025,7 @@ TEST_F(PlanRewriterTest, cpuFallbackPreservesGpuRegions) {
                     .project({"c0", "c1", "gid"})
                     .planNode();
   for (const auto& plan : {rowNumber, unnest, expand}) {
-    auto physical = rewriteToCudfPlan(plan);
+    auto physical = rewriteToCudfPlan(plan, queryCtx_);
     ASSERT_TRUE(physical->is<CudfToVeloxNode>());
     auto project = physical->sources()[0];
     ASSERT_TRUE(project->is<CudfFilterProjectNode>());
@@ -960,9 +1040,7 @@ TEST_F(PlanRewriterTest, cpuFallbackPreservesGpuRegions) {
         cpuNode->sources()[0]->sources()[0]->is<CudfFilterProjectNode>());
     auto legacy = execute(plan, true);
     auto rewritten = execute(plan, false);
-    EXPECT_TRUE(
-        ::facebook::velox::exec::test::assertEqualResults(
-            {legacy.results}, {rewritten.results}));
+    expectCpuResults(plan, legacy, rewritten);
   }
 }
 
@@ -992,7 +1070,7 @@ TEST_F(PlanRewriterTest, bothGpuConnectorsNeedOutputConversion) {
                     .outputType(input_->rowType())
                     .endTableScan()
                     .planNode();
-    auto rewritten = rewriteToCudfPlan(plan);
+    auto rewritten = rewriteToCudfPlan(plan, queryCtx_);
     ASSERT_TRUE(rewritten->is<CudfToVeloxNode>());
     EXPECT_EQ(rewritten->sources()[0], plan);
   }

@@ -216,6 +216,7 @@ separate follow-ups. Existing legacy execution stays the default until an
 engine explicitly opts in.
 
 Tests should pass the intended plan explicitly, for example
-`AssertQueryBuilder(rewriteToCudfPlan(plan))` using the test helper, or
+`AssertQueryBuilder(rewriteToCudfPlan(plan, queryCtx)).queryCtx(queryCtx)`
+using the test helper, or
 `AssertQueryBuilder(physicalPlan)`. AssertQueryBuilder itself does not translate
 plans.

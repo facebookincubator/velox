@@ -111,8 +111,9 @@ core::PlanNodePtr rewriteToCudfPlan(
   VELOX_CHECK(
       cudfIsRegistered(),
       "cuDF must be registered before rewriting a plan for cuDF execution");
+  VELOX_CHECK_NOT_NULL(queryCtx);
   CudfPlanRewriter::Config config;
-  config.queryCtx = queryCtx ? std::move(queryCtx) : core::QueryCtx::create();
+  config.queryCtx = std::move(queryCtx);
   // The rewriter takes the fallback choice from its caller. Tests keep
   // setting it the way they do for the driver adapter, so copy it over as an
   // engine would.

@@ -52,12 +52,17 @@ class PlanRewriterHiveTest
     savedDriverAdapter_ = CudfConfig::getInstance().enableDriverAdapter;
     CudfConfig::getInstance().enableDriverAdapter = false;
     CudfHiveConnectorTestBase::SetUp();
+    queryCtx_ = core::QueryCtx::create(executor_.get());
   }
 
   void TearDown() override {
+    queryCtx_.reset();
     CudfHiveConnectorTestBase::TearDown();
     CudfConfig::getInstance().enableDriverAdapter = savedDriverAdapter_;
   }
+
+  // The session that each test rewrites and runs its plans with.
+  std::shared_ptr<core::QueryCtx> queryCtx_;
 
  private:
   bool savedDriverAdapter_;
@@ -82,7 +87,7 @@ TEST_F(PlanRewriterHiveTest, gpuScanFeedsGpuNodesDirectly) {
                   .filter("c0 > 0")
                   .singleAggregation({}, {"count(c0)", "min(c1)", "max(c1)"})
                   .planNode();
-  auto physical = rewriteToCudfPlan(plan);
+  auto physical = rewriteToCudfPlan(plan, queryCtx_);
   ASSERT_TRUE(physical->is<CudfToVeloxNode>());
   auto aggregation = physical->sources()[0];
   ASSERT_TRUE(aggregation->is<CudfAggregationNode>());
@@ -92,6 +97,7 @@ TEST_F(PlanRewriterHiveTest, gpuScanFeedsGpuNodesDirectly) {
 
   auto task = ::facebook::velox::exec::test::AssertQueryBuilder(
                   physical, duckDbQueryRunner_)
+                  .queryCtx(queryCtx_)
                   .splits(makeCudfHiveConnectorSplits({file}))
                   .assertResults(
                       "SELECT count(c0), min(c1), max(c1) FROM tmp "
@@ -126,7 +132,7 @@ TEST_F(PlanRewriterHiveTest, indexLookupSourceStaysAsIs) {
           .endTableScan()
           .planNode());
   ASSERT_NE(lookupScan, nullptr);
-  ASSERT_TRUE(rewriteToCudfPlan(lookupScan)->is<CudfToVeloxNode>());
+  ASSERT_TRUE(rewriteToCudfPlan(lookupScan, queryCtx_)->is<CudfToVeloxNode>());
 
   auto plan =
       PlanBuilder(ids, pool_.get())
@@ -185,7 +191,7 @@ TEST_F(PlanRewriterHiveTest, hashJoinWithMixedGroupedExecution) {
                 {"c0", "u1"},
                 joinType)
             .planNode();
-    auto physical = rewriteToCudfPlan(plan);
+    auto physical = rewriteToCudfPlan(plan, queryCtx_);
     EXPECT_TRUE(physical->sources()[0]->is<CudfHashJoinNode>());
 
     constexpr int32_t kNumSplitGroups{2};
@@ -195,6 +201,7 @@ TEST_F(PlanRewriterHiveTest, hashJoinWithMixedGroupedExecution) {
           makeCudfHiveConnectorSplit(file->getPath()), group);
     }
     return AssertQueryBuilder(physical)
+        .queryCtx(queryCtx_)
         .splits(probeScanId, std::move(probeSplits))
         .splits(buildScanId, {makeCudfHiveConnectorSplit(file->getPath())})
         .executionStrategy(core::ExecutionStrategy::kGrouped)
@@ -236,7 +243,7 @@ TEST_F(PlanRewriterHiveTest, scanWithUnsupportedRemainingFilterStaysOnCpu) {
                   .endTableScan()
                   .singleAggregation({}, {"count(c0)", "min(c1)", "max(c1)"})
                   .planNode();
-  auto physical = rewriteToCudfPlan(plan);
+  auto physical = rewriteToCudfPlan(plan, queryCtx_);
   ASSERT_TRUE(physical->is<CudfToVeloxNode>());
   auto aggregation = physical->sources()[0];
   ASSERT_TRUE(aggregation->is<CudfAggregationNode>());
@@ -246,6 +253,7 @@ TEST_F(PlanRewriterHiveTest, scanWithUnsupportedRemainingFilterStaysOnCpu) {
 
   ::facebook::velox::exec::test::AssertQueryBuilder(
       physical, duckDbQueryRunner_)
+      .queryCtx(queryCtx_)
       .splits(makeCudfHiveConnectorSplits({file}))
       .assertResults(
           "SELECT count(c0), min(c1), max(c1) FROM tmp WHERE c0 <> 1");

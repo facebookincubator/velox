@@ -292,17 +292,28 @@ TEST_F(HashJoinTest, joinThatNeedsAstFilterStaysOnCpu) {
     config.allowCpuFallback = false;
   };
 
+  struct TestCase {
+    core::JoinType joinType;
+    // Output columns of the join.
+    std::vector<std::string> output;
+    // Filter over the join output, or empty.
+    std::string outputFilter;
+    int64_t numRows;
+  };
   // Only (2, banana) matches a build row and passes the filter, against
-  // (2, ban%). A full join adds the other three rows of each side.
-  for (const auto& [joinType, numRows] :
-       std::vector<std::pair<core::JoinType, int64_t>>{
-           {core::JoinType::kLeftSemiFilter, 1},
-           {core::JoinType::kAnti, 3},
-           {core::JoinType::kFull, 7}}) {
+  // (2, ban%). A full join adds the other three rows of each side. A left
+  // semi project join marks that one probe row.
+  for (const auto& [joinType, output, outputFilter, numRows] :
+       std::vector<TestCase>{
+           {core::JoinType::kLeftSemiFilter, {"k"}, "", 1},
+           {core::JoinType::kRightSemiFilter, {"u_k"}, "", 1},
+           {core::JoinType::kLeftSemiProject, {"k", "match"}, "match", 1},
+           {core::JoinType::kAnti, {"k"}, "", 3},
+           {core::JoinType::kFull, {"k"}, "", 7}}) {
     SCOPED_TRACE(core::JoinTypeName::toName(joinType));
     core::PlanNodeId joinId;
     auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto plan =
+    auto builder =
         PlanBuilder(planNodeIdGenerator)
             .values({probe})
             .hashJoin(
@@ -310,12 +321,15 @@ TEST_F(HashJoinTest, joinThatNeedsAstFilterStaysOnCpu) {
                 {"u_k"},
                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
                 "t_val LIKE u_pattern",
-                {"k"},
+                output,
                 joinType)
-            .capturePlanNodeId(joinId)
-            .partialAggregation({}, {"count(*)"})
-            .finalAggregation()
-            .planNode();
+            .capturePlanNodeId(joinId);
+    if (!outputFilter.empty()) {
+      builder.filter(outputFilter);
+    }
+    auto plan = builder.partialAggregation({}, {"count(*)"})
+                    .finalAggregation()
+                    .planNode();
     std::shared_ptr<Task> task;
     auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
     facebook::velox::test::assertEqualVectors(

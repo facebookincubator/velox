@@ -58,6 +58,27 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.batchSizeMinBytes.value(), 2'147'483'648);
 }
 
+TEST(ConfigTest, physicalPlanSettings) {
+  CudfConfig config;
+  EXPECT_TRUE(config.enableDriverAdapter);
+  EXPECT_FALSE(config.maxDrivers.has_value());
+
+  config.initialize(
+      {{CudfConfig::kCudfDriverAdapterEnabled, "false"},
+       {CudfConfig::kCudfMaxDrivers, "4"}});
+  EXPECT_FALSE(config.enableDriverAdapter);
+  EXPECT_EQ(config.maxDrivers, 4);
+
+  auto initializeMaxDrivers = [](const char* value) {
+    CudfConfig config;
+    config.initialize({{CudfConfig::kCudfMaxDrivers, value}});
+  };
+  VELOX_ASSERT_USER_THROW(
+      initializeMaxDrivers("0"), "cudf.max_drivers must be positive");
+  VELOX_ASSERT_USER_THROW(
+      initializeMaxDrivers("-2"), "cudf.max_drivers must be positive");
+}
+
 TEST(ConfigTest, rejectsNonPositiveBatchConcatTargets) {
   auto initialize = [](const char* key, const char* value) {
     CudfConfig config;
