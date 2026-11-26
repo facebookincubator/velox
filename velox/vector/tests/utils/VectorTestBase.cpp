@@ -106,14 +106,6 @@ BufferPtr VectorTestBase::makeIndices(
   return indicesBuffer;
 }
 
-namespace {
-// Keeps nothing alive: the caller owns the bytes of the view.
-struct NoopReleaser {
-  void addRef() const {}
-  void release() const {}
-};
-} // namespace
-
 // static
 BufferPtr VectorTestBase::makeBufferView(std::span<const std::byte> bytes) {
   return BufferView<NoopReleaser>::create(

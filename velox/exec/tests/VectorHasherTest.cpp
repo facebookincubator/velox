@@ -1388,12 +1388,8 @@ TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
           return std::make_pair(rows, selectedIds);
         };
         // All rows, and every other row.
-        SelectivityVector everyOther(numRows, false);
-        for (auto i = 0; i < numRows; i += 2) {
-          everyOther.setValid(i, true);
-        }
-        everyOther.updateBounds();
-        for (const auto& rows : {SelectivityVector(numRows), everyOther}) {
+        for (const auto& rows :
+             {SelectivityVector(numRows), makeOddRows(numRows)}) {
           EXPECT_EQ(lookup(*keysAtEnd, rows), lookup(*regularKeys, rows));
         }
       }
