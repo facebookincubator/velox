@@ -117,6 +117,14 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   //
   // TODO: Retune with a benchmark that reads the same rows more than once.
   static constexpr uint32_t kMinRowsToDecodeChunk = kRowsPerChunk / 4;
+
+  // decodeRanges() decodes rows with the decoded lengths, which it reads for
+  // every row of the view, only if its ranges hold at least one over this many
+  // of the view's rows, or if an earlier read has read them. A view of a take
+  // is new for each take.
+  //
+  // TODO: Retune with a benchmark.
+  static constexpr uint32_t kMinRowsFractionForDecodedLengths = 8;
   static constexpr size_t kMaxSymbolLength = 8;
 
   struct DecodedChunk;
@@ -146,6 +154,12 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // chunk.
   void ensureDecodedLengths() const;
 
+  // Validates the decoded length of each of the rows 'firstRow' to 'endRow' of
+  // a cached view against the compressed length of its row, with
+  // FsstEncoding::validateDecodedLength(), and returns the number of decoded
+  // bytes of the rows. The view must have read its decoded lengths.
+  size_t validateDecodedLengths(uint32_t firstRow, uint32_t endRow) const;
+
   // Keeps the lengths stream as a view and decodes only the strings that reads
   // ask for, which skips the validation of every length that a cached view
   // performs.
@@ -166,6 +180,14 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
     return {
         blob_.data() + compressedOffsets_[row],
         compressedOffsets_[row + 1] - compressedOffsets_[row]};
+  }
+
+  // Returns the compressed bytes of the strings of the rows 'firstRow' to
+  // 'endRow' of a cached view, one after another.
+  std::string_view compressedValues(uint32_t firstRow, uint32_t endRow) const {
+    return {
+        blob_.data() + compressedOffsets_[firstRow],
+        compressedOffsets_[endRow] - compressedOffsets_[firstRow]};
   }
 
   // Decodes the string of 'row' alone from its compressed bytes, which start
@@ -239,11 +261,14 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // Reads the rows of 'ranges' of a cached view for a read given an
   // addStringBuffer. Takes the rows of each chunk that 'chunks' holds from
   // it, and decodes every other row straight into 'output', in a region of
-  // buffers that it takes as decodeChunks() does, and caches nothing. 'chunks'
-  // is empty, or holds the chunk or null for each chunk from the first that
-  // the ranges span. Passes the buffers of the chunks it read from and of the
-  // region that hold its strings to 'addStringBuffer'. 'ranges' must be checked
-  // and not empty.
+  // buffers that it takes as decodeChunks() does, and caches nothing. The rows
+  // of a range in one chunk are decoded together, with one call, when the
+  // encoding has decoded lengths and the ranges hold enough rows of the view
+  // to read them, and one string at a time otherwise. 'chunks' is empty, or
+  // holds the chunk or null for each chunk from the first that the ranges
+  // span. Passes the buffers of the chunks it read from and of the region that
+  // hold its strings to 'addStringBuffer'. 'ranges' must be checked and not
+  // empty.
   void decodeRanges(
       std::span<const RowRange> ranges,
       std::span<const std::shared_ptr<const DecodedChunk>> chunks,
