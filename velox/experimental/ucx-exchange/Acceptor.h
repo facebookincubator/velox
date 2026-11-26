@@ -34,7 +34,9 @@ class Acceptor {
       ucp_ep_h ep);
 
   /// @brief Adds the endpoint reference to the handleToEndpointRef_ map such
-  /// that endpoint handles can be resolved
+  /// that endpoint handles can be resolved. Runs inside the UCX listener
+  /// callback, so it throws nothing: a handle registered already is logged and
+  /// kept.
   void registerEndpointRef(std::shared_ptr<EndpointRef> endpointRef);
 
   // Maps the lower-layer UCP endpoint handle to an endpoint reference.

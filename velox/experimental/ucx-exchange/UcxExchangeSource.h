@@ -30,6 +30,7 @@
 #include <cuda_runtime.h>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
+#include <chrono>
 #include <cuda/stream>
 
 #include <rmm/cuda_stream_pool.hpp>
@@ -97,21 +98,28 @@ class UcxExchangeSource
   /// "request"
   void process() override;
 
-  /// Close the exchange source. May be called before all data
-  /// has been received and processed. This can happen in case
-  /// of an error or an operator like Limit aborting the query
-  /// once it received enough data.
+  /// Closes the source before its stream ended, as when a LIMIT has all the
+  /// rows it needs. UcxExchangeClient calls it only for a source whose server
+  /// the exchange queue says to tell. Marks the source closed and requeues it;
+  /// on the Communicator thread, process() then sends the close message, once
+  /// the handshake response has arrived, and cleans up. Safe to call from any
+  /// thread.
   void close();
 
   /// Ends the source with a transport error that names the endpoint's close
-  /// 'reason', then closes. The exchange queue ignores the error if the source
-  /// ended or was released already. Called on the Communicator thread.
+  /// 'reason'. The exchange queue ignores the error if the source ended or was
+  /// released already. Called on the Communicator thread.
   void onEndpointClosed(std::string_view reason) override;
 
   /// @brief Called by UcxExchangeClient::next() on the consumer (driver)
   /// thread to wake up this source after it went dormant due to backpressure.
   /// Uses CAS to ensure exactly one wake-up per dormant period.
   void resumeFromBackpressure();
+
+  /// How long a source that closes during the handshake waits for the
+  /// handshake response, which tells it whether its server exists. A source
+  /// that gets no response in time ends without sending the close message.
+  static constexpr std::chrono::seconds kCloseTimeout{1};
 
   // Backpressure thresholds. Public so UcxExchangeClient can use them.
   static constexpr int32_t kBackpressureHighWaterMark = 32;
@@ -235,6 +243,15 @@ class UcxExchangeSource
   // Removes the state associated with the source, called by the state-machine.
   void cleanUp();
 
+  // Runs process() for a closed source. Returns false if the source is in
+  // Created, which connects as usual so that it can send the close message.
+  bool processClosed();
+
+  // Sends the close message to the server. Does not wait for the send to
+  // complete; the Communicator keeps the request, and with it the message,
+  // until it completes.
+  void sendClose();
+
   // Reports the end of the source to the exchange queue, which keeps the first
   // end it is told, and moves to Done. Every end of the source goes through
   // here.
@@ -266,6 +283,9 @@ class UcxExchangeSource
   // The id of this source's entry in 'queue_'.
   const UcxExchangeQueue::SourceId sourceId_;
   std::atomic<bool> closed_{false};
+  // Set kCloseTimeout after close(): a source still waiting for the handshake
+  // response then ends without the close message.
+  std::atomic<bool> closeDeadlineExpired_{false};
 
   /// True if the server detected that this source is on the same node.
   /// Set from the isIntraNodeTransfer flag in HandshakeResponse, which the
@@ -282,8 +302,13 @@ class UcxExchangeSource
   // Some metrics/counters:
   UcxExchangeMetrics metrics_;
 
-  // The outstanding request - there can only be one outstanding request
-  // at any point in time. Used for handshake, metadata and data.
+  // The handshake send. Kept apart from 'request_' because UCX may complete
+  // the send inside the call that posts it, and the completion posts the
+  // response receive in 'request_'.
+  std::shared_ptr<ucxx::Request> handshakeRequest_;
+
+  // The outstanding receive - there can only be one outstanding receive at any
+  // point in time. Used for the handshake response, metadata and data.
   // NOTE: The request owns/holds a reference to the upcall function
   // and must therefore exist until the upcall is done.
   std::shared_ptr<ucxx::Request> request_{nullptr};

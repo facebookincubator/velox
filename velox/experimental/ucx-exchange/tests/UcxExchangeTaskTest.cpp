@@ -550,15 +550,21 @@ class ScopedIntraNodeExchange {
   const bool previous_;
 };
 
-// The plan of a consumer that reads one UCX exchange. Sets 'exchangeNodeId'.
-core::PlanFragment ucxConsumerPlan(core::PlanNodeId& exchangeNodeId) {
-  return exec::test::PlanBuilder()
-      .exchange(
-          taskShuffleRowType(),
-          taskShuffleSerdeKind(),
-          std::string{core::TransportKind::kUcx})
-      .capturePlanNodeId(exchangeNodeId)
-      .planFragment();
+// The plan of a consumer that reads one UCX exchange, followed by a final LIMIT
+// of 'limit' rows if it has a value. Sets 'exchangeNodeId'.
+core::PlanFragment ucxConsumerPlan(
+    std::optional<int64_t> limit,
+    core::PlanNodeId& exchangeNodeId) {
+  auto builder = exec::test::PlanBuilder()
+                     .exchange(
+                         taskShuffleRowType(),
+                         taskShuffleSerdeKind(),
+                         std::string{core::TransportKind::kUcx})
+                     .capturePlanNodeId(exchangeNodeId);
+  if (limit.has_value()) {
+    builder.limit(/*offset=*/0, *limit, /*isPartial=*/false);
+  }
+  return builder.planFragment();
 }
 
 } // namespace
@@ -659,7 +665,7 @@ TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumer) {
   core::PlanNodeId exchangeNodeId;
   auto consumer = makeTaskShuffleTask(
       taskPrefix + "consumer",
-      ucxConsumerPlan(exchangeNodeId),
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId),
       results.consumer());
   startedTasks.add(consumer);
   consumer->start(1);
@@ -703,7 +709,7 @@ TEST_F(UcxExchangeTaskTest, oversizedProducerErrorFailsConsumer) {
   core::PlanNodeId exchangeNodeId;
   auto consumer = makeTaskShuffleTask(
       taskPrefix + "consumer",
-      ucxConsumerPlan(exchangeNodeId),
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId),
       results.consumer());
   startedTasks.add(consumer);
   consumer->start(1);
@@ -751,7 +757,7 @@ TEST_F(UcxExchangeTaskTest, lateConsumerOfFailedProducerFails) {
   core::PlanNodeId exchangeNodeId;
   auto consumer = makeTaskShuffleTask(
       taskPrefix + "lateConsumer",
-      ucxConsumerPlan(exchangeNodeId),
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId),
       results.consumer());
   startedTasks.add(consumer);
   consumer->start(1);
@@ -767,6 +773,69 @@ TEST_F(UcxExchangeTaskTest, lateConsumerOfFailedProducerFails) {
       testing::AllOf(
           testing::HasSubstr("Producer failed before sending all its data"),
           testing::HasSubstr("Injected producer failure")));
+}
+
+// A consumer that stops reading early, here after a LIMIT, has all it needs. It
+// must finish successfully, and cancelling its producer afterwards, as the
+// coordinator does, must leave the Communicator able to serve later cases. The
+// consumer closes before its stream ends, which sends the close message and
+// releases its server.
+TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceeds) {
+  registerSerdes();
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+  ScopedIntraNodeExchange intraNodeExchange(/*intraNode=*/false);
+  const auto taskPrefix = getUniqueTaskPrefix();
+  {
+    TaskShuffleResults results;
+    StartedTasks startedTasks(&results);
+
+    const auto producerId = taskPrefix + "endlessProducer";
+    auto producer = startEndlessProducer(producerId, pool_.get());
+    startedTasks.add(producer);
+
+    core::PlanNodeId exchangeNodeId;
+    auto consumer = makeTaskShuffleTask(
+        taskPrefix + "limitedConsumer",
+        ucxConsumerPlan(/*limit=*/10, exchangeNodeId),
+        results.consumer());
+    startedTasks.add(consumer);
+    consumer->start(1);
+    consumer->addSplit(exchangeNodeId, remoteSplit(producerId, 0));
+    consumer->noMoreSplits(exchangeNodeId);
+
+    ASSERT_TRUE(
+        exec::test::TaskMonitor::waitForCompletion(
+            *consumer, kTaskShuffleMaxWaitMicros))
+        << exec::taskStateString(consumer->state()) << ": "
+        << consumer->errorMessage();
+    EXPECT_EQ(totalRows(results.batches()), 10);
+
+    EXPECT_TRUE(producer->requestCancel().wait(
+        std::chrono::microseconds(kTaskShuffleMaxWaitMicros)));
+  }
+
+  // A later exchange still gets all its rows.
+  const auto producers = makeInterleavedProducers(
+      pool_.get(),
+      taskPrefix + "laterProducer",
+      /*numProducers=*/1,
+      /*numRowsPerProducer=*/64);
+  core::PlanNodeId exchangeNodeId;
+  const auto consumerPlan =
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId);
+  const auto actual = runTaskShuffle(
+      std::string{core::TransportKind::kUcx},
+      producers,
+      consumerPlan,
+      exchangeNodeId,
+      taskPrefix + "laterConsumer",
+      [this](const std::string& taskId) { return remoteSplit(taskId, 0); },
+      pool_.get(),
+      /*numConsumerDrivers=*/1,
+      /*consumerStats=*/nullptr);
+  EXPECT_TRUE(exec::test::assertEqualResults(allBatchesOf(producers), actual));
 }
 
 // A fragment whose output layout is empty ships rows that carry no columns --

@@ -187,6 +187,10 @@ void Acceptor::handleHandshake(
 void Acceptor::registerEndpointRef(std::shared_ptr<EndpointRef> endpointRef) {
   auto epHandle = endpointRef->endpoint_->getHandle();
   auto res = handleToEndpointRef_.insert(std::pair{epHandle, endpointRef});
-  VELOX_CHECK(res.second, "Endpoint handle already exists!");
+  // Runs inside the UCX listener callback, which must not throw.
+  if (!res.second) {
+    LOG(ERROR) << "Cannot register a UCX endpoint whose handle is registered "
+                  "already";
+  }
 }
 } // namespace facebook::velox::ucx_exchange

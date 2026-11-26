@@ -20,6 +20,8 @@
 #include <cudf/contiguous_split.hpp>
 #include <folly/String.h>
 #include <folly/Uri.h>
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
 #include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -111,9 +113,7 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
 }
 
 void UcxExchangeSource::process() {
-  if (closed_) {
-    // Driver thread called closed
-    cleanUp();
+  if (closed_.load(std::memory_order_acquire) && processClosed()) {
     return;
   }
 
@@ -208,6 +208,73 @@ void UcxExchangeSource::process() {
   }
 }
 
+bool UcxExchangeSource::processClosed() {
+  switch (getState()) {
+    case ReceiverState::Created:
+      // Connect anyway: a server may wait for this source. A failed connect
+      // ends the source, and the queue ignores the error of a Released entry.
+      return false;
+    case ReceiverState::WaitingForHandshakeComplete:
+    case ReceiverState::WaitingForHandshakeResponse:
+      // Until the response arrives, the source does not know whether its
+      // server exists. The handshake callbacks, the endpoint's close and the
+      // close deadline requeue the source.
+      if (!closeDeadlineExpired_.load(std::memory_order_acquire)) {
+        return true;
+      }
+      VLOG(1) << toString()
+              << " closed without a handshake response, sending no close";
+      setState(ReceiverState::Done);
+      cleanUp();
+      return true;
+    case ReceiverState::ReadyToReceive:
+    case ReceiverState::WaitingForMetadata:
+    case ReceiverState::WaitingForData:
+    case ReceiverState::WaitingForIntraNodeData:
+      // The server accepted the handshake, and the channel has not ended.
+      sendClose();
+      setState(ReceiverState::Done);
+      cleanUp();
+      return true;
+    case ReceiverState::Done:
+      cleanUp();
+      return true;
+  }
+  VELOX_UNREACHABLE();
+}
+
+void UcxExchangeSource::sendClose() {
+  if (endpointRef_ == nullptr || endpointRef_->endpoint_ == nullptr) {
+    return;
+  }
+  auto message = std::make_shared<CloseMsg>(makeCloseMsg(partitionKey_));
+  VLOG(3) << toString() << " sending the close message";
+  try {
+    // The request holds 'message' until the send completes.
+    auto request = endpointRef_->endpoint_
+                       ->tagSendBuilder(
+                           message.get(),
+                           sizeof(*message),
+                           ucxx::Tag{getCloseTag(partitionKeyHash_)})
+                       .callbackFunction([key = partitionKey_.toString()](
+                                             ucs_status_t status,
+                                             std::shared_ptr<void> /*arg*/) {
+                         if (status != UCS_OK) {
+                           VLOG(1) << "Failed to send the close message for "
+                                   << key << ": " << ucs_status_string(status);
+                         }
+                       })
+                       .callbackData(message)
+                       .build();
+    communicator_->deferRequestCleanup(std::move(request));
+  } catch (const std::exception& e) {
+    // The producer then learns that its consumer is gone only when the
+    // endpoint closes.
+    LOG(WARNING) << toString()
+                 << " cannot send the close message: " << e.what();
+  }
+}
+
 void UcxExchangeSource::cleanUp() {
   uint32_t value = static_cast<uint32_t>(getState());
   if (value != static_cast<uint32_t>(ReceiverState::Done)) {
@@ -218,15 +285,19 @@ void UcxExchangeSource::cleanUp() {
 
   // Cancel any outstanding request. With weak_ptr callbacks, the callback
   // will safely no-op if we're destroyed before it completes.
-  if (request_ && !request_->isCompleted()) {
-    // The Task has failed and we may need to cancel outstanding requests
-    request_->cancel();
+  for (const auto& request : {handshakeRequest_, request_}) {
+    if (request && !request->isCompleted()) {
+      request->cancel();
+    }
   }
 
   // Move all requests to the Communicator's deferred list so the GPU
   // buffers they reference (via their arg shared_ptr) stay alive until
   // UCX has fully processed any in-flight operations.
   if (communicator_) {
+    if (handshakeRequest_) {
+      communicator_->deferRequestCleanup(std::move(handshakeRequest_));
+    }
     if (request_) {
       communicator_->deferRequestCleanup(std::move(request_));
     }
@@ -261,8 +332,22 @@ void UcxExchangeSource::close() {
 
   VLOG(1) << toString() << " UcxExchangeSource::close called.";
 
-  // Let the Communicator progress thread do the actual clean-up.
-  setState(ReceiverState::Done);
+  // Bounds the wait for the handshake response. The timer fires on the
+  // Timekeeper's thread, so it only sets a flag and requeues; the
+  // Communicator thread acts on it. A timer that cannot be scheduled expires
+  // at once.
+  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
+  folly::futures::sleep(kCloseTimeout)
+      .via(&folly::InlineExecutor::instance())
+      .thenTry([weak](folly::Try<folly::Unit>&& /*result*/) {
+        auto self = weak.lock();
+        if (self == nullptr || self->getState() == ReceiverState::Done) {
+          return;
+        }
+        self->closeDeadlineExpired_.store(true, std::memory_order_release);
+        self->communicator_->addToWorkQueue(self);
+      });
+  // Let the Communicator progress thread tell the server and clean up.
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
@@ -274,7 +359,6 @@ void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
           port_,
           partitionKey_.toString(),
           reason)));
-  close();
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {
@@ -381,13 +465,10 @@ void UcxExchangeSource::sendHandshake() {
       communicator_->kAmCallbackOwner, communicator_->kAmCallbackId);
   // Use weak_ptr to prevent use-after-free if close() is called during callback
   std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
-  if (request_) {
-    completedRequests_.push_back(std::move(request_));
-  }
   // Pass handshakeReq as the callback arg to keep the send buffer alive until
   // the async amSend completes. UCXX stores it as shared_ptr<void> but the
   // type-erased deleter still calls ~HandshakeMsg correctly.
-  request_ =
+  handshakeRequest_ =
       endpointRef_->endpoint_
           ->amSendBuilder(
               handshakeReq.get(), sizeof(*handshakeReq), UCS_MEMORY_TYPE_HOST)
@@ -410,11 +491,8 @@ void UcxExchangeSource::onHandshake(
   // transmitted). The parameter exists only because UCXX uses it as a lifetime
   // handle; letting it go out of scope releases the send buffer.
 
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString() << " onHandshake called after close, ignoring";
-    return;
-  }
+  // A closed source completes the handshake too: it sends the close message
+  // once the response arrives.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeComplete) {
     VLOG(2) << toString() << " onHandshake called in state "
@@ -695,12 +773,8 @@ void UcxExchangeSource::receiveHandshakeResponse() {
 void UcxExchangeSource::onHandshakeResponse(
     ucs_status_t status,
     std::shared_ptr<void> arg) {
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString()
-            << " onHandshakeResponse called after close, ignoring";
-    return;
-  }
+  // A closed source handles the response too: process() then sends the close
+  // message, unless the response rejected the handshake.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeResponse) {
     VLOG(2) << toString() << " onHandshakeResponse called in state "

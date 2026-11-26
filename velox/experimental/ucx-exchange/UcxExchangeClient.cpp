@@ -46,7 +46,8 @@ void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
 
     // Add the entry first: create() registers the source with the
     // Communicator, which may run it at once. A source added after close()
-    // gets a Released entry and is closed at once.
+    // gets a Released entry and is closed at once. It still connects, to send
+    // the close message, so that its producer can finish.
     const bool closed = queue_->isClosedLocked();
     const auto sourceId =
         closed ? queue_->addReleasedSourceLocked() : queue_->addSourceLocked();
