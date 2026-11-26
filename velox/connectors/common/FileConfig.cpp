@@ -16,6 +16,8 @@
 
 #include "velox/connectors/common/FileConfig.h"
 
+#include <fmt/format.h>
+
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -124,6 +126,25 @@ uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
       unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
       "Invalid timestamp unit.");
   return unit;
+}
+
+FormatScopedConfigs FileConfig::formatScopedConfigs(
+    dwio::common::FileFormat fileFormat,
+    const config::ConfigBase& sessionProperties) const {
+  VELOX_CHECK_NE(
+      fileFormat,
+      dwio::common::FileFormat::UNKNOWN,
+      "Cannot build format-specific configs for unknown file format");
+
+  auto connectorConfig = config_->rawConfigsWithPrefix(
+      fmt::format(
+          "{}{}",
+          connectorConfigPrefix_,
+          dwio::common::formatConfigPrefix(fileFormat, ".")));
+  return {
+      config::ConfigBase(std::move(connectorConfig)),
+      config::ConfigBase(sessionProperties.rawConfigsWithPrefix(
+          dwio::common::formatConfigPrefix(fileFormat, "_")))};
 }
 
 } // namespace facebook::velox::connector

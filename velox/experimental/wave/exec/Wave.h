@@ -158,6 +158,17 @@ struct WaveStats {
   /// Optionally measured host to device transfer latency.
   WaveTime transferWaitTime;
 
+  /// Number of table scan decode kernel launches.
+  int64_t numReaderKernels{0};
+
+  /// Number of decode kernel launches that needed a kernel not generated
+  /// before in the process.
+  int64_t numNewReaderKernels{0};
+
+  /// Host time in launching decode kernels, including waiting for their
+  /// run-time compilation.
+  int64_t readerLaunchMicros{0};
+
   void clear();
   void add(const WaveStats& other);
 };

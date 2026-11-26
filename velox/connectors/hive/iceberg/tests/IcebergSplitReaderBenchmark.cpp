@@ -386,7 +386,7 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
             nullptr);
 
     std::shared_ptr<random::RandomSkipTracker> randomSkip;
-    icebergSplitReader->configureReaderOptions(randomSkip);
+    icebergSplitReader->initialize(randomSkip, /*remainingFilterColumns=*/{});
     icebergSplitReader->prepareSplit(nullptr, runtimeStats_);
 
     // Filter range is generated from a small sample data of 4096 rows. So the

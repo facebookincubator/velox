@@ -312,10 +312,8 @@ TEST_F(PrestoQueryRunnerTest, toSqlJoins) {
     auto plan = builder.newPlan()
                     .values(t)
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
+                        "t0 = u0",
                         builder.newPlan().values(u).planNode(),
-                        /*filter=*/"",
                         {"t0", "t1"},
                         core::JoinType::kInner)
                     .planNode();
@@ -330,17 +328,13 @@ TEST_F(PrestoQueryRunnerTest, toSqlJoins) {
     auto plan = builder.newPlan()
                     .values(t)
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
+                        "t0 = u0",
                         builder.newPlan().values(u).planNode(),
-                        /*filter=*/"",
                         {"t0"},
                         core::JoinType::kLeftSemiFilter)
                     .hashJoin(
-                        {"t0"},
-                        {"v0"},
+                        "t0 = v0 AND v1 > 0",
                         builder.newPlan().values(v).planNode(),
-                        "v1 > 0",
                         {"t0", "v1"},
                         core::JoinType::kInner)
                     .planNode();
@@ -357,24 +351,18 @@ TEST_F(PrestoQueryRunnerTest, toSqlJoins) {
     auto plan = builder.newPlan()
                     .values(t)
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
+                        "t0 = u0",
                         builder.newPlan().values(u).planNode(),
-                        /*filter=*/"",
                         {"t0", "t1"},
                         core::JoinType::kLeft)
                     .hashJoin(
-                        {"t0"},
-                        {"v0"},
+                        "t0 = v0",
                         builder.newPlan().values(v).planNode(),
-                        /*filter=*/"",
                         {"t0", "v1"},
                         core::JoinType::kInner)
                     .hashJoin(
-                        {"t0", "v1"},
-                        {"w0", "w1"},
+                        "t0 = w0 AND v1 = w1",
                         builder.newPlan().values(w).planNode(),
-                        /*filter=*/"",
                         {"t0", "w1"},
                         core::JoinType::kFull)
                     .planNode();

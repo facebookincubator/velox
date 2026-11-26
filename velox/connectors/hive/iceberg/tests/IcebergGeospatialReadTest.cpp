@@ -521,10 +521,8 @@ TEST_F(IcebergGeospatialReadTest, geometryHashJoinWithDynamicFilterPushdown) {
                   .endTableScan()
                   .capturePlanNodeId(scanId)
                   .hashJoin(
-                      {"geom"},
-                      {"bgeom"},
+                      "geom = bgeom",
                       builder.newPlan().values(buildData).planNode(),
-                      /*filter=*/"",
                       {"id"})
                   .planNode();
 

@@ -168,8 +168,8 @@ class SentinelBenchmark {
         {});
     NIMBLE_CHECK_EQ(productionView->encodingType(), EncodingType::Sentinel);
     const std::array<RowRange, 1> ranges{RowRange{0, numRows_}};
-    const auto productionNonNullRows =
-        productionView->read(ranges, setNull_, output_.data());
+    const auto productionNonNullRows = productionView->read(
+        ranges, setNull_, /*addStringBuffer=*/nullptr, output_.data());
     NIMBLE_CHECK_EQ(productionNonNullRows, numRows - numNulls);
     NIMBLE_CHECK(output_ == expectedValues);
     NIMBLE_CHECK(nulls_ == expectedNulls);

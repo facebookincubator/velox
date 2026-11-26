@@ -164,6 +164,9 @@ class DirectBufferedInput : public BufferedInput {
  public:
   static constexpr int32_t kTinySize = 2'000;
 
+  /// Reads 'readFile' with 'fileIoContext', which must set 'pool' and must not
+  /// set 'ioStats': 'ioStats' sets it, and is shared because loads scheduled on
+  /// 'executor' can outlive this input.
   DirectBufferedInput(
       std::shared_ptr<ReadFile> readFile,
       const MetricsLogPtr& metricsLog,
@@ -174,24 +177,7 @@ class DirectBufferedInput : public BufferedInput {
       std::shared_ptr<velox::IoStats> ioStats,
       folly::Executor* executor,
       const io::ReaderOptions& readerOptions,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {})
-      : BufferedInput(
-            std::move(readFile),
-            readerOptions.memoryPool(),
-            metricsLog,
-            ioStatistics.get(),
-            ioStats.get(),
-            kMaxMergeDistance,
-            std::nullopt,
-            std::move(fileReadOps)),
-        fileNum_(std::move(fileNum)),
-        tracker_(std::move(tracker)),
-        groupId_(std::move(groupId)),
-        ioStatistics_(std::move(ioStatistics)),
-        ioStats_(std::move(ioStats)),
-        executor_(executor),
-        fileSize_(input_->getLength()),
-        options_(readerOptions) {}
+      FileIoContext fileIoContext);
 
   ~DirectBufferedInput() override {
     for (auto& load : coalescedLoads_) {

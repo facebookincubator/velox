@@ -414,14 +414,12 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecution) {
     // is ungrouped
     auto planFragment = planBuilder
                             .hashJoin(
-                                {"t0"},
-                                {"u0"},
+                                "t0 = u0",
                                 builder.newPlan()
                                     .tableScan(rowType_)
                                     .capturePlanNodeId(buildScanNodeId)
                                     .project({"c0 as u0", "c1 as u1"})
                                     .planNode(),
-                                "",
                                 outputProjection,
                                 testData.joinType)
                             .partitionedOutput({}, 1, outputProjection)
@@ -532,14 +530,12 @@ TEST_F(GroupedExecutionTest, hashJoinWithMixedGroupedExecutionWithSpill) {
                     .capturePlanNodeId(probeScanNodeId)
                     .project({"c0 as t0", "c1 as t1"})
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
+                        "t0 = u0",
                         builder.newPlan()
                             .tableScan(rowType_)
                             .capturePlanNodeId(buildScanNodeId)
                             .project({"c0 as u0", "c1 as u1"})
                             .planNode(),
-                        "",
                         {"t1", "u1"},
                         core::JoinType::kInner)
                     .planNode();
@@ -618,14 +614,12 @@ DEBUG_ONLY_TEST_F(
     core::PlanNodePtr joinNode;
     auto planFragment = planBuilder
                             .hashJoin(
-                                {"x"},
-                                {"y"},
+                                "x = y",
                                 builder.newPlan()
                                     .tableScan(rowType_, {"c0 > 0"})
                                     .capturePlanNodeId(buildScanNodeId)
                                     .project({"c0 as y"})
                                     .planNode(),
-                                "",
                                 {"x", "y"})
                             .capturePlanNode(joinNode)
                             .partitionedOutput({}, 1, {"x", "y"})
@@ -777,14 +771,12 @@ DEBUG_ONLY_TEST_F(
   core::PlanNodePtr joinNode;
   auto planFragment = planBuilder
                           .hashJoin(
-                              {"x"},
-                              {"y"},
+                              "x = y",
                               builder.newPlan()
                                   .tableScan(rowType_, {"c0 > 0"})
                                   .capturePlanNodeId(buildScanNodeId)
                                   .project({"c0 as y"})
                                   .planNode(),
-                              "",
                               {"x", "y"})
                           .capturePlanNode(joinNode)
                           .partitionedOutput({}, 1, {"x", "y"})
@@ -910,14 +902,12 @@ TEST_F(GroupedExecutionTest, groupedExecutionWithHashAndNestedLoopJoin) {
     if (i == 0) {
       planBuilder
           .hashJoin(
-              {"w"},
-              {"r"},
+              "w = r",
               builder.newPlan()
                   .tableScan(rowType_, {"c0 > 0"})
                   .capturePlanNodeId(buildScanNodeId)
                   .project({"c0 as r"})
                   .planNode(),
-              "",
               {"x", "y", "z", "w", "c4", "c5"})
           .capturePlanNodeId(joinNodeId)
           .localPartitionRoundRobinRow()

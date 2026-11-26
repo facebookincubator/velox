@@ -1689,8 +1689,11 @@ class QueryConfig {
       int64_t,
       200,
       "Legacy session ceiling for the per-backend rate-limit capacity, shared "
-      "across drivers. Default 200. Zero defers to the function ceiling or the "
-      "built-in legacy limit. A positive value overrides the function ceiling. "
+      "across drivers. Default 200. A positive value overrides the function "
+      "ceiling. Zero defers to the function ceiling or, when the function "
+      "declares none, the limiter's default capacity (20). When "
+      "rpc.ratelimiter.tighten_limit is true, a positive value can only lower "
+      "the function ceiling: the smaller of the two applies. "
       "With admission-controlled dispatch this cap bounds in-flight work "
       "against that backend across every driver on the worker that runs the "
       "same policy; the adaptive "
@@ -1699,6 +1702,19 @@ class QueryConfig {
       "is non-negative. "
       "Queries that resolve to the same policy share a backend's rate "
       "limiter, and each distinct policy gets its own.")
+
+  /// Whether rpc.ratelimiter.max_limit can only lower a function's ceiling
+  /// instead of replacing it.
+  VELOX_QUERY_CONFIG(
+      kRpcRateLimiterTightenLimit,
+      rpcRateLimiterTightenLimit,
+      "rpc.ratelimiter.tighten_limit",
+      bool,
+      false,
+      "When true, a positive rpc.ratelimiter.max_limit can only lower the "
+      "function ceiling instead of replacing it: the smaller of the two "
+      "applies. Zero keeps its meaning, and the floor is unchanged. Ignored "
+      "when rpc.ratelimiter.hard_limit is non-negative. Default false.")
 
   /// Versioned hard ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1709,8 +1725,9 @@ class QueryConfig {
       -1,
       "Versioned session hard ceiling for the per-backend rate-limit capacity, "
       "and the switch to the function's bounds. Minus one keeps the session's "
-      "precedence: rpc.ratelimiter.min_limit and rpc.ratelimiter.max_limit "
-      "override the function's floor and ceiling. Zero or more lets the "
+      "precedence: rpc.ratelimiter.min_limit overrides the function's floor, "
+      "and rpc.ratelimiter.max_limit overrides its ceiling, or only lowers it "
+      "when rpc.ratelimiter.tighten_limit is true. Zero or more lets the "
       "function's floor and ceiling win, since session properties apply to "
       "every function in the query, and ignores rpc.ratelimiter.max_limit. A "
       "positive value caps the function's ceiling, the smaller winning, and is "

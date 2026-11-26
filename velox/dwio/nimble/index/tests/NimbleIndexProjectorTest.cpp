@@ -502,7 +502,11 @@ TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
   for (const auto& stripe : stripes) {
     SCOPED_TRACE(fmt::format("stripeIndex={}", stripe.selection.stripeIndex));
     StreamReader reader(schema, leafPool_.get(), /*options=*/{});
-    reader.setStreams(stripe.streams, encodingOptions);
+    reader.setStreams(
+        stripe.streams,
+        /*streamBufferHolders=*/{},
+        /*alphabets=*/{},
+        encodingOptions);
     velox::VectorPtr actual;
     folly::coro::blockingWait(reader.co_next(kRowsPerStripe, actual));
     const auto expected = vectorMaker_->rowVector(

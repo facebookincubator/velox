@@ -222,9 +222,11 @@ class VectorTestBase {
 
   /// Returns a flat vector containing values from zero through 'size - 1'.
   template <typename T>
-  FlatVectorPtr<EvalType<T>> makeFlatIdentityVector(vector_size_t size) {
+  FlatVectorPtr<EvalType<T>> makeFlatIdentityVector(
+      vector_size_t size,
+      const TypePtr& type = CppToType<T>::create()) {
     return makeFlatVector<T>(
-        size, [](auto row) { return static_cast<T>(row); });
+        size, [](auto row) { return static_cast<T>(row); }, nullptr, type);
   }
 
   template <typename T>

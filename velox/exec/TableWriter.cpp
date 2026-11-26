@@ -246,6 +246,10 @@ RowVectorPtr TableWriter::getOutput() {
 
   finished_ = true;
   const std::vector<std::string> fragments = closeDataSink();
+  const auto duplicateRows =
+      static_cast<int64_t>(dataSink_->numDuplicateRows());
+  VELOX_CHECK_LE(duplicateRows, numWrittenRows_);
+  numWrittenRows_ -= duplicateRows;
   updateStats(dataSink_->stats());
 
   if (outputType_->size() == 1) {
@@ -256,7 +260,11 @@ RowVectorPtr TableWriter::getOutput() {
         nullptr,
         1,
         std::vector<VectorPtr>{std::make_shared<ConstantVector<int64_t>>(
-            pool(), 1, false /*isNull*/, BIGINT(), numWrittenRows_)});
+            pool(),
+            1,
+            /*isNull=*/false,
+            BIGINT(),
+            static_cast<int64_t>(numWrittenRows_))});
   }
 
   const vector_size_t numOutputRows = fragments.size() + 1;
@@ -270,7 +278,7 @@ RowVectorPtr TableWriter::getOutput() {
   // 1. Set rows column.
   FlatVectorPtr<int64_t> writtenRowsVector =
       BaseVector::create<FlatVector<int64_t>>(BIGINT(), numOutputRows, pool());
-  writtenRowsVector->set(0, static_cast<int64_t>(numWrittenRows_));
+  writtenRowsVector->set(0, numWrittenRows_);
   for (int idx = 1; idx < numOutputRows; ++idx) {
     writtenRowsVector->setNull(idx, true);
   }

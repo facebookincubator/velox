@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include <chrono>
+
+#include "velox/experimental/wave/common/Bits.cuh"
 #include "velox/experimental/wave/common/Buffer.h"
 #include "velox/experimental/wave/common/Cuda.h"
-#include "velox/experimental/wave/common/CudaUtil.cuh"
 #include "velox/experimental/wave/common/GpuArena.h"
-#include "velox/experimental/wave/dwio/decode/GpuDecoder.cuh"
+#include "velox/experimental/wave/dwio/decode/DecodeStep.h"
+#include "velox/experimental/wave/dwio/decode/ReaderKernel.h"
 
 namespace facebook::velox::wave {
 
@@ -28,73 +31,75 @@ int32_t GpuDecode::tempSize() const {
 }
 
 int32_t GpuDecode::sharedMemorySize() const {
-  return detail::sharedMemorySizeForDecode<kBlockSize>(step);
+  return decodeSharedMemorySize(step, kBlockSize);
 }
 
-/// Describes multiple sequences of decode ops. Each TB executes a sequence of
-/// decode steps. The data area starts with a range of instruction numbers for
-/// each thread block. The first TB runs from 0 to ends[0]. The nth runs from
-/// ends[nth-1] to ends[nth]. After gridDim.x ends, we round to an 8 aligned
-/// offset and have an array of GpuDecodes.]
-struct alignas(16) GpuDecodeParams {
-  // If need to represent more than this many ops, use a dynamically allocated
-  // external array in 'external'.
-  static constexpr int32_t kMaxInlineOps = 15;
-
-  // Pointer to standalone description of work. If nullptr, the description of
-  // work fits inline in 'this'.
-  GpuDecodeParams* external{nullptr};
-  void* padding;
-  // The end of each decode program. The first starts at 0. The end is
-  // ends[blockIdx.x].
-  int32_t ends
-      [kMaxInlineOps * (sizeof(GpuDecode) + sizeof(int32_t)) /
-       sizeof(int32_t)] = {};
-};
-
-void __global__ __launch_bounds__(1024)
-    decodeKernel(GpuDecodeParams inlineParams) {
-  __shared__ GpuDecodeParams* params;
-  __shared__ int32_t programStart;
-  __shared__ int32_t programEnd;
-  __shared__ GpuDecode* ops;
-  if (threadIdx.x == 0) {
-    params = inlineParams.external ? inlineParams.external : &inlineParams;
-    programStart = blockIdx.x == 0 ? 0 : params->ends[blockIdx.x - 1];
-    programEnd = params->ends[blockIdx.x];
-    ops =
-        reinterpret_cast<GpuDecode*>(&params->ends[0] + roundUp(gridDim.x, 4));
+int32_t decodeSharedMemorySize(DecodeStep step, int32_t blockSize) {
+  // See detail::kScanSmemSlots.
+  const int32_t scanSize =
+      (blockSize / kWarpThreads + 2) * static_cast<int32_t>(sizeof(int64_t));
+  switch (step) {
+    case DecodeStep::kRleTotalLength:
+    case DecodeStep::kMainlyConstant:
+    case DecodeStep::kRleBool:
+    case DecodeStep::kVarint:
+    case DecodeStep::kMakeScatterIndices:
+    case DecodeStep::kLengthToOffset:
+      return scanSize;
+    case DecodeStep::kRle:
+      // Scan temp followed by an offset per thread.
+      return scanSize + blockSize * static_cast<int32_t>(sizeof(int32_t));
+    default:
+      return 0;
   }
-  __syncthreads();
-  for (auto i = programStart; i < programEnd; ++i) {
-    detail::decodeSwitch<kBlockSize>(ops[i]);
-  }
-  __syncthreads();
 }
 
-void launchDecode(
+namespace {
+
+// Sets the opcode of each op and returns the kernel for the ops.
+ReaderKernel compiledKernel(const DecodePrograms& programs, int32_t& shared) {
+  std::vector<GpuDecode*> ops;
+  for (auto& program : programs.programs) {
+    for (auto& op : program) {
+      ops.push_back(op.get());
+    }
+  }
+  auto key = makeReaderKernelKey(ops, kBlockSize);
+  shared = key.sharedMemorySize();
+  return getReaderKernel(key);
+}
+
+// Calls 'launch' and returns its wall time in microseconds.
+template <typename Launch>
+int64_t timedLaunch(Launch launch) {
+  const auto start = std::chrono::steady_clock::now();
+  launch();
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now() - start)
+      .count();
+}
+
+} // namespace
+
+DecodeLaunchInfo launchDecode(
     const DecodePrograms& programs,
     LaunchParams& launchParams,
     Stream* stream) {
   int32_t numBlocks = programs.programs.size();
   int32_t numOps = 0;
   bool allSingle = true;
-  int32_t shared = 0;
   for (auto& program : programs.programs) {
-    int numSteps = program.size();
-    ;
-    if (numSteps != 1) {
+    if (program.size() != 1) {
       allSingle = false;
     }
-    numOps += numSteps;
-    for (auto& step : program) {
-      shared = std::max(
-          shared, detail::sharedMemorySizeForDecode<kBlockSize>(step->step));
-    }
+    numOps += program.size();
   }
-  if (shared > 0) {
-    shared += 15; // allow align at 16.
-  }
+  int32_t shared = 0;
+  auto readerKernel = compiledKernel(programs, shared);
+  auto& kernel = readerKernel.kernel;
+  DecodeLaunchInfo info;
+  info.numBlocks = numBlocks;
+  info.isNewKernel = readerKernel.isNew;
   GpuDecodeParams localParams;
   GpuDecodeParams* params = &localParams;
   char* host = nullptr;
@@ -107,7 +112,6 @@ void launchDecode(
     uintptr_t aligned = roundUp(reinterpret_cast<uintptr_t>(host), 16);
     params = reinterpret_cast<GpuDecodeParams*>(aligned);
   }
-  int32_t end = programs.programs[0].size();
   GpuDecode* decodes =
       reinterpret_cast<GpuDecode*>(&params->ends[0] + roundUp(numBlocks, 4));
   uintptr_t decodeOffset = reinterpret_cast<char*>(decodes) - host;
@@ -121,29 +125,58 @@ void launchDecode(
   }
   if (allSingle) {
     launchParams.transfer(*stream);
-    detail::decodeGlobal<kBlockSize>
-        <<<numBlocks, kBlockSize, shared, stream->stream()->stream>>>(
-            reinterpret_cast<GpuDecode*>(device + decodeOffset));
-    CUDA_CHECK(cudaGetLastError());
+    auto* deviceOps = reinterpret_cast<GpuDecode*>(device + decodeOffset);
+    void* args[] = {&deviceOps};
+    info.launchMicros = timedLaunch([&]() {
+      kernel->launch(
+          static_cast<int32_t>(ReaderEntry::kSingle),
+          numBlocks,
+          kBlockSize,
+          shared,
+          stream,
+          args);
+    });
     programs.result.transfer(*stream);
-    return;
+    return info;
   }
   if (launchParams.device) {
     localParams.external = reinterpret_cast<GpuDecodeParams*>(device);
     launchParams.transfer(*stream);
   }
-
-  decodeKernel<<<numBlocks, kBlockSize, shared, stream->stream()->stream>>>(
-      localParams);
-  CUDA_CHECK(cudaGetLastError());
+  void* args[] = {&localParams};
+  info.launchMicros = timedLaunch([&]() {
+    kernel->launch(
+        static_cast<int32_t>(ReaderEntry::kPrograms),
+        numBlocks,
+        kBlockSize,
+        shared,
+        stream,
+        args);
+  });
   programs.result.transfer(*stream);
+  return info;
 }
 
-REGISTER_KERNEL("decode", decodeKernel);
-namespace {
-static bool decSingles_reg = registerKernel(
-    "decodeSingle",
-    reinterpret_cast<const void*>(detail::decodeGlobal<kBlockSize>));
+void launchDecodeOps(
+    GpuDecode* ops,
+    int32_t numOps,
+    int32_t blockSize,
+    Stream* stream) {
+  std::vector<GpuDecode*> opPointers;
+  opPointers.reserve(numOps);
+  for (auto i = 0; i < numOps; ++i) {
+    opPointers.push_back(&ops[i]);
+  }
+  auto key = makeReaderKernelKey(opPointers, blockSize);
+  auto kernel = getReaderKernel(key).kernel;
+  void* args[] = {&ops};
+  kernel->launch(
+      static_cast<int32_t>(ReaderEntry::kSingle),
+      numOps,
+      blockSize,
+      key.sharedMemorySize(),
+      stream,
+      args);
 }
 
 } // namespace facebook::velox::wave

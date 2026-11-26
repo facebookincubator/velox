@@ -24,7 +24,21 @@
 #include "velox/common/config/ConfigProperty.h"
 #include "velox/connectors/common/FileConfigMacrosDefine.h"
 
+namespace facebook::velox::dwio::common {
+enum class FileFormat;
+} // namespace facebook::velox::dwio::common
+
 namespace facebook::velox::connector {
+
+/// Settings for one file format, for its reader or writer factory to build
+/// format options from. Keys have the format prefix removed.
+struct FormatScopedConfigs {
+  /// Connector config keys under '<connector prefix><format>.'.
+  config::ConfigBase connectorConfig;
+
+  /// Session property keys under '<format>_'.
+  config::ConfigBase sessionProperties;
+};
 
 /// Configuration for file-based data sources. Contains settings for file
 /// reading, I/O coalescing, format-specific options, and metadata caching.
@@ -369,6 +383,12 @@ class FileConfig {
   std::string_view connectorConfigPrefix() const {
     return connectorConfigPrefix_;
   }
+
+  /// Returns the connector config and the session properties for
+  /// 'fileFormat'. 'fileFormat' must not be UNKNOWN.
+  FormatScopedConfigs formatScopedConfigs(
+      dwio::common::FileFormat fileFormat,
+      const config::ConfigBase& sessionProperties) const;
 
  protected:
   static constexpr const char* kLegacyPrefix = "hive.";

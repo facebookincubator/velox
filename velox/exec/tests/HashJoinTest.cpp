@@ -153,10 +153,8 @@ TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
                   .values(probeVector)
                   .localPartition({"t_key"})
                   .hashJoin(
-                      {"t_key"},
-                      {"u_key"},
+                      "t_key = u_key",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"t_key", "match"},
                       core::JoinType::kLeftSemiProject,
                       true)
@@ -198,10 +196,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
                   .values(probeVector)
                   .localPartition({"t_key"})
                   .hashJoin(
-                      {"t_key"},
-                      {"u_key"},
+                      "t_key = u_key",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"u_key"},
                       core::JoinType::kRight)
                   .limit(0, 1, true)
@@ -306,10 +302,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
                     // closes early while its peers wait at the barrier.
                     .localPartition({"partition_key"})
                     .hashJoin(
-                        {"t_key"},
-                        {"u_key"},
+                        "t_key = u_key",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         {"t_key", "u_key"},
                         testParam.joinType)
                     .limit(0, 5, true)
@@ -403,10 +397,8 @@ TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
                     .values(probeVector)
                     .localPartition({"t_key"})
                     .hashJoin(
-                        {"t_key"},
-                        {"u_key"},
+                        "t_key = u_key",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         outputLayout,
                         joinType)
                     .limit(0, 5, true)
@@ -828,10 +820,8 @@ TEST_P(MultiThreadedHashJoinTest, nullAsValueAntiJoin) {
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"c0", "c1"},
-                      {"u0", "u1"},
+                      "c0 = u0 AND c1 = u1",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1"},
                       core::JoinType::kAnti,
                       /*nullAware=*/false,
@@ -860,10 +850,8 @@ TEST_P(MultiThreadedHashJoinTest, nullAsValueSemiJoin) {
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"c0", "c1"},
-                      {"u0", "u1"},
+                      "c0 = u0 AND c1 = u1",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1"},
                       core::JoinType::kLeftSemiFilter,
                       /*nullAware=*/false,
@@ -1535,13 +1523,11 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
                   .tableScan(probeVectors[0]->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .tableScan(buildVectors[0]->rowType())
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
-                      "",
                       {"t0", "t1"},
                       core::JoinType::kLeftSemiFilter)
                   .planNode();
@@ -1570,13 +1556,11 @@ TEST_P(MultiThreadedHashJoinTest, semiFilterOverLazyVectors) {
              .tableScan(probeVectors[0]->rowType())
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0 AND (t1 + u1) % 3 = 0",
                  builder.newPlan()
                      .tableScan(buildVectors[0]->rowType())
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
-                 "(t1 + u1) % 3 = 0",
                  {"t0", "t1"},
                  core::JoinType::kLeftSemiFilter)
              .planNode();
@@ -1695,10 +1679,8 @@ TEST_P(HashJoinTest, nullAwareRightAntiJoinIsRejected) {
       builder.newPlan()
           .values(probeVector)
           .hashJoin(
-              {"t0"},
-              {"u0"},
+              "t0 = u0",
               builder.newPlan().values(buildVector).planNode(),
-              /*filter=*/"",
               {"u0"},
               core::JoinType::kRightAnti,
               /*nullAware=*/true)

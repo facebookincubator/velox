@@ -26,7 +26,9 @@
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
+#include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/RowRange.h"
@@ -62,16 +64,30 @@ class EncodingView {
 
   /// Reads selected physical values densely and reports null output positions.
   /// Non-nullable views ignore `setNull` and return `indices.size()`.
+  /// `addStringBuffer` is as for the read of ranges below.
   virtual uint32_t read(
       std::span<const uint32_t> indices,
       const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
       void* output) const;
 
   /// Reads ordered, disjoint source ranges densely and reports null output
   /// positions. Non-nullable views ignore `setNull`.
+  ///
+  /// A caller passes a non-null `addStringBuffer` to a read of strings only if
+  /// it holds every buffer that the read passes to it for as long as it keeps
+  /// the values. The read must then pass to `addStringBuffer` buffers, each
+  /// non-null and non-empty, that hold every non-empty value it returns, and
+  /// may pass none only when every value is empty. The view may decode the
+  /// values into buffers that it does not keep. The default reads pass the
+  /// values to addStrings(), which copies them into one buffer that it passes.
+  /// A view whose values lie in a buffer that it can pass, such as its input,
+  /// overrides addStrings() to pass it, and a view that returns the values of
+  /// another view passes `addStringBuffer` to the read of that view.
   virtual uint32_t read(
       std::span<const RowRange> ranges,
       const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
       void* output) const = 0;
 
   /// Returns the number of rows in the encoded stream.
@@ -157,6 +173,33 @@ class EncodingView {
     return numRows;
   }
 
+  // Passes to 'addStringBuffer', which is not null, buffers that hold the
+  // non-empty strings in 'values', the values that a default read of strings
+  // returns. Copies them as copyStrings() does. A view whose strings lie in a
+  // buffer that it can pass overrides it to pass that buffer.
+  virtual void addStrings(
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::span<std::string_view> values) const {
+    copyStrings(addStringBuffer, values);
+  }
+
+  // Passes Encoding::Options::inputStringBuffer to 'addStringBuffer' for the
+  // strings in 'values', which point into the input of the view, or copies
+  // them as copyStrings() does when the view has no input string buffer. Does
+  // nothing when 'addStringBuffer' is null.
+  void addInputStrings(
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::span<std::string_view> values) const;
+
+  // Copies the non-empty strings in 'values' into one new buffer, points them
+  // to it and passes it to 'addStringBuffer'. A string that points to the same
+  // bytes as the non-empty string before it, such as a repeated value, shares
+  // its copy. Does nothing when 'addStringBuffer' is null or every string is
+  // empty.
+  void copyStrings(
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::span<std::string_view> values) const;
+
   // Returns uncompressed bytes while retaining decompressed storage for the
   // lifetime of the view. May be called at most once per view.
   std::string_view decompressPayload(
@@ -228,6 +271,7 @@ class TypedEncodingView : public EncodingView {
   uint32_t read(
       std::span<const RowRange> ranges,
       const std::function<void(uint32_t)>& /*setNull*/,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
       void* output) const override {
     const auto numRows = this->checkReadRanges(ranges);
     auto* typedOutput = static_cast<physicalType*>(output);
@@ -235,6 +279,11 @@ class TypedEncodingView : public EncodingView {
     for (const auto& range : ranges) {
       readPhysical(range.startRow, range.numRows(), typedOutput + outputOffset);
       outputOffset += range.numRows();
+    }
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      if (addStringBuffer != nullptr) {
+        this->addStrings(addStringBuffer, {typedOutput, numRows});
+      }
     }
     return numRows;
   }

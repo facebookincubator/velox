@@ -114,7 +114,8 @@ TEST_F(DirectBufferedInputTest, reset) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     // First round: enqueue and load streams.
     auto stream1 = input.enqueue(common::Region{0, regionSize}, nullptr);
@@ -241,7 +242,8 @@ TEST_F(DirectBufferedInputTest, readAfterReset) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     // Enqueue and load streams.
     auto stream1 = input.enqueue(common::Region{0, regionSize}, nullptr);
@@ -320,7 +322,8 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
         dataIoStats_,
         nullptr,
         nullptr,
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     auto stream1 = input.enqueue(common::Region{123, regionSize}, nullptr);
     auto stream2 = input.enqueue(common::Region{123, regionSize}, nullptr);
@@ -392,7 +395,8 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareAllocationRead) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   // Adjacent distinct regions, then a duplicate of region 0.
   std::vector<std::unique_ptr<SeekableInputStream>> streams;
@@ -455,7 +459,8 @@ TEST_F(DirectBufferedInputTest, largeDuplicateForcesSharedAllocation) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   auto source = input.enqueue(common::Region{0, kRegionSize}, nullptr);
   auto duplicate = input.enqueue(common::Region{0, kRegionSize}, nullptr);
@@ -514,7 +519,8 @@ TEST_F(DirectBufferedInputTest, sharedAllocationStreamCrossesQuantum) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   std::vector<std::unique_ptr<SeekableInputStream>> streams;
   streams.reserve(kNumSmall);
@@ -569,7 +575,8 @@ TEST_F(DirectBufferedInputTest, sharedAllocationLoadServesTinyAndDuplicates) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   std::vector<std::unique_ptr<SeekableInputStream>> streams;
   streams.reserve(kNumSmall);
@@ -638,7 +645,8 @@ TEST_F(DirectBufferedInputTest, useSharedAllocationThreshold) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
     std::vector<std::unique_ptr<SeekableInputStream>> streams;
     streams.reserve(numRegions);
     for (int32_t k = 0; k < numRegions; ++k) {
@@ -690,7 +698,8 @@ TEST_F(DirectBufferedInputTest, sharedAllocationReducesAllocations) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   std::vector<std::unique_ptr<SeekableInputStream>> streams;
   streams.reserve(kNumRegions);
@@ -746,7 +755,8 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithBeforeLoading) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     // Block the coalesced load to verify references are held.
     folly::Baton<> loadStarted;
@@ -853,7 +863,8 @@ DEBUG_ONLY_TEST_F(DirectBufferedInputTest, resetInputWithAfterLoading) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     // Block the coalesced load to verify references are held.
     folly::Baton<> loadStarted;
@@ -944,7 +955,8 @@ TEST_F(DirectBufferedInputTest, preloadCalledTwice) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   input.preload();
   ASSERT_TRUE(input.preloaded());
@@ -971,7 +983,8 @@ TEST_F(DirectBufferedInputTest, isBufferedWithPreload) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   // Before preload, isBuffered should return false.
   EXPECT_FALSE(input.isBuffered(0, 100));
@@ -1004,7 +1017,8 @@ TEST_F(DirectBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   ASSERT_EQ(readFile->numReads(), 0);
 
@@ -1050,7 +1064,8 @@ TEST_F(DirectBufferedInputTest, preloadAfterEnqueue) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   input.enqueue({0, 100}, nullptr);
   VELOX_ASSERT_THROW(
@@ -1077,7 +1092,8 @@ TEST_F(DirectBufferedInputTest, preloadedDataWithoutPreload) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   VELOX_ASSERT_THROW(
       input.preloadedData(0, 100), "preloadedData() called without preload");
@@ -1103,7 +1119,8 @@ TEST_F(DirectBufferedInputTest, preloadedDataOffsetOutOfRange) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   input.preload();
   VELOX_ASSERT_THROW(
@@ -1155,7 +1172,8 @@ TEST_F(DirectBufferedInputTest, preload) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     ASSERT_EQ(readFile->numReads(), 0);
     EXPECT_FALSE(input.preloaded());
@@ -1275,7 +1293,8 @@ TEST_F(DirectBufferedInputTest, preloadedData) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     ASSERT_EQ(readFile->numReads(), 0);
     input.preload();
@@ -1330,7 +1349,8 @@ TEST_F(DirectBufferedInputTest, hasCache) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   ASSERT_FALSE(input.hasCache());
   VELOX_ASSERT_THROW(
@@ -1338,6 +1358,28 @@ TEST_F(DirectBufferedInputTest, hasCache) {
       "cacheRegion requires a backing cache");
   VELOX_ASSERT_THROW(
       input.findCachedRegion(0), "findCachedRegion requires a backing cache");
+}
+
+TEST_F(DirectBufferedInputTest, fileIoContextWithIoStats) {
+  io::ReaderOptions readerOptions(pool_.get());
+  auto& ids = fileIds();
+  auto ioStats = std::make_shared<IoStats>();
+  FileIoContext fileIoContext;
+  fileIoContext.ioStats = ioStats.get();
+
+  VELOX_ASSERT_THROW(
+      DirectBufferedInput(
+          std::make_shared<InMemoryReadFile>(std::string("test")),
+          MetricsLog::voidLog(),
+          StringIdLease(ids, "testFile"),
+          tracker_,
+          StringIdLease(ids, "testGroup"),
+          dataIoStats_,
+          ioStats,
+          executor_.get(),
+          readerOptions,
+          std::move(fileIoContext)),
+      "FileIoContext ioStats must be null: the input takes ioStats as a parameter");
 }
 
 TEST_F(DirectBufferedInputTest, readGapTracking) {
@@ -1393,7 +1435,8 @@ TEST_F(DirectBufferedInputTest, readGapTracking) {
         // Gaps are recorded synchronously in load(). Without an executor, no
         // prefetch outlives 'input'.
         nullptr,
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     for (const auto& region : testCase.regions) {
       input.enqueue(region, nullptr);

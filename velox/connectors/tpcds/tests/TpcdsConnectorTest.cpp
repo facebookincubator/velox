@@ -168,14 +168,12 @@ TEST_F(TpcdsConnectorTest, join) {
                       1)
                   .capturePlanNodeId(itemScanId)
                   .hashJoin(
-                      {"w_state"},
-                      {"s_state"},
+                      "w_state = s_state",
                       builder.newPlan()
                           .tpcdsTableScan(
                               velox::tpcds::Table::TBL_STORE, {"s_state"}, 1)
                           .capturePlanNodeId(inventoryScanId)
                           .planNode(),
-                      "",
                       {"w_warehouse_id"})
                   // Get distinct values of warehouse_id
                   .partialAggregation({"w_warehouse_id"}, {})

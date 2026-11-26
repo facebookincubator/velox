@@ -79,7 +79,7 @@ void TpchQueryBuilder::readFileSchema(
   std::shared_ptr<ReadFile> readFile;
   readFile.reset(uniqueReadFile.release());
   auto input = std::make_unique<dwio::common::BufferedInput>(
-      readFile, readerOptions.memoryPool());
+      readFile, FileIoContext{.pool = &readerOptions.memoryPool()});
   std::unique_ptr<dwio::common::Reader> reader =
       dwio::common::getReaderFactory(readerOptions.fileFormat())
           ->createReader(std::move(input), readerOptions);
@@ -322,11 +322,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
               kNation, nationSelectedRowTypeSubQuery, nationFileColumnsSubQuery)
           .captureScanNodeId(nationScanIdSubQuery)
           .hashJoin(
-              {"n_regionkey"},
-              {"r_regionkey"},
-              regionSubQuery,
-              "",
-              {"n_nationkey"})
+              "n_regionkey = r_regionkey", regionSubQuery, {"n_nationkey"})
           .planNode();
 
   auto supplierJoinNationJoinRegionSubQuery =
@@ -338,10 +334,8 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
               supplierFileColumnsSubQuery)
           .captureScanNodeId(supplierScanIdSubQuery)
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
+              "s_nationkey = n_nationkey",
               nationJoinRegionSubQuery,
-              "",
               {"s_suppkey"})
           .planNode();
 
@@ -373,11 +367,7 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanId)
           .hashJoin(
-              {"n_regionkey"},
-              {"r_regionkey"},
-              region,
-              "",
-              {"n_nationkey", "n_name"})
+              "n_regionkey = r_regionkey", region, {"n_nationkey", "n_name"})
           .planNode();
 
   auto supplierJoinNationJoinRegion =
@@ -386,10 +376,8 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanId)
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
+              "s_nationkey = n_nationkey",
               nationJoinRegion,
-              "",
               mergeColumnNames(supplierColumns, {"s_suppkey", "n_name"}))
           .planNode();
 
@@ -399,16 +387,12 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanId)
           .hashJoin(
-              {"ps_partkey"},
-              {"p_partkey"},
+              "ps_partkey = p_partkey",
               part,
-              "",
               {"ps_suppkey", "ps_supplycost", "p_partkey", "p_mfgr"})
           .hashJoin(
-              {"ps_suppkey"},
-              {"s_suppkey"},
+              "ps_suppkey = s_suppkey",
               supplierJoinNationJoinRegion,
-              "",
               mergeColumnNames(
                   supplierColumns,
                   {"ps_supplycost", "p_partkey", "p_mfgr", "n_name"}))
@@ -420,10 +404,8 @@ TpchPlan TpchQueryBuilder::getQ2Plan() const {
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanIdSubQuery)
           .hashJoin(
-              {"ps_suppkey"},
-              {"s_suppkey"},
+              "ps_suppkey = s_suppkey",
               supplierJoinNationJoinRegionSubQuery,
-              "",
               {"ps_supplycost", "ps_partkey"})
           .partialAggregation(
               {"ps_partkey"}, {"min(ps_supplycost) AS min_supplycost"})
@@ -512,10 +494,8 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
               {orderDateFilter})
           .captureScanNodeId(ordersPlanNodeId)
           .hashJoin(
-              {"o_custkey"},
-              {"c_custkey"},
+              "o_custkey = c_custkey",
               customers,
-              "",
               {"o_orderdate", "o_shippriority", "o_orderkey"})
           .planNode();
 
@@ -532,10 +512,8 @@ TpchPlan TpchQueryBuilder::getQ3Plan() const {
               {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
                "l_orderkey"})
           .hashJoin(
-              {"l_orderkey"},
-              {"o_orderkey"},
+              "l_orderkey = o_orderkey",
               custkeyJoinNode,
-              "",
               {"l_orderkey", "o_orderdate", "o_shippriority", "part_revenue"})
           .partialAggregation(
               {"l_orderkey", "o_orderdate", "o_shippriority"},
@@ -598,10 +576,8 @@ TpchPlan TpchQueryBuilder::getQ4Plan() const {
           .localPartition({"l_orderkey"})
           .finalAggregation()
           .hashJoin(
-              {"l_orderkey"},
-              {"o_orderkey"},
+              "l_orderkey = o_orderkey",
               orders,
-              "",
               {"o_orderpriority"},
               core::JoinType::kRightSemiFilter)
           .partialAggregation({"o_orderpriority"}, {"count(0) AS order_count"})
@@ -687,11 +663,7 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanNodeId)
           .hashJoin(
-              {"n_regionkey"},
-              {"r_regionkey"},
-              region,
-              "",
-              {"n_nationkey", "n_name"})
+              "n_regionkey = r_regionkey", region, {"n_nationkey", "n_name"})
           .planNode();
 
   auto supplierJoinNationRegion =
@@ -700,10 +672,8 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
+              "s_nationkey = n_nationkey",
               nationJoinRegion,
-              "",
               {"s_suppkey", "n_name", "s_nationkey"})
           .planNode();
 
@@ -717,22 +687,16 @@ TpchPlan TpchQueryBuilder::getQ5Plan() const {
                "l_orderkey",
                "l_suppkey"})
           .hashJoin(
-              {"l_suppkey"},
-              {"s_suppkey"},
+              "l_suppkey = s_suppkey",
               supplierJoinNationRegion,
-              "",
               {"n_name", "part_revenue", "s_nationkey", "l_orderkey"})
           .hashJoin(
-              {"l_orderkey"},
-              {"o_orderkey"},
+              "l_orderkey = o_orderkey",
               orders,
-              "",
               {"n_name", "part_revenue", "s_nationkey", "o_custkey"})
           .hashJoin(
-              {"s_nationkey", "o_custkey"},
-              {"c_nationkey", "c_custkey"},
+              "s_nationkey = c_nationkey AND o_custkey = c_custkey",
               customer,
-              "",
               {"n_name", "part_revenue"})
           .partialAggregation({"n_name"}, {"sum(part_revenue) as revenue"})
           .localPartition(std::vector<std::string>{})
@@ -832,11 +796,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
           .hashJoin(
-              {"c_nationkey"},
-              {"n_nationkey"},
-              custNation,
-              "",
-              {"n_name", "c_custkey"})
+              "c_nationkey = n_nationkey", custNation, {"n_name", "c_custkey"})
           .project({"n_name as cust_nation", "c_custkey"})
           .planNode();
 
@@ -846,10 +806,8 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .captureScanNodeId(ordersScanNodeId)
           .hashJoin(
-              {"o_custkey"},
-              {"c_custkey"},
+              "o_custkey = c_custkey",
               customerJoinNation,
-              "",
               {"cust_nation", "o_orderkey"})
           .planNode();
 
@@ -867,11 +825,7 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
-              suppNation,
-              "",
-              {"n_name", "s_suppkey"})
+              "s_nationkey = n_nationkey", suppNation, {"n_name", "s_suppkey"})
           .project({"n_name as supp_nation", "s_suppkey"})
           .planNode();
 
@@ -885,21 +839,16 @@ TpchPlan TpchQueryBuilder::getQ7Plan() const {
               {shipDateFilter})
           .captureScanNodeId(lineitemScanNodeId)
           .hashJoin(
-              {"l_suppkey"},
-              {"s_suppkey"},
+              "l_suppkey = s_suppkey",
               supplierJoinNation,
-              "",
               {"supp_nation",
                "l_extendedprice",
                "l_discount",
                "l_shipdate",
                "l_orderkey"})
           .hashJoin(
-              {"l_orderkey"},
-              {"o_orderkey"},
+              "l_orderkey = o_orderkey AND ((((cust_nation = 'FRANCE') AND (supp_nation = 'GERMANY')) OR ((cust_nation = 'GERMANY') AND (supp_nation = 'FRANCE'))))",
               ordersJoinCustomer,
-              "(((cust_nation = 'FRANCE') AND (supp_nation = 'GERMANY')) OR "
-              "((cust_nation = 'GERMANY') AND (supp_nation = 'FRANCE')))",
               {"supp_nation",
                "cust_nation",
                "l_extendedprice",
@@ -1007,8 +956,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .filtersAsNode(filtersAsNode_)
           .tableScan(kNation, nationSelectedRowType, nationFileColumns)
           .captureScanNodeId(nationScanNodeId)
-          .hashJoin(
-              {"n_regionkey"}, {"r_regionkey"}, region, "", {"n_nationkey"})
+          .hashJoin("n_regionkey = r_regionkey", region, {"n_nationkey"})
           .planNode();
 
   auto customerJoinNationJoinRegion =
@@ -1017,11 +965,7 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
           .hashJoin(
-              {"c_nationkey"},
-              {"n_nationkey"},
-              nationJoinRegion,
-              "",
-              {"c_custkey"})
+              "c_nationkey = n_nationkey", nationJoinRegion, {"c_custkey"})
           .planNode();
 
   auto ordersJoinCustomerJoinNationJoinRegion =
@@ -1034,10 +978,8 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
               {orderDateFilter})
           .captureScanNodeId(ordersScanNodeId)
           .hashJoin(
-              {"o_custkey"},
-              {"c_custkey"},
+              "o_custkey = c_custkey",
               customerJoinNationJoinRegion,
-              "",
               {"o_orderkey", "o_orderdate"})
           .planNode();
 
@@ -1047,10 +989,8 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
+              "s_nationkey = n_nationkey",
               nationWithName,
-              "",
               {"s_suppkey", "n_name"})
           .planNode();
 
@@ -1060,30 +1000,24 @@ TpchPlan TpchQueryBuilder::getQ8Plan() const {
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanNodeId)
           .hashJoin(
-              {"l_orderkey"},
-              {"o_orderkey"},
+              "l_orderkey = o_orderkey",
               ordersJoinCustomerJoinNationJoinRegion,
-              "",
               {"l_partkey",
                "l_suppkey",
                "o_orderdate",
                "l_extendedprice",
                "l_discount"})
           .hashJoin(
-              {"l_suppkey"},
-              {"s_suppkey"},
+              "l_suppkey = s_suppkey",
               supplierJoinNation,
-              "",
               {"n_name",
                "o_orderdate",
                "l_partkey",
                "l_extendedprice",
                "l_discount"})
           .hashJoin(
-              {"l_partkey"},
-              {"p_partkey"},
+              "l_partkey = p_partkey",
               part,
-              "",
               {"n_name", "o_orderdate", "l_extendedprice", "l_discount"})
           .project(
               {"l_extendedprice * (1.0 - l_discount) as volume",
@@ -1183,12 +1117,10 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
           .filtersAsNode(filtersAsNode_)
           .tableScan(kLineitem, lineitemSelectedRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanNodeId)
-          .hashJoin({"l_partkey"}, {"p_partkey"}, part, "", lineitemColumns)
+          .hashJoin("l_partkey = p_partkey", part, lineitemColumns)
           .hashJoin(
-              {"l_suppkey"},
-              {"s_suppkey"},
+              "l_suppkey = s_suppkey",
               supplier,
-              "",
               mergeColumnNames(lineitemColumns, {"s_nationkey"}))
           .planNode();
 
@@ -1198,10 +1130,8 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanNodeId)
           .hashJoin(
-              {"ps_partkey", "ps_suppkey"},
-              {"l_partkey", "l_suppkey"},
+              "ps_partkey = l_partkey AND ps_suppkey = l_suppkey",
               lineitemJoinPartJoinSupplier,
-              "",
               mergeColumnNames(
                   lineitemCommonColumns,
                   {"l_orderkey", "s_nationkey", "ps_supplycost"}))
@@ -1213,18 +1143,14 @@ TpchPlan TpchQueryBuilder::getQ9Plan(const std::string& partFilter) const {
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .captureScanNodeId(ordersScanNodeId)
           .hashJoin(
-              {"o_orderkey"},
-              {"l_orderkey"},
+              "o_orderkey = l_orderkey",
               partsuppJoinLineitemJoinPartJoinSupplier,
-              "",
               mergeColumnNames(
                   lineitemCommonColumns,
                   {"s_nationkey", "ps_supplycost", "o_orderdate"}))
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
+              "s_nationkey = n_nationkey",
               nation,
-              "",
               mergeColumnNames(
                   lineitemCommonColumns,
                   {"ps_supplycost", "o_orderdate", "n_name"}))
@@ -1312,17 +1238,13 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
           .tableScan(kCustomer, customerSelectedRowType, customerFileColumns)
           .captureScanNodeId(customerScanNodeId)
           .hashJoin(
-              {"c_custkey"},
-              {"o_custkey"},
+              "c_custkey = o_custkey",
               orders,
-              "",
               mergeColumnNames(
                   customerOutputColumns, {"c_nationkey", "o_orderkey"}))
           .hashJoin(
-              {"c_nationkey"},
-              {"n_nationkey"},
+              "c_nationkey = n_nationkey",
               nation,
-              "",
               mergeColumnNames(customerOutputColumns, {"n_name", "o_orderkey"}))
           .planNode();
 
@@ -1338,10 +1260,8 @@ TpchPlan TpchQueryBuilder::getQ10Plan() const {
                       {"l_extendedprice * (1.0 - l_discount) AS part_revenue",
                        "l_orderkey"})
                   .hashJoin(
-                      {"l_orderkey"},
-                      {"o_orderkey"},
+                      "l_orderkey = o_orderkey",
                       partialPlan,
-                      "",
                       mergeColumnNames(
                           customerOutputColumns, {"part_revenue", "n_name"}))
                   .partialAggregation(
@@ -1428,12 +1348,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanIdSubQuery)
-          .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
-              nationSubQuery,
-              "",
-              {"s_suppkey"})
+          .hashJoin("s_nationkey = n_nationkey", nationSubQuery, {"s_suppkey"})
           .planNode();
 
   auto subQueryPlan =
@@ -1443,10 +1358,8 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
               kPartsupp, partsuppRowTypeSubQuery, partsuppFileColumnsSubQuery)
           .captureScanNodeId(partsuppScanIdSubQuery)
           .hashJoin(
-              {"ps_suppkey"},
-              {"s_suppkey"},
+              "ps_suppkey = s_suppkey",
               supplierJoinNationSubQuery,
-              "",
               {"ps_availqty", "ps_suppkey", "ps_supplycost"})
           .project({"ps_supplycost * ps_availqty AS product_cost_qty"})
           .partialAggregation({}, {"sum(product_cost_qty) AS sum_cost_qty"})
@@ -1469,7 +1382,7 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
           .filtersAsNode(filtersAsNode_)
           .tableScan(kSupplier, supplierRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanId)
-          .hashJoin({"s_nationkey"}, {"n_nationkey"}, nation, "", {"s_suppkey"})
+          .hashJoin("s_nationkey = n_nationkey", nation, {"s_suppkey"})
           .planNode();
 
   auto plan =
@@ -1478,10 +1391,8 @@ TpchPlan TpchQueryBuilder::getQ11Plan() const {
           .tableScan(kPartsupp, partsuppRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanId)
           .hashJoin(
-              {"ps_suppkey"},
-              {"s_suppkey"},
+              "ps_suppkey = s_suppkey",
               supplierJoinNation,
-              "",
               {"ps_partkey", "ps_availqty", "ps_supplycost"})
           .project(
               {"ps_supplycost * ps_availqty AS product_cost_qty", "ps_partkey"})
@@ -1555,10 +1466,8 @@ TpchPlan TpchQueryBuilder::getQ12Plan() const {
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns, {})
           .captureScanNodeId(ordersScanNodeId)
           .hashJoin(
-              {"o_orderkey"},
-              {"l_orderkey"},
+              "o_orderkey = l_orderkey",
               lineitem,
-              "",
               {"l_shipmode", "o_orderpriority"})
           .project(
               {"l_shipmode",
@@ -1614,10 +1523,8 @@ TpchPlan TpchQueryBuilder::getQ13Plan() const {
               "o_comment not like '%special%requests%'")
           .captureScanNodeId(ordersScanNodeId)
           .hashJoin(
-              {"o_custkey"},
-              {"c_custkey"},
+              "o_custkey = c_custkey",
               customers,
-              "",
               {"c_custkey", "o_orderkey"},
               core::JoinType::kRight)
           .partialAggregation({"c_custkey"}, {"count(o_orderkey) as c_count"})
@@ -1673,12 +1580,7 @@ TpchPlan TpchQueryBuilder::getQ14Plan() const {
               {"l_extendedprice * (1.0 - l_discount) as part_revenue",
                "l_shipdate",
                "l_partkey"})
-          .hashJoin(
-              {"l_partkey"},
-              {"p_partkey"},
-              part,
-              "",
-              {"part_revenue", "p_type"})
+          .hashJoin("l_partkey = p_partkey", part, {"part_revenue", "p_type"})
           .project(
               {"(CASE WHEN (p_type LIKE 'PROMO%') THEN part_revenue ELSE 0.0 END) as filter_revenue",
                "part_revenue"})
@@ -1755,10 +1657,8 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
           .localPartition(std::vector<std::string>{})
           .finalAggregation()
           .hashJoin(
-              {"total_revenue"},
-              {"max_revenue"},
+              "total_revenue = max_revenue",
               maxRevenue,
-              "",
               {"supplier_no", "total_revenue"})
           .planNode();
 
@@ -1768,10 +1668,8 @@ TpchPlan TpchQueryBuilder::getQ15Plan() const {
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
           .hashJoin(
-              {"s_suppkey"},
-              {"supplier_no"},
+              "s_suppkey = supplier_no",
               supplierWithMaxRevenue,
-              "",
               {"s_suppkey", "s_name", "s_address", "s_phone", "total_revenue"})
           .orderBy({"s_suppkey"}, false)
           .planNode();
@@ -1840,16 +1738,12 @@ TpchPlan TpchQueryBuilder::getQ16Plan() const {
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanNodeId)
           .hashJoin(
-              {"ps_partkey"},
-              {"p_partkey"},
+              "ps_partkey = p_partkey",
               part,
-              "",
               {"ps_suppkey", "p_brand", "p_type", "p_size"})
           .hashJoin(
-              {"ps_suppkey"},
-              {"s_suppkey"},
+              "ps_suppkey = s_suppkey",
               supplier,
-              "",
               {"ps_suppkey", "p_brand", "p_type", "p_size"},
               core::JoinType::kAnti,
               true /*nullAware*/)
@@ -1917,10 +1811,8 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
           .tableScan(kLineitem, lineitemRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemScanId)
           .hashJoin(
-              {"l_partkey"},
-              {"p_partkey"},
+              "l_partkey = p_partkey",
               part,
-              "",
               {"l_quantity", "p_partkey", "l_extendedprice"})
           .planNode();
 
@@ -1930,19 +1822,13 @@ TpchPlan TpchQueryBuilder::getQ17Plan() const {
           .tableScan(kLineitem, lineitemRowType, lineitemFileColumns)
           .captureScanNodeId(lineitemAggScanId)
           .hashJoin(
-              {"l_partkey"},
-              {"p_partkey"},
-              partAgg,
-              "",
-              {"l_partkey", "l_quantity"})
+              "l_partkey = p_partkey", partAgg, {"l_partkey", "l_quantity"})
           .partialAggregation({"l_partkey"}, {"avg(l_quantity) as avg_"})
           .localPartition({"l_partkey"})
           .finalAggregation()
           .hashJoin(
-              {"l_partkey"},
-              {"p_partkey"},
+              "l_partkey = p_partkey AND l_quantity < 0.2 * avg_",
               lineitemJoinPart,
-              "l_quantity < 0.2 * avg_",
               {"l_extendedprice"})
           .partialAggregation({}, {"sum(l_extendedprice) as partial_sum"})
           .localPartition(std::vector<std::string>{})
@@ -1997,10 +1883,8 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
           .tableScan(kOrders, ordersSelectedRowType, ordersFileColumns)
           .captureScanNodeId(ordersScanNodeId)
           .hashJoin(
-              {"o_orderkey"},
-              {"l_orderkey"},
+              "o_orderkey = l_orderkey",
               bigOrders,
-              "",
               {"o_orderkey",
                "o_custkey",
                "o_orderdate",
@@ -2008,15 +1892,13 @@ TpchPlan TpchQueryBuilder::getQ18Plan() const {
                "l_orderkey",
                "quantity"})
           .hashJoin(
-              {"o_custkey"},
-              {"c_custkey"},
+              "o_custkey = c_custkey",
               builder.newPlan()
                   .filtersAsNode(filtersAsNode_)
                   .tableScan(
                       kCustomer, customerSelectedRowType, customerFileColumns)
                   .captureScanNodeId(customerScanNodeId)
                   .planNode(),
-              "",
               {"c_name",
                "c_custkey",
                "o_orderkey",
@@ -2183,10 +2065,8 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
           .tableScan(kPartsupp, partsuppSelectedRowType, partsuppFileColumns)
           .captureScanNodeId(partsuppScanId)
           .hashJoin(
-              {"ps_partkey"},
-              {"p_partkey"},
+              "ps_partkey = p_partkey",
               part,
-              "",
               {"ps_partkey", "ps_suppkey", "ps_availqty"},
               core::JoinType::kLeftSemiFilter)
           .planNode();
@@ -2197,10 +2077,8 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
           .tableScan(kSupplier, supplierSelectedRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanId)
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
+              "s_nationkey = n_nationkey",
               nation,
-              "",
               {"s_name", "s_address", "s_suppkey"})
           .planNode();
 
@@ -2214,10 +2092,8 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
               {shipDateFilter})
           .captureScanNodeId(lineitemScanId)
           .hashJoin(
-              {"l_partkey"},
-              {"p_partkey"},
+              "l_partkey = p_partkey",
               partAgg,
-              "",
               {"l_partkey", "l_suppkey", "l_quantity"})
           .partialAggregation(
               {"l_partkey", "l_suppkey"}, {"sum(l_quantity) AS sum_qty"})
@@ -2225,16 +2101,12 @@ TpchPlan TpchQueryBuilder::getQ20Plan() const {
           .finalAggregation()
           .project({"l_partkey", "l_suppkey", "0.5 * sum_qty AS filter_qty"})
           .hashJoin(
-              {"l_partkey", "l_suppkey"},
-              {"ps_partkey", "ps_suppkey"},
+              "l_partkey = ps_partkey AND l_suppkey = ps_suppkey AND ps_availqty > filter_qty",
               partsuppJoinPart,
-              "ps_availqty > filter_qty",
               {"ps_suppkey"})
           .hashJoin(
-              {"ps_suppkey"},
-              {"s_suppkey"},
+              "ps_suppkey = s_suppkey",
               supplierJoinNation,
-              "",
               {"s_name", "s_address"},
               core::JoinType::kRightSemiFilter)
           .orderBy({"s_name"}, false)
@@ -2312,10 +2184,8 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
           .tableScan(kSupplier, supplierRowType, supplierFileColumns)
           .captureScanNodeId(supplierScanNodeId)
           .hashJoin(
-              {"s_nationkey"},
-              {"n_nationkey"},
+              "s_nationkey = n_nationkey",
               nation,
-              "",
               {"s_suppkey", "s_name", "s_nationkey"})
           .planNode();
 
@@ -2331,10 +2201,8 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
           .captureScanNodeId(lineitem1ScanNodeId)
           .project({"l_orderkey as l_orderkey_1", "l_suppkey as l_suppkey_1"})
           .hashJoin(
-              {"l_suppkey_1"},
-              {"s_suppkey"},
+              "l_suppkey_1 = s_suppkey",
               supplierJoinNation,
-              "",
               {"l_orderkey_1", "s_nationkey", "l_suppkey_1", "s_name"})
           .planNode();
 
@@ -2348,10 +2216,8 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
               {"o_orderstatus = 'F'"})
           .captureScanNodeId(ordersScanNodeId)
           .hashJoin(
-              {"o_orderkey"},
-              {"l_orderkey_1"},
+              "o_orderkey = l_orderkey_1",
               lineitemJoinSupplier,
-              "",
               {"s_nationkey", "l_orderkey_1", "l_suppkey_1", "s_name"})
           .planNode();
 
@@ -2362,17 +2228,13 @@ TpchPlan TpchQueryBuilder::getQ21Plan() const {
           .captureScanNodeId(lineitem2ScanNodeId)
           .project({"l_orderkey as l_orderkey_2", "l_suppkey as l_suppkey_2"})
           .hashJoin(
-              {"l_orderkey_2"},
-              {"l_orderkey_1"},
+              "l_orderkey_2 = l_orderkey_1 AND l_suppkey_2 <> l_suppkey_1",
               ordersJoinLineitem1,
-              "l_suppkey_2 <> l_suppkey_1",
               {"l_orderkey_1", "l_suppkey_1", "s_name"},
               core::JoinType::kRightSemiFilter)
           .hashJoin(
-              {"l_orderkey_1"},
-              {"l_orderkey_3"},
+              "l_orderkey_1 = l_orderkey_3 AND l_suppkey_3 <> l_suppkey_1",
               lineitem3,
-              "l_suppkey_3 <> l_suppkey_1",
               {"s_name"},
               core::JoinType::kAnti,
               false /*nullAware*/)
@@ -2454,10 +2316,8 @@ TpchPlan TpchQueryBuilder::getQ22Plan() const {
               {"c_acctbal", "avg_acctbal", "c_custkey", "c_phone"})
           .filter("c_acctbal > avg_acctbal")
           .hashJoin(
-              {"c_custkey"},
-              {"o_custkey"},
+              "c_custkey = o_custkey",
               orders,
-              "",
               {"c_acctbal", "c_phone"},
               core::JoinType::kAnti,
               false /*nullAware*/)

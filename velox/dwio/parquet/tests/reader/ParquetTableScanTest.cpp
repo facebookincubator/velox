@@ -192,7 +192,8 @@ class ParquetTableScanTest : public ParquetTableScanTestBase {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<facebook::velox::dwio::common::BufferedInput>(
-            std::make_shared<LocalReadFile>(filePath), readerOpts.memoryPool()),
+            std::make_shared<LocalReadFile>(filePath),
+            facebook::velox::FileIoContext{.pool = &readerOpts.memoryPool()}),
         readerOpts);
     rowType_ = reader->rowType();
     createDuckDbTable({data});
@@ -2242,10 +2243,8 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterPushdown) {
                   .tableScan(fact->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"k"},
-                      {"dk"},
+                      "k = dk",
                       builder.newPlan().values(build).planNode(),
-                      "",
                       {"k", "payload", "dim_payload"})
                   .capturePlanNodeId(joinId)
                   .planNode();
@@ -2313,17 +2312,13 @@ TEST_F(ParquetTableScanTest, longDecimalDynamicFilterReplacement) {
   PlanBuilder builder(pool_.get());
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinId;
-  auto plan = builder.newPlan()
-                  .tableScan(fact->rowType())
-                  .capturePlanNodeId(probeScanId)
-                  .hashJoin(
-                      {"k"},
-                      {"dk"},
-                      builder.newPlan().values(build).planNode(),
-                      "",
-                      {"k"})
-                  .capturePlanNodeId(joinId)
-                  .planNode();
+  auto plan =
+      builder.newPlan()
+          .tableScan(fact->rowType())
+          .capturePlanNodeId(probeScanId)
+          .hashJoin("k = dk", builder.newPlan().values(build).planNode(), {"k"})
+          .capturePlanNodeId(joinId)
+          .planNode();
 
   auto task = AssertQueryBuilder(plan)
                   .split(probeScanId, makeSplit(filePath->getPath()))

@@ -690,10 +690,8 @@ TEST_F(IcebergChangelogE2ETest, dynamicFilterOnSnapshotIdApplied) {
                   .endTableScan()
                   .capturePlanNodeId(changelogScanId)
                   .hashJoin(
-                      {"snapshotid"},
-                      {"build_snapshotid"},
+                      "snapshotid = build_snapshotid",
                       builder.newPlan().values(buildVector).planNode(),
-                      /*filter=*/"",
                       {"snapshotid"})
                   .planNode();
 
@@ -749,16 +747,12 @@ TEST_F(IcebergChangelogE2ETest, mergedDynamicFiltersOnSnapshotId) {
                   .endTableScan()
                   .capturePlanNodeId(changelogScanId)
                   .hashJoin(
-                      {"snapshotid"},
-                      {"b1_snapshotid"},
+                      "snapshotid = b1_snapshotid",
                       builder.newPlan().values(build1).planNode(),
-                      /*filter=*/"",
                       {"snapshotid"})
                   .hashJoin(
-                      {"snapshotid"},
-                      {"b2_snapshotid"},
+                      "snapshotid = b2_snapshotid",
                       builder.newPlan().values(build2).planNode(),
-                      /*filter=*/"",
                       {"snapshotid"})
                   .planNode();
 

@@ -70,7 +70,8 @@ class NullColumnReaderTest : public ::testing::Test,
     options.setScanSpec(scanSpec);
     Readers readers;
     readers.reader = factory->createReader(
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+        std::make_unique<dwio::common::BufferedInput>(
+            readFile, FileIoContext{.pool = pool()}),
         options);
     dwio::common::typeutils::checkTypeCompatibility(
         *readers.reader->rowType(), *readType);

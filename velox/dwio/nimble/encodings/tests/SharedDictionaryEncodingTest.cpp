@@ -46,6 +46,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
@@ -1134,7 +1135,13 @@ TEST_F(SharedDictionaryEncodingTest, viewReadsRowsThroughAlphabet) {
 
     const std::array<RowRange, 2> ranges{{{1, 3}, {5, 7}}};
     std::vector<int32_t> rangeRows(4);
-    EXPECT_EQ(view->read(ranges, /*setNull=*/{}, rangeRows.data()), 4);
+    EXPECT_EQ(
+        view->read(
+            ranges,
+            /*setNull=*/{},
+            /*addStringBuffer=*/nullptr,
+            rangeRows.data()),
+        4);
     EXPECT_THAT(rangeRows, testing::ElementsAre(10, 40, 30, 10));
   }
 }
@@ -1170,6 +1177,144 @@ TEST_F(SharedDictionaryEncodingTest, viewReadsStringRows) {
   }
 }
 
+// Returns whether every non-empty string of 'values' lies in one of 'buffers'.
+bool liesIn(
+    std::span<const std::string_view> values,
+    std::span<const velox::BufferPtr> buffers) {
+  return std::all_of(values.begin(), values.end(), [&](std::string_view value) {
+    return value.empty() ||
+        std::any_of(
+               buffers.begin(),
+               buffers.end(),
+               [&](const velox::BufferPtr& buffer) {
+                 const auto* begin = buffer->as<char>();
+                 return value.data() >= begin &&
+                     value.data() + value.size() <= begin + buffer->size();
+               });
+  });
+}
+
+TEST_F(SharedDictionaryEncodingTest, viewPassesBuffersOfAlphabetStrings) {
+  struct TestParam {
+    std::string testName;
+    EncodingType alphabetEncodingType;
+
+    std::string debugString() const {
+      return fmt::format("{}, {}", testName, alphabetEncodingType);
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {"view over the encoded alphabet", EncodingType::Trivial},
+      {"view decoding the alphabet", EncodingType::Fsst},
+      {"entries decoded up front", EncodingType::Prefix},
+  };
+
+  // Prefix encoding expects sorted entries.
+  const std::vector<std::string_view> alphabetValues{
+      "",
+      "apple pie with cream",
+      "apple sauce with cinnamon",
+      "banana bread with walnuts",
+  };
+  const std::vector<uint32_t> indices{3, 1, 1, 0, 2};
+  const std::string encoded{SharedDictionaryEncoding<std::string_view>::encode(
+      indices, createNestedPolicy, *buffer_)};
+  const std::vector<std::string_view> expectedRows{
+      "banana bread with walnuts",
+      "apple pie with cream",
+      "apple pie with cream",
+      "",
+      "apple sauce with cinnamon",
+  };
+  const std::vector<uint32_t> selectedRows{4, 0, 3};
+  const std::vector<std::string_view> expectedSelected{
+      "apple sauce with cinnamon", "banana bread with walnuts", ""};
+
+  // Encodes the alphabet with 'encodingType'. The policy of
+  // SharedDictionaryAlphabet::encode() does not select Prefix, so a Prefix
+  // alphabet replays its layout instead.
+  const auto encodeAlphabet = [&](EncodingType encodingType, Buffer& buffer) {
+    if (encodingType == EncodingType::Prefix) {
+      return EncodingFactory::encode<std::string_view>(
+          std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
+              EncodingLayout{encodingType, {}, CompressionType::Uncompressed},
+              CompressionOptions{},
+              createNestedPolicy),
+          alphabetValues,
+          buffer);
+    }
+
+    // Keeps FSST, which does not shrink these few strings.
+    return SharedDictionaryAlphabet::encode<std::string_view>(
+        alphabetValues,
+        std::array{encodingType},
+        buffer,
+        {.fsstCompressionTargetRatio = 10.0});
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    Buffer alphabetBuffer{*pool_};
+    auto alphabetOwner = std::make_shared<const std::string>(
+        encodeAlphabet(testData.alphabetEncodingType, alphabetBuffer));
+    const std::string_view encodedAlphabet{*alphabetOwner};
+    auto alphabet = SharedDictionaryAlphabet::create(
+        encodedAlphabet, std::move(alphabetOwner), pool_.get());
+    ASSERT_EQ(alphabet->encodingType(), testData.alphabetEncodingType);
+    Encoding::Options options;
+    options.sharedDictionaryAlphabet = alphabet;
+    auto view = detail::createTypedEncodingView<std::string_view>(
+        encoded, pool_.get(), options);
+
+    const std::array<RowRange, 1> ranges{{{0, 5}}};
+    std::vector<std::string_view> rows(expectedRows.size());
+    std::vector<velox::BufferPtr> rangeBuffers;
+    EXPECT_EQ(
+        view->read(
+            ranges,
+            /*setNull=*/{},
+            [&](velox::BufferPtr buffer) {
+              rangeBuffers.push_back(std::move(buffer));
+            },
+            rows.data()),
+        5);
+    std::vector<std::string_view> selected(selectedRows.size());
+    std::vector<velox::BufferPtr> indexBuffers;
+    EXPECT_EQ(
+        view->read(
+            std::span<const uint32_t>{selectedRows},
+            /*setNull=*/{},
+            [&](velox::BufferPtr buffer) {
+              indexBuffers.push_back(std::move(buffer));
+            },
+            selected.data()),
+        3);
+    EXPECT_THAT(rows, testing::ElementsAreArray(expectedRows));
+    EXPECT_THAT(selected, testing::ElementsAreArray(expectedSelected));
+    EXPECT_TRUE(liesIn(rows, rangeBuffers));
+    EXPECT_TRUE(liesIn(selected, indexBuffers));
+
+    // The reads pass buffers that the alphabet keeps, such as its decoded
+    // chunk, so both pass the same buffers instead of a copy each.
+    EXPECT_FALSE(rangeBuffers.empty());
+    EXPECT_EQ(indexBuffers, rangeBuffers);
+    if (testData.alphabetEncodingType == EncodingType::Trivial) {
+      // The strings of a Trivial alphabet point into the encoded alphabet.
+      ASSERT_EQ(rangeBuffers.size(), 1);
+      EXPECT_EQ(rangeBuffers[0]->as<char>(), encodedAlphabet.data());
+      EXPECT_EQ(rangeBuffers[0]->size(), encodedAlphabet.size());
+    }
+
+    // The passed buffers keep the strings alive without the view and the
+    // alphabet.
+    view.reset();
+    options.sharedDictionaryAlphabet.reset();
+    alphabet.reset();
+    EXPECT_THAT(rows, testing::ElementsAreArray(expectedRows));
+    EXPECT_THAT(selected, testing::ElementsAreArray(expectedSelected));
+  }
+}
+
 TEST_F(SharedDictionaryEncodingTest, viewReadsNullableRows) {
   // Rows 1 and 3 are null, and the shared dictionary encodes the other rows.
   const std::string values{test::encodeSharedDictionary(*buffer_, {2, 0, 1})};
@@ -1194,7 +1339,10 @@ TEST_F(SharedDictionaryEncodingTest, viewReadsNullableRows) {
   const std::array<RowRange, 1> ranges{{{0, 5}}};
   EXPECT_EQ(
       view->read(
-          ranges, [&](uint32_t row) { nullRows.push_back(row); }, rows.data()),
+          ranges,
+          [&](uint32_t row) { nullRows.push_back(row); },
+          /*addStringBuffer=*/nullptr,
+          rows.data()),
       3);
   EXPECT_THAT(nullRows, testing::ElementsAre(1, 3));
   // The values of null rows are undefined.

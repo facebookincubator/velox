@@ -25,13 +25,11 @@
 
 DECLARE_int32(velox_tpch_text_pool_size_mb);
 
+namespace facebook::velox::connector::tpch {
 namespace {
 
-using namespace facebook::velox;
-using namespace facebook::velox::connector::tpch;
-
-using facebook::velox::exec::test::PlanBuilder;
-using facebook::velox::tpch::Table;
+using exec::test::PlanBuilder;
+using velox::tpch::Table;
 
 class TpchConnectorTest : public exec::test::OperatorTestBase {
  public:
@@ -40,17 +38,17 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
   void SetUp() override {
     FLAGS_velox_tpch_text_pool_size_mb = 10;
     OperatorTestBase::SetUp();
-    connector::tpch::TpchConnectorFactory factory;
+    TpchConnectorFactory factory;
     auto tpchConnector = factory.newConnector(
         kTpchConnectorId,
         std::make_shared<config::ConfigBase>(
             std::unordered_map<std::string, std::string>()));
-    connector::ConnectorRegistry::global().insert(
+    ConnectorRegistry::global().insert(
         tpchConnector->connectorId(), tpchConnector);
   }
 
   void TearDown() override {
-    connector::ConnectorRegistry::global().erase(kTpchConnectorId);
+    ConnectorRegistry::global().erase(kTpchConnectorId);
     OperatorTestBase::TearDown();
   }
 
@@ -60,16 +58,6 @@ class TpchConnectorTest : public exec::test::OperatorTestBase {
         std::make_shared<TpchConnectorSplit>(
             kTpchConnectorId, /*cacheable=*/true, totalParts, partNumber));
   }
-
-  RowVectorPtr getResults(
-      const core::PlanNodePtr& planNode,
-      std::vector<exec::Split>&& splits) {
-    return exec::test::AssertQueryBuilder(planNode)
-        .splits(std::move(splits))
-        .copyResults(pool());
-  }
-
-  void runScaleFactorTest(double scaleFactor);
 };
 
 // Simple scan of first 5 rows of "nation".
@@ -81,7 +69,6 @@ TEST_F(TpchConnectorTest, simple) {
                   .limit(0, 5, false)
                   .planNode();
 
-  auto output = getResults(plan, {makeTpchSplit()});
   auto expected = makeRowVector({
       // n_nationkey
       makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
@@ -104,7 +91,9 @@ TEST_F(TpchConnectorTest, simple) {
           "usly ironic, pending foxes. even, special instructions nag. sly, final foxes detect slyly fluffily ",
       }),
   });
-  test::assertEqualVectors(expected, output);
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertResults(expected);
 }
 
 // Extract single column from "nation".
@@ -112,7 +101,6 @@ TEST_F(TpchConnectorTest, singleColumn) {
   auto plan =
       PlanBuilder().tpchTableScan(Table::TBL_NATION, {"n_name"}).planNode();
 
-  auto output = getResults(plan, {makeTpchSplit()});
   auto expected = makeRowVector({makeFlatVector<StringView>({
       "ALGERIA",       "ARGENTINA", "BRAZIL", "CANADA",
       "EGYPT",         "ETHIOPIA",  "FRANCE", "GERMANY",
@@ -122,15 +110,17 @@ TEST_F(TpchConnectorTest, singleColumn) {
       "SAUDI ARABIA",  "VIETNAM",   "RUSSIA", "UNITED KINGDOM",
       "UNITED STATES",
   })});
-  test::assertEqualVectors(expected, output);
-  EXPECT_EQ("n_name", output->type()->asRow().nameOf(0));
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertResults(expected);
+  EXPECT_EQ("n_name", plan->outputType()->nameOf(0));
 }
 
 // Check that aliases are correctly resolved.
 TEST_F(TpchConnectorTest, singleColumnWithAlias) {
   const std::string aliasedName = "my_aliased_column_name";
 
-  auto outputType = ROW({aliasedName}, {VARCHAR()});
+  auto outputType = ROW(aliasedName, VARCHAR());
   auto plan =
       PlanBuilder()
           .startTableScan()
@@ -148,50 +138,46 @@ TEST_F(TpchConnectorTest, singleColumnWithAlias) {
           .limit(0, 1, false)
           .planNode();
 
-  auto output = getResults(plan, {makeTpchSplit()});
-  auto expected = makeRowVector({makeFlatVector<StringView>({
-      "ALGERIA",
-  })});
-  test::assertEqualVectors(expected, output);
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertSingleResult(std::string("ALGERIA"));
 
-  EXPECT_EQ(aliasedName, output->type()->asRow().nameOf(0));
-  EXPECT_EQ(1, output->childrenSize());
-}
-
-void TpchConnectorTest::runScaleFactorTest(double scaleFactor) {
-  auto plan = PlanBuilder()
-                  .startTableScan()
-                  .outputType(ROW({}, {}))
-                  .tableHandle(
-                      std::make_shared<TpchTableHandle>(
-                          kTpchConnectorId, Table::TBL_SUPPLIER, scaleFactor))
-                  .endTableScan()
-                  .singleAggregation({}, {"count(1)"})
-                  .planNode();
-
-  auto output = getResults(plan, {makeTpchSplit()});
-  int64_t expectedRows = tpch::getRowCount(Table::TBL_SUPPLIER, scaleFactor);
-  auto expected = makeRowVector(
-      {makeFlatVector<int64_t>(std::vector<int64_t>{expectedRows})});
-  test::assertEqualVectors(expected, output);
+  EXPECT_EQ(aliasedName, plan->outputType()->nameOf(0));
 }
 
 // Aggregation over a larger table.
 TEST_F(TpchConnectorTest, simpleAggregation) {
   VELOX_ASSERT_THROW(
-      runScaleFactorTest(-1), "Tpch scale factor must be non-negative");
-  runScaleFactorTest(0.01);
-  runScaleFactorTest(1.0);
-  runScaleFactorTest(5.0);
-  runScaleFactorTest(13.0);
+      std::make_shared<TpchTableHandle>(
+          kTpchConnectorId, Table::TBL_SUPPLIER, -1),
+      "Tpch scale factor must be non-negative");
+
+  for (double scaleFactor : {0.01, 1.0, 5.0, 13.0}) {
+    SCOPED_TRACE(scaleFactor);
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .outputType(ROW({}))
+                    .tableHandle(
+                        std::make_shared<TpchTableHandle>(
+                            kTpchConnectorId, Table::TBL_SUPPLIER, scaleFactor))
+                    .endTableScan()
+                    .singleAggregation({}, {"count(1)"})
+                    .planNode();
+
+    exec::test::AssertQueryBuilder(plan)
+        .split(makeTpchSplit())
+        .assertSingleResult(
+            static_cast<int64_t>(
+                velox::tpch::getRowCount(Table::TBL_SUPPLIER, scaleFactor)));
+  }
 }
 
 TEST_F(TpchConnectorTest, lineitemTinyRowCount) {
-  // Lineitem row count depends on the orders.
-  // Verify against Java tiny result.
+  // Lineitem rows are generated per order. Scale factor 0.01 has 60'175 of
+  // them.
   auto plan = PlanBuilder()
                   .startTableScan()
-                  .outputType(ROW({}, {}))
+                  .outputType(ROW({}))
                   .tableHandle(
                       std::make_shared<TpchTableHandle>(
                           kTpchConnectorId, Table::TBL_LINEITEM, 0.01))
@@ -199,25 +185,36 @@ TEST_F(TpchConnectorTest, lineitemTinyRowCount) {
                   .singleAggregation({}, {"count(1)"})
                   .planNode();
 
-  std::vector<exec::Split> splits;
   const size_t numParts = 4;
-
+  std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+  splits.reserve(numParts);
   for (size_t i = 0; i < numParts; ++i) {
-    splits.push_back(makeTpchSplit(numParts, i));
+    splits.push_back(
+        std::make_shared<TpchConnectorSplit>(
+            kTpchConnectorId, /*cacheable=*/true, numParts, i));
   }
 
-  auto output = getResults(plan, std::move(splits));
-  EXPECT_EQ(60'175, output->childAt(0)->asFlatVector<int64_t>()->valueAt(0));
+  exec::test::AssertQueryBuilder(plan).splits(splits).assertSingleResult(
+      int64_t{60'175});
+
+  // A batch smaller than one order's lineitems still covers every order.
+  for (int batchRows : {1, 2, 3, 7}) {
+    SCOPED_TRACE(batchRows);
+    exec::test::AssertQueryBuilder(plan)
+        .splits(splits)
+        .config(
+            core::QueryConfig::kTableScanOutputBatchRowsOverride,
+            std::to_string(batchRows))
+        .assertSingleResult(int64_t{60'175});
+  }
 }
 
 TEST_F(TpchConnectorTest, unknownColumn) {
-  EXPECT_THROW(
-      {
-        PlanBuilder()
-            .tpchTableScan(Table::TBL_NATION, {"does_not_exist"})
-            .planNode();
-      },
-      VeloxUserError);
+  VELOX_ASSERT_USER_THROW(
+      PlanBuilder()
+          .tpchTableScan(Table::TBL_NATION, {"does_not_exist"})
+          .planNode(),
+      "Field not found: does_not_exist");
 }
 
 // Ensures that splits broken down using different configurations return the
@@ -230,8 +227,10 @@ TEST_F(TpchConnectorTest, multipleSplits) {
                   .planNode();
 
   // Use a full read from a single split to use as the source of truth.
-  auto fullResult = getResults(plan, {makeTpchSplit()});
-  size_t nationRowCount = tpch::getRowCount(tpch::Table::TBL_NATION, 1);
+  auto fullResult = exec::test::AssertQueryBuilder(plan)
+                        .split(makeTpchSplit())
+                        .copyResults(pool());
+  size_t nationRowCount = velox::tpch::getRowCount(Table::TBL_NATION, 1);
   EXPECT_EQ(nationRowCount, fullResult->size());
 
   // Run query with different number of parts, up until `totalParts >
@@ -244,14 +243,14 @@ TEST_F(TpchConnectorTest, multipleSplits) {
       splits.emplace_back(makeTpchSplit(totalParts, i));
     }
 
-    auto output = getResults(plan, std::move(splits));
-    test::assertEqualVectors(fullResult, output);
+    exec::test::AssertQueryBuilder(plan)
+        .splits(std::move(splits))
+        .assertResults(fullResult);
   }
 }
 
-// Test filtering in the TpchConnector.
+// Test an equality filter in the TpchConnector.
 TEST_F(TpchConnectorTest, filterPushdown) {
-  // Test equality filter
   auto plan = PlanBuilder(pool())
                   .tpchTableScan(
                       Table::TBL_NATION,
@@ -260,8 +259,6 @@ TEST_F(TpchConnectorTest, filterPushdown) {
                       kTpchConnectorId,
                       "n_regionkey = 1")
                   .planNode();
-
-  auto output = getResults(plan, {makeTpchSplit()});
 
   // Should only return nations with regionkey = 1
   auto expected = makeRowVector({
@@ -278,12 +275,13 @@ TEST_F(TpchConnectorTest, filterPushdown) {
       // n_regionkey
       makeFlatVector<int64_t>({1, 1, 1, 1, 1}),
   });
-  test::assertEqualVectors(expected, output);
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertResults(expected);
 }
 
-// Test more complex filters in the TpchConnector.
+// Test a conjunction of range filters in the TpchConnector.
 TEST_F(TpchConnectorTest, complexFilterPushdown) {
-  // Test range filter
   auto plan = PlanBuilder(pool())
                   .tpchTableScan(
                       Table::TBL_NATION,
@@ -292,8 +290,6 @@ TEST_F(TpchConnectorTest, complexFilterPushdown) {
                       kTpchConnectorId,
                       "n_nationkey < 5 AND n_regionkey > 0")
                   .planNode();
-
-  auto output = getResults(plan, {makeTpchSplit()});
 
   // Should only return nations with nationkey < 5 AND regionkey > 0
   auto expected = makeRowVector({
@@ -309,12 +305,13 @@ TEST_F(TpchConnectorTest, complexFilterPushdown) {
       // n_regionkey
       makeFlatVector<int64_t>({1, 1, 1, 4}),
   });
-  test::assertEqualVectors(expected, output);
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertResults(expected);
 }
 
 // Test filtering with LIKE operator
 TEST_F(TpchConnectorTest, likeFilterPushdown) {
-  // Test LIKE filter
   auto plan = PlanBuilder(pool())
                   .tpchTableScan(
                       Table::TBL_NATION,
@@ -324,26 +321,22 @@ TEST_F(TpchConnectorTest, likeFilterPushdown) {
                       "n_name LIKE 'A%'")
                   .planNode();
 
-  auto output = getResults(plan, {makeTpchSplit()});
-
   // Should only return nations with names starting with 'A'
   auto expected = makeRowVector({
       // n_nationkey
       makeFlatVector<int64_t>({0, 1}),
       // n_name
-      makeFlatVector<StringView>({
-          "ALGERIA",
-          "ARGENTINA",
-      }),
+      makeFlatVector<StringView>({"ALGERIA", "ARGENTINA"}),
       // n_regionkey
       makeFlatVector<int64_t>({0, 1}),
   });
-  test::assertEqualVectors(expected, output);
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertResults(expected);
 }
 
 // Test filtering with IN operator
 TEST_F(TpchConnectorTest, inFilterPushdown) {
-  // Test IN filter
   auto plan = PlanBuilder(pool())
                   .tpchTableScan(
                       Table::TBL_NATION,
@@ -352,8 +345,6 @@ TEST_F(TpchConnectorTest, inFilterPushdown) {
                       kTpchConnectorId,
                       "n_nationkey IN (0, 5, 10, 15, 20)")
                   .planNode();
-
-  auto output = getResults(plan, {makeTpchSplit()});
 
   // Should only return nations with nationkey in the specified list
   auto expected = makeRowVector({
@@ -370,7 +361,9 @@ TEST_F(TpchConnectorTest, inFilterPushdown) {
       // n_regionkey
       makeFlatVector<int64_t>({0, 0, 4, 0, 4}),
   });
-  test::assertEqualVectors(expected, output);
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertResults(expected);
 }
 
 TEST_F(TpchConnectorTest, namespaceInfer) {
@@ -383,10 +376,11 @@ TEST_F(TpchConnectorTest, namespaceInfer) {
       {300.0, "sf300.customer"},
       {10000.0, "sf10000.customer"},
   };
-  for (const auto& expectpair : expect) {
+  for (const auto& [scaleFactor, name] : expect) {
+    SCOPED_TRACE(scaleFactor);
     auto handle = std::make_shared<TpchTableHandle>(
-        kTpchConnectorId, Table::TBL_CUSTOMER, expectpair.first);
-    EXPECT_EQ(handle->name(), expectpair.second);
+        kTpchConnectorId, Table::TBL_CUSTOMER, scaleFactor);
+    EXPECT_EQ(handle->name(), name);
   }
 }
 
@@ -395,38 +389,31 @@ TEST_F(TpchConnectorTest, join) {
   PlanBuilder builder;
   core::PlanNodeId nationScanId;
   core::PlanNodeId regionScanId;
-  auto plan =
-      builder.newPlan()
-          .tpchTableScan(
-              tpch::Table::TBL_NATION, {"n_regionkey"}, 1.0 /*scaleFactor*/)
-          .capturePlanNodeId(nationScanId)
-          .hashJoin(
-              {"n_regionkey"},
-              {"r_regionkey"},
-              builder.newPlan()
+  auto plan = builder.newPlan()
                   .tpchTableScan(
-                      tpch::Table::TBL_REGION,
-                      {"r_regionkey", "r_name"},
-                      1.0 /*scaleFactor*/)
-                  .capturePlanNodeId(regionScanId)
-                  .planNode(),
-              "", // extra filter
-              {"r_name"})
-          .singleAggregation({"r_name"}, {"count(1) as nation_cnt"})
-          .orderBy({"r_name"}, false)
-          .planNode();
+                      Table::TBL_NATION, {"n_regionkey"}, 1.0 /*scaleFactor*/)
+                  .capturePlanNodeId(nationScanId)
+                  .hashJoin(
+                      "n_regionkey = r_regionkey",
+                      builder.newPlan()
+                          .tpchTableScan(
+                              Table::TBL_REGION,
+                              {"r_regionkey", "r_name"},
+                              1.0 /*scaleFactor*/)
+                          .capturePlanNodeId(regionScanId)
+                          .planNode(),
+                      {"r_name"})
+                  .singleAggregation({"r_name"}, {"count(1) as nation_cnt"})
+                  .planNode();
 
-  auto output = exec::test::AssertQueryBuilder(plan)
-                    .split(nationScanId, makeTpchSplit())
-                    .split(regionScanId, makeTpchSplit())
-                    .copyResults(pool());
-
-  auto expected = makeRowVector({
-      makeFlatVector<StringView>(
-          {"AFRICA", "AMERICA", "ASIA", "EUROPE", "MIDDLE EAST"}),
-      makeConstant<int64_t>(5, 5),
-  });
-  test::assertEqualVectors(expected, output);
+  exec::test::AssertQueryBuilder(plan)
+      .split(nationScanId, makeTpchSplit())
+      .split(regionScanId, makeTpchSplit())
+      .assertResults(makeRowVector({
+          makeFlatVector<StringView>(
+              {"AFRICA", "AMERICA", "ASIA", "EUROPE", "MIDDLE EAST"}),
+          makeConstant<int64_t>(5, 5),
+      }));
 }
 
 TEST_F(TpchConnectorTest, orderDateCount) {
@@ -436,28 +423,29 @@ TEST_F(TpchConnectorTest, orderDateCount) {
                   .limit(0, 10, false)
                   .planNode();
 
-  auto output = getResults(plan, {makeTpchSplit()});
-  auto orderDate = output->childAt(0)->asFlatVector<int32_t>();
-  EXPECT_EQ("1992-01-01", DATE()->toString(orderDate->valueAt(0)));
-  // Match with count obtained from Java.
-  EXPECT_EQ(9, orderDate->size());
+  // Scale factor 0.01 has 9 orders on that date.
+  const auto orderDate = DATE()->toDays("1992-01-01");
+  exec::test::AssertQueryBuilder(plan)
+      .split(makeTpchSplit())
+      .assertResults(makeRowVector({makeConstant(orderDate, 9, DATE())}));
 }
 
 TEST_F(TpchConnectorTest, config) {
   std::unordered_map<std::string, std::string> properties = {
       {"property", "value"}};
-  connector::tpch::TpchConnectorFactory factory;
+  TpchConnectorFactory factory;
   auto connector = factory.newConnector(
       kTpchConnectorId,
       std::make_shared<config::ConfigBase>(std::move(properties)));
 
   const auto& config = connector->connectorConfig();
-  auto val = config->get<std::string>("property");
-  EXPECT_TRUE(val.has_value());
-  EXPECT_EQ(val.value(), "value");
+  auto value = config->get<std::string>("property");
+  EXPECT_TRUE(value.has_value());
+  EXPECT_EQ(value.value(), "value");
 }
 
 } // namespace
+} // namespace facebook::velox::connector::tpch
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

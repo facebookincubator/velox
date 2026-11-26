@@ -75,6 +75,7 @@ struct FaultFileOperation : public BaseFaultOperation {
 struct FaultFileSystemOperation : public BaseFaultOperation {
   enum class Type {
     kMkdir = 0,
+    kOpenFileForRead,
     /// TODO: Add support for fileSystem operations.
   };
   FaultFileSystemOperation(Type _type, const std::string& _path)
@@ -84,6 +85,8 @@ struct FaultFileSystemOperation : public BaseFaultOperation {
     switch (type) {
       case FaultFileSystemOperation::Type::kMkdir:
         return "mkdir";
+      case FaultFileSystemOperation::Type::kOpenFileForRead:
+        return "openFileForRead";
       default:
         VELOX_UNSUPPORTED(
             "Unknown filesystem operation type: {}", static_cast<int>(type));
@@ -174,5 +177,17 @@ struct FaultFileSystemMkdirOperation : FaultFileSystemOperation {
       const std::string& _path,
       const DirectoryOptions& _options)
       : FaultFileSystemOperation(Type::kMkdir, _path), options(_options) {}
+};
+
+/// Fault injection parameters for file system openFileForRead API. A hook can
+/// inspect 'options' or throw to fail the open, but cannot skip it.
+struct FaultFileSystemOpenFileForReadOperation : FaultFileSystemOperation {
+  const FileOptions& options;
+
+  FaultFileSystemOpenFileForReadOperation(
+      const std::string& _path,
+      const FileOptions& _options)
+      : FaultFileSystemOperation(Type::kOpenFileForRead, _path),
+        options(_options) {}
 };
 } // namespace facebook::velox::tests::utils

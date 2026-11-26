@@ -191,7 +191,7 @@ class TableWriter : public Operator {
 
   bool finished_{false};
   bool closed_{false};
-  vector_size_t numWrittenRows_{0};
+  int64_t numWrittenRows_{0};
 };
 
 // TODO: TableWriteTraits got moved to velox/core as it pertains to plan

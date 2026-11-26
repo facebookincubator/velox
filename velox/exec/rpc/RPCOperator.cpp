@@ -259,7 +259,12 @@ void RPCOperator::initializeRateLimiter() {
       policy.ceiling = functionLimit;
     }
     if (legacySessionLimit > 0) {
-      policy.ceiling = legacySessionLimit;
+      // max_limit replaces the function's ceiling, or with
+      // rpc.ratelimiter.tighten_limit can only lower it.
+      policy.ceiling =
+          queryConfig.rpcRateLimiterTightenLimit() && functionLimit > 0
+          ? std::min(functionLimit, legacySessionLimit)
+          : legacySessionLimit;
     }
   } else if (functionLimit > 0 && sessionHardLimit > 0) {
     policy.ceiling = std::min(functionLimit, sessionHardLimit);

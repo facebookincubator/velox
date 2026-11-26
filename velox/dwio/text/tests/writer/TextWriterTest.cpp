@@ -73,8 +73,8 @@ class TextWriterTest : public testing::Test,
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(schema);
     readerOptions.setSerDeOptions(serDeOptions);
-    auto input =
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        readFile, FileIoContext{.pool = pool()});
     return factory->createReader(std::move(input), readerOptions);
   }
 

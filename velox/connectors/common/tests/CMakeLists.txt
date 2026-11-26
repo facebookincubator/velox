@@ -20,3 +20,19 @@ target_link_libraries(
   GTest::gtest
   GTest::gtest_main
 )
+
+add_executable(velox_file_split_reader_test FileSplitReaderTest.cpp)
+add_test(velox_file_split_reader_test velox_file_split_reader_test)
+target_link_libraries(
+  velox_file_split_reader_test
+  velox_file_connector
+  velox_dwio_dwrf_reader
+  velox_dwio_orc_reader
+  velox_vector_test_lib
+  GTest::gtest
+  GTest::gtest_main
+)
+if(VELOX_ENABLE_PARQUET)
+  target_include_directories(velox_file_split_reader_test PUBLIC ${ARROW_PREFIX}/install/include)
+  target_link_libraries(velox_file_split_reader_test velox_dwio_parquet_reader)
+endif()

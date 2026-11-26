@@ -92,29 +92,33 @@ class SentinelEncodingView final : public TypedEncodingView<T> {
         "Sentinel child row count must match its parent");
   }
 
+  /// Reads the rows with one read of the child that takes `addStringBuffer`,
+  /// so that the child passes the buffers of the strings, then clears the rows
+  /// that equal the sentinel. Reads never return the sentinel, which points
+  /// into the input.
   uint32_t read(
       std::span<const uint32_t> indices,
       const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
       void* output) const final {
     NIMBLE_CHECK_LE(indices.size(), std::numeric_limits<uint32_t>::max());
     auto* physicalOutput = static_cast<physicalType*>(output);
-    values_->readAt(indices, physicalOutput);
+    values_->read(
+        indices, /*setNull=*/[](uint32_t) {}, addStringBuffer, physicalOutput);
     return normalizeNulls(
         physicalOutput, static_cast<uint32_t>(indices.size()), &setNull);
   }
 
+  /// Does the same as the read of indices above for ordered, disjoint ranges.
   uint32_t read(
       std::span<const RowRange> ranges,
       const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
       void* output) const final {
     const auto numRows = this->checkReadRanges(ranges);
     auto* physicalOutput = static_cast<physicalType*>(output);
-    uint32_t outputOffset{0};
-    for (const auto& range : ranges) {
-      values_->read(
-          range.startRow, range.numRows(), physicalOutput + outputOffset);
-      outputOffset += range.numRows();
-    }
+    values_->read(
+        ranges, /*setNull=*/[](uint32_t) {}, addStringBuffer, physicalOutput);
     return normalizeNulls(physicalOutput, numRows, &setNull);
   }
 

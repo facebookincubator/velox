@@ -451,7 +451,8 @@ class E2EFilterTest
           dataIoStats_,
           nullptr,
           ioExecutor_.get(),
-          cacheReaderOpts);
+          cacheReaderOpts,
+          FileIoContext{.pool = &cacheReaderOpts.memoryPool()});
     }
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -644,7 +645,7 @@ class E2EFilterTest
 
     auto input = std::make_unique<velox::dwio::common::BufferedInput>(
         std::make_shared<velox::InMemoryReadFile>(sinkData_),
-        *leafPool_,
+        velox::FileIoContext{.pool = leafPool_.get()},
         velox::dwio::common::MetricsLog::voidLog());
 
     auto dataIoStats = std::make_shared<velox::io::IoStatistics>();
@@ -2575,7 +2576,7 @@ TEST_P(E2EFilterTest, nestedMainlyConstantWithDictionary) {
   // Read back and verify the data is correct.
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get());
@@ -2781,7 +2782,7 @@ TEST_P(E2EFilterTest, fuzzMainlyConstantDictionaryVector) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get());
@@ -2897,7 +2898,7 @@ TEST_P(E2EFilterTest, fuzzRleDictionaryVector) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get());
@@ -2976,7 +2977,7 @@ TEST_P(E2EFilterTest, constantStringDictionaryVector) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get());
@@ -3045,7 +3046,7 @@ TEST_P(E2EFilterTest, constantStringWithNullsDictionaryVector) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts(leafPool_.get());
@@ -3174,7 +3175,7 @@ TEST_P(E2EFilterTest, crossChunkEncodingChange) {
   // Read back and verify the data is correct.
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions crossChunkReaderOpts(leafPool_.get());
@@ -3266,7 +3267,8 @@ class NimbleExtractionTest : public E2EFilterTest {
     readerOpts.setDataIoStats(ioStats);
     readerOpts.setMetadataIoStats(ioStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<InMemoryReadFile>(sinkData_), readerOpts.memoryPool());
+        std::make_shared<InMemoryReadFile>(sinkData_),
+        FileIoContext{.pool = &readerOpts.memoryPool()});
 
     ReadResult rr;
     rr.reader = makeReader(readerOpts, std::move(input));
@@ -3547,7 +3549,7 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithDifferentAlphabets) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
@@ -3688,7 +3690,7 @@ TEST_P(E2EFilterTest, reactiveEncodingFallbackOutputRowsBias) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
@@ -3816,7 +3818,7 @@ TEST_P(E2EFilterTest, multiChunkDictionaryWithFilter) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
@@ -3923,7 +3925,7 @@ TEST_P(E2EFilterTest, filterOnlyDictionaryStringColumn) {
   // to force multiple next() calls and trigger stale state across batches.
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -4052,7 +4054,7 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStruct) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -4233,7 +4235,7 @@ TEST_P(E2EFilterTest, dictionaryStringInSparseNullableStructMultiChild) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -4359,7 +4361,7 @@ TEST_P(E2EFilterTest, filterOnlyDictAbandonDropsFilter) {
   // Read with filter-only column, batch size that spans both chunks.
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -4464,7 +4466,7 @@ TEST_P(E2EFilterTest, dictionaryChunkExhaustedAllNullTail) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -4609,7 +4611,7 @@ TEST_P(E2EFilterTest, dictionaryStringAllNullRangeAfterStreamEnd) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
   readerOptions.setMetadataIoStats(metadataIoStats_);
@@ -4755,7 +4757,7 @@ TEST_P(E2EFilterTest, dictionaryChunkGapBetweenChunks) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -4881,7 +4883,7 @@ TEST_P(E2EFilterTest, dictionaryChunkGapWithAbandon) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -5043,7 +5045,7 @@ TEST_P(E2EFilterTest, crossChunkEncodingChangeWithFilter) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
@@ -5170,7 +5172,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonWithNullsAndFilter) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -5277,7 +5279,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedDictFilter) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -5396,7 +5398,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonProjectedNullableDictFilter) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -5518,7 +5520,7 @@ TEST_P(E2EFilterTest, crossChunkAbandonSparseDictFilter) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -5616,7 +5618,7 @@ TEST_P(E2EFilterTest, isNullFilterWithNullableDictionary) {
 
   auto input = std::make_unique<velox::dwio::common::BufferedInput>(
       std::make_shared<velox::InMemoryReadFile>(sinkData_),
-      *leafPool_,
+      velox::FileIoContext{.pool = leafPool_.get()},
       velox::dwio::common::MetricsLog::voidLog());
 
   velox::dwio::common::ReaderOptions readerOpts{leafPool_.get()};
