@@ -51,6 +51,7 @@ add_executable(
   EncodingLayoutTest.cpp
   EncodingRebindTest.cpp
   EncodingSelectionTest.cpp
+  EncodingStatsTest.cpp
   EncodingSliceTest.cpp
   EncodingViewFactoryTest.cpp
   EncodingViewUtilsTest.cpp

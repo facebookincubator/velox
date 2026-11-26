@@ -460,6 +460,9 @@ std::string_view FixedBitWidthEncoding<T>::encode(
     std::span<const physicalType> values,
     Buffer& buffer,
     const Encoding::Options& options) {
+  auto* shadowChunk = EncodingStats::ShadowChunk::current();
+  const uint64_t startCpuNs =
+      shadowChunk != nullptr ? EncodingStats::ShadowChunk::threadCpuNanos() : 0;
   const bool useVarint = options.useVarintRowCount;
   static_assert(
       std::is_same_v<
@@ -519,6 +522,9 @@ std::string_view FixedBitWidthEncoding<T>::encode(
 
   Vector<char> vector{&buffer.getMemoryPool()};
 
+  auto payloadOptions =
+      options.payloadCompressionOptions(EncodingType::FixedBitWidth);
+  payloadOptions.fullWidthLanes = fullWidthLanes;
   CompressionEncoder<T> compressionEncoder{
       buffer.getMemoryPool(),
       *dataCompressionPolicy,
@@ -537,7 +543,8 @@ std::string_view FixedBitWidthEncoding<T>::encode(
         return pos;
       },
       // Only typed-lane payloads are typed, so only they take the level.
-      options.fixedBitWidthTypedLanesOpenzlLevel};
+      options.fixedBitWidthTypedLanesOpenzlLevel,
+      &payloadOptions};
 
   const uint32_t encodingSize =
       Encoding::serializePrefixSize(rowCount, useVarint) +
@@ -557,6 +564,29 @@ std::string_view FixedBitWidthEncoding<T>::encode(
   compressionEncoder.write(pos);
 
   NIMBLE_DCHECK_EQ(encodingSize, pos - reserved, "Encoding size mismatch.");
+
+  // A sampled chunk's typed lanes are encoded again, into scratch memory, with
+  // typed lanes and their level off, to measure what the two settings change.
+  // The selection is the same, so only the payload differs.
+  if (shadowChunk != nullptr && laneBits > 0 &&
+      compressionEncoder.countedPayload().has_value()) {
+    shadowChunk->reEncode(
+        *compressionEncoder.countedPayload(),
+        compressionEncoder.getSize(),
+        startCpuNs,
+        [&]() -> uint64_t {
+          auto baselineOptions = options;
+          baselineOptions.fixedBitWidthTypedLanes = false;
+          baselineOptions.fixedBitWidthTypedLanesOpenzlLevel.reset();
+          // The re-encode's payload is not counted as a written one.
+          baselineOptions.encodingStats = nullptr;
+          Buffer scratch{buffer.getMemoryPool()};
+          const auto packed = FixedBitWidthEncoding<T>::encode(
+              selection, values, scratch, baselineOptions);
+          // Both encodings have the same header.
+          return packed.size() - (encodingSize - compressionEncoder.getSize());
+        });
+  }
   return {reserved, encodingSize};
 }
 

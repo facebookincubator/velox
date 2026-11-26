@@ -26,6 +26,9 @@
 
 namespace facebook::nimble {
 
+class EncodingStats;
+class PayloadTally;
+
 ///
 /// Compression policy type definitions:
 /// A compression policy defines which compression algorithm to apply on the
@@ -159,6 +162,28 @@ struct CompressionOptions {
 /// 1-9" (compressionLevel in openzl/prod/src/openzl/compress/gcparams.h).
 constexpr int32_t kMinTypedLanesOpenzlLevel = 1;
 constexpr int32_t kMaxTypedLanesOpenzlLevel = 9;
+
+/// What an encoding tells CompressionEncoder about each payload it hands over,
+/// besides the payload's DataType, for the writer's encoding counters. Built
+/// from Encoding::Options by Encoding::Options::payloadCompressionOptions().
+struct PayloadCompressionOptions {
+  explicit PayloadCompressionOptions(EncodingType encodingType)
+      : encodingType{encodingType} {}
+
+  /// The encoding that produced the payload.
+  EncodingType encodingType;
+
+  /// Counts the payload when set (see EncodingStats).
+  EncodingStats* stats{nullptr};
+
+  /// Counts the payload instead of 'stats' when set, without a lock: the
+  /// encode task's PayloadTally, which the writer folds into 'stats'.
+  PayloadTally* tally{nullptr};
+
+  /// The payload is FixedBitWidth typed lanes as wide as their values' type,
+  /// for EncodingStats.
+  bool fullWidthLanes{false};
+};
 
 class CompressionPolicy {
  public:

@@ -341,6 +341,12 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<uint32_t> FIXED_BIT_WIDTH_TYPED_LANES_OPENZL_LEVEL_OVERRIDE;
 
+  /// Samples about 1 in N chunks for a re-encode of their FixedBitWidth typed
+  /// lanes with typed lanes and the typed-lanes level off, in [0, 1000000]. 0
+  /// (default) disables it. Maps to WriterOptions::shadowEncodeSampleRate.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<uint32_t> SHADOW_ENCODE_SAMPLE_RATE;
+
   /// Omits in-map streams for FlatMap features whose in-map flag is constant,
   /// which is the common case for dense feature sets.
   static Entry<bool> SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS;

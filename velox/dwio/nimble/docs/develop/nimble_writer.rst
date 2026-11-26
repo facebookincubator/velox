@@ -333,3 +333,41 @@ Chunk Index (metadata)
     → Reader skips chunks via min/max (filter pushdown)
 
 Memory Layout
+
+
+Encoding counters
+-----------------
+
+A writer created with typed lanes (``fixedBitWidthTypedLanes``), a typed-lanes
+level (``fixedBitWidthTypedLanesOpenzlLevel``) or a shadow sample rate
+(``shadowEncodeSampleRate``) keeps ``EncodingStats``
+(``compression/EncodingStats.h``). Other writers keep none, so they count
+nothing and publish nothing new.
+
+- **Payload counters.** FixedBitWidth's ``CompressionEncoder`` counts every
+  payload by payload data type, lane width (``full`` for typed lanes as wide
+  as their type, ``narrow`` for narrower lanes, ``none`` otherwise), stored
+  compression and MetaInternal level (``L<n>``, or ``none`` when no
+  MetaInternal attempt was made).
+- **Replay counters.** ``replayedChunks`` and ``replayFallbacks`` count chunks
+  that replayed a captured layout (``encodingLayoutTree`` or the selection
+  cache) and replays that fell back to a fresh selection.
+- **Always present.** The replay counters and the typed-lane totals are
+  published, at 0 if nothing happened, whenever the counters exist.
+- **Sampled re-encode.** With a sample rate N (``shadowEncodeSampleRate``),
+  the writer samples about 1 in N chunks by a hash of each chunk's stream,
+  its chunk index and a random seed drawn once per writer, published as
+  ``encoding.shadowSampleSeed``, and FixedBitWidth encodes each
+  typed-lane payload of a sampled chunk a second time, into scratch memory,
+  with the same selection and with typed lanes and the typed-lanes level off.
+  The counters ``encoding.shadow.<settings>.FixedBitWidth.*`` compare the
+  payloads' stored bytes as written and as re-encoded, and the CPU time of
+  their encodes as written (``actualCpuNs``) and of their re-encodes
+  (``baselineCpuNs``). The re-encode never touches the stream context, the
+  selection cache or a shared dictionary, shared-dictionary streams are not
+  sampled, and the file never changes.
+
+Counter ``encoding.X`` is published as runtime stat ``nimble.encoding.X``
+(``Writer::runtimeStats()``) and as ``FileCloseMetrics`` field
+``encoding.X``. Every name in a family has the same number of segments, so a
+reader can split it by position.

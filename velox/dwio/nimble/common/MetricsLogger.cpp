@@ -43,6 +43,9 @@ folly::dynamic FileCloseMetrics::serialize() const {
   obj["fileSize"] = fileSize;
   obj["encodingCpuNs"] = encodingCpuNs;
   obj["encodingWallNs"] = encodingWallNs;
+  for (const auto& [name, value] : encodingCounters) {
+    obj[name] = value;
+  }
   return obj;
 }
 

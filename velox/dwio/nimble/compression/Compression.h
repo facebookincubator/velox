@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
 #include "velox/dwio/nimble/compression/Compressor.h"
+#include "velox/dwio/nimble/compression/EncodingStats.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 
 namespace facebook::nimble {
@@ -87,10 +88,13 @@ class CompressionEncoder {
       std::optional<int32_t> typedLanesLevel = std::nullopt)
       : dataSize_{uncompressedBuffer.size()},
         compressionType_{CompressionType::Uncompressed} {
-    if (dataSize_ == 0 ||
-        dataSize_ < compressionPolicy.config().minCompressionSize ||
-        compressionPolicy.config().compressionType ==
-            CompressionType::Uncompressed) {
+    if (dataSize_ == 0) {
+      data_ = uncompressedBuffer;
+      return;
+    }
+    const CompressionConfig config = compressionPolicy.config();
+    if (dataSize_ < config.minCompressionSize ||
+        config.compressionType == CompressionType::Uncompressed) {
       // No compression, just use the original buffer.
       data_ = uncompressedBuffer;
       return;
@@ -122,6 +126,8 @@ class CompressionEncoder {
   // Note that in this case, the target buffer for the newly encoded data is
   // different if compression is applied (it is written to a temp buffer), or if
   // compression is skipped (written directly to the stream buffer).
+  // 'payloadOptions', when given, counts the payload in the writer's encoding
+  // counters.
   CompressionEncoder(
       velox::memory::MemoryPool& pool,
       const CompressionPolicy& compressionPolicy,
@@ -130,16 +136,31 @@ class CompressionEncoder {
       size_t uncompressedSize,
       const std::function<std::span<char>()>& allocateUncompressedBuffer,
       std::function<void(char*&)> encoder,
-      std::optional<int32_t> typedLanesLevel = std::nullopt)
+      std::optional<int32_t> typedLanesLevel = std::nullopt,
+      const PayloadCompressionOptions* payloadOptions = nullptr)
       : encoder_{std::move(encoder)},
         dataSize_{uncompressedSize},
         compressionType_{CompressionType::Uncompressed} {
-    if (uncompressedSize == 0 ||
-        uncompressedSize < compressionPolicy.config().minCompressionSize ||
-        compressionPolicy.config().compressionType ==
-            CompressionType::Uncompressed) {
+    if (uncompressedSize == 0) {
+      countPayload(
+          payloadOptions,
+          typedLanesLevel,
+          /*attemptedConfig=*/nullptr,
+          dataType,
+          uncompressedSize);
+      return;
+    }
+    const CompressionConfig config = compressionPolicy.config();
+    if (uncompressedSize < config.minCompressionSize ||
+        config.compressionType == CompressionType::Uncompressed) {
       // No compression. Do not encode the data yet. It will be encoded later
       // (in write()) directly into the output buffer.
+      countPayload(
+          payloadOptions,
+          typedLanesLevel,
+          /*attemptedConfig=*/nullptr,
+          dataType,
+          uncompressedSize);
       return;
     }
 
@@ -161,6 +182,8 @@ class CompressionEncoder {
       // temp buffer for later.
       // Note: data size is still the same uncompressed size.
       data_ = uncompressed;
+      countPayload(
+          payloadOptions, typedLanesLevel, &config, dataType, uncompressedSize);
       return;
     }
 
@@ -169,6 +192,8 @@ class CompressionEncoder {
     data_ = {compressed_->data(), compressed_->size()};
     dataSize_ = compressed_->size();
     compressionType_ = compressionResult.compressionType;
+    countPayload(
+        payloadOptions, typedLanesLevel, &config, dataType, uncompressedSize);
   }
 
   size_t getSize() {
@@ -195,13 +220,58 @@ class CompressionEncoder {
     return compressionType_;
   }
 
+  // The payload as counted, when 'payloadOptions' counted it.
+  const std::optional<EncodingStats::Payload>& countedPayload() const {
+    return countedPayload_;
+  }
+
  private:
+  // Counts this payload in the payload options' tally if they have one, else
+  // in their EncodingStats, if any. 'attemptedConfig' is the configuration
+  // compression was attempted with; null when it wasn't attempted.
+  void countPayload(
+      const PayloadCompressionOptions* payloadOptions,
+      std::optional<int32_t> typedLanesLevel,
+      const CompressionConfig* attemptedConfig,
+      DataType dataType,
+      size_t uncompressedSize) {
+    if (payloadOptions == nullptr ||
+        (payloadOptions->tally == nullptr &&
+         payloadOptions->stats == nullptr)) {
+      return;
+    }
+    int32_t level = 0;
+    bool typedLevel = false;
+    if (attemptedConfig != nullptr &&
+        attemptedConfig->compressionType == CompressionType::MetaInternal) {
+      typedLevel =
+          dataType != DataType::Undefined && typedLanesLevel.has_value();
+      level = typedLevel
+          ? *typedLanesLevel
+          : attemptedConfig->parameters.metaInternal.compressionLevel;
+    }
+    countedPayload_ = EncodingStats::Payload{
+        .encodingType = payloadOptions->encodingType,
+        .dataType = dataType,
+        .compressionType = compressionType_,
+        .level = level,
+        .fullWidth = payloadOptions->fullWidthLanes,
+        .typedLevel = typedLevel};
+    if (payloadOptions->tally != nullptr) {
+      payloadOptions->tally->add(*countedPayload_, uncompressedSize, dataSize_);
+    } else {
+      payloadOptions->stats->addPayload(
+          *countedPayload_, uncompressedSize, dataSize_);
+    }
+  }
+
   const std::function<void(char*&)> encoder_;
 
   size_t dataSize_;
   std::optional<std::span<const char>> data_;
   std::optional<Vector<char>> compressed_;
   CompressionType compressionType_;
+  std::optional<EncodingStats::Payload> countedPayload_;
 };
 
 } // namespace facebook::nimble

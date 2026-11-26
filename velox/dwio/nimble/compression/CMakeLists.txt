@@ -15,6 +15,7 @@ add_library(
   nimble_compression
   Compression.cpp
   CompressionPolicy.cpp
+  EncodingStats.cpp
   Lz4Compressor.cpp
   OpenZLCompressor.cpp
   ZstdCompressor.cpp
@@ -23,12 +24,14 @@ add_library(
   Lz4Compressor.h
   Compression.h
   Compressor.h
+  EncodingStats.h
 )
 
 target_link_libraries(
   nimble_compression
   nimble_common
   velox_test_util
+  velox_process
   Folly::folly
   lz4
   ${VELOX_OPENZL_LIBRARIES}
