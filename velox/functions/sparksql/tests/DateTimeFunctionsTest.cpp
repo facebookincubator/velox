@@ -1651,6 +1651,15 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
     const Timestamp minValidMinute(-9'223'372'036'843, 0);
     EXPECT_EQ(minValidMinute, dateTrunc("minute", minValidMinute));
 
+    // Negative sub-minute historical LMT offset (SPARK-33404):
+    // 1880-01-01 00:00:00 UTC in America/Los_Angeles (-07:52:58) is
+    // 1879-12-31 16:07:02 local; flooring to minute yields 16:07:00
+    // (-2 seconds).
+    setQueryTimeZone("America/Los_Angeles");
+    EXPECT_EQ(
+        Timestamp(-2'840'140'802, 0),
+        dateTrunc("minute", Timestamp(-2'840'140'800, 123'456'789)));
+
     setQueryTimeZone("Asia/Kolkata");
     // At 1906-01-01 00:00:00, Asia/Kolkata transitioned from LMT (+05:21:10) to
     // IST (+05:30:00). Local times in [00:00:00, 00:08:50) are nonexistent.

@@ -596,7 +596,7 @@ struct DateTruncFunction {
     }
     const auto unit = unitOption.value();
     // For variable time zones, historical offsets may not be whole minutes
-    // (e.g. Asia/Shanghai before 1928), and offset transitions (e.g. DST or
+    // (e.g. Asia/Shanghai before 1901), and offset transitions (e.g. DST or
     // LMT) may lie between the instant and its floored local minute. Spark
     // truncates in session time zone with fallback to ZonedDateTime.truncatedTo
     // when candidate offset differs. UTC and fixed-offset zones (which are
@@ -628,6 +628,7 @@ struct DateTruncFunction {
 
  private:
   const tz::TimeZone* timeZone_ = nullptr;
+  // True when session time zone is neither UTC nor fixed-offset.
   bool isVariableTimeZone_{false};
 };
 
