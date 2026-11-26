@@ -630,6 +630,43 @@ TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
       hashJoin(core::JoinType::kRightSemiProject, false, false),
       "HashJoin unsupported join type: RIGHT SEMI (PROJECT)");
 
+  // The join keys are columns of the two sources, as many on each side, with
+  // matching types.
+  auto hashJoinOn = [&](Keys leftKeys, Keys rightKeys) {
+    return std::make_shared<CudfHashJoinNode>(
+        "join",
+        source,
+        std::make_shared<CudfFromVeloxNode>("build-upload", values()),
+        input_->rowType(),
+        core::JoinType::kInner,
+        /*nullAware=*/false,
+        std::move(leftKeys),
+        std::move(rightKeys),
+        /*filter=*/nullptr);
+  };
+  auto missingKey = std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "x");
+  auto varcharKey =
+      std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "k");
+  VELOX_ASSERT_USER_THROW(
+      hashJoinOn({}, {}), "CudfHashJoin must have at least one join key");
+  VELOX_ASSERT_USER_THROW(
+      hashJoinOn({key}, {key, key}),
+      "CudfHashJoin must have the same number of join keys on the probe and build sides");
+  VELOX_ASSERT_USER_THROW(
+      hashJoinOn({nullptr}, {key}), "CudfHashJoin join keys must not be null");
+  VELOX_ASSERT_USER_THROW(
+      hashJoinOn({key}, {nullptr}), "CudfHashJoin join keys must not be null");
+  VELOX_ASSERT_USER_THROW(
+      hashJoinOn({missingKey}, {key}),
+      "CudfHashJoin probe key not found in the probe source: x");
+  VELOX_ASSERT_USER_THROW(
+      hashJoinOn({key}, {missingKey}),
+      "CudfHashJoin build key not found in the build source: x");
+  VELOX_ASSERT_USER_THROW(
+      hashJoinOn({key}, {varcharKey}),
+      "CudfHashJoin join key types on the probe and build sides must match: k is BIGINT, k is VARCHAR");
+  EXPECT_NE(hashJoinOn({key}, {key}), nullptr);
+
   auto nestedLoopJoin = [&](core::JoinType joinType) {
     return std::make_shared<CudfNestedLoopJoinNode>(
         "join",

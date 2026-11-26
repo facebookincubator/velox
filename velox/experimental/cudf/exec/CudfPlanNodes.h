@@ -212,7 +212,10 @@ class CudfHashJoinNode : public CudfPlanNode {
   static std::optional<std::string>
   unsupportedReason(core::JoinType joinType, bool nullAware, bool hasFilter);
 
-  /// Throws if unsupportedReason() has a reason for the join.
+  /// 'leftKeys' are columns of 'probeSource' and 'rightKeys' are columns of
+  /// 'buildSource': at least one on each side, as many on each side, with
+  /// matching types. Throws if they are not, or if unsupportedReason() has a
+  /// reason for the join.
   CudfHashJoinNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr probeSource,

@@ -545,6 +545,38 @@ CudfHashJoinNode::CudfHashJoinNode(
       filter_(std::move(filter)),
       sources_{std::move(probeSource), std::move(buildSource)},
       outputType_(std::move(outputType)) {
+  // The same rules as core::AbstractJoinNode::validate() has for its keys.
+  VELOX_USER_CHECK(
+      !leftKeys_.empty(), "CudfHashJoin must have at least one join key");
+  VELOX_USER_CHECK_EQ(
+      leftKeys_.size(),
+      rightKeys_.size(),
+      "CudfHashJoin must have the same number of join keys on the probe and build sides");
+  const auto& probeType = sources_[0]->outputType();
+  const auto& buildType = sources_[1]->outputType();
+  for (size_t i = 0; i < leftKeys_.size(); ++i) {
+    const auto& probeKey = leftKeys_[i];
+    const auto& buildKey = rightKeys_[i];
+    VELOX_USER_CHECK_NOT_NULL(
+        probeKey, "CudfHashJoin join keys must not be null");
+    VELOX_USER_CHECK_NOT_NULL(
+        buildKey, "CudfHashJoin join keys must not be null");
+    VELOX_USER_CHECK(
+        probeType->containsChild(probeKey->name()),
+        "CudfHashJoin probe key not found in the probe source: {}",
+        probeKey->name());
+    VELOX_USER_CHECK(
+        buildType->containsChild(buildKey->name()),
+        "CudfHashJoin build key not found in the build source: {}",
+        buildKey->name());
+    VELOX_USER_CHECK(
+        probeKey->type()->kind() == buildKey->type()->kind(),
+        "CudfHashJoin join key types on the probe and build sides must match: {} is {}, {} is {}",
+        probeKey->name(),
+        probeKey->type()->toString(),
+        buildKey->name(),
+        buildKey->type()->toString());
+  }
   const auto unsupported =
       unsupportedReason(joinType_, nullAware_, filter_ != nullptr);
   VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));
