@@ -135,11 +135,15 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
   EncodingLayoutTree layout(bool ordinary, CompressionType compressionType) {
     const EncodingLayout trivial{
         EncodingType::Trivial, {}, CompressionType::Uncompressed};
+    std::vector<std::optional<const EncodingLayout>> stringChildren{trivial};
+    if (!ordinary) {
+      stringChildren.emplace_back(trivial);
+    }
     EncodingLayout strings{
         ordinary ? EncodingType::Trivial : EncodingType::Fsst,
         {},
         compressionType,
-        {trivial}};
+        std::move(stringChildren)};
     const auto valueLayout = [&] {
       if (!ordinary && GetParam()) {
         return EncodingLayout{
