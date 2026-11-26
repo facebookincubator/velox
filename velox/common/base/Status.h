@@ -395,10 +395,8 @@ class [[nodiscard]] Status {
     return ok() ? kNoMessage : state_->msg;
   }
 
-  /// Return the optional error code attached to this status, or an empty
-  /// string if none was attached. When a user error status is converted into
-  /// a VeloxUserError (see EvalCtx::setStatus), this value becomes
-  /// VeloxException::errorCode(); an empty value maps to INVALID_ARGUMENT.
+  /// Return the error code attached with withErrorCode(), or an empty string
+  /// if none was attached.
   const std::string& errorCode() const {
     static const std::string kNoErrorCode;
     return ok() ? kNoErrorCode : state_->errorCode;

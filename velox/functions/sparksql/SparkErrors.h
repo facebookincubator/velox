@@ -15,40 +15,46 @@
  */
 #pragma once
 
-#include <folly/FixedString.h>
+#include <string>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/base/Status.h"
+#include "velox/functions/sparksql/SparkErrorCodes.h"
 
 /// Helpers for Spark functions to report errors that map to a Spark error
-/// condition (see Spark's error-conditions.json). The condition is attached to
-/// the error as error code "SPARK:<condition>", e.g. "SPARK:DIVIDE_BY_ZERO".
-/// The error message is unchanged. Engines such as Gluten use the error code to
-/// raise the matching Spark exception.
+/// condition. The condition is attached to the error as an error code from
+/// SparkErrorCodes.h, e.g. "SPARK:DIVIDE_BY_ZERO". The error message is
+/// unchanged. Engines such as Gluten use the error code to raise the matching
+/// Spark exception.
 
-namespace facebook::velox::functions::sparksql::spark_error_code {
-using namespace folly::string_literals;
+namespace facebook::velox::functions::sparksql::detail {
 
-/// Spark error condition DIVIDE_BY_ZERO.
-inline constexpr auto kDivideByZero = "SPARK:DIVIDE_BY_ZERO"_fs;
+/// Builds the user error Status returned by the SPARK_USER_RETURN* macros.
+/// Without a message (error details are skipped, e.g. under TRY), no code is
+/// attached to keep TRY cheap.
+struct SparkUserError {
+  const char* errorCode;
 
-} // namespace facebook::velox::functions::sparksql::spark_error_code
+  Status operator()() const {
+    return Status::UserError();
+  }
 
-/// Same as _VELOX_RETURN_IMPL with Status::UserError, but sets 'errorCode', one
-/// of the spark_error_code constants. When error details are skipped (e.g.
-/// under TRY), no code is set to keep TRY cheap.
-#define _SPARK_USER_RETURN_IMPL(errorCode, expr, exprStr, ...)                 \
-  do {                                                                         \
-    if (expr) [[unlikely]] {                                                   \
-      if (::facebook::velox::threadSkipErrorDetails()) {                       \
-        return ::facebook::velox::Status::UserError();                         \
-      }                                                                        \
-      auto message = ::facebook::velox::errorMessage(__VA_ARGS__);             \
-      return ::facebook::velox::Status::UserError(                             \
-                 ::facebook::velox::internal::generateError(message, exprStr)) \
-          .withErrorCode((errorCode).toStdString());                           \
-    }                                                                          \
-  } while (0)
+  Status operator()(std::string message) const {
+    return Status::UserError(std::move(message)).withErrorCode(errorCode);
+  }
+};
+
+} // namespace facebook::velox::functions::sparksql::detail
+
+/// Same as _VELOX_USER_RETURN_IMPL, but sets 'errorCode', one of the
+/// spark_error_code constants.
+#define _SPARK_USER_RETURN_IMPL(errorCode, expr, exprStr, ...)        \
+  _VELOX_RETURN_IMPL(                                                 \
+      expr,                                                           \
+      exprStr,                                                        \
+      ::facebook::velox::functions::sparksql::detail::SparkUserError{ \
+          (errorCode).c_str()},                                       \
+      ##__VA_ARGS__)
 
 #define _SPARK_USER_RETURN_OP(errorCode, expr1, expr2, op, user_fmt, ...) \
   _SPARK_USER_RETURN_IMPL(                                                \
