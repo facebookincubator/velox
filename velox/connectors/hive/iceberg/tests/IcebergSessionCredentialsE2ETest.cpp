@@ -110,6 +110,7 @@ class RecordingFileSystem : public FileSystem {
     {
       std::lock_guard<std::mutex> l(mutex_);
       capturedReadOps_.push_back(options.fileReadOps);
+      openCancellable_.push_back(options.cancellationToken.canBeCancelled());
     }
     const std::string delegated{extractPath(path)};
     return std::make_unique<RecordingReadFile>(
@@ -171,6 +172,14 @@ class RecordingFileSystem : public FileSystem {
     std::lock_guard<std::mutex> l(mutex_);
     capturedReadOps_.clear();
     capturedReadContextOps_.clear();
+    openCancellable_.clear();
+  }
+
+  // Returns, for each openFileForRead call, whether its cancellation token can
+  // be canceled. A default token cannot; a query's token can.
+  std::vector<bool> openCancellable() {
+    std::lock_guard<std::mutex> l(mutex_);
+    return openCancellable_;
   }
 
   // Returns the recorded value for 'key' across all openFileForRead calls, or
@@ -212,6 +221,7 @@ class RecordingFileSystem : public FileSystem {
   std::vector<folly::F14FastMap<std::string, std::string>> capturedReadOps_{};
   std::vector<folly::F14FastMap<std::string, std::string>>
       capturedReadContextOps_{};
+  std::vector<bool> openCancellable_{};
 };
 
 std::shared_ptr<RecordingFileSystem> recordingFileSystem() {
@@ -477,6 +487,53 @@ TEST_F(IcebergSessionCredentialsE2ETest, deleteFileReadOpsAddKeys) {
         dvFile.contentOffset,
         dvFile.contentLength,
         dvFile.referencedDataFile));
+  }
+}
+
+// Each delete file opens with the query's cancellation token, so canceling the
+// query stops an open that is retrying.
+TEST_F(
+    IcebergSessionCredentialsE2ETest,
+    deleteFileOpenCarriesQueryCancellation) {
+  const auto dataFile = writeRowPositionDataFile();
+  const auto assertOpenCancellable = [&](const IcebergDeleteFile& deleteFile) {
+    recordingFileSystem()->clear();
+    assertScanDeletesOddRows(dataFile->getPath(), deleteFile);
+    EXPECT_THAT(
+        recordingFileSystem()->openCancellable(),
+        testing::AllOf(testing::Not(testing::IsEmpty()), testing::Each(true)));
+  };
+
+  {
+    const auto deleteFile = common::testutil::TempFilePath::create();
+    writeToFile(
+        deleteFile->getPath(),
+        {makeRowVector(
+            {"file_path", "pos"},
+            {makeFlatVector<std::string>(
+                 {dataFile->getPath(), dataFile->getPath()}),
+             makeFlatVector<int64_t>({1, 3})})});
+    assertOpenCancellable(IcebergDeleteFile(
+        FileContent::kPositionalDeletes,
+        RecordingFileSystem::scheme() + deleteFile->getPath(),
+        fileFormat_,
+        /*recordCount=*/2,
+        getFileSize(deleteFile->getPath())));
+  }
+
+  {
+    const auto deleteFile = common::testutil::TempFilePath::create();
+    writeToFile(
+        deleteFile->getPath(),
+        {makeNamedRowVector("c0", makeFlatVector<int64_t>({1, 3}))});
+    assertOpenCancellable(IcebergDeleteFile(
+        FileContent::kEqualityDeletes,
+        RecordingFileSystem::scheme() + deleteFile->getPath(),
+        fileFormat_,
+        /*recordCount=*/2,
+        getFileSize(deleteFile->getPath()),
+        // Field ID 1 is 'c0'.
+        /*equalityFieldIds=*/{1}));
   }
 }
 

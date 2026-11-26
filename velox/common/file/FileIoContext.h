@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 
+#include <folly/CancellationToken.h>
 #include <folly/container/F14Map.h>
 #include <folly/io/async/Request.h>
 
@@ -60,6 +61,10 @@ struct FileIoContext {
   /// queries, and the memory belongs to the query doing the read. Null means
   /// the file allocates outside any pool.
   memory::MemoryPool* pool{nullptr};
+
+  /// Cancels this read once the query it belongs to is canceled. See ReadFile
+  /// for what a canceled read does.
+  folly::CancellationToken cancellationToken{};
 };
 
 /// Replaces the FileIoContext of reads that honor it: reads on this thread

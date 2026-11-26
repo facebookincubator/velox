@@ -72,6 +72,7 @@ BufferedInputBuilder::createDefault(
             .fileOpts = fileReadOps,
             .cacheable = readerOpts.cacheable(),
             .pool = &readerOpts.memoryPool(),
+            .cancellationToken = connectorQueryCtx->cancellationToken(),
         });
   }
   if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE &&
@@ -82,6 +83,7 @@ BufferedInputBuilder::createDefault(
             .ioStats = ioStats.get(),
             .fileOpts = fileReadOps,
             .pool = &readerOpts.memoryPool(),
+            .cancellationToken = connectorQueryCtx->cancellationToken(),
         },
         dwio::common::MetricsLog::voidLog(),
         ioStatistics.get());
@@ -100,6 +102,7 @@ BufferedInputBuilder::createDefault(
       FileIoContext{
           .fileOpts = fileReadOps,
           .pool = &readerOpts.memoryPool(),
+          .cancellationToken = connectorQueryCtx->cancellationToken(),
       });
 }
 

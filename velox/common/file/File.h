@@ -69,7 +69,21 @@ class IoStats {
   folly::Synchronized<folly::F14FastMap<std::string, RuntimeMetric>> stats_;
 };
 
-// A read-only file.  All methods in this object should be thread safe.
+/// A read-only file. All methods in this object should be thread safe.
+///
+/// One ReadFile can serve reads for many queries at once, so a query's
+/// cancellation travels with each call, not with the file:
+/// - A read takes a FileIoContext. Once its 'cancellationToken' is canceled, a
+///   read that retries throws before its next attempt or during the backoff
+///   between attempts. An attempt already in flight runs to completion,
+///   including any wait inside it, such as for admission or throttling. The
+///   caller sees an exception, never a short read. Other reads of the same file
+///   are not affected.
+/// - Opening a file takes FileOptions, whose 'cancellationToken' stops the open
+///   the same way.
+/// - size() takes no token. See size().
+///
+/// An implementation that does not retry can ignore the tokens.
 class ReadFile {
  public:
   virtual ~ReadFile() = default;
@@ -160,7 +174,9 @@ class ReadFile {
   // set to true, in-memory to false.
   virtual bool shouldCoalesce() const = 0;
 
-  // Number of bytes in the file.
+  /// Returns the number of bytes in the file. Takes no cancellation token, so
+  /// an implementation that needs a storage call to learn the size makes it
+  /// while opening the file, where FileOptions::cancellationToken applies.
   virtual uint64_t size() const = 0;
 
   // An estimate for the total amount of memory *this uses.

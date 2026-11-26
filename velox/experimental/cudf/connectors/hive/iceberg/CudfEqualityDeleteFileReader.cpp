@@ -98,7 +98,10 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   const FileHandleKey fileHandleKey{
       .filename = deleteFile.filePath,
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
-  auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
+  FileProperties fileProperties;
+  fileProperties.cancellationToken = connectorQueryCtx->cancellationToken();
+  auto deleteFileHandleCachePtr =
+      fileHandleFactory->generate(fileHandleKey, &fileProperties);
   auto deleteFileInput =
       ::facebook::velox::connector::BufferedInputBuilder::getInstance()->create(
           *deleteFileHandleCachePtr,

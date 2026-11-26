@@ -217,6 +217,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
   FileProperties fileProperties;
   fileProperties.fileReadOps = fileReadOps;
+  fileProperties.cancellationToken = connectorQueryCtx->cancellationToken();
   auto deleteFileHandleCachePtr =
       fileHandleFactory->generate(fileHandleKey, &fileProperties);
   auto deleteFileInput = connector::BufferedInputBuilder::getInstance()->create(

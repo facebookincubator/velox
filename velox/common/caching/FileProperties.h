@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 
+#include <folly/CancellationToken.h>
 #include <folly/container/F14Map.h>
 #include <folly/dynamic.h>
 
@@ -39,6 +40,10 @@ struct FileProperties {
   /// Non-owning pointer to the statistics of the data source that opened the
   /// file. Set locally by the reader at open time, so 'serialize()' skips it.
   io::IoStatistics* ioStatistics{nullptr};
+
+  /// Cancels opening the file when the query that opens it is canceled. Set
+  /// locally by the reader at open time, so 'serialize()' skips it.
+  folly::CancellationToken cancellationToken{};
 
   folly::dynamic serialize() const;
 

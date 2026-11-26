@@ -20,6 +20,8 @@
 #include "velox/common/file/TokenProvider.h"
 #include "velox/common/memory/MemoryPool.h"
 
+#include <folly/CancellationToken.h>
+
 #include <functional>
 #include <memory>
 #include <optional>
@@ -104,6 +106,12 @@ struct FileOptions {
   /// File read operations metadata that can be passed to the underlying file
   /// system for tracking and logging purposes.
   folly::F14FastMap<std::string, std::string> fileReadOps{};
+
+  /// Cancels opening a file for read. Once canceled, an open that retries
+  /// throws before its next attempt or during the backoff between attempts.
+  /// Applies only to this open: the opened ReadFile does not keep it, because
+  /// one ReadFile can serve many queries.
+  folly::CancellationToken cancellationToken{};
 };
 
 /// Defines directory options
