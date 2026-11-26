@@ -55,4 +55,10 @@ bool isGpuTableScan(
     const core::QueryCtx& queryCtx,
     std::string* reason);
 
+/// Returns whether source 'sourceIndex' of 'node' is the lookup side of an
+/// IndexLookupJoinNode. That scan is not a pipeline: the join reads its table
+/// handle and gets no vectors from it. It stays a core::TableScanNode with no
+/// conversion above it, whatever its connector is.
+bool isIndexLookupSource(const core::PlanNode& node, size_t sourceIndex);
+
 } // namespace facebook::velox::cudf_velox

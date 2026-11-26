@@ -46,7 +46,10 @@ general driver adapter uses.
 
 The rewriter and the general driver adapter decide placement with the same
 rules, by asking the definition of each node (see Built-in nodes). A scan has
-no cuDF plan node, so its rule is `isGpuTableScan()` in `GpuPlacement.h`. A
+no cuDF plan node, so its rule is `isGpuTableScan()` in `GpuPlacement.h`. The
+lookup side of an index lookup join is the exception: the join reads the table
+handle of that scan and gets no vectors from it, so the rewriter leaves the
+scan as it is and `validateCudfPlan` asks for no conversion above it. A
 Filter followed by a Project is decided as one
 unit, because LocalPlanner fuses the two into one FilterProject operator. Core
 plan nodes that stay on the CPU are rebuilt with their rewritten sources.

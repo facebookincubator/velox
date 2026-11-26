@@ -826,7 +826,8 @@ void validateCudfPlan(
           output.has_value(), "A terminal sink cannot feed another node");
       const auto need = traits.inputs[i];
       VELOX_USER_CHECK(
-          need == InputRepresentation::kEither ||
+          isIndexLookupSource(*node, i) ||
+              need == InputRepresentation::kEither ||
               (need == InputRepresentation::kCudf) ==
                   (*output == VectorRepresentation::kCudf),
           "Vector representation mismatch at source {} of {} ({})",

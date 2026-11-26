@@ -144,4 +144,9 @@ bool isGpuTableScan(
       node, *connectorQueryCtx, queryCtx.queryConfig(), reason);
 }
 
+bool isIndexLookupSource(const core::PlanNode& node, size_t sourceIndex) {
+  return sourceIndex == 1 &&
+      dynamic_cast<const core::IndexLookupJoinNode*>(&node) != nullptr;
+}
+
 } // namespace facebook::velox::cudf_velox

@@ -1074,6 +1074,47 @@ TEST_F(PlanRewriterHiveTest, gpuScanFeedsGpuNodesDirectly) {
   EXPECT_TRUE(operators.contains("CudfReduceSINGLE"));
 }
 
+// The lookup side of an index lookup join is not a pipeline: the join reads
+// the table handle of that scan. The rewriter leaves the scan as it is, even
+// when the scan would run on the GPU by itself.
+TEST_F(PlanRewriterHiveTest, indexLookupSourceStaysAsIs) {
+  auto lookupType = ROW({"u0", "u1"}, BIGINT());
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto lookupScan = std::dynamic_pointer_cast<const core::TableScanNode>(
+      PlanBuilder(ids, pool_.get())
+          .startTableScan()
+          .connectorId(cudf_velox::exec::test::kCudfHiveConnectorId)
+          .outputType(lookupType)
+          .dataColumns(lookupType)
+          .indexColumns({"u0"})
+          .assignments(
+              ::facebook::velox::exec::test::HiveConnectorTestBase::
+                  allRegularColumns(lookupType))
+          .endTableScan()
+          .planNode());
+  ASSERT_NE(lookupScan, nullptr);
+  ASSERT_TRUE(rewriteToCudfPlan(lookupScan)->is<CudfToVeloxNode>());
+
+  auto plan =
+      PlanBuilder(ids, pool_.get())
+          .values(makeVectors(ROW({"c0", "c1"}, BIGINT()), 1, 10))
+          .project({"c0 + 1 AS k", "c1"})
+          .indexLookupJoin(
+              {"k"}, {"u0"}, lookupScan, {}, "", false, {"k", "c1", "u1"})
+          .planNode();
+  // The join itself has no cuDF plan node.
+  auto physical = rewriteToCudfPlan(
+      plan,
+      core::QueryCtx::create(
+          nullptr,
+          core::QueryConfig({{CudfConfig::kCudfAllowCpuFallback, "true"}})));
+  const auto* join = physical->as<core::IndexLookupJoinNode>();
+  ASSERT_NE(join, nullptr);
+  EXPECT_EQ(join->lookupSource(), lookupScan);
+  ASSERT_TRUE(join->sources()[0]->is<CudfToVeloxNode>());
+  EXPECT_TRUE(join->sources()[0]->sources()[0]->is<CudfFilterProjectNode>());
+}
+
 TEST_F(PlanRewriterHiveTest, scanWithUnsupportedRemainingFilterStaysOnCpu) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), BIGINT()});
   auto vectors = makeVectors(rowType, 4, 1'000);

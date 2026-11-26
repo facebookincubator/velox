@@ -692,7 +692,14 @@ class Rewriter {
     if (!node->sources().empty()) {
       checkCpuFallback(node, reason);
     }
-    auto newSources = rewriteChildren(node->sources(), Mode::kCpu);
+    std::vector<core::PlanNodePtr> newSources;
+    newSources.reserve(node->sources().size());
+    for (size_t i = 0; i < node->sources().size(); ++i) {
+      const auto& source = node->sources()[i];
+      newSources.push_back(
+          isIndexLookupSource(*node, i) ? source
+                                        : rewriteNode(source, Mode::kCpu).node);
+    }
     if (newSources == node->sources()) {
       return {node, Mode::kCpu};
     }
