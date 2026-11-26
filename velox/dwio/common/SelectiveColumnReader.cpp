@@ -506,6 +506,15 @@ void SelectiveColumnReader::setNulls(BufferPtr resultNulls) {
   returnReaderNulls_ = false;
 }
 
+void SelectiveColumnReader::resetReadState() {
+  readOffset_ = 0;
+  numParentNulls_ = 0;
+  parentNullsRecordedTo_ = 0;
+  // Filter results are cached per dictionary entry of the previous stripe.
+  scanState_.filterCache.clear();
+  scanState_.clear();
+}
+
 void SelectiveColumnReader::resetFilterCaches() {
   if (scanState_.filterCache.empty() && scanSpec_->hasFilter()) {
     scanState_.filterCache.resize(

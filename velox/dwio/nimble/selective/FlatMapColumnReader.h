@@ -28,4 +28,4 @@ createFlatMapColumnReader(
     NimbleParams& params,
     velox::common::ScanSpec& scanSpec);
 
-}
+} // namespace facebook::nimble

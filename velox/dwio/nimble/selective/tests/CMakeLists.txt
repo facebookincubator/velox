@@ -14,6 +14,7 @@
 add_executable(
   nimble_velox_selective_tests
   ChunkedDecoderTest.cpp
+  ColumnReaderTest.cpp
   # This requires VELOX_BUILD_TEST_UTILS=ON but it also requires
   # VELOX_ENABLE_EXEC=ON. VELOX_ENABLE_EXEC is OFF by
   # VELOX_BUILD_MINIMAL_WITH_DWIO=ON.
@@ -21,6 +22,7 @@ add_executable(
   # E2EFilterTest.cpp
   # E2EIndexTest.cpp
   FlatMapColumnReaderTest.cpp
+  FlatMapKeyNodeTest.cpp
   FloatingPointColumnReaderTest.cpp
   NimbleDataTest.cpp
   NullColumnReaderTest.cpp

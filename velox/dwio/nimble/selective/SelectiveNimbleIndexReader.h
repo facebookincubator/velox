@@ -18,6 +18,7 @@
 
 #include <folly/container/F14Map.h>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "velox/connectors/Connector.h"
@@ -26,6 +27,7 @@
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
+#include "velox/dwio/nimble/selective/FlatMapKeyNode.h"
 #include "velox/dwio/nimble/selective/ReaderBase.h"
 #include "velox/dwio/nimble/selective/RowSizeTracker.h"
 #include "velox/serializers/KeyEncoder.h"
@@ -46,11 +48,18 @@ class SelectiveNimbleIndexReader : public velox::dwio::common::IndexReader {
  public:
   using Result = velox::connector::IndexSource::Result;
 
+  /// Runtime stat counting the FlatMap key readers that a stripe reused from
+  /// an earlier stripe instead of building.
+  static constexpr std::string_view kNumReusedFlatMapKeyNodes{
+      "numReusedFlatMapKeyNodes"};
+
   SelectiveNimbleIndexReader(
       std::shared_ptr<ReaderBase> readerBase,
       const velox::dwio::common::RowReaderOptions& options);
 
-  ~SelectiveNimbleIndexReader() override = default;
+  /// Destroys the column reader tree first, while the FlatMap key node pool
+  /// that the tree returns its key readers to is alive.
+  ~SelectiveNimbleIndexReader() override;
 
   /// Starts a new batch lookup with the given index bounds.
   /// Encodes the bounds, looks up matching stripes, and prepares for iteration.
@@ -282,12 +291,17 @@ class SelectiveNimbleIndexReader : public velox::dwio::common::IndexReader {
   const velox::RowTypePtr fileOutputType_;
 
   const ClusterIndexBase* const clusterIndex_;
+  const int32_t numStripes_;
 
   StripeStreams streams_;
-  int32_t numStripes_{0};
 
   std::unique_ptr<velox::serializer::KeyEncoder> keyEncoder_;
 
+  // Keeps the FlatMap key readers of the column readers of earlier stripes, so
+  // the column reader of the next stripe rebinds them instead of building new
+  // ones. 'columnReader_' returns its key readers here when it is destroyed,
+  // which the destructor does first.
+  FlatMapKeyNodePool flatMapKeyNodePool_;
   std::unique_ptr<velox::dwio::common::SelectiveColumnReader> columnReader_;
   velox::dwio::common::SplitStats splitStats_{
       velox::dwio::common::FileFormat::NIMBLE};

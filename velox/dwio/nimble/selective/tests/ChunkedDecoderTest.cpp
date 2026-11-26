@@ -1130,6 +1130,99 @@ TEST_P(ChunkedDecoderDataTest, skipEntireStream) {
       "Failed to read chunk header");
 }
 
+// Rebinding to another stream drops the position, the chunk and the stream
+// index of the first stream, so the decoder reads and skips the new stream from
+// its start.
+TEST_P(ChunkedDecoderDataTest, rebindStream) {
+  const auto [firstStream, firstChunkInfos] =
+      encodeChunkedStream<uint32_t>({{0, 1, 2, 3, 4}, {5, 6, 7}});
+  const auto [secondStream, secondChunkInfos] =
+      encodeChunkedStream<uint32_t>({{100, 101, 102}, {103, 104, 105, 106}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          firstStream.data(), firstStream.size()),
+      createTestStreamIndex(firstChunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  std::vector<int32_t> result(2);
+  decoder.nextIndices(result.data(), 2, nullptr);
+  EXPECT_EQ(result, (std::vector<int32_t>{0, 1}));
+  // Leaves the decoder in the second chunk of the first stream.
+  decoder.skip(4);
+
+  // The second stream has no stream index, so a skip that used the index of
+  // the first stream would land at the wrong offset.
+  decoder.rebindStream(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          secondStream.data(), secondStream.size()),
+      /*streamIndex=*/nullptr,
+      /*dictionaryAlphabetLoader=*/nullptr);
+  result.resize(1);
+  decoder.nextIndices(result.data(), 1, nullptr);
+  EXPECT_EQ(result, (std::vector<int32_t>{100}));
+  decoder.skip(3);
+  result.resize(3);
+  decoder.nextIndices(result.data(), 3, nullptr);
+  EXPECT_EQ(result, (std::vector<int32_t>{104, 105, 106}));
+}
+
+// A SeekableArrayInputStream that sets '*destroyed' when it is destroyed.
+class DestroyTrackingInputStream
+    : public dwio::common::SeekableArrayInputStream {
+ public:
+  DestroyTrackingInputStream(const std::string& data, bool* destroyed)
+      : SeekableArrayInputStream(data.data(), data.size()),
+        destroyed_{destroyed} {}
+
+  ~DestroyTrackingInputStream() override {
+    *destroyed_ = true;
+  }
+
+ private:
+  bool* const destroyed_;
+};
+
+// Unbinding destroys the input of the stream, so that a decoder kept for a
+// later stream keeps none of the stream's data alive. Rebinding then reads the
+// next stream from its start.
+TEST_P(ChunkedDecoderDataTest, unbindStream) {
+  const auto [firstStream, firstChunkInfos] =
+      encodeChunkedStream<uint32_t>({{0, 1, 2, 3, 4}, {5, 6, 7}});
+  const auto [secondStream, secondChunkInfos] =
+      encodeChunkedStream<uint32_t>({{100, 101, 102}, {103, 104, 105, 106}});
+  bool firstInputDestroyed{false};
+  ChunkedDecoder decoder(
+      std::make_unique<DestroyTrackingInputStream>(
+          firstStream, &firstInputDestroyed),
+      createTestStreamIndex(firstChunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  std::vector<int32_t> result(2);
+  decoder.nextIndices(result.data(), 2, nullptr);
+  EXPECT_EQ(result, (std::vector<int32_t>{0, 1}));
+  // Leaves the decoder in the second chunk of the first stream.
+  decoder.skip(4);
+  EXPECT_FALSE(firstInputDestroyed);
+
+  decoder.unbindStream();
+  EXPECT_TRUE(firstInputDestroyed);
+
+  decoder.rebindStream(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          secondStream.data(), secondStream.size()),
+      createTestStreamIndex(secondChunkInfos),
+      /*dictionaryAlphabetLoader=*/nullptr);
+  result.resize(1);
+  decoder.nextIndices(result.data(), 1, nullptr);
+  EXPECT_EQ(result, (std::vector<int32_t>{100}));
+  decoder.skip(3);
+  result.resize(3);
+  decoder.nextIndices(result.data(), 3, nullptr);
+  EXPECT_EQ(result, (std::vector<int32_t>{104, 105, 106}));
+}
+
 // The row-size estimates peek at a chunk header only before anything is read
 // or skipped. A skip with the index to exactly the end of the stream leaves no
 // header to peek at, so they keep their last values.

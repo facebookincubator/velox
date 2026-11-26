@@ -148,8 +148,8 @@ SelectiveNimbleIndexReader::SelectiveNimbleIndexReader(
           readerBase_->fileSchema(),
           *options.scanSpec())),
       clusterIndex_{readerBase_->tablet().clusterIndex()},
-      streams_{readerBase_},
       numStripes_{static_cast<int32_t>(readerBase_->tablet().stripeCount())},
+      streams_{readerBase_},
       stats_{
           {std::string(dwio::common::IndexReader::kIndexStripeLoadWallNanos),
            velox::RuntimeMetric(velox::RuntimeCounter::Unit::kNanos)},
@@ -160,6 +160,10 @@ SelectiveNimbleIndexReader::SelectiveNimbleIndexReader(
           {std::string(dwio::common::IndexReader::kIndexDataDecodeCpuNanos),
            velox::RuntimeMetric(velox::RuntimeCounter::Unit::kNanos)},
       } {}
+
+SelectiveNimbleIndexReader::~SelectiveNimbleIndexReader() {
+  columnReader_.reset();
+}
 
 void SelectiveNimbleIndexReader::startLookup(
     const velox::serializer::IndexBounds& indexBounds,
@@ -489,12 +493,20 @@ void SelectiveNimbleIndexReader::splitStripeRowRanges(
 }
 
 void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
+  // advanceStripe() and reset() destroy the tree of the earlier stripe, which
+  // puts its FlatMap key readers in 'flatMapKeyNodePool_' for this tree to
+  // rebind.
+  NIMBLE_CHECK_NULL(
+      columnReader_, "The tree of the earlier stripe must be destroyed first.");
   addStat(dwio::common::RowReader::kNumStripeLoads, 1);
   loadedStripes_.insert(stripeIndex);
 
   CpuWallTiming timing;
   {
     CpuWallTimer timer(timing);
+
+    // buildColumnReader() rebinds the kept FlatMap key readers to the stripe
+    // that 'streams_' reads, so move 'streams_' there first.
     streams_.setStripe(stripeIndex);
     NimbleParams params(
         *readerBase_->pool(),
@@ -508,7 +520,8 @@ void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
         /*lazyIoColumns=*/nullptr,
         /*lazyColumnIo=*/false,
         /*dictionaryAwareReads=*/options_.nimbleDictionaryAwareReads(),
-        /*scanFastPath=*/options_.nimbleScanFastPath());
+        /*scanFastPath=*/options_.nimbleScanFastPath(),
+        &flatMapKeyNodePool_);
 
     columnReader_ = buildColumnReader(
         fileOutputType_,
@@ -803,6 +816,11 @@ SelectiveNimbleIndexReader::stats() const {
     result[std::string(
         dwio::common::IndexReader::kNumIndexDistinctStripesLoaded)] =
         RuntimeMetric(static_cast<int64_t>(loadedStripes_.size()));
+  }
+  if (const auto numReusedKeyNodes = flatMapKeyNodePool_.numReusedKeyNodes();
+      numReusedKeyNodes > 0) {
+    result[std::string(kNumReusedFlatMapKeyNodes)] =
+        RuntimeMetric(static_cast<int64_t>(numReusedKeyNodes));
   }
   return result;
 }
