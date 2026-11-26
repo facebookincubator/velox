@@ -44,6 +44,7 @@
 #include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/fuzzer/encoding/EncodingFuzzer.h"
+#include "velox/dwio/nimble/fuzzer/encoding/FsstDecodedLengthsFuzzer.h"
 
 DEFINE_uint32(
     view_fuzzer_iterations,
@@ -311,6 +312,38 @@ TEST(FsstViewFuzzerTest, correctness) {
           compression);
     }
   }
+}
+
+// Only a view that caches decoded chunks reads the decoded lengths.
+TEST(FsstViewFuzzerTest, corruptedDecodedLengths) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  Encoding::Options options{};
+  options.fsstCompressionTargetRatio = std::numeric_limits<double>::max();
+  options.cacheEncodingView = true;
+
+  // Reads every row twice, since a read that fails must fail again.
+  const auto read = [&](std::string_view encoded, uint32_t numRows) {
+    const auto view = createEncodingView(encoded, pool.get(), options);
+    std::optional<std::vector<std::string>> results[2];
+    for (auto& result : results) {
+      std::vector<std::string_view> output(numRows);
+      try {
+        view->read(0, view->rowCount(), output.data());
+      } catch (const NimbleException&) {
+        continue;
+      }
+      result.emplace(output.begin(), output.end());
+    }
+    EXPECT_EQ(results[0], results[1]);
+    return results[0];
+  };
+  fuzzFsstDecodedLengths(
+      *pool,
+      FLAGS_view_fuzzer_seed,
+      FLAGS_view_fuzzer_iterations,
+      FLAGS_view_fuzzer_max_rows,
+      options,
+      read);
 }
 
 using TrivialViewTypes = ::testing::Types<
