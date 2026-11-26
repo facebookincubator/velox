@@ -123,6 +123,12 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-bundled-deps
 
+      - name: Show Core Dump Settings
+        run: |
+          cat /proc/sys/kernel/core_pattern
+          ulimit -c
+          systemctl is-active apport || true
+
       - name: Run Tests
         run: |
           cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
