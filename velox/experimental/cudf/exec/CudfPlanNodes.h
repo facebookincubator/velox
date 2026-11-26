@@ -61,7 +61,13 @@ class CudfUnaryPlanNode : public CudfPlanNode {
 /// execution unit.
 class CudfFilterProjectNode : public CudfUnaryPlanNode {
  public:
-  /// Throws if unsupportedReason() has a reason for the node.
+  /// 'filter' and 'filterNodeId' are set together, for a node that filters.
+  /// 'projectNodeId' is set for a node that projects: 'projections' then has
+  /// one expression of the matching type for each column of 'outputType'.
+  /// Without it, 'projections' is empty and 'outputType' is the type of
+  /// 'source'. 'lazyDereference' is allowed only for a projection without a
+  /// filter. Throws if the arguments break these rules, or if
+  /// unsupportedReason() has a reason for the node.
   CudfFilterProjectNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,

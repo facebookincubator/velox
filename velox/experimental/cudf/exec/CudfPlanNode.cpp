@@ -211,7 +211,43 @@ CudfFilterProjectNode::CudfFilterProjectNode(
       filter_(std::move(filter)),
       projections_(std::move(projections)),
       lazyDereference_(lazyDereference) {
-  VELOX_CHECK(filter_ || projectNodeId_);
+  VELOX_USER_CHECK(
+      filter_ != nullptr || projectNodeId_.has_value(),
+      "CudfFilterProject must have a filter or a project node ID");
+  VELOX_USER_CHECK(
+      filter_ == nullptr || filterNodeId_.has_value(),
+      "CudfFilterProject filter must come with a filter node ID");
+  VELOX_USER_CHECK(
+      filter_ != nullptr || !filterNodeId_.has_value(),
+      "CudfFilterProject filter node ID must come with a filter");
+  VELOX_USER_CHECK(
+      !lazyDereference_ || (projectNodeId_.has_value() && filter_ == nullptr),
+      "CudfFilterProject lazy dereference must be a projection without a filter");
+  if (projectNodeId_.has_value()) {
+    VELOX_USER_CHECK_EQ(
+        projections_.size(),
+        outputType_->size(),
+        "CudfFilterProject must have one projection for each output column");
+    for (size_t i = 0; i < projections_.size(); ++i) {
+      VELOX_USER_CHECK_NOT_NULL(
+          projections_[i], "CudfFilterProject projections must not be null");
+      VELOX_USER_CHECK(
+          projections_[i]->type()->equivalent(*outputType_->childAt(i)),
+          "CudfFilterProject projection must have the type of its output column: {} is {}, got {}",
+          outputType_->nameOf(i),
+          outputType_->childAt(i)->toString(),
+          projections_[i]->type()->toString());
+    }
+  } else {
+    VELOX_USER_CHECK(
+        projections_.empty(),
+        "CudfFilterProject projections must come with a project node ID");
+    VELOX_USER_CHECK(
+        outputType_->equivalent(*sources_[0]->outputType()),
+        "CudfFilterProject without projections must keep the type of its source: {} vs. {}",
+        outputType_->toString(),
+        sources_[0]->outputType()->toString());
+  }
   const auto unsupported =
       unsupportedReason(sources_[0]->outputType(), filter_, projections_);
   VELOX_USER_CHECK(!unsupported.has_value(), "{}", unsupported.value_or(""));

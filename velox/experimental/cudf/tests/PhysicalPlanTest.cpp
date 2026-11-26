@@ -544,6 +544,69 @@ TEST_F(PhysicalPlanTest, constructorsRejectUnsupportedArguments) {
       topN({key}, {core::kAscNullsLast}, 0),
       "CudfTopN must specify greater than zero number of rows to keep");
 
+  // The filter, the projections and their plan node IDs have to agree with
+  // each other and with the output type.
+  using Id = std::optional<core::PlanNodeId>;
+  using Exprs = std::vector<core::TypedExprPtr>;
+  const core::TypedExprPtr noFilter;
+  const core::TypedExprPtr filter =
+      std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), true);
+  auto filterProject = [&](RowTypePtr outputType,
+                           Id filterId,
+                           Id projectId,
+                           core::TypedExprPtr filter,
+                           Exprs projections,
+                           bool lazyDereference = false) {
+    return std::make_shared<CudfFilterProjectNode>(
+        "filter-project",
+        source,
+        std::move(outputType),
+        std::move(filterId),
+        std::move(projectId),
+        std::move(filter),
+        std::move(projections),
+        lazyDereference);
+  };
+  const auto oneColumn = input_->rowType();
+  const auto twoColumns = ROW({"k", "k2"}, BIGINT());
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, {}, {}, noFilter, {}),
+      "CudfFilterProject must have a filter or a project node ID");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, {}, "project", filter, {key}),
+      "CudfFilterProject filter must come with a filter node ID");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, "filter", "project", noFilter, {key}),
+      "CudfFilterProject filter node ID must come with a filter");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, "filter", {}, filter, {key}),
+      "CudfFilterProject projections must come with a project node ID");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, {}, "project", noFilter, {key, key}),
+      "CudfFilterProject must have one projection for each output column");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, {}, "project", noFilter, {nullptr}),
+      "CudfFilterProject projections must not be null");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(ROW("k", DOUBLE()), {}, "project", noFilter, {key}),
+      "CudfFilterProject projection must have the type of its output column: k is DOUBLE, got BIGINT");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(twoColumns, "filter", {}, filter, {}),
+      "CudfFilterProject without projections must keep the type of its source");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, "filter", "project", filter, {key}, true),
+      "CudfFilterProject lazy dereference must be a projection without a filter");
+  VELOX_ASSERT_USER_THROW(
+      filterProject(oneColumn, "filter", {}, filter, {}, true),
+      "CudfFilterProject lazy dereference must be a projection without a filter");
+  EXPECT_NE(filterProject(oneColumn, "filter", {}, filter, {}), nullptr);
+  EXPECT_NE(
+      filterProject(twoColumns, {}, "project", noFilter, {key, key}), nullptr);
+  EXPECT_NE(
+      filterProject(oneColumn, "filter", "project", filter, {key}), nullptr);
+  EXPECT_NE(
+      filterProject(oneColumn, {}, "project", noFilter, {key}, true), nullptr);
+
   // The placement rules of a hash join that need no QueryCtx.
   auto hashJoin = [&](core::JoinType joinType, bool nullAware, bool filter) {
     return std::make_shared<CudfHashJoinNode>(
