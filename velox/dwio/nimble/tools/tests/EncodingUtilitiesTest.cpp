@@ -396,36 +396,59 @@ TEST_F(EncodingUtilitiesTest, traverseEncodingsFsstChildren) {
   }
 
   Buffer buffer{*pool_};
-  const auto stream = nimble::test::Encoder<FsstEncoding>::encode(
+  const auto current = nimble::test::Encoder<FsstEncoding>::encode(
       buffer,
       values,
       CompressionType::Uncompressed,
       {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
 
-  EncodingType rootType = EncodingType::Constant; // init to something else
-  std::vector<std::tuple<std::string, uint32_t, uint32_t>>
-      nestedVisits; // name, level, index
-  traverseEncodings(
-      stream,
-      [&](EncodingType encodingType,
-          DataType /* dataType */,
-          uint32_t level,
-          uint32_t index,
-          const std::string& nestedEncodingName,
-          const std::unordered_map<EncodingPropertyType, EncodingProperty>&
-          /* properties */) -> bool {
-        if (level == 0) {
-          rootType = encodingType;
-        } else {
-          nestedVisits.emplace_back(nestedEncodingName, level, index);
-        }
-        return true;
-      });
+  // The layout written before decoded lengths existed: no decoded lengths
+  // section and no flag in the compression type byte.
+  const auto prefixSize = EncodingPrefix::prefixSize(current, false);
+  const auto header = FsstEncoding::parseHeader(current, prefixSize);
+  std::string older{current.substr(0, prefixSize)};
+  older.push_back(static_cast<char>(header.compressionType));
+  for (const auto section : {header.symbolTable, header.lengths}) {
+    char size[5];
+    char* cursor = size;
+    varint::writeVarint(static_cast<uint32_t>(section.size()), &cursor);
+    older.append(size, cursor);
+    older.append(section);
+  }
+  older.append(header.blob);
 
-  EXPECT_EQ(rootType, EncodingType::Fsst);
-  const std::vector<std::tuple<std::string, uint32_t, uint32_t>> expected{
-      {"Lengths", 1u, 0u}, {"DecodedLengths", 1u, 1u}};
-  EXPECT_EQ(nestedVisits, expected);
+  for (const bool hasDecodedLengths : {false, true}) {
+    SCOPED_TRACE(hasDecodedLengths ? "decoded lengths" : "no decoded lengths");
+    const std::string_view stream =
+        hasDecodedLengths ? std::string_view{current} : std::string_view{older};
+    EncodingType rootType = EncodingType::Constant; // init to something else
+    std::vector<std::tuple<std::string, uint32_t, uint32_t>>
+        nestedVisits; // name, level, index
+    traverseEncodings(
+        stream,
+        [&](EncodingType encodingType,
+            DataType /* dataType */,
+            uint32_t level,
+            uint32_t index,
+            const std::string& nestedEncodingName,
+            const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+            /* properties */) -> bool {
+          if (level == 0) {
+            rootType = encodingType;
+          } else {
+            nestedVisits.emplace_back(nestedEncodingName, level, index);
+          }
+          return true;
+        });
+
+    EXPECT_EQ(rootType, EncodingType::Fsst);
+    std::vector<std::tuple<std::string, uint32_t, uint32_t>> expected{
+        {"Lengths", 1u, 0u}};
+    if (hasDecodedLengths) {
+      expected.emplace_back("DecodedLengths", 1u, 1u);
+    }
+    EXPECT_EQ(nestedVisits, expected);
+  }
 }
 
 TEST_F(EncodingUtilitiesTest, traverseEncodingsPforNoExceptions) {
