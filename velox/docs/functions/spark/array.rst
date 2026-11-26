@@ -280,7 +280,8 @@ Array Functions
 .. spark:function:: in(value, array(E)) -> boolean
 
     Returns true if value matches at least one of the elements of the array.
-    Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, DATE, DECIMAL input types.
+    Supports BOOLEAN, REAL, DOUBLE, BIGINT, VARCHAR, TIMESTAMP, TIMESTAMP_UTC, DATE,
+    DECIMAL input types.
 
 .. spark:function:: sequence(start, stop) -> array(T)
                     sequence(start, stop, step) -> array(T)
