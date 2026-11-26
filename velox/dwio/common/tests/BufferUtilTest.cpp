@@ -51,8 +51,8 @@ TEST_F(BufferUtilTest, ensureCapacityGrowWithoutPreserveOldData) {
   std::memset(raw, 0x7F, 32);
 
   // Grow buffer beyond capacity so a new buffer is allocated.
-  // With preserveOldData = false and clearBits = true, all bytes in [0, newCapacity)
-  // must be cleared to 0 (including the range [0, oldSize)).
+  // With preserveOldData = false and clearBits = true, all bytes in [0,
+  // newCapacity) must be cleared to 0 (including the range [0, oldSize)).
   const size_t newElements = buffer->capacity() * 2;
   ensureCapacity<int8_t>(buffer, newElements, pool_.get(), false, true);
   ASSERT_GE(buffer->capacity(), newElements);
@@ -137,8 +137,8 @@ TEST_F(BufferUtilTest, ensureCapacityDownsizeSharedBufferWithPreserveOldData) {
   ASSERT_FALSE(buffer->unique());
 
   // Downsize to 16 elements with preserveOldData = true.
-  // Reallocation occurs; std::min(oldSize, newCapacity) must prevent copying past
-  // the allocated size of the new buffer.
+  // Reallocation occurs; std::min(oldSize, newCapacity) must prevent copying
+  // past the allocated size of the new buffer.
   ensureCapacity<int8_t>(buffer, 16, pool_.get(), true, false);
   ASSERT_TRUE(buffer->unique());
   ASSERT_GE(buffer->capacity(), 16);
