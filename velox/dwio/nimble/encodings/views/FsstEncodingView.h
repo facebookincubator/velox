@@ -277,10 +277,12 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // Compressed string payload, either borrowed from input or pool-owned.
   std::string_view blob_;
 
-  // The nested encodings of the compressed and of the decoded lengths. Empty
-  // for a view without caching. Neither is read when the view is created, and
-  // a take that reads few rows of each chunk decodes no chunk, so it would pay
-  // for the decoded lengths of every row.
+  // The nested encodings of the compressed and of the decoded lengths. Both are
+  // empty for a view without caching, and the decoded lengths are empty for an
+  // encoding without them, which decodeChunks() decodes one string at a time.
+  // Neither is read when the view is created, and a take that reads few rows of
+  // each chunk decodes no chunk, so it would pay for the decoded lengths of
+  // every row.
   std::string_view encodedLengths_;
   std::string_view encodedDecodedLengths_;
 
@@ -292,8 +294,8 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // compressedLengthsRead_.
   mutable std::vector<size_t> compressedOffsets_;
 
-  // Set by ensureDecodedLengths(), which the first decodeChunks() of a cached
-  // view of an encoding with decoded lengths calls.
+  // Set by ensureDecodedLengths(), which the first decodeChunks() of an
+  // encoding with decoded lengths calls.
   mutable folly::once_flag decodedLengthsRead_;
 
   // The decoded length of each row, which lets decodeChunks() reserve the bytes

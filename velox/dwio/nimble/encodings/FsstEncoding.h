@@ -87,19 +87,23 @@ namespace facebook::nimble {
 ///
 /// Binary layout:
 /// - Encoding::kPrefixSize bytes: standard Encoding prefix
-/// - 1 byte: compression type for the concatenated FSST output
+/// - 1 byte: compression type for the concatenated FSST output, with
+///   kDecodedLengthsFlag set in the high bit when decoded lengths follow
 /// - varint: serialized FSST symbol table size
 /// - N bytes: serialized FSST symbol table (~2KB typical)
 /// - varint: lengths encoding size
 /// - M bytes: nested encoding of compressed string lengths
-/// - varint: decoded lengths encoding size
-/// - D bytes: nested encoding of decoded string lengths
+/// - varint: decoded lengths encoding size, only with kDecodedLengthsFlag
+/// - D bytes: nested encoding of decoded string lengths, only with
+///   kDecodedLengthsFlag
 /// - K bytes: concatenated FSST output, optionally compressed by the normal
 ///   Nimble encoding-layer compression policy
 ///
-/// Decoded lengths hold the length of each string after decoding. They let a
-/// reader decode many strings with one decoder call and cut the output by
-/// length, instead of calling the decoder once per string.
+/// Decoded lengths hold the length of each string after decoding. Without them,
+/// a reader learns a string's length only by decoding it, so it calls the
+/// decoder once per string. With them, it decodes many strings with one call
+/// and cuts the output by length. The writer always stores them. The layout
+/// without them is only read, for data written before they existed.
 ///
 /// Only supports std::string_view data type.
 class FsstEncoding final
@@ -107,6 +111,11 @@ class FsstEncoding final
  public:
   using cppDataType = std::string_view;
   using physicalType = std::string_view;
+
+  /// Set in the high bit of the compression type byte when the encoding stores
+  /// decoded lengths. A reader that does not know the flag rejects the byte as
+  /// an unsupported compression type, so it fails instead of misreading.
+  static constexpr uint8_t kDecodedLengthsFlag{0x80};
 
   FsstEncoding(
       velox::memory::MemoryPool& pool,
@@ -154,13 +163,14 @@ class FsstEncoding final
       std::string_view encoding,
       const Encoding::Options& options = {});
 
-  /// Returns the nested decoded-lengths encoding from serialized FSST data.
+  /// Returns the nested decoded-lengths encoding from serialized FSST data, or
+  /// an empty view when the encoding does not store decoded lengths.
   static std::string_view decodedLengthsEncoding(
       std::string_view encoding,
       const Encoding::Options& options);
 
-  /// Captures FSST's nested encoding layouts: the compressed lengths and the
-  /// decoded lengths.
+  /// Captures FSST's nested lengths encoding layouts: the compressed lengths
+  /// and the decoded lengths, whose slot is empty when the encoding has none.
   static void captureNestedEncoding(
       std::string_view encoding,
       std::vector<std::optional<const EncodingLayout>>& children,
@@ -174,7 +184,8 @@ class FsstEncoding final
     std::string_view symbolTable;
     /// Nested encoding for per-row compressed string sizes.
     std::string_view lengths;
-    /// Nested encoding for per-row decoded string sizes.
+    /// Nested encoding for per-row decoded string sizes. Empty when the
+    /// encoding does not store them.
     std::string_view decodedLengths;
     /// Serialized blob, which may have secondary encoding-layer compression.
     std::string_view blob;
@@ -663,7 +674,7 @@ void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
 
   if (options_.fsstDecodeCacheEnabled()) {
     readWithDecodeCache(visitor, params, skip, readCompressed);
-  } else if (selectsEveryRow) {
+  } else if (selectsEveryRow && !decodedLengthsData_.empty()) {
     // Decode rows ahead only when the read needs every row, since decoding
     // rows that the read skips would be wasted work.
     readDense(visitor, params, lengths, static_cast<uint32_t>(numSelected));
