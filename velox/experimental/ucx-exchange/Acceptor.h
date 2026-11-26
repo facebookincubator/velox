@@ -33,18 +33,21 @@ class Acceptor {
       std::shared_ptr<ucxx::Request> request,
       ucp_ep_h ep);
 
-  /// @brief Adds the endpoint reference to the handleToEndpointRef_ map such
-  /// that endpoint handles can be resolved. Runs inside the UCX listener
-  /// callback, so it throws nothing: a handle registered already is logged and
-  /// kept.
-  void registerEndpointRef(std::shared_ptr<EndpointRef> endpointRef);
+  /// Maps 'handle', the UCP handle of an incoming endpoint, to 'endpointRef',
+  /// so that handshakes on the endpoint resolve to it. Replaces an earlier
+  /// mapping of the handle: UCP can reuse the handle of an endpoint that closed
+  /// for a new connection. Runs inside the UCX listener callback, so it throws
+  /// nothing.
+  void registerEndpointRef(
+      ucp_ep_h handle,
+      std::shared_ptr<EndpointRef> endpointRef);
 
-  // Maps the lower-layer UCP endpoint handle to an endpoint reference.
-  // Accessed only from the Communicator main loop thread: writes happen in
-  // registerEndpointRef() (called from listenerCallback during
-  // worker_->progress()), and reads happen in cStyleAMCallback (also fired
-  // during worker_->progress()). No mutex needed.
-  std::map<ucp_ep_h, std::shared_ptr<EndpointRef>> handleToEndpointRef_;
+  /// Erases every mapping to 'endpointRef', which is being removed. A mapping
+  /// of its handle that a newer endpoint replaced stays.
+  void unregisterEndpointRef(const std::shared_ptr<EndpointRef>& endpointRef);
+
+  /// Returns the endpoint reference mapped to 'handle', or nullptr.
+  std::shared_ptr<EndpointRef> findEndpointRef(ucp_ep_h handle) const;
 
  private:
   // Creates a server for a handshake of this protocol version, or refuses a
@@ -52,6 +55,13 @@ class Acceptor {
   static void handleHandshake(
       const std::shared_ptr<ucxx::Request>& request,
       ucp_ep_h ep);
+
+  // Maps the UCP handle of each incoming endpoint to its reference. Used only
+  // on the Communicator thread: registerEndpointRef() runs in the listener
+  // callback and lookups in the active message callback, both inside the
+  // worker's progress, and unregisterEndpointRef() in the Communicator's
+  // endpoint removal. No mutex needed.
+  std::map<ucp_ep_h, std::shared_ptr<EndpointRef>> handleToEndpointRef_;
 };
 
 } // namespace facebook::velox::ucx_exchange

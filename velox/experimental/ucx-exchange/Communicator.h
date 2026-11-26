@@ -108,6 +108,8 @@ class Communicator {
 
   /// @brief Removes an endpoint from the communicator. This is required when
   /// the endpoint has become stale since the other side has disappeared.
+  /// Must be called on the Communicator thread, which owns the Acceptor's
+  /// handle map.
   /// NOTE: This should NOT be called from within a UCX callback. Use
   /// deferEndpointCleanup() instead.
   void removeEndpointRef(std::shared_ptr<EndpointRef> ep);

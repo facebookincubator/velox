@@ -480,6 +480,9 @@ void Communicator::removeEndpointRef(std::shared_ptr<EndpointRef> ep) {
       ++it;
     }
   }
+  // UCP may reuse the endpoint's handle for a new connection, whose handshakes
+  // must not resolve to this endpoint.
+  acceptor_.unregisterEndpointRef(ep);
   VLOG(3) << "- Communicator::removeEndpointRef";
 }
 
@@ -526,11 +529,7 @@ void Communicator::deferRequestCleanup(std::shared_ptr<ucxx::Request> request) {
 
 std::shared_ptr<EndpointRef> Communicator::findEndpointRefByHandle(
     ucp_ep_h handle) {
-  auto it = acceptor_.handleToEndpointRef_.find(handle);
-  if (it != acceptor_.handleToEndpointRef_.end()) {
-    return it->second;
-  }
-  return nullptr;
+  return acceptor_.findEndpointRef(handle);
 }
 
 bool Communicator::hasPendingCloseReceive() const {
@@ -602,7 +601,7 @@ void Communicator::listenerCallback(ucp_conn_request_h conn_request) {
       return;
     }
   }
-  acceptor_.registerEndpointRef(epRef);
+  acceptor_.registerEndpointRef(endpoint->getHandle(), epRef);
 }
 
 } // namespace facebook::velox::ucx_exchange

@@ -183,14 +183,28 @@ void Acceptor::handleHandshake(
   sendHandshakeResponse(epRef, key, std::move(response));
 }
 
-// Add endpoint reference to ucp_cp -> epRef map.
-void Acceptor::registerEndpointRef(std::shared_ptr<EndpointRef> endpointRef) {
-  auto epHandle = endpointRef->endpoint_->getHandle();
-  auto res = handleToEndpointRef_.insert(std::pair{epHandle, endpointRef});
-  // Runs inside the UCX listener callback, which must not throw.
-  if (!res.second) {
-    LOG(ERROR) << "Cannot register a UCX endpoint whose handle is registered "
-                  "already";
+void Acceptor::registerEndpointRef(
+    ucp_ep_h handle,
+    std::shared_ptr<EndpointRef> endpointRef) {
+  auto [it, inserted] = handleToEndpointRef_.try_emplace(handle, endpointRef);
+  if (!inserted) {
+    LOG(WARNING) << "Replacing the UCX endpoint registered for a reused "
+                    "endpoint handle";
+    it->second = std::move(endpointRef);
   }
+}
+
+void Acceptor::unregisterEndpointRef(
+    const std::shared_ptr<EndpointRef>& endpointRef) {
+  // By value, not by handle: UCXX no longer reports the handle once the
+  // endpoint is closed.
+  std::erase_if(handleToEndpointRef_, [&](const auto& entry) {
+    return entry.second == endpointRef;
+  });
+}
+
+std::shared_ptr<EndpointRef> Acceptor::findEndpointRef(ucp_ep_h handle) const {
+  auto it = handleToEndpointRef_.find(handle);
+  return it != handleToEndpointRef_.end() ? it->second : nullptr;
 }
 } // namespace facebook::velox::ucx_exchange
