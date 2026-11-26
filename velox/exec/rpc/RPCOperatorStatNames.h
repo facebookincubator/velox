@@ -130,8 +130,8 @@ struct RPCOperatorStatNames {
       "rpcRateLimiterFloorMilli"};
 
   /// The ceiling the function declares for its backend, present only when it
-  /// declares one. Beside kRpcRateLimiterHardLimit, it shows whether the
-  /// session's limits replaced the function's.
+  /// declares one. Beside kRpcRateLimiterHardLimit, it shows whether a
+  /// session limit changed the function's ceiling.
   static inline const std::string kRpcFunctionCeiling{"rpcFunctionCeiling"};
 
   /// The adaptive floor the function declares, in thousandths of an admission

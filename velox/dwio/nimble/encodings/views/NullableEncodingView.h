@@ -84,9 +84,12 @@ class NullableEncodingView final : public TypedEncodingView<T> {
     }
   }
 
+  /// Passes `addStringBuffer` to the single read of the child that returns
+  /// every non-null value, as the read of ranges below does.
   uint32_t read(
       std::span<const uint32_t> indices,
       const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
       void* output) const final {
     NIMBLE_CHECK_LE(indices.size(), std::numeric_limits<uint32_t>::max());
     const auto numIndices = static_cast<uint32_t>(indices.size());
@@ -100,7 +103,7 @@ class NullableEncodingView final : public TypedEncodingView<T> {
     }
     if (numNonNullRows() == this->rowCount_) {
       // The compact child holds every row.
-      nonNullValues_->readAt(indices, typedOutput);
+      nonNullValues_->read(indices, setNull, addStringBuffer, typedOutput);
       return numIndices;
     }
     std::optional<NullsWindow> nullsWindow;
@@ -149,9 +152,11 @@ class NullableEncodingView final : public TypedEncodingView<T> {
       return 0;
     }
     if (nonNullIndices.size() == numIndices) {
-      nonNullValues_->readAt(
+      nonNullValues_->read(
           std::span<const uint32_t>{
               nonNullIndices.data(), nonNullIndices.size()},
+          setNull,
+          addStringBuffer,
           typedOutput);
       return static_cast<uint32_t>(nonNullIndices.size());
     }
@@ -159,8 +164,10 @@ class NullableEncodingView final : public TypedEncodingView<T> {
     ScopedVector<physicalType> values{
         0, this->pool_, this->options_.bufferPool};
     values.resize(nonNullIndices.size());
-    nonNullValues_->readAt(
+    nonNullValues_->read(
         std::span<const uint32_t>{nonNullIndices.data(), nonNullIndices.size()},
+        setNull,
+        addStringBuffer,
         values.data());
     for (size_t i{0}; i < values.size(); ++i) {
       typedOutput[outputIndices[i]] = values[i];
@@ -168,9 +175,13 @@ class NullableEncodingView final : public TypedEncodingView<T> {
     return static_cast<uint32_t>(nonNullIndices.size());
   }
 
+  /// Passes `addStringBuffer` to the single read of the child that returns
+  /// every non-null value, which passes the buffers of the strings. Null rows
+  /// hold empty values.
   uint32_t read(
       std::span<const RowRange> ranges,
       const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
       void* output) const final {
     const auto numRows = this->checkReadRanges(ranges);
     auto* typedOutput = static_cast<physicalType*>(output);
@@ -183,7 +194,7 @@ class NullableEncodingView final : public TypedEncodingView<T> {
     }
     if (numNonNullRows() == this->rowCount_) {
       // The compact child holds every row.
-      nonNullValues_->read(ranges, setNull, typedOutput);
+      nonNullValues_->read(ranges, setNull, addStringBuffer, typedOutput);
       return numRows;
     }
 
@@ -228,14 +239,16 @@ class NullableEncodingView final : public TypedEncodingView<T> {
       return 0;
     }
     if (runs.numRows() == numRows) {
-      nonNullValues_->read(runs.ranges(), setNull, typedOutput);
+      nonNullValues_->read(
+          runs.ranges(), setNull, addStringBuffer, typedOutput);
       return numRows;
     }
 
     ScopedVector<physicalType> values{
         0, this->pool_, this->options_.bufferPool};
     values.resize(runs.numRows());
-    nonNullValues_->read(runs.ranges(), setNull, values.data());
+    nonNullValues_->read(
+        runs.ranges(), setNull, addStringBuffer, values.data());
     scatterRuns(values.data(), runs, typedOutput);
     return runs.numRows();
   }

@@ -1086,8 +1086,8 @@ TEST_F(TrieKeyReaderChunkTest, rejectsInvalidChildOffsets) {
 }
 
 TEST_F(TrieKeyReaderChunkTest, rejectsCompactOffsetsWithHugeRowCount) {
-  // A few bytes of Constant child offsets claim a billion rows. Validation
-  // rejects the second offset without decoding the rest.
+  // A few bytes of Constant child offsets claim a billion rows. The open
+  // rejects the final offset without decoding the others.
   constexpr uint32_t kNumValues{1'000'000'000};
   NIMBLE_ASSERT_FILE_THROW(
       TrieKeyReader(
@@ -1100,8 +1100,68 @@ TEST_F(TrieKeyReaderChunkTest, rejectsCompactOffsetsWithHugeRowCount) {
           /*cacheEncodingViews=*/false,
           keyCodec_,
           pool_.get()),
-      "offsets contain an empty range: child offsets.");
+      "invalid final offset: child offsets.");
   EXPECT_LT(pool_->peakBytes(), 16 << 20);
+}
+
+TEST_F(TrieKeyReaderChunkTest, rejectsCorruptEncodedOffsetsOnRead) {
+  // A level of 100 values, each with two children, has more child offsets than
+  // a level keeps decoded, so the open checks only the first and the last, and
+  // the reads that use an offset check it.
+  constexpr uint32_t kNumParents{100};
+  std::vector<uint64_t> parents(kNumParents);
+  std::iota(parents.begin(), parents.end(), 0);
+  std::vector<uint64_t> children(2 * kNumParents);
+  for (uint32_t i = 0; i < children.size(); ++i) {
+    children[i] = i % 2;
+  }
+  struct TestParam {
+    std::string name;
+    uint32_t corruptOffset;
+    std::string debugString() const {
+      return fmt::format("{}, offset 50 is {}", name, corruptOffset);
+    }
+  };
+  for (const auto& testData : std::vector<TestParam>{
+           {"empty range", 98}, {"decreasing", 90}, {"past the end", 201}}) {
+    SCOPED_TRACE(testData.debugString());
+    std::vector<uint32_t> offsets(kNumParents + 1);
+    for (uint32_t i = 0; i <= kNumParents; ++i) {
+      offsets[i] = 2 * i;
+    }
+    offsets[50] = testData.corruptOffset;
+    const auto chunk = makeChunk(
+        children.size(),
+        {encodeTrivial<uint64_t>(parents),
+         encodeTrivial<uint32_t>(offsets),
+         encodeTrivial<uint64_t>(children)},
+        {kNumParents, static_cast<uint32_t>(children.size())});
+    const TrieKeyReader reader{
+        chunk,
+        /*cacheEncodingViews=*/false,
+        keyCodec_,
+        pool_.get()};
+    // Keys away from the corrupt offset still read.
+    EXPECT_EQ(reader.seek(makeKey({10, 1}), /*inclusive=*/true), 21);
+    EXPECT_EQ(reader.get(21), makeKey({10, 1}));
+    NIMBLE_ASSERT_FILE_THROW(
+        reader.seek(
+            makeKey({49, 0}),
+            /*inclusive=*/true),
+        "TrieKeyReader child offset");
+    // A scan reads the child offsets that its rows span together.
+    std::vector<std::unique_ptr<char[]>> buffers;
+    std::vector<std::string_view> keys;
+    NIMBLE_ASSERT_FILE_THROW(
+        reader.readKeys(
+            0,
+            children.size(),
+            keys,
+            [&](size_t size) {
+              return buffers.emplace_back(std::make_unique<char[]>(size)).get();
+            }),
+        "TrieKeyReader child offset");
+  }
 }
 
 TEST_F(TrieKeyReaderChunkTest, rejectsInvalidLeafRowOffsets) {

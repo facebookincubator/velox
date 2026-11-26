@@ -25,6 +25,7 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/VectorHasher.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -68,7 +69,6 @@ HashBuild::HashBuild(
       nullAware_{joinNode_->isNullAware()},
       nullAsValue_{joinNode_->isNullAsValue()},
       needProbedFlagSpill_{needRightSideJoin(joinType_)},
-      dropDuplicates_(joinNode_->canDropDuplicates()),
       vectorHasherMaxNumDistinct_(
           driverCtx->queryConfig().joinBuildVectorHasherMaxNumDistinct()),
       abandonHashBuildDedupMinRows_(
@@ -96,7 +96,32 @@ HashBuild::HashBuild(
     keyChannels_.emplace_back(channel);
   }
 
+  stateCleared_ = false;
+}
+
+void HashBuild::initialize() {
+  Operator::initialize();
+
+  // Compile only when duplicate eligibility depends on the filter's determinism
+  // and referenced columns, or an anti join needs its null-propagation
+  // properties. Null-aware semi joins with filters must keep duplicates
+  // regardless of the filter.
+  std::unique_ptr<ExprSet> filter;
+  if (joinNode_->filter() != nullptr &&
+      (isAntiJoin(joinType_) ||
+       (!nullAware_ &&
+        (isLeftSemiFilterJoin(joinType_) ||
+         isLeftSemiProjectJoin(joinType_))))) {
+    filter = std::make_unique<ExprSet>(
+        std::vector<core::TypedExprPtr>{joinNode_->filter()},
+        operatorCtx_->execCtx());
+  }
+  dropDuplicates_ =
+      canDropDuplicates(filter != nullptr ? filter->expr(0).get() : nullptr);
+
   // Identify the non-key build side columns and make a decoder for each.
+  const auto& inputType = joinNode_->sources()[1]->outputType();
+  const auto numKeys = keyChannels_.size();
   const int32_t numDependents = inputType->size() - numKeys;
   if (!dropDuplicates_) {
     if (numDependents > 0) {
@@ -117,13 +142,8 @@ HashBuild::HashBuild(
     }
   }
 
-  tableType_ = hashJoinTableType(joinNode_);
-
-  stateCleared_ = false;
-}
-
-void HashBuild::initialize() {
-  Operator::initialize();
+  tableType_ =
+      hashJoinTableType(joinNode_->rightKeys(), inputType, dropDuplicates_);
 
   if (setupCachedHashTable()) {
     return;
@@ -134,9 +154,35 @@ void HashBuild::initialize() {
   setupTable();
   setupSpiller();
 
-  if (isAntiJoin(joinType_) && joinNode_->filter()) {
-    setupFilterForAntiJoins(keyChannelMap_);
+  if (isAntiJoin(joinType_) && filter != nullptr) {
+    setupFilterForAntiJoins(*filter->expr(0), keyChannelMap_);
   }
+}
+
+bool HashBuild::canDropDuplicates(const Expr* filter) const {
+  // Counting joins fold duplicates into a per-key count.
+  if (isCountingJoin(joinType_)) {
+    return true;
+  }
+  // Other probe-only joins only need to know whether a probe row has a match.
+  if (!isProbeOnlyJoin(joinType_)) {
+    return false;
+  }
+  if (joinNode_->filter() == nullptr) {
+    return true;
+  }
+  if (nullAware_ || !filter->isDeterministic()) {
+    return false;
+  }
+  // A filter that reads no build column gives the same result for every build
+  // row with the same key.
+  const auto& buildType = joinNode_->sources()[1]->outputType();
+  for (const auto* field : filter->distinctFields()) {
+    if (buildType->containsChild(field->field())) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool HashBuild::setupCachedHashTable() {
@@ -258,7 +304,13 @@ void HashBuild::setupTable() {
   if (joinNode_->isRightJoin() || joinNode_->isFullJoin() ||
       joinNode_->isRightSemiProjectJoin() || joinNode_->isRightAntiJoin()) {
     // Do not ignore null keys. kRightAnti must retain null keys: a null-keyed
-    // build row never matches and is always returned.
+    // build row never matches and is always returned. A row stores 0 in the
+    // slot of a null key, and the bloom filter takes that 0, which only lets
+    // probe rows with key 0 through the scan. A full join emits the probe rows
+    // that match nothing, and null-aware and null-as-value joins read the probe
+    // rows with null keys, so none of them can filter its probe side.
+    const bool filtersProbe =
+        !joinNode_->isFullJoin() && !nullAware_ && !nullAsValue_;
     table_ = HashTable<false>::createForJoin(
         std::move(keyHashers),
         dependentTypes,
@@ -266,7 +318,10 @@ void HashBuild::setupTable() {
         {.allowDuplicates = true,
          .hasProbedFlag = true,
          .minTableSizeForParallelJoinBuild =
-             queryConfig.minTableRowsForParallelJoinBuild()});
+             queryConfig.minTableRowsForParallelJoinBuild(),
+         .bloomFilterMaxSize = filtersProbe
+             ? queryConfig.hashProbeBloomFilterPushdownMaxSize()
+             : 0});
   } else {
     // Right semi join needs to tag build rows that were probed.
     const bool needProbedFlag = joinNode_->isRightSemiFilterJoin();
@@ -389,17 +444,15 @@ RowTypePtr HashBuild::inputType() const {
 }
 
 void HashBuild::setupFilterForAntiJoins(
+    const Expr& filter,
     const folly::F14FastMap<column_index_t, column_index_t>& keyChannelMap) {
   VELOX_DCHECK(
       std::is_sorted(dependentChannels_.begin(), dependentChannels_.end()));
 
-  ExprSet exprs({joinNode_->filter()}, operatorCtx_->execCtx());
-  VELOX_DCHECK_EQ(exprs.exprs().size(), 1);
-  const auto& expr = exprs.expr(0);
-  filterPropagatesNulls_ = expr->propagatesNulls();
+  filterPropagatesNulls_ = filter.propagatesNulls();
   if (filterPropagatesNulls_) {
     const auto inputType = joinNode_->sources()[1]->outputType();
-    for (const auto& field : expr->distinctFields()) {
+    for (const auto& field : filter.distinctFields()) {
       const auto index = inputType->getChildIdxIfExists(field->field());
       if (!index.has_value()) {
         continue;

@@ -24,7 +24,7 @@
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -50,7 +50,6 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
     const std::shared_ptr<const velox_hive::HiveConfig>& hiveConfig,
     const std::shared_ptr<::facebook::velox::io::IoStatistics>& ioStatistics,
     const std::shared_ptr<::facebook::velox::IoStats>& ioStats,
-    ::facebook::velox::dwio::common::RuntimeStats& runtimeStats,
     const std::string& connectorId)
     : equalityColumnNames_(equalityColumnNames) {
   VELOX_CHECK(
@@ -87,12 +86,13 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   dwio::common::ReaderOptions deleteReaderOpts(pool_, scanSpec);
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  ::facebook::velox::connector::configureReaderOptions(
+  ::facebook::velox::connector::FileSplitReader::configureReaderOptions(
       hiveConfig,
       connectorQueryCtx,
-      deleteFileSchema,
       deleteSplit,
+      deleteFileSchema,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       deleteReaderOpts);
 
   const FileHandleKey fileHandleKey{
@@ -123,28 +123,16 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!::facebook::velox::connector::testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit->filePath,
-          deleteSplit->partitionKeys,
-          {},
-          hiveConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
-    runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
-    numDeleteKeys_ = 0;
-    return;
-  }
-
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  ::facebook::velox::connector::configureRowReaderOptions(
-      {},
+  ::facebook::velox::connector::FileSplitReader::configureRowReaderOptions(
       nullptr,
-      deleteFileSchema,
+      nullptr,
       deleteSplit,
       nullptr,
+      deleteFileSchema,
       nullptr,
-      nullptr,
+      {},
+      /*serdeParameters=*/{},
       deleteRowReaderOpts);
 
   auto deleteRowReader = deleteReader->createRowReader(deleteRowReaderOpts);

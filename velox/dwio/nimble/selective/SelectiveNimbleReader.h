@@ -21,11 +21,25 @@
 namespace facebook::nimble {
 
 class ReaderBase;
+class TabletReaderCache;
 
+/// Creates selective Nimble readers.
 class SelectiveNimbleReaderFactory : public velox::dwio::common::ReaderFactory {
  public:
-  SelectiveNimbleReaderFactory()
-      : ReaderFactory(velox::dwio::common::FileFormat::NIMBLE) {}
+  /// With 'tabletReaderCache' set, the readers that load the cluster index,
+  /// such as index lookups, share one TabletReader per file from the cache.
+  /// The shared tablet keeps the file metadata and the cluster index parsed in
+  /// memory, so a lookup on a file the cache holds reads and parses no
+  /// metadata. Readers that do not load the cluster index are unaffected.
+  ///
+  /// The cache keys tablets by file name and builds each one with the options
+  /// of the first reader of its file. A file name must therefore always refer
+  /// to the same contents, and the readers of one file must use compatible
+  /// options. The cache must outlive every reader this factory creates.
+  explicit SelectiveNimbleReaderFactory(
+      TabletReaderCache* tabletReaderCache = nullptr)
+      : ReaderFactory(velox::dwio::common::FileFormat::NIMBLE),
+        tabletReaderCache_{tabletReaderCache} {}
 
   std::unique_ptr<velox::dwio::common::Reader> createReader(
       std::unique_ptr<velox::dwio::common::BufferedInput>,
@@ -35,11 +49,19 @@ class SelectiveNimbleReaderFactory : public velox::dwio::common::ReaderFactory {
   /// 'readerBase' is null.
   std::unique_ptr<velox::dwio::common::Reader> createReader(
       std::shared_ptr<ReaderBase> readerBase);
+
+ private:
+  // Shares tablets among the readers that load the cluster index. Null shares
+  // none.
+  TabletReaderCache* const tabletReaderCache_;
 };
 
-inline void registerSelectiveNimbleReaderFactory() {
+/// Registers a SelectiveNimbleReaderFactory with 'tabletReaderCache'. Does
+/// nothing if a Nimble reader factory is already registered.
+inline void registerSelectiveNimbleReaderFactory(
+    TabletReaderCache* tabletReaderCache = nullptr) {
   velox::dwio::common::registerReaderFactory(
-      std::make_shared<SelectiveNimbleReaderFactory>());
+      std::make_shared<SelectiveNimbleReaderFactory>(tabletReaderCache));
 }
 
 inline void unregisterSelectiveNimbleReaderFactory() {

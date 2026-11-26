@@ -30,6 +30,18 @@ if(VELOX_ENABLE_BENCHMARKS)
     fmt::fmt
   )
 
+  add_executable(nimble_encoding_factory_benchmark EncodingFactoryBenchmark.cpp BenchmarkUtils.h)
+
+  target_link_libraries(
+    nimble_encoding_factory_benchmark
+    nimble_encodings_tests_utils
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
+  )
+
   add_executable(
     nimble_fixed_bit_width_benchmark
     FixedBitWidthBenchmark.cpp

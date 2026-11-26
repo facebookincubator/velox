@@ -17,7 +17,7 @@
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
 #include "velox/connectors/common/BufferedInputBuilder.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -86,12 +86,13 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics_);
   deleteReaderOpts.setMetadataIoStats(ioStatistics_);
-  connector::configureReaderOptions(
+  connector::FileSplitReader::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx,
-      deleteFileSchema,
       deleteSplit_,
+      deleteFileSchema,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       deleteReaderOpts);
 
   const FileHandleKey fileHandleKey{
@@ -118,14 +119,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // 1) the delete file doesn't contain the base file that is being read; 2) The
   // delete file does not contain the positions in the current batch for the
   // base file.
-  if (!connector::testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit_->filePath,
-          deleteSplit_->partitionKeys,
-          {},
-          fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+  if (!common::testFilters(*scanSpec, *deleteReader)) {
     // We only count the number of base splits skipped as skippedSplits runtime
     // statistics in Velox.  Skipped delta split is only counted as skipped
     // bytes.
@@ -135,14 +129,15 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   }
 
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  connector::configureRowReaderOptions(
-      {},
+  connector::FileSplitReader::configureRowReaderOptions(
       nullptr,
-      deleteFileSchema,
+      nullptr,
       deleteSplit_,
       nullptr,
+      deleteFileSchema,
       nullptr,
-      nullptr,
+      {},
+      /*serdeParameters=*/{},
       deleteRowReaderOpts);
 
   deleteRowReader_.reset();

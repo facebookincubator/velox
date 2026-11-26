@@ -980,7 +980,7 @@ class TestParquetFileReader : public ::testing::Test {
     readerOptions.setMetadataIoStats(metadataIoStats);
     auto input = std::make_unique<dwio::common::BufferedInput>(
         std::make_shared<LocalReadFile>(filePath->getPath()),
-        readerOptions.memoryPool());
+        FileIoContext{.pool = &readerOptions.memoryPool()});
     uint64_t fileSize = std::move(input)->getReadFile()->size();
     VELOX_ASSERT_THROW(
         std::make_unique<ParquetReader>(std::move(input), readerOptions),
@@ -1039,7 +1039,7 @@ TEST_F(TestParquetFileReader, incompleteMetadata) {
   readerOptions.setMetadataIoStats(metadataIoStats);
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(filePath->getPath()),
-      readerOptions.memoryPool());
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   uint64_t fileSize = std::move(input)->getReadFile()->size();
   std::unique_ptr<dwio::common::SeekableInputStream> inputStream;

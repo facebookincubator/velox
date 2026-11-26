@@ -159,7 +159,8 @@ class BufferedInputTest : public testing::Test {
 TEST_F(BufferedInputTest, hasCache) {
   auto readFile =
       std::make_shared<facebook::velox::InMemoryReadFile>(std::string("test"));
-  BufferedInput input(readFile, *pool_);
+  BufferedInput input(
+      readFile, facebook::velox::FileIoContext{.pool = pool_.get()});
   // Base BufferedInput does not have cache.
   EXPECT_FALSE(input.hasCache());
 
@@ -169,6 +170,15 @@ TEST_F(BufferedInputTest, hasCache) {
       "cacheRegion requires a backing cache");
   VELOX_ASSERT_THROW(
       input.findCachedRegion(0), "findCachedRegion requires a backing cache");
+}
+
+TEST_F(BufferedInputTest, fileIoContextWithoutPool) {
+  VELOX_ASSERT_THROW(
+      BufferedInput(
+          std::make_shared<facebook::velox::InMemoryReadFile>(
+              std::string("test")),
+          facebook::velox::FileIoContext{}),
+      "BufferedInput requires a FileIoContext pool");
 }
 
 TEST_F(BufferedInputTest, cachedRegion) {
@@ -281,7 +291,8 @@ TEST_F(BufferedInputTest, cachedRegion) {
 TEST_F(BufferedInputTest, zeroLengthStream) {
   auto readFile =
       std::make_shared<facebook::velox::InMemoryReadFile>(std::string());
-  BufferedInput input(readFile, *pool_);
+  BufferedInput input(
+      readFile, facebook::velox::FileIoContext{.pool = pool_.get()});
   auto ret = input.enqueue({0, 0});
   EXPECT_EQ(input.nextFetchSize(), 0);
   EXPECT_NE(ret, nullptr);
@@ -298,9 +309,8 @@ TEST_F(BufferedInputTest, useRead) {
   // Use read
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       10,
       /* wsVRLoad = */ false);
@@ -322,9 +332,8 @@ TEST_F(BufferedInputTest, useVRead) {
   // Use vread
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       10,
       /* wsVRLoad = */ true);
@@ -349,9 +358,8 @@ TEST_F(BufferedInputTest, willMerge) {
 
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       10, // Will merge if distance <= 10
       /* wsVRLoad = */ false);
@@ -383,9 +391,8 @@ TEST_F(BufferedInputTest, wontMerge) {
 
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ false);
@@ -415,9 +422,8 @@ TEST_F(BufferedInputTest, readSorting) {
   expectPreads(*readFileMock, content, {{0, 9}, {24, 3}, {29, 3}});
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ false);
@@ -453,9 +459,8 @@ TEST_F(BufferedInputTest, vreadSorting) {
       *readFileMock, content, {{0, 3}, {3, 3}, {6, 3}, {24, 3}, {29, 3}});
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ true);
@@ -495,9 +500,8 @@ TEST_F(BufferedInputTest, vreadSortingWithLabels) {
       {{0, 3, l[0]}, {3, 3, l[1]}, {6, 3, l[2]}, {24, 3, l[3]}, {29, 3, l[4]}});
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       1, // Will merge if distance <= 1
       /* wsVRLoad = */ true);
@@ -533,9 +537,8 @@ TEST_F(BufferedInputTest, resetAfterAllStreamsConsumed) {
 
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       10,
       /* wsVRLoad = */ false);
@@ -589,9 +592,8 @@ TEST_F(BufferedInputTest, resetAfterPartialStreamsConsumed) {
 
   BufferedInput input(
       readFileMock,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       10,
       /*wsVRLoad=*/false);
@@ -636,9 +638,8 @@ TEST_F(BufferedInputTest, preload) {
 
   BufferedInput input(
       readFile,
-      *pool_,
+      facebook::velox::FileIoContext{.pool = pool_.get()},
       MetricsLog::voidLog(),
-      nullptr,
       nullptr,
       10,
       /* wsVRLoad = */ false);
@@ -680,7 +681,7 @@ class CustomDirectBufferedInput
       std::shared_ptr<facebook::velox::IoStats> ioStats,
       folly::Executor* executor,
       const facebook::velox::io::ReaderOptions& readerOptions,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {})
+      facebook::velox::FileIoContext fileIoContext)
       : DirectBufferedInput(
             std::move(readFile),
             metricsLog,
@@ -691,7 +692,7 @@ class CustomDirectBufferedInput
             std::move(ioStats),
             executor,
             readerOptions,
-            std::move(fileReadOps)) {
+            std::move(fileIoContext)) {
     VELOX_NYI("Not implemented in CustomBufferedInputBuilder");
   }
 
@@ -760,7 +761,8 @@ class CustomBufferedInputBuilder
         std::move(ioStats),
         executor,
         readerOpts,
-        fileReadOps);
+        facebook::velox::FileIoContext{
+            .fileOpts = fileReadOps, .pool = &readerOpts.memoryPool()});
   }
 };
 
@@ -828,7 +830,11 @@ TEST_F(BufferedInputTest, readGapTracking) {
     SCOPED_TRACE(testCase.debugString());
 
     auto ioStats = std::make_shared<facebook::velox::io::IoStatistics>();
-    BufferedInput input(readFile, *pool_, MetricsLog::voidLog(), ioStats.get());
+    BufferedInput input(
+        readFile,
+        facebook::velox::FileIoContext{.pool = pool_.get()},
+        MetricsLog::voidLog(),
+        ioStats.get());
 
     for (const auto& region : testCase.regions) {
       input.enqueue(region);

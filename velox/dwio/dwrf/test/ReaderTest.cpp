@@ -27,7 +27,7 @@
 #include "velox/common/file/tests/TestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/connectors/common/ExtractionUtils.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileDataSource.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/Mutation.h"
@@ -854,8 +854,8 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields = makeSubfields({"a", "b.b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfieldsByName = groupSubfields(subfields);
-  auto scanSpec = velox::connector::makeScanSpec(
-      outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
+  auto scanSpec = velox::connector::FileDataSource::makeScanSpec(
+      outputType, subfieldsByName, {}, schema, {}, {}, {}, true, pool());
   dwio::common::ReaderOptions readerOpts{pool(), scanSpec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
@@ -872,8 +872,8 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields2 = makeSubfields({"a", "b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields2ByName = groupSubfields(subfields2);
-  auto scanSpec2 = velox::connector::makeScanSpec(
-      outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
+  auto scanSpec2 = velox::connector::FileDataSource::makeScanSpec(
+      outputType, subfields2ByName, {}, schema, {}, {}, {}, true, pool());
   dwio::common::ReaderOptions readerOpts2{pool(), scanSpec2};
   readerOpts2.setDataIoStats(dataIoStats_);
   readerOpts2.setMetadataIoStats(metadataIoStats_);
@@ -1446,7 +1446,7 @@ std::pair<std::unique_ptr<DwrfReader>, RowVectorPtr> readWithColumnMapping(
       readerOpts,
       std::make_unique<BufferedInput>(
           std::make_shared<InMemoryReadFile>(std::move(data)),
-          readerOpts.memoryPool()));
+          FileIoContext{.pool = &readerOpts.memoryPool()}));
 
   // Read all columns using the reader's (possibly renamed) schema.
   RowReaderOptions rowReaderOpts;
@@ -1939,7 +1939,8 @@ TEST_F(TestReader, testEmptyFile) {
   sink.write(std::move(buf));
   std::string data(sink.data(), sink.size());
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(std::move(data)), *pool());
+      std::make_shared<InMemoryReadFile>(std::move(data)),
+      FileIoContext{.pool = pool()});
 
   dwio::common::ReaderOptions readerOpts{pool(), nullptr};
   readerOpts.setDataIoStats(dataIoStats_);
@@ -2046,7 +2047,8 @@ void testBufferLifeCycle(
 
   std::string data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
+      std::make_shared<InMemoryReadFile>(std::move(data)),
+      FileIoContext{.pool = pool});
 
   dwio::common::ReaderOptions readerOpts{pool, nullptr};
   readerOpts.setDataIoStats(dataIoStats);
@@ -2108,7 +2110,8 @@ void testFlatmapAsMapFieldLifeCycle(
 
   std::string data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
+      std::make_shared<InMemoryReadFile>(std::move(data)),
+      FileIoContext{.pool = pool});
 
   dwio::common::ReaderOptions readerOpts{pool, nullptr};
   readerOpts.setDataIoStats(dataIoStats);
@@ -2343,7 +2346,8 @@ createWriterReader(
       std::move(flushPolicy));
   std::string data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(std::move(data)), *pool);
+      std::make_shared<InMemoryReadFile>(std::move(data)),
+      FileIoContext{.pool = pool});
   dwio::common::ReaderOptions readerOpts(pool, scanSpec);
   readerOpts.setDataIoStats(dataIoStats);
   readerOpts.setMetadataIoStats(metadataIoStats);
@@ -2709,7 +2713,8 @@ class SplitRowRangeTest : public TestReader {
     readerOpts.setRandomSkip(std::move(randomSkip));
     return DwrfReader::create(
         std::make_unique<BufferedInput>(
-            std::make_shared<InMemoryReadFile>(data_), *pool()),
+            std::make_shared<InMemoryReadFile>(data_),
+            FileIoContext{.pool = pool()}),
         readerOpts);
   }
 
@@ -4043,7 +4048,7 @@ TEST_F(TestReader, skipLongString) {
   // whose values are repeated 'a' to 'y' respectively.
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<LocalReadFile>(getExampleFilePath("long_string.dwrf")),
-      *pool());
+      FileIoContext{.pool = pool()});
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addField("c0", 0);
   spec->getOrCreateChild("c1")->setFilter(
@@ -4273,7 +4278,8 @@ TEST_F(TestReader, boundedPrefetchReadsAfterRejectedEstimation) {
     SCOPED_TRACE(preload);
     auto readFile =
         std::make_shared<velox::tests::utils::CountingReadFile>(data);
-    auto input = std::make_unique<BufferedInput>(readFile, *pool());
+    auto input = std::make_unique<BufferedInput>(
+        readFile, FileIoContext{.pool = pool()});
     dwio::common::ReaderOptions readerOptions(pool(), nullptr);
     readerOptions.setFileFormat(FileFormat::DWRF);
     readerOptions.setFilePreloadThreshold(0);
@@ -4351,7 +4357,8 @@ DEBUG_ONLY_TEST_F(TestReader, queuedLoadCancelledBeforeReaderDestruction) {
 
   std::string data(sinkPtr->data(), sinkPtr->size());
   auto input = std::make_unique<BufferedInput>(
-      std::make_shared<InMemoryReadFile>(std::move(data)), *pool());
+      std::make_shared<InMemoryReadFile>(std::move(data)),
+      FileIoContext{.pool = pool()});
 
   std::atomic<int> asyncLoadsStarted{0};
   std::atomic<int> loadsCompleted{0};
@@ -4839,10 +4846,9 @@ TEST_F(TestReader, extractionMapKeysIoReduction) {
     // Disable file preloading so small files don't bypass per-stream IO.
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(fileData),
-        *pool(),
+        FileIoContext{.pool = pool()},
         MetricsLog::voidLog(),
         ioStats.get(),
-        /*ioStats=*/nullptr,
         /*maxMergeDistance=*/0);
     dwio::common::ReaderOptions readerOpts(pool(), scanSpec);
     readerOpts.setDataIoStats(ioStats);
@@ -5083,10 +5089,9 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
     // Disable file preloading so small files don't bypass per-stream IO.
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(largeFileData),
-        *pool(),
+        FileIoContext{.pool = pool()},
         MetricsLog::voidLog(),
         ioStats.get(),
-        /*ioStats=*/nullptr,
         /*maxMergeDistance=*/0);
     dwio::common::ReaderOptions readerOpts(pool(), scanSpec);
     readerOpts.setDataIoStats(ioStats);

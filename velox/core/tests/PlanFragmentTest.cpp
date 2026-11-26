@@ -345,13 +345,11 @@ TEST_F(PlanFragmentTest, supportsBarrier) {
                           .tableScan(rowType_)
                           .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                           .hashJoin(
-                              {"t0"},
-                              {"u0"},
+                              "t0 = u0",
                               builder.newPlan()
                                   .tableScan(rowType_)
                                   .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                                   .planNode(),
-                              "",
                               {"t1"},
                               core::JoinType::kAnti)
                           .planNode();

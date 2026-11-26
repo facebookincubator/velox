@@ -17,19 +17,95 @@
 #include "velox/functions/sparksql/EncodeFunction.h"
 
 #include <algorithm>
+#include <array>
+#include <compare>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <folly/Range.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/functions/Registerer.h"
 #include "velox/functions/lib/Utf8Utils.h"
+#include "velox/functions/lib/string/StringCore.h"
+#include "velox/functions/sparksql/EncodeCharsets.h"
 
 namespace facebook::velox::functions::sparksql::detail {
 namespace {
 
 constexpr char32_t kReplacementCodePoint = 0xFFFD;
+
+constexpr std::array<std::pair<std::string_view, CharsetType>, 7>
+    kStandardCharsets{{
+        {"UTF-8", CharsetType::kUtf8},
+        {"US-ASCII", CharsetType::kUsAscii},
+        {"ISO-8859-1", CharsetType::kIso8859_1},
+        {"UTF-16", CharsetType::kUtf16},
+        {"UTF-16BE", CharsetType::kUtf16BE},
+        {"UTF-16LE", CharsetType::kUtf16LE},
+        {"UTF-32", CharsetType::kUtf32},
+    }};
+
+static_assert(
+    [] {
+      if (kStandardCharsets.size() != single_byte::kStandardNames.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < kStandardCharsets.size(); ++i) {
+        if (kStandardCharsets[i].first != single_byte::kStandardNames[i]) {
+          return false;
+        }
+      }
+      for (const auto& alias : single_byte::kStandardAliases) {
+        if (alias.charsetIndex >= kStandardCharsets.size()) {
+          return false;
+        }
+      }
+      return true;
+    }(),
+    "Standard charset types must match the generated alias order");
+
+constexpr auto kStandardTypes = [] {
+  std::array<CharsetType, kStandardCharsets.size()> types{};
+  for (size_t i = 0; i < types.size(); ++i) {
+    types[i] = kStandardCharsets[i].second;
+  }
+  return types;
+}();
+
+std::strong_ordering compareCharsetAlias(
+    const StringView& value,
+    std::string_view expected) {
+  const auto compareCharacter = [](char left, char right) {
+    const auto toUpper = [](char character) {
+      return character >= 'a' && character <= 'z'
+          ? static_cast<char>(character - ('a' - 'A'))
+          : character;
+    };
+    return toUpper(left) <=> toUpper(right);
+  };
+  size_t position{0};
+  size_t expectedPosition{0};
+  while (position < value.size() && expectedPosition < expected.size()) {
+    auto character = value.data()[position++];
+    // Spark lowercases names; only U+212A folds from non-ASCII to ASCII.
+    if (character == '\xE2' && value.size() - position >= 2 &&
+        value.data()[position] == '\x84' &&
+        value.data()[position + 1] == '\xAA') {
+      character = 'k';
+      position += 2;
+    }
+    if (const auto comparison =
+            compareCharacter(character, expected[expectedPosition++]);
+        comparison != 0) {
+      return comparison;
+    }
+  }
+  return (value.size() - position) <=> (expected.size() - expectedPosition);
+}
 
 bool equalsIgnoreAsciiCase(std::string_view value, std::string_view expected) {
   return value.size() == expected.size() &&
@@ -186,6 +262,52 @@ Status encodeSingleByte(
   return Status::OK();
 }
 
+Status encodeLegacySingleByte(
+    exec::StringWriter& result,
+    const StringView& input,
+    const StringView& charset,
+    uint8_t charsetIndex,
+    bool replaceUnmappable) {
+  const auto& encoding = single_byte::kCharsets[charsetIndex];
+  if (encoding.asciiCompatible &&
+      stringCore::isAscii(input.data(), input.size())) {
+    result.setNoCopy(input);
+    return Status::OK();
+  }
+  result.resize(input.size());
+  size_t inputPosition{0};
+  size_t outputPosition{0};
+  while (inputPosition < input.size()) {
+    char32_t codePoint;
+    inputPosition +=
+        decodeCodePoint(input.data(), input.size(), inputPosition, codePoint);
+    uint16_t encodedByte{single_byte::kUnmappable};
+    if (codePoint < 256) {
+      encodedByte = single_byte::kLowMappings[charsetIndex][codePoint];
+    } else {
+      const auto begin =
+          single_byte::kExtraMappings.begin() + encoding.extraOffset;
+      const auto end = begin + encoding.extraSize;
+      const auto mapping = std::lower_bound(
+          begin, end, codePoint, [](const auto& entry, char32_t value) {
+            return entry.codePoint < value;
+          });
+      if (mapping != end && mapping->codePoint == codePoint) {
+        encodedByte = mapping->encodedByte;
+      }
+    }
+    if (encodedByte == single_byte::kUnmappable) {
+      if (!replaceUnmappable) {
+        return unmappableCharacter(charset);
+      }
+      encodedByte = encoding.replacement;
+    }
+    result.data()[outputPosition++] = static_cast<char>(encodedByte);
+  }
+  result.resize(outputPosition);
+  return Status::OK();
+}
+
 Status encodeUtf16(
     exec::StringWriter& result,
     const StringView& input,
@@ -249,38 +371,43 @@ Status encodeUtf32(
 
 } // namespace
 
-CharsetType resolveCharset(const StringView& charset) {
-  if (equalsIgnoreAsciiCase(charset, "UTF-8")) {
-    return CharsetType::kUtf8;
+Charset resolveCharset(const StringView& charset, bool legacyJavaCharsets) {
+  for (const auto& [name, type] : kStandardCharsets) {
+    if (equalsIgnoreAsciiCase(charset, name)) {
+      return {type};
+    }
   }
-  if (equalsIgnoreAsciiCase(charset, "US-ASCII")) {
-    return CharsetType::kUsAscii;
+  if (legacyJavaCharsets) {
+    const auto findAlias = [&](const auto& aliases) {
+      return std::lower_bound(
+          aliases.begin(),
+          aliases.end(),
+          charset,
+          [](const auto& alias, const StringView& name) {
+            return compareCharsetAlias(name, alias.name) > 0;
+          });
+    };
+    const auto standard = findAlias(single_byte::kStandardAliases);
+    if (standard != single_byte::kStandardAliases.end() &&
+        compareCharsetAlias(charset, standard->name) == 0) {
+      return {kStandardTypes[standard->charsetIndex]};
+    }
+    const auto legacy = findAlias(single_byte::kLegacyAliases);
+    if (legacy != single_byte::kLegacyAliases.end() &&
+        compareCharsetAlias(charset, legacy->name) == 0) {
+      return {CharsetType::kLegacySingleByte, legacy->charsetIndex};
+    }
   }
-  if (equalsIgnoreAsciiCase(charset, "ISO-8859-1")) {
-    return CharsetType::kIso8859_1;
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-16")) {
-    return CharsetType::kUtf16;
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-16BE")) {
-    return CharsetType::kUtf16BE;
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-16LE")) {
-    return CharsetType::kUtf16LE;
-  }
-  if (equalsIgnoreAsciiCase(charset, "UTF-32")) {
-    return CharsetType::kUtf32;
-  }
-  return CharsetType::kUnsupported;
+  return {};
 }
 
 Status encode(
     exec::StringWriter& result,
     const StringView& input,
     const StringView& charset,
-    CharsetType type,
+    Charset resolved,
     bool legacyCodingErrorAction) {
-  switch (type) {
+  switch (resolved.type) {
     case CharsetType::kUtf8:
       return encodeUtf8(result, input);
     case CharsetType::kUsAscii:
@@ -297,6 +424,13 @@ Status encode(
       return encodeUtf16(result, input, false, false);
     case CharsetType::kUtf32:
       return encodeUtf32(result, input, true);
+    case CharsetType::kLegacySingleByte:
+      return encodeLegacySingleByte(
+          result,
+          input,
+          charset,
+          resolved.legacyIndex,
+          legacyCodingErrorAction);
     case CharsetType::kUnsupported:
       VELOX_UNREACHABLE();
   }
@@ -304,3 +438,65 @@ Status encode(
 }
 
 } // namespace facebook::velox::functions::sparksql::detail
+
+namespace facebook::velox::functions::sparksql {
+namespace {
+
+// Keeps borrowed legacy ASCII bytes alive after the input vector is released.
+template <typename T>
+struct BorrowingEncodeFunction : EncodeFunction<T> {
+  static constexpr int32_t reuse_strings_from_arg = 0;
+};
+
+template <template <typename> class Function>
+using EncodeFunctionHolder = core::UDFHolder<
+    Function<exec::VectorExec>,
+    exec::VectorExec,
+    Varbinary,
+    ConstantChecker<Varchar, Varchar>,
+    Varchar,
+    Varchar>;
+
+using EncodeFunctionFactoryBase = exec::SimpleFunctionAdapterFactoryImpl<
+    EncodeFunctionHolder<EncodeFunction>>;
+
+// Chooses buffer ownership once per expression, without per-row overhead.
+class EncodeFunctionFactory : public EncodeFunctionFactoryBase {
+ public:
+  std::unique_ptr<exec::VectorFunction> createVectorFunction(
+      const std::vector<TypePtr>& inputTypes,
+      const std::vector<VectorPtr>& constantInputs,
+      const core::QueryConfig& config,
+      memory::MemoryPool* memoryPool) const override {
+    bool mayBorrowInput = SparkQueryConfig{config}.legacyJavaCharsets();
+    if (mayBorrowInput && !constantInputs.empty() && constantInputs[1]) {
+      const auto& charset = constantInputs[1];
+      if (charset->isNullAt(0)) {
+        mayBorrowInput = false;
+      } else {
+        const auto resolved = detail::resolveCharset(
+            charset->as<SimpleVector<StringView>>()->valueAt(0), true);
+        mayBorrowInput =
+            resolved.type == detail::CharsetType::kLegacySingleByte &&
+            detail::single_byte::kCharsets[resolved.legacyIndex]
+                .asciiCompatible;
+      }
+    }
+    if (mayBorrowInput) {
+      return std::make_unique<exec::SimpleFunctionAdapter<
+          EncodeFunctionHolder<BorrowingEncodeFunction>>>(
+          inputTypes, config, constantInputs, memoryPool);
+    }
+    return EncodeFunctionFactoryBase::createVectorFunction(
+        inputTypes, constantInputs, config, memoryPool);
+  }
+};
+
+} // namespace
+
+void registerEncode(const std::string& name) {
+  exec::mutableSimpleFunctions().registerFunction<EncodeFunctionFactory>(
+      {name}, {}, true);
+}
+
+} // namespace facebook::velox::functions::sparksql

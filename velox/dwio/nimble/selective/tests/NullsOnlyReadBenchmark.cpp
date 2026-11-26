@@ -219,7 +219,8 @@ class NullsOnlyReadBenchmark : public velox::test::VectorTestBase {
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
                 std::make_unique<dwio::common::BufferedInput>(
-                    std::make_shared<InMemoryReadFile>(file), *pool()),
+                    std::make_shared<InMemoryReadFile>(file),
+                    FileIoContext{.pool = pool()}),
                 readerOptions);
 
     // The stripe loads in the timed loop rather than in createRowReader.

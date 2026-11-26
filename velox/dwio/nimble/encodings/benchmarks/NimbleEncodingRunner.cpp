@@ -967,7 +967,8 @@ void validateBlockBitPackingV2ArtifactStructure(
 
 void validateVarintArtifactStructure(
     std::string_view artifact,
-    uint32_t rowCount) {
+    uint32_t rowCount,
+    bool requireMinimumBaseline) {
   size_t offset = EncodingPrefix::kFixedPrefixSize;
   const auto baseline = readBoundedUint32(artifact, offset, "Varint baseline");
   offset += sizeof(uint32_t);
@@ -981,7 +982,9 @@ void validateVarintArtifactStructure(
         "Varint baseline plus residual overflows uint32");
     sawZeroResidual |= residual == 0;
   }
-  require(sawZeroResidual, "Varint baseline is not the minimum value");
+  if (requireMinimumBaseline) {
+    require(sawZeroResidual, "Varint baseline is not the minimum value");
+  }
   require(offset == artifact.size(), "Varint payload has trailing bytes");
 }
 
@@ -2498,7 +2501,8 @@ class TypedRunner {
           spec_.encodingType,
           TypeTraits<T>::dataType,
           config_.rowCount);
-      validateVarintArtifactStructure(encodedArtifact_, config_.rowCount);
+      validateVarintArtifactStructure(
+          encodedArtifact_, config_.rowCount, /*requireMinimumBaseline=*/true);
     }
     auto encoding = createEncoding(decoderArtifact());
     require(
@@ -2622,7 +2626,8 @@ class TypedRunner {
     if (spec_.encoding == RunnerEncoding::Varint) {
       validateArtifactPrefix(
           sliced, spec_.encodingType, TypeTraits<T>::dataType, count);
-      validateVarintArtifactStructure(sliced, count);
+      validateVarintArtifactStructure(
+          sliced, count, /*requireMinimumBaseline=*/false);
     }
     const auto backing = makeDecoderBacking(spec_.encoding, sliced);
     const std::string_view decoderInput =

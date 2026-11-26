@@ -336,8 +336,11 @@ void createAndReadNullableWithView(
         createEncodingView(encoded, benchmarkPool().get(), options);
     const auto row = positions[iters % positions.size()];
     const RowRange range{row, row + 1};
-    folly::doNotOptimizeAway(
-        view->read(std::span<const RowRange>{&range, 1}, setNull, &value));
+    folly::doNotOptimizeAway(view->read(
+        std::span<const RowRange>{&range, 1},
+        setNull,
+        /*addStringBuffer=*/nullptr,
+        &value));
     folly::doNotOptimizeAway(value);
   }
 }
@@ -387,8 +390,11 @@ void readNullableWithReusedView(
   while (iters--) {
     const auto row = positions[iters % positions.size()];
     const RowRange range{row, row + 1};
-    folly::doNotOptimizeAway(
-        view.read(std::span<const RowRange>{&range, 1}, setNull, &value));
+    folly::doNotOptimizeAway(view.read(
+        std::span<const RowRange>{&range, 1},
+        setNull,
+        /*addStringBuffer=*/nullptr,
+        &value));
     folly::doNotOptimizeAway(value);
   }
 }
@@ -725,7 +731,8 @@ unsigned readNullableRanges(
   Vector<int64_t> output{benchmarkPool().get(), numRows};
   suspender.dismiss();
   for (unsigned iteration{0}; iteration < iterations; ++iteration) {
-    const auto numNonNulls = view->read(ranges, [](uint32_t) {}, output.data());
+    const auto numNonNulls = view->read(
+        ranges, [](uint32_t) {}, /*addStringBuffer=*/nullptr, output.data());
     folly::doNotOptimizeAway(numNonNulls);
     folly::doNotOptimizeAway(output.data());
   }
@@ -752,8 +759,8 @@ unsigned readNullableSparseIndices(
   Vector<int64_t> output{benchmarkPool().get(), numSelected};
   suspender.dismiss();
   for (unsigned iteration{0}; iteration < iterations; ++iteration) {
-    const auto numNonNulls =
-        view->read(indices, [](uint32_t) {}, output.data());
+    const auto numNonNulls = view->read(
+        indices, [](uint32_t) {}, /*addStringBuffer=*/nullptr, output.data());
     folly::doNotOptimizeAway(numNonNulls);
     folly::doNotOptimizeAway(output.data());
   }
@@ -779,7 +786,8 @@ unsigned readNullableSparseRanges(
   Vector<int64_t> output{benchmarkPool().get(), numRanges * rangeSize};
   suspender.dismiss();
   for (unsigned iteration{0}; iteration < iterations; ++iteration) {
-    const auto numNonNulls = view->read(ranges, [](uint32_t) {}, output.data());
+    const auto numNonNulls = view->read(
+        ranges, [](uint32_t) {}, /*addStringBuffer=*/nullptr, output.data());
     folly::doNotOptimizeAway(numNonNulls);
     folly::doNotOptimizeAway(output.data());
   }

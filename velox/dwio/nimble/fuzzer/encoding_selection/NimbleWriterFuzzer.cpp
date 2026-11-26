@@ -39,7 +39,6 @@
 #include "velox/common/file/File.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/io/IoStatistics.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -1592,7 +1591,12 @@ std::string NimbleWriterFuzzer::writeFile(
       drawnSettings.metadataFlushThreshold);
   auto schema =
       std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
-  verifyColumnStatistics(file, schema, batches, statsOptions);
+  verifyColumnStatistics(
+      file,
+      schema,
+      batches,
+      statsOptions,
+      folly::hash::hash_combine(iterationSeed, std::string_view{"lazyStats"}));
   verifySchemaAndStripeGroupConsistency(file, schema);
   return file;
 }
@@ -2190,13 +2194,137 @@ std::optional<std::string> findFileBoundsViolation(
   return std::nullopt;
 }
 
+// Formats a statistics bound, or "absent" when there is none.
+template <typename T>
+std::string formatBound(const std::optional<T>& bound) {
+  return bound.has_value() ? fmt::format("{}", *bound) : std::string{"absent"};
+}
+
+// Describes every field of 'stats', so that two statistics are equal exactly
+// when their descriptions are. Unlike the value, a NaN bound's description
+// equals itself.
+std::string describeStatistics(const ColumnStatistics& stats) {
+  const auto counts = fmt::format(
+      "values {}, nulls {}, logical size {}, physical size {}",
+      stats.getValueCount(),
+      stats.getNullCount(),
+      stats.getLogicalSize(),
+      stats.getPhysicalSize());
+  const auto describeBounded =
+      [&](std::string_view kind, const auto& min, const auto& max) {
+        return fmt::format(
+            "{}: {}, min {}, max {}",
+            kind,
+            counts,
+            formatBound(min),
+            formatBound(max));
+      };
+  switch (stats.getType()) {
+    case StatType::INTEGRAL: {
+      const auto* integral = stats.as<IntegralStatistics>();
+      return describeBounded(
+          "integral", integral->getMin(), integral->getMax());
+    }
+    case StatType::FLOATING_POINT: {
+      const auto* floating = stats.as<FloatingPointStatistics>();
+      return describeBounded(
+          "floating point", floating->getMin(), floating->getMax());
+    }
+    case StatType::STRING: {
+      const auto* strings = stats.as<StringStatistics>();
+      return describeBounded("string", strings->getMin(), strings->getMax());
+    }
+    case StatType::DEDUPLICATED: {
+      const auto* deduplicated = stats.as<DeduplicatedColumnStatistics>();
+      return fmt::format(
+          "deduplicated: count {}, logical size {}, base {}",
+          deduplicated->getDedupedCount(),
+          deduplicated->getDedupedLogicalSize(),
+          describeStatistics(*deduplicated->getBaseStatistics()));
+    }
+    case StatType::DEFAULT:
+      return fmt::format("default: {}", counts);
+  }
+  NIMBLE_UNREACHABLE("Unknown statistics type.");
+}
+
+// Checks that a lazy read of the stats section 'payload' returns, for every
+// node, the statistics and logical size in 'eager', which the eager read
+// returned. The lazy read builds each node's statistics, and the view of each
+// stream they read, on first use. So the nodes are visited in an order drawn
+// from 'lazyReadSeed', and half of them have their logical size read first.
+void verifyLazyColumnStatistics(
+    std::string_view payload,
+    const RowTypePtr& schema,
+    const std::vector<std::unique_ptr<ColumnStatistics>>& eager,
+    uint64_t lazyReadSeed,
+    uint64_t seed,
+    velox::memory::MemoryPool& pool) {
+  const auto lazy = VectorizedFileStats::deserialize(
+      payload, /*payloadHolder=*/nullptr, schema, pool);
+  FuzzerGenerator rng(lazyReadSeed);
+  std::vector<uint32_t> nodes(eager.size());
+  std::iota(nodes.begin(), nodes.end(), 0);
+  std::shuffle(nodes.begin(), nodes.end(), rng);
+  for (const auto node : nodes) {
+    const auto& expected = eager[node];
+    if (expected == nullptr) {
+      continue;
+    }
+    const auto verifyLogicalSize = [&] {
+      const auto logicalSize = lazy->logicalSize(node);
+      NIMBLE_CHECK(
+          logicalSize.has_value(),
+          "Lazy read has no logical size for node {} (seed {}).",
+          node,
+          seed);
+      NIMBLE_CHECK_EQ(
+          *logicalSize,
+          expected->getLogicalSize(),
+          "Node {} lazy logical size mismatch (seed {}).",
+          node,
+          seed);
+    };
+    const bool logicalSizeFirst = folly::Random::oneIn(2, rng);
+    if (logicalSizeFirst) {
+      verifyLogicalSize();
+    }
+    const auto* actual = lazy->columnStatistics(node);
+    NIMBLE_CHECK_NOT_NULL(
+        actual,
+        "Lazy read has no statistics for node {} (seed {}).",
+        node,
+        seed);
+    NIMBLE_CHECK_EQ(
+        describeStatistics(*actual),
+        describeStatistics(*expected),
+        "Node {} lazy statistics mismatch (seed {}).",
+        node,
+        seed);
+    if (!logicalSizeFirst) {
+      verifyLogicalSize();
+    }
+  }
+
+  const auto numNodes = static_cast<uint32_t>(eager.size());
+  NIMBLE_CHECK_NULL(
+      lazy->columnStatistics(numNodes),
+      "Lazy read has statistics past the last node (seed {}).",
+      seed);
+  NIMBLE_CHECK(
+      !lazy->logicalSize(numNodes).has_value(),
+      "Lazy read has a logical size past the last node (seed {}).",
+      seed);
+}
+
 } // namespace
 
 void NimbleWriterFuzzer::verifyColumnStatistics(
     const std::string& file,
     const RowTypePtr& schema,
     const std::vector<VectorPtr>& batches,
-    const VectorizedFileStats::Options& statsOptions) {
+    const VectorizedFileStats::Options& statsOptions,
+    uint64_t lazyReadSeed) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   auto tablet = TabletReader::create(
       readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
@@ -2354,6 +2482,14 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
           applyLengthLimit(expectedStr->getMaximum()));
     }
   }
+
+  verifyLazyColumnStatistics(
+      statsSection->content(),
+      schema,
+      columnStats,
+      lazyReadSeed,
+      options_.seed,
+      *leafPool_);
 }
 
 void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
@@ -2534,7 +2670,7 @@ void NimbleWriterFuzzer::readAndVerify(
         std::make_shared<velox::io::IoStatistics>());
     auto reader = factory->createReader(
         std::make_unique<velox::dwio::common::BufferedInput>(
-            readFile, *leafPool_),
+            readFile, velox::FileIoContext{.pool = leafPool_.get()}),
         readerOptions);
     checkSchema(*reader->rowType());
 
@@ -3194,7 +3330,7 @@ std::string describeFilters(
 // statistics of a filtered column show that no row of the file passes its
 // filter. Returns whether the connector would skip the file. Fails when it
 // would skip a file holding 'expectedRows', the input rows that pass every
-// filter.
+// filter. 'fileStatsMode' names how 'reader' reads the statistics.
 bool fileSkippedByStats(
     const velox::common::ScanSpec& scanSpec,
     const velox::dwio::common::Reader& reader,
@@ -3202,14 +3338,9 @@ bool fileSkippedByStats(
     const std::vector<VectorPtr>& batches,
     const std::vector<ColumnFilter>& filters,
     const std::vector<RowPosition>& expectedRows,
+    std::string_view fileStatsMode,
     uint64_t seed) {
-  if (velox::connector::testFilters(
-          &scanSpec,
-          &reader,
-          /*filePath=*/"point lookup file",
-          /*partitionKey=*/{},
-          /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false)) {
+  if (velox::common::testFilters(scanSpec, reader)) {
     return false;
   }
   if (!expectedRows.empty()) {
@@ -3230,8 +3361,9 @@ bool fileSkippedByStats(
               stats == nullptr ? std::string{"none"} : stats->toString()));
     }
     NIMBLE_FAIL(
-        "File statistics skip a file holding a row that passes every filter (seed {}, batch {}, row {}). {}",
+        "File statistics skip a file holding a row that passes every filter (seed {}, {} file stats, batch {}, row {}). {}",
         seed,
+        fileStatsMode,
         batchIndex,
         row,
         fmt::join(columns, "; "));
@@ -3255,6 +3387,8 @@ void NimbleWriterFuzzer::verifyPointLookup(
     return;
   }
   const auto description = describeFilters(schema, filters);
+  const bool lazyFileStats = folly::Random::oneIn(2, rng);
+  const std::string_view fileStatsMode = lazyFileStats ? "lazy" : "eager";
 
   std::vector<RowPosition> expectedRows;
   for (const auto& [batchIndex, row] : rows.all) {
@@ -3280,12 +3414,14 @@ void NimbleWriterFuzzer::verifyPointLookup(
   velox::dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
   readerOptions.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
   readerOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
-  auto reader = velox::dwio::common::getReaderFactory(
-                    velox::dwio::common::FileFormat::NIMBLE)
-                    ->createReader(
-                        std::make_unique<velox::dwio::common::BufferedInput>(
-                            readFile, *leafPool_),
-                        readerOptions);
+  readerOptions.setNimbleLazyFileStats(lazyFileStats);
+  auto reader =
+      velox::dwio::common::getReaderFactory(
+          velox::dwio::common::FileFormat::NIMBLE)
+          ->createReader(
+              std::make_unique<velox::dwio::common::BufferedInput>(
+                  readFile, velox::FileIoContext{.pool = leafPool_.get()}),
+              readerOptions);
   // The file is still read when the connector would skip it, so the row reader
   // is checked to return no rows for it.
   const bool skippedByFileStats = fileSkippedByStats(
@@ -3295,6 +3431,7 @@ void NimbleWriterFuzzer::verifyPointLookup(
       batches,
       filters,
       expectedRows,
+      fileStatsMode,
       options_.seed);
   velox::dwio::common::RowReaderOptions rowOptions;
   rowOptions.setRequestedType(schema);
@@ -3346,6 +3483,7 @@ void NimbleWriterFuzzer::verifyPointLookup(
     }
   };
   record(pointLookupCoverage_.byNumColumns[filters.size()]);
+  record(pointLookupCoverage_.byFileStatsMode[std::string{fileStatsMode}]);
   for (const auto& [column, lookup] : filters) {
     record(pointLookupCoverage_.byType[schema->childAt(column)->toString()]
                                       [std::string{lookup.kind}]);
@@ -4116,6 +4254,10 @@ void NimbleWriterFuzzer::logPointLookupCoverage() const {
   for (const auto& [numColumns, counts] : pointLookupCoverage_.byNumColumns) {
     byNumColumns.push_back(formatCounts(std::to_string(numColumns), counts));
   }
+  std::vector<std::string> byFileStatsMode;
+  for (const auto& [mode, counts] : pointLookupCoverage_.byFileStatsMode) {
+    byFileStatsMode.push_back(formatCounts(mode, counts));
+  }
   std::vector<std::string> typeLines;
   for (const auto& [type, byKind] : pointLookupCoverage_.byType) {
     std::vector<std::string> kinds;
@@ -4128,10 +4270,14 @@ void NimbleWriterFuzzer::logPointLookupCoverage() const {
   LOG(WARNING) << fmt::format(
       "\nPoint lookup coverage:\n"
       "  columnsPerLookup: {}\n"
+      "  fileStatsModes: {}\n"
       "  matchedRowsPerLookup:\n{}\n"
       "  filtersByType:\n{}",
       byNumColumns.empty() ? std::string{"none"}
                            : fmt::format("{}", fmt::join(byNumColumns, " ")),
+      byFileStatsMode.empty()
+          ? std::string{"none"}
+          : fmt::format("{}", fmt::join(byFileStatsMode, " ")),
       formatKeyedCountBuckets(
           pointLookupCoverage_.lookupsByMatchedRows, kMaxMatchedRowsBucket),
       typeLines.empty() ? std::string{"    none"}

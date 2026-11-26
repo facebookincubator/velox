@@ -153,6 +153,16 @@ class SparkQueryConfig {
       false,
       "Replace unmappable characters in the Spark encode function.")
 
+  /// Enables verified Java single-byte charsets and aliases for these and the
+  /// standard encode charsets.
+  VELOX_SPARK_CONFIG(
+      kLegacyJavaCharsets,
+      legacyJavaCharsets,
+      "legacy_java_charsets",
+      bool,
+      false,
+      "Enable the verified subset of Java charset names in Spark encode.")
+
   /// If true, ignore null fields when generating JSON string.
   VELOX_SPARK_CONFIG(
       kJsonIgnoreNullFields,

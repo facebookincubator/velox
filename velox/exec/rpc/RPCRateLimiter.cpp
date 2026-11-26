@@ -439,8 +439,9 @@ RPCRateLimiter::collectWakeableLocked(std::vector<ContinuePromise>& toNotify) {
     if (pending_.load() != 0 || waiters_.empty()) {
       return std::nullopt;
     }
-    if (now_() < nextPacedAdmission_) {
-      return preparePacingTimerLocked();
+    const auto now = now_();
+    if (now < nextPacedAdmission_) {
+      return preparePacingTimerLocked(now);
     }
     while (!waiters_.empty()) {
       toNotify.push_back(std::move(waiters_.front()));
@@ -460,13 +461,10 @@ RPCRateLimiter::collectWakeableLocked(std::vector<ContinuePromise>& toNotify) {
 }
 
 std::optional<RPCRateLimiter::PacingTimerRequest>
-RPCRateLimiter::preparePacingTimerLocked() {
+RPCRateLimiter::preparePacingTimerLocked(
+    std::chrono::steady_clock::time_point now) {
   if (pacingTimerArmed_ || !isPacingLocked() || pending_.load() != 0 ||
       waiters_.empty()) {
-    return std::nullopt;
-  }
-  const auto now = now_();
-  if (now >= nextPacedAdmission_) {
     return std::nullopt;
   }
   const auto delay = std::max(
@@ -737,13 +735,14 @@ RPCRateLimiter::Admission RPCRateLimiter::admitOrWait() {
     const int64_t pending = pending_.load();
     const int64_t capacity = capacityLocked();
     if (isPacingLocked()) {
-      if (pending == 0 && now_() >= nextPacedAdmission_) {
+      const auto now = now_();
+      if (pending == 0 && now >= nextPacedAdmission_) {
         result.admitted = true;
         return result;
       }
       waiters_.emplace_back("RPCRateLimiter::admitOrWait");
       result.wait = waiters_.back().getSemiFuture();
-      timerRequest = preparePacingTimerLocked();
+      timerRequest = preparePacingTimerLocked(now);
     } else if (pending < capacity) {
       RPC_RATE_LIMITER_VLOG(2) << "admitOrWait[" << admissionKey_
                                << "]: admitted (pending=" << pending

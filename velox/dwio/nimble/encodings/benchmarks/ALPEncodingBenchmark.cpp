@@ -454,7 +454,8 @@ class AlpFileBenchmarkFixture {
     nimble::SelectiveNimbleReaderFactory factory;
     auto reader = factory.createReader(
         std::make_unique<common::BufferedInput>(
-            std::make_shared<velox::InMemoryReadFile>(file_), *pool_),
+            std::make_shared<velox::InMemoryReadFile>(file_),
+            facebook::velox::FileIoContext{.pool = pool_.get()}),
         options);
     common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(velox::asRowType(input_->type()));

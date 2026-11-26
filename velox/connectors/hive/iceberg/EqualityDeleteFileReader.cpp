@@ -18,7 +18,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -147,7 +147,6 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
-    dwio::common::RuntimeStats& runtimeStats,
     const std::string& connectorId,
     const folly::F14FastMap<std::string, std::string>& fileReadOps)
     : equalityColumnNames_(equalityColumnNames),
@@ -204,12 +203,13 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   // TODO: Use separate IoStatistics for data and metadata.
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
-  connector::configureReaderOptions(
+  connector::FileSplitReader::configureReaderOptions(
       fileConfig,
       connectorQueryCtx,
-      deleteFileSchema,
       deleteSplit,
+      deleteFileSchema,
       /*tableParameters=*/{},
+      /*serdeParameters=*/{},
       deleteReaderOpts);
 
   const FileHandleKey fileHandleKey{
@@ -232,27 +232,16 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!connector::testFilters(
-          scanSpec.get(),
-          deleteReader.get(),
-          deleteSplit->filePath,
-          deleteSplit->partitionKeys,
-          {},
-          fileConfig->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx->sessionProperties()))) {
-    runtimeStats.skippedSplitBytes += static_cast<int64_t>(deleteSplit->length);
-    return;
-  }
-
   dwio::common::RowReaderOptions deleteRowReaderOpts;
-  connector::configureRowReaderOptions(
-      {},
+  connector::FileSplitReader::configureRowReaderOptions(
       nullptr,
-      deleteFileSchema,
+      nullptr,
       deleteSplit,
       nullptr,
+      deleteFileSchema,
       nullptr,
-      nullptr,
+      {},
+      /*serdeParameters=*/{},
       deleteRowReaderOpts);
 
   auto deleteRowReader = deleteReader->createRowReader(deleteRowReaderOpts);

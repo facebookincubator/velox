@@ -145,9 +145,12 @@ class ReaderBase {
   std::optional<uint64_t> fileColumnLogicalSize(uint32_t nodeId) const;
 
  private:
+  // 'sharedTablet' is true when other readers may use 'tablet', so this reader
+  // leaves the tablet's preloaded stats section for them instead of taking it.
   ReaderBase(
       std::unique_ptr<velox::dwio::common::BufferedInput> input,
       std::shared_ptr<TabletReader> tablet,
+      bool sharedTablet,
       const std::shared_ptr<velox::random::RandomSkipTracker>& randomSkip,
       const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
       std::shared_ptr<const Type> nimbleSchema,

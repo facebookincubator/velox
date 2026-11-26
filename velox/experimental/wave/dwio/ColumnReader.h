@@ -126,6 +126,12 @@ class ReadStream : public Executable {
       FileInfo& fileInfo,
       const OperandSet* firstColumns = nullptr);
 
+  /// Keeps 'use' while 'this' exists. A split reader frees the data of a
+  /// stripe when no ReadStream keeps the stripe's 'use'.
+  void setStripeUse(std::shared_ptr<void> use) {
+    stripeUse_ = std::move(use);
+  }
+
   void setNullable(const AbstractOperand& op, bool nullable) {
     waveStream->setNullable(op, nullable);
   }
@@ -195,6 +201,7 @@ class ReadStream : public Executable {
   void initializeResultNulls(Stream& stream);
 
   StructColumnReader* reader_;
+  std::shared_ptr<void> stripeUse_;
   std::vector<AbstractOperand*> abstractOperands_;
 
   // Offset in top level rows from start of split.
@@ -242,10 +249,6 @@ class ReadStream : public Executable {
   bool inited_{false};
   FileInfo fileInfo_;
 
-  // Keep track of which level of encodings we are decoding for. This is
-  // necessary when you decode multiple streams together and want them to be
-  // fully decoded in the same kernel launch in order to implement filters.
-  int32_t decodeLevel_{0};
   bool filtersCompacted_{false};
 };
 

@@ -100,8 +100,8 @@ class TextReaderTest : public testing::Test,
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(type);
     readerOptions.setSerDeOptions(serDeOptions);
-    auto input =
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+    auto input = std::make_unique<dwio::common::BufferedInput>(
+        readFile, FileIoContext{.pool = pool()});
     return factory->createReader(std::move(input), readerOptions);
   }
 
@@ -1374,131 +1374,6 @@ TEST_F(TextReaderTest, primitiveLimitsStressTest) {
   ASSERT_EQ(rowReader->next(10, result), 0);
 }
 
-TEST_F(TextReaderTest, DISABLED_nestedComplexTypesWithCustomDelimiters) {
-  // Inner maps for the arrays
-  const auto innerMapKeys1 = makeFlatVector<int64_t>({1, 11, 22});
-  const auto innerMapValues1 = makeFlatVector<bool>({true, false, true});
-  const auto innerMapKeys2 = makeFlatVector<int64_t>({33, 44});
-  const auto innerMapValues2 = makeFlatVector<bool>({false, true});
-  const auto innerMapKeys3 = makeFlatVector<int64_t>({55, 66, 77, 88});
-  const auto innerMapValues3 = makeFlatVector<bool>({true, true, false, true});
-  const auto innerMapKeys4 = makeFlatVector<int64_t>(std::vector<int64_t>{99});
-  const auto innerMapValues4 = makeFlatVector<bool>(std::vector<bool>{false});
-  const auto innerMapKeys5 = makeFlatVector<int64_t>({100, 200});
-  const auto innerMapValues5 = makeFlatVector<bool>({true, false});
-  const auto innerMapKeys6 = makeFlatVector<int64_t>({300, 400, 500});
-  const auto innerMapValues6 = makeFlatVector<bool>({false, false, true});
-
-  // Combine all inner map keys and values
-  const auto allInnerMapKeys = makeFlatVector<int64_t>(
-      {1, 11, 22, 33, 44, 55, 66, 77, 88, 99, 100, 200, 300, 400, 500});
-  const auto allInnerMapValues = makeFlatVector<bool>(
-      {true,
-       false,
-       true,
-       false,
-       true,
-       true,
-       true,
-       false,
-       true,
-       false,
-       true,
-       false,
-       false,
-       false,
-       true});
-
-  // Create inner maps with proper offsets and sizes
-  BufferPtr innerMapSizes = allocateOffsets(6, pool());
-  BufferPtr innerMapOffsets = allocateOffsets(6, pool());
-  auto rawInnerMapSizes = innerMapSizes->asMutable<vector_size_t>();
-  auto rawInnerMapOffsets = innerMapOffsets->asMutable<vector_size_t>();
-
-  rawInnerMapSizes[0] = 3; // {1:true, 11:false, 22:true}
-  rawInnerMapSizes[1] = 2; // {33:false, 44:true}
-  rawInnerMapSizes[2] = 4; // {55:true, 66:true, 77:false, 88:true}
-  rawInnerMapSizes[3] = 1; // {99:false}
-  rawInnerMapSizes[4] = 2; // {100:true, 200:false}
-  rawInnerMapSizes[5] = 3; // {300:false, 400:false, 500:true}
-
-  rawInnerMapOffsets[0] = 0;
-  for (int i = 1; i < 6; i++) {
-    rawInnerMapOffsets[i] = rawInnerMapOffsets[i - 1] + rawInnerMapSizes[i - 1];
-  }
-
-  auto innerMapsVector = std::make_shared<MapVector>(
-      pool(),
-      MAP(BIGINT(), BOOLEAN()),
-      nullptr,
-      6,
-      innerMapOffsets,
-      innerMapSizes,
-      allInnerMapKeys,
-      allInnerMapValues);
-
-  // Create arrays containing the inner maps
-  // Array 1: [innerMap0, innerMap1] (maps at indices 0, 1)
-  // Array 2: [innerMap2, innerMap3, innerMap4] (maps at indices 2, 3, 4)
-  // Array 3: [innerMap5] (map at index 5)
-  auto arrayVector = makeArrayVector({0, 2, 5, 6}, innerMapsVector);
-
-  // Create the outer map keys
-  const auto outerMapKeys = makeFlatVector<int64_t>({10, 20, 30});
-
-  // Create the final data structure
-  auto outerMapOffsets = allocateOffsets(3, pool());
-  auto outerMapSizes = allocateOffsets(3, pool());
-  auto rawOuterMapOffsets = outerMapOffsets->asMutable<vector_size_t>();
-  auto rawOuterMapSizes = outerMapSizes->asMutable<vector_size_t>();
-
-  // Set offsets: [0, 1, 2]
-  rawOuterMapOffsets[0] = 0;
-  rawOuterMapOffsets[1] = 1;
-  rawOuterMapOffsets[2] = 2;
-
-  // Set sizes: [1, 1, 1] (each outer map entry contains 1 array)
-  rawOuterMapSizes[0] = 1;
-  rawOuterMapSizes[1] = 1;
-  rawOuterMapSizes[2] = 1;
-
-  const auto expected = makeRowVector({std::make_shared<MapVector>(
-      pool(),
-      MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN()))),
-      nullptr,
-      3,
-      outerMapOffsets,
-      outerMapSizes,
-      outerMapKeys,
-      arrayVector)});
-
-  const auto type =
-      ROW({{"col_nested_map", MAP(BIGINT(), ARRAY(MAP(BIGINT(), BOOLEAN())))}});
-  // Set up custom delimiters:
-  // - Tab ('\t') for field separation (depth 0)
-  // - Pipe ('|') for array element separation (depth 1)
-  // - Hash ('#') for map key-value separation (depth 2)
-  // - ',' for inner map key-value pair separation (depth 3)
-  auto serDeOptions = dwio::common::SerDeOptions('\t', '=', '|', '\\', true);
-  serDeOptions.separators[3] = ',';
-  serDeOptions.separators[4] = ':';
-  auto reader = createReader(
-      type, "examples/custom_delimiter_nested_complex_types", serDeOptions);
-  auto rowReaderOptions = dwio::common::RowReaderOptions();
-  auto rowReader = reader->createRowReader(rowReaderOptions);
-
-  EXPECT_EQ(*reader->rowType(), *type);
-
-  VectorPtr result;
-
-  // Read all 3 rows
-  ASSERT_EQ(rowReader->next(10, result), 3);
-  for (int i = 0; i < 3; ++i) {
-    EXPECT_TRUE(result->equalValueAt(expected.get(), i, i));
-  }
-  ASSERT_EQ(rowReader->next(10, result), 0);
-}
-
 TEST_F(TextReaderTest, nestedArraysWithCustomDelimiters) {
   // Create expected nested array structure
   // Row 1: [[1,2,3], [4,5], [6,7,8,9]]
@@ -2176,7 +2051,7 @@ class TextSplitRowRangeTest : public TextReaderTest {
     dwio::common::ReaderOptions readerOptions(pool(), makeScanSpec(*type_));
     readerOptions.setFileSchema(type_);
     auto input = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<LocalReadFile>(path), *pool());
+        std::make_shared<LocalReadFile>(path), FileIoContext{.pool = pool()});
     return factory->createReader(std::move(input), readerOptions);
   }
 

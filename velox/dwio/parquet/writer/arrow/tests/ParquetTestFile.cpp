@@ -45,7 +45,7 @@ ParquetTestFile ParquetTestFile::open(
       file.leafPool_.get(), std::move(scanSpec)};
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(file.path_->getPath()),
-      readerOptions.memoryPool());
+      FileIoContext{.pool = &readerOptions.memoryPool()});
   file.reader_ =
       std::make_unique<ParquetReader>(std::move(input), readerOptions);
   return file;

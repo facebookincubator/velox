@@ -19,6 +19,7 @@
 #include <span>
 
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 
 using namespace facebook::velox;
 
@@ -485,6 +486,189 @@ ExprToSubfieldFilterParser::leafToSubfieldFilter(
     return leafCallToSubfieldFilter(*call, evaluator, negated);
   }
   return std::nullopt;
+}
+
+namespace {
+
+core::CallTypedExprPtr replaceInputs(
+    const core::CallTypedExpr* call,
+    std::vector<core::TypedExprPtr>&& inputs) {
+  return std::make_shared<core::CallTypedExpr>(
+      call->type(), std::move(inputs), call->name());
+}
+
+bool isNotExpr(
+    const core::TypedExprPtr& expr,
+    const core::CallTypedExpr* call,
+    core::ExpressionEvaluator* evaluator) {
+  if (!call->name().ends_with("not")) {
+    return false;
+  }
+  auto exprs = evaluator->compile(expr);
+  VELOX_CHECK_EQ(exprs->size(), 1);
+  auto& compiled = exprs->expr(0);
+  return compiled->vectorFunction() &&
+      compiled->vectorFunction()->getCanonicalName() ==
+      FunctionCanonicalName::kNot;
+}
+
+double getPrestoSampleRate(
+    const core::TypedExprPtr& expr,
+    const core::CallTypedExpr* call,
+    core::ExpressionEvaluator* evaluator) {
+  if (!call->name().ends_with("lt")) {
+    return -1;
+  }
+  VELOX_CHECK_EQ(call->inputs().size(), 2);
+  auto exprs = evaluator->compile(expr);
+  VELOX_CHECK_EQ(exprs->size(), 1);
+  auto& lt = exprs->expr(0);
+  if (!(lt->vectorFunction() &&
+        lt->vectorFunction()->getCanonicalName() ==
+            FunctionCanonicalName::kLt)) {
+    return -1;
+  }
+  auto& rand = lt->inputs()[0];
+  if (!(rand->inputs().empty() && rand->vectorFunction() &&
+        rand->vectorFunction()->getCanonicalName() ==
+            FunctionCanonicalName::kRand)) {
+    return -1;
+  }
+  auto* rate =
+      dynamic_cast<const core::ConstantTypedExpr*>(call->inputs()[1].get());
+  if (!(rate && rate->type()->kind() == TypeKind::DOUBLE)) {
+    return -1;
+  }
+  return std::max(0.0, std::min(1.0, rate->value().value<double>()));
+}
+
+core::TypedExprPtr extractFilters(
+    ExprToSubfieldFilterParser& parser,
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    bool negated,
+    common::SubfieldFilters& filters,
+    double& sampleRate) {
+  common::Filter* oldFilter = nullptr;
+  try {
+    if (auto subfieldAndFilter =
+            parser.leafToSubfieldFilter(*expr, evaluator, negated)) {
+      auto& [subfield, filter] = subfieldAndFilter.value();
+      if (auto it = filters.find(subfield); it != filters.end()) {
+        oldFilter = it->second.get();
+        filter = filter->mergeWith(oldFilter);
+      }
+      filters.insert_or_assign(std::move(subfield), std::move(filter));
+      return nullptr;
+    }
+  } catch (const VeloxException&) {
+    LOG(WARNING) << "Unexpected failure when extracting filter for: "
+                 << expr->toString();
+    if (oldFilter) {
+      LOG(WARNING) << "Merging with " << oldFilter->toString();
+    }
+  }
+
+  auto* call = dynamic_cast<const core::CallTypedExpr*>(expr.get());
+  if (call == nullptr) {
+    return expr;
+  }
+
+  if (isNotExpr(expr, call, evaluator)) {
+    auto inner = extractFilters(
+        parser, call->inputs()[0], evaluator, !negated, filters, sampleRate);
+    return inner ? replaceInputs(call, {inner}) : nullptr;
+  }
+
+  if ((call->name() == expression::kAnd && !negated) ||
+      (call->name() == expression::kOr && negated)) {
+    std::vector<core::TypedExprPtr> args;
+    args.reserve(call->inputs().size());
+    for (const auto& input : call->inputs()) {
+      if (auto arg = extractFilters(
+              parser, input, evaluator, negated, filters, sampleRate)) {
+        args.push_back(std::move(arg));
+      }
+      // If extractFilters returns nullptr, it means
+      // everything in input is converted to filters.
+    }
+    if (args.empty()) {
+      return nullptr;
+    }
+    if (args.size() == 1) {
+      return std::move(args[0]);
+    }
+    return replaceInputs(call, std::move(args));
+  }
+
+  if ((call->name() == expression::kAnd && negated) ||
+      (call->name() == expression::kOr && !negated)) {
+    std::vector<std::unique_ptr<common::Filter>> disjuncts;
+    common::Subfield subfield;
+
+    for (const auto& input : call->inputs()) {
+      common::SubfieldFilters tmpFilters;
+      double tmpSampleRate = 1;
+      auto tmpRemaining = extractFilters(
+          parser, input, evaluator, negated, tmpFilters, tmpSampleRate);
+
+      if (tmpRemaining != nullptr || tmpSampleRate != 1 ||
+          tmpFilters.size() != 1) {
+        disjuncts.clear();
+        break;
+      }
+
+      if (disjuncts.empty()) {
+        subfield = tmpFilters.begin()->first.clone();
+      } else if (!(subfield == tmpFilters.begin()->first)) {
+        disjuncts.clear();
+        break;
+      }
+
+      disjuncts.push_back(tmpFilters.begin()->second->clone());
+    }
+
+    if (!disjuncts.empty()) {
+      auto filter =
+          ExprToSubfieldFilterParser::makeOrFilter(std::move(disjuncts));
+
+      if (filter == nullptr) {
+        return expr;
+      }
+
+      auto it = filters.find(subfield);
+      if (it != filters.end()) {
+        filter = filter->mergeWith(it->second.get());
+      }
+
+      filters.insert_or_assign(std::move(subfield), std::move(filter));
+
+      return nullptr;
+    }
+  }
+
+  if (!negated) {
+    double rate = getPrestoSampleRate(expr, call, evaluator);
+    if (rate != -1) {
+      sampleRate *= rate;
+      return nullptr;
+    }
+  }
+
+  return expr;
+}
+} // namespace
+
+core::TypedExprPtr ExprToSubfieldFilterParser::extractFilters(
+    const core::TypedExprPtr& expr,
+    core::ExpressionEvaluator* evaluator,
+    common::SubfieldFilters& filters,
+    double& sampleRate) {
+  if (expr == nullptr) {
+    return nullptr;
+  }
+  return exec::extractFilters(
+      *getInstance(), expr, evaluator, /*negated=*/false, filters, sampleRate);
 }
 
 // static

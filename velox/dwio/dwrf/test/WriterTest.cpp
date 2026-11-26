@@ -61,7 +61,8 @@ class WriterTest : public Test {
   std::unique_ptr<ReaderBase> createReader() {
     std::string data(sinkPtr_->data(), sinkPtr_->size());
     auto readFile = std::make_shared<InMemoryReadFile>(std::move(data));
-    auto input = std::make_unique<BufferedInput>(std::move(readFile), *pool_);
+    auto input = std::make_unique<BufferedInput>(
+        std::move(readFile), FileIoContext{.pool = pool_.get()});
     dwio::common::ReaderOptions readerOpts(pool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);

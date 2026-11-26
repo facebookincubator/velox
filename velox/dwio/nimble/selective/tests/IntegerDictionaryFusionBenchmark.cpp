@@ -174,7 +174,7 @@ class IntegerDictionaryFusionBenchmark : public velox::test::VectorTestBase {
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<InMemoryReadFile>(file(
                 config.valueType, config.indicesEncoding, config.nullPattern)),
-            *pool()),
+            FileIoContext{.pool = pool()}),
         readerOptions);
     dwio::common::RowReaderOptions rowReaderOptions;
     rowReaderOptions.setRequestedType(inputType);

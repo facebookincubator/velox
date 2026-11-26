@@ -230,8 +230,9 @@ CudfSplitReader::CudfSplitReader(
   baseReaderOpts_.setDataIoStats(ioStatistics_);
   baseReaderOpts_.setMetadataIoStats(ioStatistics_);
 
-  // The cuDF path doesn't use connector::hive::configureReaderOptions() to
-  // apply configurations so load-quantum, max-coalesced-bytes and
+  // The cuDF path doesn't use
+  // connector::FileSplitReader::configureReaderOptions() to apply
+  // configurations so load-quantum, max-coalesced-bytes and
   // max-coalesced-distance-bytes are applied here so a tuned load-quantum
   // reaches CachedBufferedInput.
   const ::facebook::velox::connector::hive::HiveConfig hiveConfig(

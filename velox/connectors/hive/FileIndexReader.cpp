@@ -19,8 +19,8 @@
 #include "velox/common/Casts.h"
 #include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/serializers/KeyEncoder.h"
@@ -251,11 +251,12 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
   readerOpts.setDataIoStats(ioStatistics_);
   readerOpts.setMetadataIoStats(ioStatistics_);
   readerOpts.setIndexIoStats(ioStatistics_);
-  hive::configureReaderOptions(
+  connector::FileSplitReader::configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
-      tableHandle_,
       hiveSplit_,
+      tableHandle_->dataColumns(),
+      tableHandle_->tableParameters(),
       hiveSplit_->serdeParameters,
       readerOpts);
   readerOpts.setLoadClusterIndex(true);
@@ -302,15 +303,15 @@ FileIndexReader::createIndexReader() {
       "FileIndexReader only supports Nimble, Flux and SST file formats");
 
   dwio::common::RowReaderOptions rowReaderOpts;
-  configureRowReaderOptions(
-      tableHandle_->tableParameters(),
+  connector::FileSplitReader::configureRowReaderOptions(
+      fileConfig_,
+      connectorQueryCtx_,
+      hiveSplit_,
       /*metadataFilter=*/nullptr,
       outputType_,
-      hiveSplit_,
-      hiveSplit_->serdeParameters,
-      fileConfig_,
-      connectorQueryCtx_->sessionProperties(),
       ioExecutor_,
+      tableHandle_->tableParameters(),
+      hiveSplit_->serdeParameters,
       rowReaderOpts);
   if (hiveSplit_->fileFormat != dwio::common::FileFormat::SST) {
     rowReaderOpts.setIndexEnabled(true);

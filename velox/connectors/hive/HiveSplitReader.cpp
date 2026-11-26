@@ -18,7 +18,6 @@
 
 #include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -187,11 +186,12 @@ std::vector<TypePtr> HiveSplitReader::adaptColumns(
 }
 
 void HiveSplitReader::configureBaseReaderOptions() {
-  hive::configureReaderOptions(
+  configureReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
-      tableHandle_,
       fileSplit_,
+      tableHandle_->dataColumns(),
+      tableHandle_->tableParameters(),
       hiveSplit_->serdeParameters,
       baseReaderOpts_);
 }
@@ -199,15 +199,15 @@ void HiveSplitReader::configureBaseReaderOptions() {
 void HiveSplitReader::configureBaseRowReaderOptions(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     RowTypePtr rowType) {
-  hive::configureRowReaderOptions(
-      tableHandle_->tableParameters(),
+  configureRowReaderOptions(
+      fileConfig_,
+      connectorQueryCtx_,
+      fileSplit_,
       std::move(metadataFilter),
       rowType,
-      fileSplit_,
-      hiveSplit_->serdeParameters,
-      fileConfig_,
-      connectorQueryCtx_->sessionProperties(),
       ioExecutor_,
+      tableHandle_->tableParameters(),
+      hiveSplit_->serdeParameters,
       baseRowReaderOpts_);
 }
 

@@ -324,7 +324,8 @@ std::unique_ptr<ReaderContext> makeReaderContext(
   readerOpts.setDataIoStats(ioStats);
   readerOpts.setMetadataIoStats(ioStats);
   ctx->readerBase = nimble::ReaderBase::create(
-      std::make_unique<dwio::common::BufferedInput>(readFile, pool),
+      std::make_unique<dwio::common::BufferedInput>(
+          readFile, FileIoContext{.pool = &pool}),
       readerOpts);
 
   ctx->streams = std::make_unique<nimble::StripeStreams>(ctx->readerBase);

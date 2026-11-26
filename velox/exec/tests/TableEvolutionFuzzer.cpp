@@ -1873,7 +1873,7 @@ RowTypePtr TableEvolutionFuzzer::readInputFileSchema(
                             ->openFileForRead(inputFile.path);
   std::shared_ptr<ReadFile> readFile{std::move(uniqueReadFile)};
   auto input = std::make_unique<dwio::common::BufferedInput>(
-      readFile, readerOptions.memoryPool());
+      readFile, FileIoContext{.pool = &readerOptions.memoryPool()});
   auto readerFactory = dwio::common::getReaderFactory(inputFile.format);
   VELOX_CHECK_NOT_NULL(
       readerFactory,

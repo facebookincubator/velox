@@ -75,7 +75,8 @@ class FloatingPointColumnReaderTest : public ::testing::Test,
 
     Readers readers;
     readers.reader = factory->createReader(
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+        std::make_unique<dwio::common::BufferedInput>(
+            readFile, FileIoContext{.pool = pool()}),
         options);
 
     dwio::common::RowReaderOptions rowOptions;

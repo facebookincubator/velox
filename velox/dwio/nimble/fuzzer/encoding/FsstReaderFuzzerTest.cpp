@@ -309,7 +309,8 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
                 std::make_unique<dwio::common::BufferedInput>(
-                    std::make_shared<InMemoryReadFile>(file), *pool_),
+                    std::make_shared<InMemoryReadFile>(file),
+                    FileIoContext{.pool = pool_.get()}),
                 options);
     dwio::common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(type);

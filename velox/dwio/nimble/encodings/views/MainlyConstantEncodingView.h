@@ -17,6 +17,13 @@
 
 #include <algorithm>
 #include <bit>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <type_traits>
+#include <vector>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -34,6 +41,7 @@ template <typename T>
 class MainlyConstantEncodingView final : public TypedEncodingView<T> {
  public:
   using physicalType = typename TypedEncodingView<T>::physicalType;
+  using TypedEncodingView<T>::read;
 
   MainlyConstantEncodingView(
       std::string_view data,
@@ -81,6 +89,38 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
   ~MainlyConstantEncodingView() override {
     this->releaseVectorBuffer(otherValueRanks_);
     this->releaseVectorBuffer(isCommonBits_);
+  }
+
+  /// Reads the other values of string rows with one read of the other values
+  /// that takes `addStringBuffer`, so that it passes the buffers of their
+  /// strings, and passes the input string buffer for the common value, which
+  /// points into the input, or a copy of it when the view has no input string
+  /// buffer. Reads other values as the base view does.
+  uint32_t read(
+      std::span<const uint32_t> indices,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      if (addStringBuffer != nullptr) {
+        return readStrings(indices, addStringBuffer, output);
+      }
+    }
+    return EncodingView::read(indices, setNull, addStringBuffer, output);
+  }
+
+  /// Does the same as the read of indices above for ordered, disjoint ranges.
+  uint32_t read(
+      std::span<const RowRange> ranges,
+      const std::function<void(uint32_t)>& setNull,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const final {
+    if constexpr (std::is_same_v<physicalType, std::string_view>) {
+      if (addStringBuffer != nullptr) {
+        return readStrings(ranges, addStringBuffer, output);
+      }
+    }
+    return TypedEncodingView<T>::read(ranges, setNull, addStringBuffer, output);
   }
 
  private:
@@ -165,11 +205,52 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
       const final {
     this->checkReadRange(offset, length);
+    forEachRun(
+        offset,
+        length,
+        [&](uint32_t row, uint32_t count) {
+          std::fill(output + row, output + row + count, commonValue_);
+        },
+        [&](uint32_t otherValue, uint32_t row, uint32_t count) {
+          otherValues_->read(otherValue, count, output + row);
+        });
+  }
+
+  // Calls onCommon(row, count) for each run of common rows among the 'length'
+  // rows from 'offset', and onOther(otherValue, row, count) for each run of
+  // other rows, whose first value is at 'otherValue' in 'otherValues_'. 'row'
+  // counts from 'offset'. Without the lookup structures, reads the flags of
+  // the rows alone and counts the non-common rows before them once, instead
+  // of consulting structures over every row.
+  template <typename OnCommon, typename OnOther>
+  void forEachRun(
+      uint32_t offset,
+      uint32_t length,
+      const OnCommon& onCommon,
+      const OnOther& onOther) const {
     if (length == 0) {
       return;
     }
     if (!cachesLookupStructures()) {
-      readPhysicalFromView(offset, length, output);
+      ScopedVector<bool> isCommon{
+          length, this->pool_, this->options_.bufferPool};
+      isCommonView_->read(offset, length, isCommon.data());
+      auto nextOtherValue = isCommonView_->count(offset, /*value=*/false);
+      uint32_t row{0};
+      while (row < length) {
+        const bool common = isCommon[row];
+        uint32_t next{row + 1};
+        while (next < length && isCommon[next] == common) {
+          ++next;
+        }
+        if (common) {
+          onCommon(row, next - row);
+        } else {
+          onOther(nextOtherValue, row, next - row);
+          nextOtherValue += next - row;
+        }
+        row = next;
+      }
       return;
     }
     const auto end = offset + length;
@@ -178,42 +259,139 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
     while (row < end) {
       const bool common = isCommon(row);
       const auto next = runEnd(row, end, common);
-      const auto count = next - row;
       if (common) {
-        std::fill(
-            output + (row - offset), output + (next - offset), commonValue_);
+        onCommon(row - offset, next - row);
       } else {
-        otherValues_->read(nextOtherValue, count, output + (row - offset));
-        nextOtherValue += count;
+        onOther(nextOtherValue, row - offset, next - row);
+        nextOtherValue += next - row;
       }
       row = next;
     }
   }
 
-  // Reads the flags of the range alone and counts the non-common rows before
-  // it once, instead of consulting structures over every row.
-  void readPhysicalFromView(
-      uint32_t offset,
-      uint32_t length,
-      physicalType* output) const {
-    ScopedVector<bool> isCommon{length, this->pool_, this->options_.bufferPool};
-    isCommonView_->read(offset, length, isCommon.data());
-    auto nextOtherValue = isCommonView_->count(offset, /*value=*/false);
-    uint32_t row{0};
-    while (row < length) {
-      const bool common = isCommon[row];
-      uint32_t next{row + 1};
-      while (next < length && isCommon[next] == common) {
-        ++next;
-      }
-      if (common) {
-        std::fill(output + row, output + next, commonValue_);
-      } else {
-        otherValues_->read(nextOtherValue, next - row, output + row);
-        nextOtherValue += next - row;
-      }
-      row = next;
+  // Reads the rows of 'ranges' for a read given 'addStringBuffer'. Fills the
+  // common rows, and reads the other rows with one read of 'otherValues_'
+  // that passes the buffers of their strings.
+  uint32_t readStrings(
+      std::span<const RowRange> ranges,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const {
+    const auto numRows = this->checkReadRanges(ranges);
+    auto* stringOutput = static_cast<std::string_view*>(output);
+    std::optional<std::string_view> commonValue;
+    std::vector<RowRange> otherRanges;
+
+    // The output row of the first value of each of 'otherRanges'.
+    std::vector<uint32_t> otherOutputRows;
+    uint32_t numOtherValues{0};
+    uint32_t outputOffset{0};
+    for (const auto& range : ranges) {
+      forEachRun(
+          range.startRow,
+          range.numRows(),
+          [&](uint32_t row, uint32_t count) {
+            const auto value = addCommonValue(addStringBuffer, commonValue);
+            std::fill(
+                stringOutput + outputOffset + row,
+                stringOutput + outputOffset + row + count,
+                value);
+          },
+          [&](uint32_t otherValue, uint32_t row, uint32_t count) {
+            otherRanges.emplace_back(otherValue, otherValue + count);
+            otherOutputRows.emplace_back(outputOffset + row);
+            numOtherValues += count;
+          });
+      outputOffset += range.numRows();
     }
+    if (numOtherValues == 0) {
+      return numRows;
+    }
+    ScopedVector<std::string_view> otherValues{
+        numOtherValues, this->pool_, this->options_.bufferPool};
+    otherValues_->read(
+        otherRanges,
+        /*setNull=*/[](uint32_t) {},
+        addStringBuffer,
+        otherValues.data());
+    uint32_t otherOffset{0};
+    for (size_t i{0}; i < otherRanges.size(); ++i) {
+      const auto count = otherRanges[i].numRows();
+      std::copy(
+          otherValues.data() + otherOffset,
+          otherValues.data() + otherOffset + count,
+          stringOutput + otherOutputRows[i]);
+      otherOffset += count;
+    }
+    return numRows;
+  }
+
+  // Does the same as the read of ranges above for the rows at 'indices'.
+  uint32_t readStrings(
+      std::span<const uint32_t> indices,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      void* output) const {
+    NIMBLE_CHECK_LE(indices.size(), std::numeric_limits<uint32_t>::max());
+    if (indices.empty()) {
+      return 0;
+    }
+    this->checkReadIndices(indices);
+    auto* stringOutput = static_cast<std::string_view*>(output);
+    std::optional<std::string_view> commonValue;
+    ScopedVector<uint32_t> otherIndices{
+        0, this->pool_, this->options_.bufferPool};
+
+    // The output row of each of 'otherIndices'.
+    ScopedVector<uint32_t> otherOutputRows{
+        0, this->pool_, this->options_.bufferPool};
+    otherIndices.reserve(indices.size());
+    otherOutputRows.reserve(indices.size());
+    for (uint32_t i{0}; i < indices.size(); ++i) {
+      const auto row = indices[i];
+      const bool common =
+          cachesLookupStructures() ? isCommon(row) : isCommonView_->readAt(row);
+      if (common) {
+        stringOutput[i] = addCommonValue(addStringBuffer, commonValue);
+        continue;
+      }
+      otherIndices.push_back(
+          cachesLookupStructures()
+              ? otherValueIndex(row)
+              : isCommonView_->count(row, /*value=*/false));
+      otherOutputRows.push_back(i);
+    }
+    if (otherIndices.empty()) {
+      return static_cast<uint32_t>(indices.size());
+    }
+    ScopedVector<std::string_view> otherValues{
+        otherIndices.size(), this->pool_, this->options_.bufferPool};
+    otherValues_->read(
+        std::span<const uint32_t>{otherIndices.data(), otherIndices.size()},
+        /*setNull=*/[](uint32_t) {},
+        addStringBuffer,
+        otherValues.data());
+    for (size_t i{0}; i < otherIndices.size(); ++i) {
+      stringOutput[otherOutputRows[i]] = otherValues[i];
+    }
+    return static_cast<uint32_t>(indices.size());
+  }
+
+  // Returns the common value for the rows of a read given 'addStringBuffer'.
+  // The first call passes the buffer that holds a non-empty common value:
+  // the input string buffer, or a copy of the value when the view has no input
+  // string buffer. Later calls return the value that the first one stored in
+  // 'commonValue'.
+  std::string_view addCommonValue(
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::optional<std::string_view>& commonValue) const {
+    if (!commonValue.has_value()) {
+      std::string_view value{commonValue_};
+      if (!value.empty()) {
+        this->addInputStrings(
+            addStringBuffer, std::span<std::string_view>{&value, 1});
+      }
+      commonValue = value;
+    }
+    return *commonValue;
   }
 
   // Holds one bit per row, set for rows that equal the common value. The tail

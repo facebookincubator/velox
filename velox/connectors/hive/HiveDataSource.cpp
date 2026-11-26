@@ -18,7 +18,6 @@
 
 #include <utility>
 
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveBucketPruning.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -131,11 +130,10 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
   if (rebuildScanSpec) {
-    auto newScanSpec = connector::makeScanSpec(
+    auto newScanSpec = makeScanSpec(
         readerOutputType_,
         subfields_,
         fileScanState_->filters,
-        /*indexColumns=*/{},
         tableHandle_->dataColumns(),
         partitionKeys_,
         infoColumns_,

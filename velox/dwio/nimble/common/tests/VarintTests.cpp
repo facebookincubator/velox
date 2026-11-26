@@ -16,12 +16,17 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <limits>
 #include <numeric>
+#include <vector>
 
 #include "folly/Random.h"
 #include "folly/Range.h"
 #include "folly/Varint.h"
+#include "velox/dwio/nimble/common/NimbleException.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 
 using namespace ::facebook;
 
@@ -39,7 +44,8 @@ std::pair<std::unique_ptr<char[]>, size_t> encodeValues(
   for (auto val : values) {
     nimble::varint::writeVarint(val, &pos);
   }
-  return {std::move(buf), static_cast<size_t>(pos - buf.get())};
+  const auto size = static_cast<size_t>(pos - buf.get());
+  return {std::move(buf), size};
 }
 
 // Bulk-decode and verify the result matches the expected values.
@@ -60,6 +66,74 @@ void verifyBulkDecode(const std::vector<T>& expected, const char* encoded) {
 }
 
 } // namespace
+
+TEST(VarintTests, boundedSkipReadsUnalignedMixedWidthValues) {
+  const std::vector<uint64_t> values{
+      0,
+      127,
+      128,
+      16'383,
+      16'384,
+      std::numeric_limits<uint64_t>::max(),
+      std::numeric_limits<uint64_t>::max(),
+      std::numeric_limits<uint64_t>::max(),
+      0,
+      128,
+      0,
+      1,
+      127,
+      128,
+      std::numeric_limits<uint64_t>::max(),
+      0,
+      1,
+  };
+  const auto [buffer, size] = encodeValues(values);
+  std::vector<char> storage(size + 1);
+  std::copy_n(buffer.get(), size, storage.data() + 1);
+  const char* begin = storage.data() + 1;
+  const char* end = begin + size;
+  folly::Range<const uint8_t*> remaining{
+      reinterpret_cast<const uint8_t*>(begin),
+      reinterpret_cast<const uint8_t*>(end),
+  };
+
+  for (size_t count = 0; count <= values.size(); ++count) {
+    SCOPED_TRACE(count);
+    const char* skipped = nimble::varint::bulkVarintSkip(count, begin, end);
+    EXPECT_EQ(
+        static_cast<size_t>(skipped - begin),
+        static_cast<size_t>(
+            reinterpret_cast<const char*>(remaining.begin()) - begin));
+    if (count < values.size()) {
+      EXPECT_EQ(folly::decodeVarint(remaining), values[count]);
+    }
+  }
+  EXPECT_EQ(nimble::varint::bulkVarintSkip(0, end, end) - begin, size);
+}
+
+TEST(VarintTests, boundedSkipRejectsEveryTruncation) {
+  const std::vector<uint64_t> values{
+      std::numeric_limits<uint64_t>::max(),
+      0,
+      1,
+      127,
+      128,
+      16'383,
+      16'384,
+      std::numeric_limits<uint64_t>::max(),
+      0,
+  };
+  const auto [buffer, size] = encodeValues(values);
+  for (size_t length = 0; length < size; ++length) {
+    SCOPED_TRACE(length);
+    std::vector<char> storage(std::max(length, size_t{1}));
+    std::copy_n(buffer.get(), length, storage.data());
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::varint::bulkVarintSkip(
+            values.size(), storage.data(), storage.data() + length),
+        "Varint skip runs past the end of the encoding.");
+  }
+}
 
 TEST(VarintTests, varintSize32) {
   // Boundary values for varint encoding.

@@ -114,7 +114,8 @@ namespace facebook::velox::dwrf {
   // read it back and compare
   auto readFile = std::make_shared<InMemoryReadFile>(
       std::string(sinkPtr->data(), sinkPtr->size()));
-  auto input = std::make_unique<BufferedInput>(readFile, pool);
+  auto input =
+      std::make_unique<BufferedInput>(readFile, FileIoContext{.pool = &pool});
 
   auto dataIoStats = std::make_shared<io::IoStatistics>();
   auto metadataIoStats = std::make_shared<io::IoStatistics>();

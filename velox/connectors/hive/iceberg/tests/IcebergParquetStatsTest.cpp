@@ -47,7 +47,8 @@ class IcebergParquetStatsTest : public test::IcebergTestBase {
 
     parquet::ParquetReader reader(
         std::make_unique<dwio::common::BufferedInput>(
-            std::make_shared<LocalReadFile>(task["path"].asString()), *opPool_),
+            std::make_shared<LocalReadFile>(task["path"].asString()),
+            FileIoContext{.pool = opPool_.get()}),
         dwio::common::ReaderOptions(opPool_.get(), nullptr));
     const auto metadata = reader.fileMetaData();
     ASSERT_EQ(metadata.numRowGroups(), expectedRowGroups);

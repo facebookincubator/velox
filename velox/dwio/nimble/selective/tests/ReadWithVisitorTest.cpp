@@ -452,7 +452,8 @@ class ReadWithVisitorTest : public ::testing::Test,
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     ctx->readerBase = ReaderBase::create(
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+        std::make_unique<dwio::common::BufferedInput>(
+            readFile, FileIoContext{.pool = pool()}),
         readerOpts);
 
     ctx->streams = std::make_unique<StripeStreams>(ctx->readerBase);

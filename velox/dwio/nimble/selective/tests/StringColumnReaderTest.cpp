@@ -106,7 +106,8 @@ class StringColumnReaderTest : public ::testing::Test,
     options.setMetadataIoStats(metadataIoStats_);
     Readers readers;
     readers.reader = factory->createReader(
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+        std::make_unique<dwio::common::BufferedInput>(
+            readFile, FileIoContext{.pool = pool()}),
         options);
     auto type = asRowType(expected->type());
     dwio::common::RowReaderOptions rowOptions;
@@ -1236,7 +1237,8 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
                 std::make_unique<dwio::common::BufferedInput>(
-                    std::make_shared<InMemoryReadFile>(nimbleFile), *pool()),
+                    std::make_shared<InMemoryReadFile>(nimbleFile),
+                    FileIoContext{.pool = pool()}),
                 options);
     dwio::common::RowReaderOptions rowOptions;
     rowOptions.setRequestedType(asRowType(expected->type()));
@@ -2621,7 +2623,8 @@ TEST_P(StringColumnReaderTest, flatMapStringDictionaryPath) {
   options.setDataIoStats(dataIoStats_);
   options.setMetadataIoStats(metadataIoStats_);
   auto reader = factory->createReader(
-      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      std::make_unique<dwio::common::BufferedInput>(
+          readFile, FileIoContext{.pool = pool()}),
       options);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setRequestedType(asRowType(input->type()));
@@ -2755,7 +2758,8 @@ TEST_P(
   options.setDataIoStats(dataIoStats_);
   options.setMetadataIoStats(metadataIoStats_);
   auto reader = factory->createReader(
-      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      std::make_unique<dwio::common::BufferedInput>(
+          readFile, FileIoContext{.pool = pool()}),
       options);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setRequestedType(asRowType(input->type()));
@@ -2879,7 +2883,8 @@ TEST_P(StringColumnReaderTest, flatMapStringDictionaryPathMultiChunk) {
   options.setDataIoStats(dataIoStats_);
   options.setMetadataIoStats(metadataIoStats_);
   auto reader = factory->createReader(
-      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      std::make_unique<dwio::common::BufferedInput>(
+          readFile, FileIoContext{.pool = pool()}),
       options);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setRequestedType(asRowType(chunk1->type()));

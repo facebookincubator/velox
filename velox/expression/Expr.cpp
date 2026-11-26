@@ -174,6 +174,27 @@ Expr::Expr(
   }
 }
 
+std::vector<FieldReference*> Expr::fieldsReadForAllPassingRows() const {
+  // Only an AND evaluates each input on the rows the previous ones passed, so
+  // only an AND reads a field for every row that passes. An input with a
+  // conditional may still read its fields for just some of those rows.
+  if (!evaluatesArgumentsOnNonIncreasingSelection()) {
+    return {};
+  }
+  std::vector<FieldReference*> fields;
+  for (auto* field : distinctFields_) {
+    const bool readUnderConditional =
+        std::any_of(inputs_.begin(), inputs_.end(), [&](const auto& input) {
+          return input->hasConditionals() &&
+              isMember(input->distinctFields(), *field);
+        });
+    if (!readUnderConditional) {
+      fields.push_back(field);
+    }
+  }
+  return fields;
+}
+
 // static
 bool Expr::isSameFields(
     const std::vector<FieldReference*>& fields1,

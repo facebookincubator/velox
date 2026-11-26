@@ -58,6 +58,7 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
     VELOX_FILE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
     VELOX_FILE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
     VELOX_FILE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterNumUniqueKeyColumnsSession);
     VELOX_FILE_CONFIG_REGISTER(kUser);
     VELOX_FILE_CONFIG_REGISTER(kSource);
     VELOX_FILE_CONFIG_REGISTER(kSchema);
