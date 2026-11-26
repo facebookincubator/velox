@@ -517,6 +517,21 @@ void VectorHasher::lookupIdsRangeSimd(
   auto bits = rows.asMutableRange().bits();
   constexpr int32_t kWidth = xsimd::batch<T>::size;
   // Looks up the batch of rows that starts at 'index', with its keys at 'keys'.
+  // A local copy: 'result' could alias 'multiplier_', which would then be
+  // reloaded after each store.
+  const uint64_t multiplier = multiplier_;
+  // Stores the ids of the batch of rows that starts at 'index', or adds them
+  // times 'multiplier' to the ids there.
+  auto storeIds = [&](xsimd::batch<uint64_t> ids,
+                      vector_size_t index) INLINE_LAMBDA {
+    if (multiplier == 1) {
+      ids.store_unaligned(result + index);
+    } else {
+      (xsimd::batch<uint64_t>::load_unaligned(result + index) +
+       ids * multiplier)
+          .store_unaligned(result + index);
+    }
+  };
   auto lookupBatch = [&](const T* keys, vector_size_t index) INLINE_LAMBDA {
     auto values = xsimd::batch<T>::load_unaligned(keys);
     uint64_t outOfRange =
@@ -526,39 +541,22 @@ void VectorHasher::lookupIdsRangeSimd(
     }
     if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
       if constexpr (sizeof(T) == 8) {
-        auto unsignedValues =
-            simd::reinterpretBatch<typename std::make_unsigned<T>::type>(
-                values);
-        if (multiplier_ == 1) {
-          (unsignedValues - offset).store_unaligned(result + index);
-        } else {
-          (xsimd::batch<uint64_t>::load_unaligned(result + index) +
-           ((unsignedValues - offset) * multiplier_))
-              .store_unaligned(result + index);
-        }
+        storeIds(simd::reinterpretBatch<uint64_t>(values) - offset, index);
       } else {
         // Widen 8 to 2 x 4 since result is always 64 bits wide.
-        auto first4 = simd::reinterpretBatch<uint64_t>(
-                          simd::getHalf<int64_t, 0>(values)) -
+        const auto first4 = simd::reinterpretBatch<uint64_t>(
+                                simd::getHalf<int64_t, 0>(values)) -
             offset;
-        auto next4 = simd::reinterpretBatch<uint64_t>(
-                         simd::getHalf<int64_t, 1>(values)) -
-            offset;
-        if (multiplier_ == 1) {
-          first4.store_unaligned(result + index);
-          next4.store_unaligned(result + index + first4.size);
-        } else {
-          (xsimd::batch<uint64_t>::load_unaligned(result + index) +
-           (first4 * multiplier_))
-              .store_unaligned(result + index);
-          (xsimd::batch<uint64_t>::load_unaligned(
-               result + index + first4.size) +
-           (next4 * multiplier_))
-              .store_unaligned(result + index + first4.size);
-        }
+        storeIds(first4, index);
+        storeIds(
+            simd::reinterpretBatch<uint64_t>(
+                simd::getHalf<int64_t, 1>(values)) -
+                offset,
+            index + first4.size);
       }
     }
   };
+
   const vector_size_t numKeys = decoded.base()->size();
   // Full batches stay within 'data', which may have no padding.
   const vector_size_t fullBatchesEnd =
