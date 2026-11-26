@@ -142,7 +142,7 @@ std::shared_ptr<exec::VectorFunction> makeMapFromEntries(
     const core::QueryConfig& config) {
   return std::make_shared<MapFromEntriesFunction>(
       config.throwExceptionOnDuplicateMapKeys(),
-      SparkQueryConfig{config}.mapKeyNormalizationEnabled());
+      !SparkQueryConfig{config}.legacyDisableMapKeyNormalization());
 }
 } // namespace
 

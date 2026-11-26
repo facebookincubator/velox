@@ -62,10 +62,11 @@ TEST(SparkQueryConfigTest, roundTrip) {
   {
     core::QueryConfig queryConfig({
         {SparkQueryConfig::qualify(
-             SparkQueryConfig::kMapKeyNormalizationEnabled),
+             SparkQueryConfig::kLegacyDisableMapKeyNormalization),
          "true"},
     });
-    EXPECT_TRUE(SparkQueryConfig{queryConfig}.mapKeyNormalizationEnabled());
+    EXPECT_TRUE(
+        SparkQueryConfig{queryConfig}.legacyDisableMapKeyNormalization());
   }
 }
 
@@ -73,7 +74,8 @@ TEST(SparkQueryConfigTest, defaultValues) {
   core::QueryConfig queryConfig({});
   EXPECT_FALSE(
       SparkQueryConfig{queryConfig}.decimalToFloatHighPrecisionCastEnabled());
-  EXPECT_FALSE(SparkQueryConfig{queryConfig}.mapKeyNormalizationEnabled());
+  EXPECT_FALSE(
+      SparkQueryConfig{queryConfig}.legacyDisableMapKeyNormalization());
 }
 
 // Verifies SparkConfigProvider::normalize rejects out-of-range partition_id.

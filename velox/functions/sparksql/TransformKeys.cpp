@@ -78,12 +78,13 @@ class TransformKeysFunction : public exec::VectorFunction {
     }
     const auto& keyRows =
         toElementRows<MapVector>(numKeys, *remainingRows, flatMap.get());
-    // The keys are normalized before they are deduplicated, and the result
-    // holds the normalized keys.
-    if (normalizeKeys_) {
-      transformedKeys = normalizeMapKeys(transformedKeys, keyRows, context);
-    }
-    exec::LocalDecodedVector decodedKeys(context, *transformedKeys, keyRows);
+    // The keys are normalized before they are deduplicated. A map with a
+    // repeated key holds its normalized keys, and the others keep their keys,
+    // as in Spark.
+    const auto normalizedKeys = normalizeKeys_
+        ? normalizeMapKeys(transformedKeys, keyRows, context)
+        : transformedKeys;
+    exec::LocalDecodedVector decodedKeys(context, *normalizedKeys, keyRows);
 
     // Under EXCEPTION no row can shrink, so the result keeps the offsets and
     // sizes of the input map.
@@ -118,7 +119,8 @@ class TransformKeysFunction : public exec::VectorFunction {
         *decodedKeys,
         transformedKeys,
         flatMap->mapValues(),
-        /*throwOnDuplicateKey=*/false);
+        /*throwOnDuplicateKey=*/false,
+        normalizedKeys);
     context.deselectErrors(*remainingRows);
     mapVector->setNulls(addNullsForUnselectedRows(flatMap, *remainingRows));
     context.moveOrCopyResult(mapVector, rows, result);
@@ -152,7 +154,7 @@ std::shared_ptr<exec::VectorFunction> makeTransformKeys(
     const core::QueryConfig& config) {
   return std::make_shared<TransformKeysFunction>(
       config.throwExceptionOnDuplicateMapKeys(),
-      SparkQueryConfig{config}.mapKeyNormalizationEnabled());
+      !SparkQueryConfig{config}.legacyDisableMapKeyNormalization());
 }
 } // namespace
 

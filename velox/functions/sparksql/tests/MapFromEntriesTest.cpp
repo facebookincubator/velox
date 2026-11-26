@@ -252,14 +252,15 @@ TEST_F(MapFromEntriesTest, entriesKeepInputOrder) {
   }
 }
 
-TEST_F(MapFromEntriesTest, topLevelSignedZeroKeysStayDistinct) {
+TEST_F(MapFromEntriesTest, legacyTopLevelSignedZeroKeysStayDistinct) {
   auto input = makeArrayOfRowVector(
       ROW({DOUBLE(), INTEGER()}),
       {{variant::row({-0.0, 1}), variant::row({0.0, 2})}});
   auto data = makeRowVector({input});
   for (const bool throwOnDuplicate : {false, true}) {
     SCOPED_TRACE(fmt::format("throwOnDuplicate: {}", throwOnDuplicate));
-    setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+    setThrowExceptionOnDuplicateMapKeys(
+        throwOnDuplicate, /*legacyDisableMapKeyNormalization=*/true);
     EXPECT_THAT(
         elementBitPatterns(evaluate("map_keys(map_from_entries(c0))", data)),
         testing::ElementsAre(
@@ -275,7 +276,7 @@ TEST_F(MapFromEntriesTest, normalizedSignedZeroKeysAreOneKey) {
       ROW({DOUBLE(), INTEGER()}),
       {{variant::row({-0.0, 1}), variant::row({0.0, 2})}});
   auto data = makeRowVector({input});
-  setMapKeyNormalization(false);
+  setThrowExceptionOnDuplicateMapKeys(false);
   EXPECT_THAT(
       elementBitPatterns(evaluate("map_keys(map_from_entries(c0))", data)),
       testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
@@ -283,9 +284,21 @@ TEST_F(MapFromEntriesTest, normalizedSignedZeroKeysAreOneKey) {
       makeArrayVector<int32_t>({{2}}),
       evaluate("map_values(map_from_entries(c0))", data));
 
-  setMapKeyNormalization(true);
+  setThrowExceptionOnDuplicateMapKeys(true);
   VELOX_ASSERT_THROW(
       evaluate("map_from_entries(c0)", data), "Duplicate map key was found");
+
+  // As in Spark, map_from_entries normalizes the keys of every map, also
+  // without a repeated key.
+  auto single = makeRowVector({makeArrayOfRowVector(
+      ROW({DOUBLE(), INTEGER()}), {{variant::row({-0.0, 1})}})});
+  for (const bool throwOnDuplicate : {false, true}) {
+    SCOPED_TRACE(fmt::format("throwOnDuplicate: {}", throwOnDuplicate));
+    setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+    EXPECT_THAT(
+        elementBitPatterns(evaluate("map_keys(map_from_entries(c0))", single)),
+        testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+  }
 }
 
 TEST_F(MapFromEntriesTest, nanKeysAreOneKey) {

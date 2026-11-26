@@ -650,8 +650,9 @@ TEST_F(MapFromArraysTest, stringKeys) {
   testMapFromArrays(keys, values, expected);
 }
 
-TEST_F(MapFromArraysTest, floatingPointKeys) {
-  setThrowExceptionOnDuplicateMapKeys(false);
+TEST_F(MapFromArraysTest, legacyFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(
+      false, /*legacyDisableMapKeyNormalization=*/true);
 
   // Spark looks up top-level keys with Java's Double.equals: NaNs are equal to
   // each other, and negative zero is distinct from positive zero.
@@ -678,7 +679,7 @@ TEST_F(MapFromArraysTest, normalizedFloatingPointKeys) {
   const auto otherNaN =
       std::bit_cast<double>(std::bit_cast<uint64_t>(kNaN) | uint64_t{1});
   {
-    setMapKeyNormalization(false);
+    setThrowExceptionOnDuplicateMapKeys(false);
     auto keys = makeArrayVector<double>({{-0.0, 0.0, otherNaN, kNaN}});
     auto values = makeArrayVectorFromJson<int64_t>({"[1, 2, 3, 4]"});
     auto data = makeRowVector({keys, values});
@@ -691,10 +692,11 @@ TEST_F(MapFromArraysTest, normalizedFloatingPointKeys) {
         evaluate("map_values(map_from_arrays(c0, c1))", data));
   }
 
-  setMapKeyNormalization(true);
-  {
-    // Without a repeated key, the result references the input arrays, so it
-    // holds the normalized keys too.
+  for (const bool throwOnDuplicate : {false, true}) {
+    SCOPED_TRACE(fmt::format("throwOnDuplicate: {}", throwOnDuplicate));
+    setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+    // Without a repeated key, the map keeps its keys, also on the zero-copy
+    // path under EXCEPTION.
     auto keys = makeArrayVector<double>({{-0.0, 1.5}});
     auto values = makeArrayVectorFromJson<int64_t>({"[1, 2]"});
     EXPECT_THAT(
@@ -702,17 +704,39 @@ TEST_F(MapFromArraysTest, normalizedFloatingPointKeys) {
             "map_keys(map_from_arrays(c0, c1))",
             makeRowVector({keys, values}))),
         testing::ElementsAre(
-            std::bit_cast<uint64_t>(0.0), std::bit_cast<uint64_t>(1.5)));
+            std::bit_cast<uint64_t>(-0.0), std::bit_cast<uint64_t>(1.5)));
   }
   {
+    setThrowExceptionOnDuplicateMapKeys(true);
     auto keys = makeArrayVector<double>({{-0.0, 0.0}});
     auto values = makeArrayVectorFromJson<int64_t>({"[1, 2]"});
     testMapFromArraysFails(keys, values, "Duplicate map key was found");
   }
 }
 
-TEST_F(MapFromArraysTest, throwPolicyFloatingPointKeys) {
-  setThrowExceptionOnDuplicateMapKeys(true);
+TEST_F(MapFromArraysTest, normalizedConstantEncodedFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  auto keys = BaseVector::wrapInConstant(
+      2, 0, makeArrayVector<double>({{-0.0, 0.0, kNaN, kNaN}}));
+  auto values = makeArrayVectorFromJson<int64_t>({
+      "[1, 2, 3, 4]",
+      "[5, 6, 7, 8]",
+  });
+  EXPECT_THAT(
+      elementBitPatterns(evaluate(
+          "map_keys(map_from_arrays(c0, c1))", makeRowVector({keys, values}))),
+      testing::ElementsAre(
+          std::bit_cast<uint64_t>(0.0),
+          std::bit_cast<uint64_t>(kNaN),
+          std::bit_cast<uint64_t>(0.0),
+          std::bit_cast<uint64_t>(kNaN)));
+}
+
+TEST_F(MapFromArraysTest, legacyThrowPolicyFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(
+      true, /*legacyDisableMapKeyNormalization=*/true);
 
   {
     auto keys = makeArrayVector<double>({{0.0, -0.0}});
@@ -738,8 +762,9 @@ TEST_F(MapFromArraysTest, throwPolicyFloatingPointKeys) {
   }
 }
 
-TEST_F(MapFromArraysTest, constantEncodedFloatingPointKeys) {
-  setThrowExceptionOnDuplicateMapKeys(false);
+TEST_F(MapFromArraysTest, legacyConstantEncodedFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(
+      false, /*legacyDisableMapKeyNormalization=*/true);
 
   constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
   auto keys = BaseVector::wrapInConstant(

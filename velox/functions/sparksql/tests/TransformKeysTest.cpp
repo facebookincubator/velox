@@ -183,8 +183,9 @@ TEST_F(TransformKeysTest, throwPolicyTryDuplicateKeys) {
       evaluate("try(transform_keys(c0, (k, v) -> remainder(k, 2)))", data));
 }
 
-TEST_F(TransformKeysTest, lastWinFloatingPointKeys) {
-  setThrowExceptionOnDuplicateMapKeys(false);
+TEST_F(TransformKeysTest, legacyLastWinFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(
+      false, /*legacyDisableMapKeyNormalization=*/true);
 
   // The lambda turns keys 1.0 and -1.0 into 0.0 and -0.0 in the first row and
   // into NaN in the second. Spark keeps 0.0 and -0.0 as two keys and treats
@@ -223,7 +224,7 @@ TEST_F(TransformKeysTest, normalizedFloatingPointKeys) {
       makeMapVector<double, int64_t>({{{1.0, 10}, {-1.0, 20}}}),
       makeFlatVector<double>({0.0}),
   });
-  setMapKeyNormalization(false);
+  setThrowExceptionOnDuplicateMapKeys(false);
   EXPECT_THAT(
       elementBitPatterns(evaluate(
           "map_keys(transform_keys(c0, (k, v) -> multiply(k, c1)))", data)),
@@ -233,24 +234,30 @@ TEST_F(TransformKeysTest, normalizedFloatingPointKeys) {
       evaluate(
           "map_values(transform_keys(c0, (k, v) -> multiply(k, c1)))", data));
 
-  setMapKeyNormalization(true);
+  setThrowExceptionOnDuplicateMapKeys(true);
   VELOX_ASSERT_THROW(
       evaluate("transform_keys(c0, (k, v) -> multiply(k, c1))", data),
       "Duplicate map key was found");
-  // Without a repeated key, the result keeps the offsets of the input map and
-  // holds the normalized key.
+
+  // Without a repeated key, the map keeps its keys, also on the zero-copy
+  // path under EXCEPTION.
   auto single = makeRowVector({
       makeMapVector<double, int64_t>({{{-1.0, 20}}}),
       makeFlatVector<double>({0.0}),
   });
-  EXPECT_THAT(
-      elementBitPatterns(evaluate(
-          "map_keys(transform_keys(c0, (k, v) -> multiply(k, c1)))", single)),
-      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+  for (const bool throwOnDuplicate : {false, true}) {
+    SCOPED_TRACE(fmt::format("throwOnDuplicate: {}", throwOnDuplicate));
+    setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+    EXPECT_THAT(
+        elementBitPatterns(evaluate(
+            "map_keys(transform_keys(c0, (k, v) -> multiply(k, c1)))", single)),
+        testing::ElementsAre(std::bit_cast<uint64_t>(-0.0)));
+  }
 }
 
-TEST_F(TransformKeysTest, throwPolicyFloatingPointKeys) {
-  setThrowExceptionOnDuplicateMapKeys(true);
+TEST_F(TransformKeysTest, legacyThrowPolicyFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(
+      true, /*legacyDisableMapKeyNormalization=*/true);
 
   {
     auto data = makeRowVector({

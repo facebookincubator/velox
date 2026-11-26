@@ -191,7 +191,8 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
     const DecodedVector& decodedKeyElements,
     const VectorPtr& keyElements,
     const VectorPtr& valueElements,
-    bool throwOnDuplicateKey) {
+    bool throwOnDuplicateKey,
+    const VectorPtr& normalizedKeyElements) {
   const auto* keysArray = decodedKeys.base()->asUnchecked<ArrayVectorBase>();
   const auto* valuesArray =
       decodedValues.base()->asUnchecked<ArrayVectorBase>();
@@ -224,6 +225,27 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
       ? buildMapEntriesForConstantKeys(rows, context, buffers)
       : buildMapEntries(rows, context, buffers);
 
+  // A map with a repeated key holds its normalized keys, and the other maps
+  // keep their keys.
+  VectorPtr resultKeys = keyElements;
+  if (normalizedKeyElements != nullptr &&
+      normalizedKeyElements != keyElements) {
+    rows.applyToSelected([&](vector_size_t row) {
+      const auto keysIndex = decodedKeys.index(row);
+      const auto numKeys = keysArray->sizeAt(keysIndex);
+      if (buffers.rawSizes[row] == numKeys) {
+        return;
+      }
+      if (resultKeys == keyElements) {
+        resultKeys =
+            BaseVector::create(keyElements->type(), keyElements->size(), pool);
+        resultKeys->copy(keyElements.get(), 0, 0, keyElements->size());
+      }
+      const auto offset = keysArray->offsetAt(keysIndex);
+      resultKeys->copy(normalizedKeyElements.get(), offset, offset, numKeys);
+    });
+  }
+
   return std::make_shared<MapVector>(
       pool,
       outputType,
@@ -232,7 +254,7 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
       std::move(offsets),
       std::move(sizes),
       BaseVector::wrapInDictionary(
-          nullptr, std::move(keysIndices), numEntries, keyElements),
+          nullptr, std::move(keysIndices), numEntries, std::move(resultKeys)),
       BaseVector::wrapInDictionary(
           nullptr, std::move(valuesIndices), numEntries, valueElements));
 }
@@ -389,8 +411,8 @@ class MapFunction : public exec::VectorFunction {
     if (auto* ctx = context.execCtx()->queryCtx()) {
       throwExceptionOnDuplicateMapKeys =
           ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
-      normalizeKeys =
-          SparkQueryConfig{ctx->queryConfig()}.mapKeyNormalizationEnabled();
+      normalizeKeys = !SparkQueryConfig{ctx->queryConfig()}
+                           .legacyDisableMapKeyNormalization();
     }
 
     bool constantKeys{true};

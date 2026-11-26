@@ -31,7 +31,10 @@ void registerMapFunction(const std::string& name);
 
 /// Builds a map for the selected rows from per-row key and value arrays,
 /// resolving repeated keys with LastWin. The result has the given size and no
-/// nulls.
+/// nulls. If 'normalizedKeyElements' is set, 'decodedKeyElements' decodes
+/// these keys, normalized with normalizeMapKeys, and a map with a repeated key
+/// holds them while the other maps hold 'keyElements', as Spark's
+/// ArrayBasedMapBuilder.from does.
 std::shared_ptr<MapVector> buildDeduplicatedMap(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
@@ -42,7 +45,8 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
     const DecodedVector& decodedKeyElements,
     const VectorPtr& keyElements,
     const VectorPtr& valueElements,
-    bool throwOnDuplicateKey);
+    bool throwOnDuplicateKey,
+    const VectorPtr& normalizedKeyElements = nullptr);
 
 /// Returns the given map keys with their REAL or DOUBLE values in 'rows'
 /// normalized the way Spark 4.0+ normalizes the keys of a map it builds: -0.0

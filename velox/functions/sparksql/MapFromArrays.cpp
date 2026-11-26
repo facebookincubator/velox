@@ -60,7 +60,7 @@ std::shared_ptr<exec::VectorFunction> makeMapFromArrays(
     const core::QueryConfig& config) {
   return std::make_shared<MapFromArraysFunction>(
       config.throwExceptionOnDuplicateMapKeys(),
-      SparkQueryConfig{config}.mapKeyNormalizationEnabled());
+      !SparkQueryConfig{config}.legacyDisableMapKeyNormalization());
 }
 } // namespace
 
@@ -85,8 +85,9 @@ void MapFromArraysFunction::apply(
       keysArray,
       decodedKeys->nulls(&rows),
       decodedKeys->indices());
-  // The keys are normalized before they are deduplicated, and the result holds
-  // the normalized keys.
+  // The keys are normalized before they are deduplicated. A map with a repeated
+  // key holds its normalized keys, and the others keep their keys, as in
+  // Spark.
   const auto normalizedKeys = normalizeKeys_
       ? normalizeMapKeys(keysElements, keyElementRows, context)
       : keysElements;
@@ -110,7 +111,7 @@ void MapFromArraysFunction::apply(
         rows.end(),
         keysArray->offsets(),
         keysArray->sizes(),
-        normalizedKeys,
+        keysElements,
         valuesArray->elements());
     context.moveOrCopyResult(mapVector, *remainingRows, result);
     return;
@@ -125,9 +126,10 @@ void MapFromArraysFunction::apply(
       *decodedKeys,
       *decodedValues,
       *decodedKeyElements,
-      normalizedKeys,
+      keysElements,
       valuesArray->elements(),
-      throwExceptionOnDuplicateMapKeys_);
+      throwExceptionOnDuplicateMapKeys_,
+      normalizedKeys);
   context.deselectErrors(*remainingRows);
   context.moveOrCopyResult(mapVector, *remainingRows, result);
 }
