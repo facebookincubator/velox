@@ -150,9 +150,14 @@ T normalizeKey(T key) {
 // one.
 template <typename T>
 bool needsNormalization(T key) {
-  return key == 0 ? std::signbit(key)
-                  : std::bit_cast<JavaFloatingPoint::Bits<T>>(key) !=
-          JavaFloatingPoint::bits(key);
+  if (key == 0) {
+    return std::signbit(key);
+  }
+  if (std::isnan(key)) {
+    return std::bit_cast<JavaFloatingPoint::Bits<T>>(key) !=
+        JavaFloatingPoint::bits(std::numeric_limits<T>::quiet_NaN());
+  }
+  return false;
 }
 
 template <typename T>
