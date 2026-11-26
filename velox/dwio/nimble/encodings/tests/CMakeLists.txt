@@ -40,6 +40,7 @@ add_executable(
   BlockBitPackingV2EncodingViewTest.cpp
   ConstantEncodingViewTest.cpp
   ConstantEncodingTest.cpp
+  DecodedStringBuffersTest.cpp
   DictionaryEncodingTest.cpp
   DictionaryEncodingViewTest.cpp
   EliasFanoEncodingTest.cpp

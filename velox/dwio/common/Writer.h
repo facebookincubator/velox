@@ -87,6 +87,12 @@ class Writer {
     return {};
   }
 
+  /// Returns the number of duplicate rows passed to write() that this writer
+  /// dropped instead of writing (default: none). Final once close() is called.
+  virtual uint64_t numDuplicateRows() const {
+    return 0;
+  }
+
   /// Aborts the writing by closing the writer and dropping everything.
   /// Data can no longer be written.
   virtual void abort() = 0;

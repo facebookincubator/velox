@@ -92,6 +92,7 @@ struct GreaterOrEqual : private Less<T> {
 /// BOOLEAN
 /// VARCHAR
 /// TIMESTAMP
+/// TIMESTAMP UTC
 /// VARBINARY
 
 /// Special cases:
@@ -145,6 +146,7 @@ comparisonSignatures() {
         "varchar",
         "varbinary",
         "timestamp",
+        "timestamp utc",
         "date",
         "interval day to second",
         "interval year to month"}) {
@@ -160,15 +162,30 @@ comparisonSignatures() {
 
 template <typename T>
 struct BetweenFunction {
+  /// Spark evaluates 'value between low and high' as 'value >= low and value <=
+  /// high', so the result is false if one comparison is false even if the
+  /// other bound is null.
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE bool callNullable(
       bool& result,
-      const TInput& value,
-      const TInput& low,
-      const TInput& high) {
+      const TInput* value,
+      const TInput* low,
+      const TInput* high) {
+    if (value == nullptr) {
+      return false;
+    }
     GreaterOrEqual<TInput> gte;
     LessOrEqual<TInput> lte;
-    result = gte(value, low) && lte(value, high);
+    if ((low != nullptr && !gte(*value, *low)) ||
+        (high != nullptr && !lte(*value, *high))) {
+      result = false;
+      return true;
+    }
+    if (low == nullptr || high == nullptr) {
+      return false;
+    }
+    result = true;
+    return true;
   }
 };
 

@@ -21,13 +21,13 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/common/FileDataSource.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/FileIndexReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveIndexSourceUtils.h"
 #include "velox/exec/OperatorUtils.h"
+#include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 #include "velox/vector/LazyVector.h"
 
@@ -843,7 +843,7 @@ void HiveIndexSource::initRemainingFilter(
     std::vector<TypePtr>& readColumnTypes) {
   VELOX_CHECK_NULL(remainingFilterExprSet_);
   double sampleRate = tableHandle_->sampleRate();
-  auto remainingFilter = connector::extractFiltersFromRemainingFilter(
+  auto remainingFilter = exec::ExprToSubfieldFilterParser::extractFilters(
       tableHandle_->remainingFilter(),
       expressionEvaluator_,
       filters_,
@@ -863,10 +863,15 @@ void HiveIndexSource::initRemainingFilter(
   for (int i = 0; i < readColumnNames.size(); ++i) {
     columnNames[readColumnNames[i]] = i;
   }
+  const auto fieldsReadForAllPassingRows =
+      remainingFilterExpr->fieldsReadForAllPassingRows();
   for (const auto* input : remainingFilterExpr->distinctFields()) {
     auto it = columnNames.find(input->field());
     if (it != columnNames.end()) {
-      if (connector::shouldEagerlyMaterialize(*remainingFilterExpr, *input)) {
+      if (std::find(
+              fieldsReadForAllPassingRows.begin(),
+              fieldsReadForAllPassingRows.end(),
+              input) == fieldsReadForAllPassingRows.end()) {
         remainingEagerlyLoadFields_.push_back(it->second);
       }
       continue;
@@ -880,7 +885,7 @@ void HiveIndexSource::initRemainingFilter(
 
   remainingFilterSubfields_ = remainingFilterExpr->extractSubfields();
   for (auto& subfield : remainingFilterSubfields_) {
-    const auto& name = connector::getColumnName(subfield);
+    const auto& name = subfield.baseName();
     auto it = projectedSubfields_.find(name);
     if (it != projectedSubfields_.end()) {
       // Some subfields of the column are already projected out, we append
@@ -922,7 +927,7 @@ void HiveIndexSource::init(
   for (const auto& handle : tableHandle_->filterColumnHandles()) {
     auto it = columnHandles.find(handle->name());
     if (it != columnHandles.end()) {
-      connector::checkColumnHandleConsistent(*handle, *it->second);
+      handle->checkConsistentWith(*it->second);
       continue;
     }
     checkColumnHandleIsRegular(*handle);
@@ -947,7 +952,7 @@ void HiveIndexSource::init(
 
     for (auto& subfield : handle->requiredSubfields()) {
       VELOX_USER_CHECK_EQ(
-          connector::getColumnName(subfield),
+          subfield.baseName(),
           handle->name(),
           "Required subfield does not match column name");
       projectedSubfields_[handle->name()].push_back(&subfield);
@@ -957,9 +962,7 @@ void HiveIndexSource::init(
 
   if (hiveConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx_->sessionProperties())) {
-    connector::checkColumnNameLowerCase(outputType_);
-    connector::checkColumnNameLowerCase(tableHandle_->subfieldFilters(), {});
-    connector::checkColumnNameLowerCase(tableHandle_->remainingFilter());
+    tableHandle_->checkColumnNamesLowerCase(*outputType_);
   }
 
   for (const auto& [subfield, filter] : tableHandle_->subfieldFilters()) {
@@ -982,11 +985,10 @@ void HiveIndexSource::init(
 std::shared_ptr<common::ScanSpec> HiveIndexSource::buildScanSpec(
     const std::unordered_map<std::string, std::optional<std::string>>*
         partitionValues) {
-  auto scanSpec = connector::makeScanSpec(
+  auto scanSpec = connector::FileDataSource::makeScanSpec(
       readerOutputType_,
       projectedSubfields_,
       filters_,
-      /*indexColumns=*/{},
       tableHandle_->dataColumns(),
       partitionKeyHandles_,
       /*infoColumns=*/{},

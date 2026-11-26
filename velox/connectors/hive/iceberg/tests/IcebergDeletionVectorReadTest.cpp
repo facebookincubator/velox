@@ -154,7 +154,8 @@ TEST_F(IcebergDeletionVectorReadTest, deletionVectorAppliesToNonZeroByteSplit) {
   auto reader = std::make_unique<dwrf::ReaderBase>(
       readerOptions,
       std::make_unique<dwio::common::BufferedInput>(
-          std::shared_ptr<ReadFile>(std::move(readFile)), *pool()));
+          std::shared_ptr<ReadFile>(std::move(readFile)),
+          FileIoContext{.pool = pool()}));
   reader->loadCache();
 
   // The premise of the test: the second stripe really does start at a nonzero

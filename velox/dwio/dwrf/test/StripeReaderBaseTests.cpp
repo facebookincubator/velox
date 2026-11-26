@@ -70,7 +70,8 @@ class StripeLoadKeysTest : public Test {
     reader_ = std::make_unique<ReaderBase>(
         *pool_,
         std::make_unique<BufferedInput>(
-            std::make_shared<InMemoryReadFile>(std::string()), *pool_),
+            std::make_shared<InMemoryReadFile>(std::string()),
+            FileIoContext{.pool = pool_.get()}),
         nullptr,
         footer_.get(),
         nullptr,

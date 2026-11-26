@@ -16,6 +16,9 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
+#include <span>
+#include <string_view>
 
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
@@ -38,6 +41,17 @@ class ConstantEncodingView final : public TypedEncodingView<T> {
   }
 
  private:
+  // Passes the input string buffer, which a string value points into, or
+  // copies the value once when the view has no input string buffer. Passes
+  // nothing for an empty value.
+  void addStrings(
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::span<std::string_view> values) const final {
+    if (!values.empty() && !values.front().empty()) {
+      this->addInputStrings(addStringBuffer, values);
+    }
+  }
+
   T readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
     return detail::castFromPhysicalType<T>(value_);

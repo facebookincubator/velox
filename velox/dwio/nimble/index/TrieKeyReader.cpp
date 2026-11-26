@@ -249,7 +249,11 @@ std::unique_ptr<KeySequence> createKeySequence(
 
 // Child offsets of one level: decoded values for a short sequence, the encoded
 // sequence otherwise, or the identity when none are stored, as for the leaf row
-// offsets of distinct keys.
+// offsets of distinct keys. Opening a chunk validates decoded offsets in full,
+// but checks only the first and the last encoded offset, so that a lookup does
+// not decode every offset of the chunk it opens. Each read of encoded offsets
+// checks the entries it returns instead: they stay within the next level, and
+// the entries of a read increase.
 class ChildOffsets {
  public:
   ChildOffsets() = default;
@@ -257,14 +261,21 @@ class ChildOffsets {
   explicit ChildOffsets(Vector<uint32_t> decoded)
       : decoded_{std::move(decoded)} {}
 
-  explicit ChildOffsets(std::unique_ptr<TypedEncodingView<uint32_t>> encoded)
-      : encoded_{std::move(encoded)} {}
+  ChildOffsets(
+      std::unique_ptr<TypedEncodingView<uint32_t>> encoded,
+      uint32_t maxEntry)
+      : encoded_{std::move(encoded)}, maxEntry_{maxEntry} {}
 
   // Returns entry 'index': the first child of value 'index' at the next level
   // or, for leaf row offsets, its first source row.
   uint32_t at(uint32_t index) const {
     if (encoded_ != nullptr) {
-      return encoded_->readAt(index);
+      const auto entry = encoded_->readAt(index);
+      NIMBLE_CHECK_FILE_LE(
+          entry,
+          maxEntry_,
+          "TrieKeyReader child offset exceeds the next level.");
+      return entry;
     }
     if (!decoded_.has_value()) {
       return index;
@@ -279,6 +290,7 @@ class ChildOffsets {
     if (encoded_ != nullptr) {
       encoded_->read(
           begin, static_cast<uint32_t>(entries.size()), entries.data());
+      checkEntries(begin, entries);
       return;
     }
     if (!decoded_.has_value()) {
@@ -292,10 +304,17 @@ class ChildOffsets {
   // Returns the offset range containing `position`.
   uint32_t containingRange(uint32_t position) const {
     if (encoded_ != nullptr) {
+      // The search assumes increasing entries, which the open does not check,
+      // so the range it finds is checked to contain 'position'.
       uint32_t found;
-      return encoded_->lowerBound(
-                 0, encoded_->rowCount(), position + 1, found) -
-          1;
+      const auto upper =
+          encoded_->lowerBound(0, encoded_->rowCount(), position + 1, found);
+      NIMBLE_CHECK_FILE(
+          upper > 0 && upper < encoded_->rowCount() &&
+              at(upper - 1) <= position && position < found &&
+              found <= maxEntry_,
+          "TrieKeyReader child offsets do not increase.");
+      return upper - 1;
     }
     if (!decoded_.has_value()) {
       return position;
@@ -305,8 +324,32 @@ class ChildOffsets {
   }
 
  private:
+  // Checks that the encoded 'entries' read from 'begin' increase, from the
+  // entry before them, and stay within the next level.
+  void checkEntries(uint32_t begin, std::span<const uint32_t> entries) const {
+    if (entries.empty()) {
+      return;
+    }
+    auto previous = begin == 0 ? 0 : encoded_->readAt(begin - 1);
+    NIMBLE_CHECK_FILE(
+        begin == 0 || previous < entries.front(),
+        "TrieKeyReader child offsets do not increase.");
+    for (size_t i = begin == 0 ? 1 : 0; i < entries.size(); ++i) {
+      NIMBLE_CHECK_FILE_LT(
+          previous, entries[i], "TrieKeyReader child offsets do not increase.");
+      previous = entries[i];
+    }
+    NIMBLE_CHECK_FILE_LE(
+        entries.back(),
+        maxEntry_,
+        "TrieKeyReader child offset exceeds the next level.");
+  }
+
   std::optional<Vector<uint32_t>> decoded_;
   std::unique_ptr<TypedEncodingView<uint32_t>> encoded_;
+  // The largest entry of encoded offsets: the value count of the next level,
+  // or the row count for leaf row offsets.
+  uint32_t maxEntry_{0};
 };
 
 // Reads and validates the encoded child offsets of 'numValues' values at one
@@ -328,6 +371,20 @@ ChildOffsets readEncodedOffsets(
   auto encodedOffsets = createKeyView<uint32_t>(
       pool, readSizedSequence(position, end), numValues + 1, cacheEncodingView);
   const auto numOffsets = encodedOffsets->rowCount();
+  if (numOffsets > kMaxDecodedOffsets) {
+    // Reads of the offsets check the entries they return.
+    NIMBLE_CHECK_FILE_EQ(
+        encodedOffsets->readAt(0),
+        0,
+        "TrieKeyReader offsets must start at zero: {}.",
+        description);
+    NIMBLE_CHECK_FILE_EQ(
+        encodedOffsets->readAt(numOffsets - 1),
+        expectedEnd,
+        "TrieKeyReader has an invalid final offset: {}.",
+        description);
+    return ChildOffsets{std::move(encodedOffsets), expectedEnd};
+  }
   // Validates in fixed batches, so a compact sequence that claims a huge row
   // count fails without a matching allocation.
   std::array<uint32_t, 1'024> batch;
@@ -358,9 +415,6 @@ ChildOffsets readEncodedOffsets(
       expectedEnd,
       "TrieKeyReader has an invalid final offset: {}.",
       description);
-  if (numOffsets > kMaxDecodedOffsets) {
-    return ChildOffsets{std::move(encodedOffsets)};
-  }
   Vector<uint32_t> decodedOffsets{&pool, numOffsets};
   encodedOffsets->read(0, numOffsets, decodedOffsets.data());
   return ChildOffsets{std::move(decodedOffsets)};
@@ -496,6 +550,12 @@ std::pair<uint32_t, uint32_t> TrieKeyReader::seekBounds(
     const auto runEnd = level == 0
         ? sequence.rowCount()
         : childOffsets_.at(level - 1).at(parentIndex + 1);
+    NIMBLE_CHECK_FILE_LT(
+        runBegin, runEnd, "TrieKeyReader child offsets do not increase.");
+    NIMBLE_CHECK_FILE_LE(
+        runEnd,
+        sequence.rowCount(),
+        "TrieKeyReader child offset exceeds the next level.");
     uint64_t found;
     const auto componentIndex =
         sequence.lowerBound(runBegin, runEnd, target[level], found);
@@ -669,9 +729,9 @@ void TrieKeyReader::levelsOf(
   // rows end at the last row, which the last value of every span holds, so the
   // leaf moves at most to the value of the last row, and a level above moves
   // only to the value that holds the moved value of the level below. These hold
-  // for any index that loads: readSequences() checks that the child offsets of
-  // each level start at zero, increase, and end at the number of values of the
-  // next level.
+  // for any index that loads: the child offsets of each level start at zero and
+  // end at the number of values of the next level, containingRange() checks the
+  // range it returns, and read() checks that the offsets it returns increase.
   const uint32_t leaf = numLevels_ - 1;
   auto* output = levels.data();
   for (uint32_t row = startRow; row < startRow + numRows; ++row) {

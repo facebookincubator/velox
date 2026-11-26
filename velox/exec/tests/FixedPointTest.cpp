@@ -356,10 +356,8 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
             builder.newPlan()
                 .stateSource("outer", schema)
                 .hashJoin(
-                    {"key"},
-                    {"ikey"},
+                    "key = ikey",
                     innerCountingNode(builder),
-                    "",
                     {"key", "val", "ival"})
                 .project({"key", "val + ival AS val"}),
             ConvergenceConfig::converging(
@@ -1060,10 +1058,8 @@ TEST_F(FixedPointTest, recursiveCte) {
               builder.newPlan()
                   .stateSource("result", schema)
                   .hashJoin(
-                      {"id"},
-                      {"src"},
+                      "id = src",
                       builder.newPlan().values(edges).planNode(),
-                      "",
                       {"dst", "depth"})
                   .project({"dst AS id", "depth + 1 AS depth"}),
               ConvergenceConfig::converging(
@@ -1115,10 +1111,8 @@ TEST_F(FixedPointTest, whenDeltaEmptyRecursiveCte) {
               builder.newPlan()
                   .stateSource("result", schema)
                   .hashJoin(
-                      {"id"},
-                      {"src"},
+                      "id = src",
                       builder.newPlan().values(edges).planNode(),
-                      "",
                       {"dst", "depth"})
                   .project({"dst AS id", "depth + 1 AS depth"}),
               ConvergenceConfig::whenDeltaEmpty(100),
@@ -2819,8 +2813,7 @@ TEST_F(FixedPointTest, kMeans) {
                   // cluster has a null count, and the coalesce below
                   // then retains its old centroid.
                   .hashJoin(
-                      {"slot"},
-                      {"old_slot"},
+                      "slot = old_slot",
                       // Old centroids, renamed so the RIGHT join below
                       // can carry both sides.
                       builder.newPlan()
@@ -2830,7 +2823,6 @@ TEST_F(FixedPointTest, kMeans) {
                                "cx AS old_cx",
                                "cy AS old_cy"})
                           .planNode(),
-                      "",
                       {"old_slot", "old_cx", "old_cy", "sx", "sy", "cnt"},
                       core::JoinType::kRight)
                   // Velox has no divide(DOUBLE, BIGINT); cast the count
@@ -2987,8 +2979,7 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
                            "sum(sy) AS gsy",
                            "sum(cnt) AS gcnt"})
                       .hashJoin(
-                          {"slot"},
-                          {"old_slot"},
+                          "slot = old_slot",
                           builder.newPlan()
                               .stateSource("centroids", centroidsType)
                               .project(
@@ -2996,7 +2987,6 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
                                    "cx AS old_cx",
                                    "cy AS old_cy"})
                               .planNode(),
-                          "",
                           {"old_slot",
                            "old_cx",
                            "old_cy",
@@ -3370,12 +3360,10 @@ TEST_F(FixedPointTest, twoScannedInitialPlans) {
                       builder.newPlan()
                           .stateSource("values", valuesSchema)
                           .hashJoin(
-                              {"key"},
-                              {"skey"},
+                              "key = skey",
                               builder.newPlan()
                                   .stateSource("steps", stepsSchema)
                                   .planNode(),
-                              "",
                               {"key", "val", "delta"})
                           .project({"key", "val + delta AS val"}),
                       ConvergenceConfig::converging(
@@ -3460,12 +3448,10 @@ TEST_F(FixedPointTest, initialPlanMixesExchangeAndScan) {
                               .singleAggregation({"key"}, {"sum(val)"})
                               .project({"key", "a0 AS val"})
                               .hashJoin(
-                                  {"key"},
-                                  {"skey"},
+                                  "key = skey",
                                   builder.newPlan()
                                       .stateSource("steps", stepsSchema)
                                       .planNode(),
-                                  "",
                                   {"key", "val", "delta"})
                               .project({"key", "val + delta AS val"})
                               .planNode(),
@@ -3785,10 +3771,8 @@ TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
                           builder.newPlan()
                               .stateSource("outer", outerSchema)
                               .hashJoin(
-                                  {"key"},
-                                  {"ikey"},
+                                  "key = ikey",
                                   innerCountingNode(builder),
-                                  "",
                                   {"val", "ival"})
                               .project({"val + ival >= 6 AS converged"})
                               .planNode(),
@@ -5080,7 +5064,7 @@ TEST_F(FixedPointTest, stepTableScan) {
             declaration,
             builder.newPlan()
                 .stateSource("n", schema)
-                .hashJoin({"x"}, {"y"}, scan, "", {"x"}),
+                .hashJoin("x = y", scan, {"x"}),
             noConvergence),
         fmt::format(
             "FixedPointNode: only an initial plan can read splits; other "
@@ -5098,7 +5082,7 @@ TEST_F(FixedPointTest, stepTableScan) {
             ConvergenceConfig::converging(
                 builder.newPlan()
                     .stateSource("n", schema, /*delta=*/false)
-                    .hashJoin({"x"}, {"y"}, scan, "", {"x"})
+                    .hashJoin("x = y", scan, {"x"})
                     .singleAggregation({}, {"count(1)"})
                     .project({"a0 = 0"})
                     .planNode(),
@@ -5164,8 +5148,7 @@ TEST_F(FixedPointTest, stepTableScan) {
             builder.newPlan()
                 .stateSource("n", schema)
                 .hashJoin(
-                    {"x"},
-                    {"y"},
+                    "x = y",
                     builder.newPlan()
                         .fixedPoint(
                             std::make_shared<VectorStateDeclaration>(
@@ -5173,7 +5156,6 @@ TEST_F(FixedPointTest, stepTableScan) {
                             builder.newPlan().stateSource("m", tableSchema),
                             noConvergence)
                         .planNode(),
-                    "",
                     {"x"}),
             noConvergence),
         fmt::format(
@@ -5295,13 +5277,11 @@ TEST_F(FixedPointTest, trailingTableScan) {
                           .filter("v < 3"),
                       ConvergenceConfig::whenDeltaEmpty(10))
                   .hashJoin(
-                      {"k"},
-                      {"tk"},
+                      "k = tk",
                       builder.newPlan()
                           .tableScan(ROW({"tk", "w"}, BIGINT()))
                           .capturePlanNodeId(scanId)
                           .planNode(),
-                      "",
                       {"w", "v"})
                   .planNode();
 
@@ -5421,13 +5401,11 @@ TEST_F(FixedPointTest, nestedInitialPlanTableScan) {
                                       .filter("v < 3"),
                                   ConvergenceConfig::whenDeltaEmpty(10))
                               .hashJoin(
-                                  {"k"},
-                                  {"tk"},
+                                  "k = tk",
                                   builder.newPlan()
                                       .tableScan(ROW("tk", BIGINT()))
                                       .capturePlanNodeId(joinScanId)
                                       .planNode(),
-                                  "",
                                   {"k", "v"})
                               .planNode(),
                           /*append=*/true),
@@ -5561,29 +5539,26 @@ TEST_F(FixedPointTest, nestedInnerShuffle) {
           .planNode();
 
   // Outer loop: local, adds the inner result to its own value each round.
-  auto plan = builder.newPlan()
-                  .fixedPoint(
-                      std::make_shared<VectorStateDeclaration>(
-                          "outer",
-                          outerSchema,
-                          builder.newPlan().tableScan(outerSchema).planNode()),
-                      builder.newPlan()
-                          .stateSource("outer", outerSchema)
-                          .hashJoin(
-                              {"key"},
-                              {"ikey"},
-                              innerFixedPoint,
-                              "",
-                              {"key", "val", "ival"})
-                          .project({"key", "val + ival AS val"}),
-                      ConvergenceConfig::converging(
-                          builder.newPlan()
-                              .stateSource("outer", outerSchema)
-                              .project({"val >= 6 AS converged"})
-                              .planNode(),
-                          100),
-                      /*outputStateEntry=*/"outer")
-                  .planNode();
+  auto plan =
+      builder.newPlan()
+          .fixedPoint(
+              std::make_shared<VectorStateDeclaration>(
+                  "outer",
+                  outerSchema,
+                  builder.newPlan().tableScan(outerSchema).planNode()),
+              builder.newPlan()
+                  .stateSource("outer", outerSchema)
+                  .hashJoin(
+                      "key = ikey", innerFixedPoint, {"key", "val", "ival"})
+                  .project({"key", "val + ival AS val"}),
+              ConvergenceConfig::converging(
+                  builder.newPlan()
+                      .stateSource("outer", outerSchema)
+                      .project({"val >= 6 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"outer")
+          .planNode();
 
   std::vector<std::pair<int64_t, int64_t>> expected{
       {0, 6},
@@ -5774,40 +5749,37 @@ TEST_F(FixedPointTest, nestedOuterAndInnerShuffle) {
   // plan, so that plan's sub-task runs a FixedPointLoop, and its
   // PartitionedOutput runs in that sub-task's own pipeline, under the
   // producer id peers read.
-  auto plan = builder.newPlan()
-                  .fixedPoint(
-                      {std::make_shared<VectorStateDeclaration>(
-                          "outer",
-                          outerSchema,
-                          builder.newPlan().tableScan(outerSchema).planNode())},
-                      {builder.newPlan()
-                           .stateSource("outer", outerSchema)
-                           .hashJoin(
-                               {"key"},
-                               {"ikey"},
-                               innerFixedPoint,
-                               "",
-                               {"key", "val", "ival"})
-                           .project({"key", "val + ival AS val"})
-                           .partitionedOutput(
-                               {"key"},
-                               kNumWorkers,
-                               /*replicateNullsAndAny=*/false,
-                               moduloSpec)
-                           .planNode(),
-                       builder.newPlan()
-                           .exchange(outerSchema, "Presto")
-                           .singleAggregation({"key"}, {"sum(val)"})
-                           .project({"key", "a0 AS val"})
-                           .planNode()},
-                      ConvergenceConfig::converging(
-                          builder.newPlan()
-                              .stateSource("outer", outerSchema)
-                              .project({"val >= 6 AS converged"})
-                              .planNode(),
-                          100),
-                      /*outputStateEntry=*/"outer")
-                  .planNode();
+  auto plan =
+      builder.newPlan()
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "outer",
+                  outerSchema,
+                  builder.newPlan().tableScan(outerSchema).planNode())},
+              {builder.newPlan()
+                   .stateSource("outer", outerSchema)
+                   .hashJoin(
+                       "key = ikey", innerFixedPoint, {"key", "val", "ival"})
+                   .project({"key", "val + ival AS val"})
+                   .partitionedOutput(
+                       {"key"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       moduloSpec)
+                   .planNode(),
+               builder.newPlan()
+                   .exchange(outerSchema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val)"})
+                   .project({"key", "a0 AS val"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  builder.newPlan()
+                      .stateSource("outer", outerSchema)
+                      .project({"val >= 6 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"outer")
+          .planNode();
 
   // The inner loop yields 3 every outer round, so each worker goes 0 -> 3 -> 6
   // and stops on the second.
@@ -5875,40 +5847,37 @@ TEST_F(FixedPointTest, nestedInConsumerPlan) {
 
   // Outer loop: shuffles by key first, then adds the inner loop's result in
   // the consuming plan.
-  auto plan = builder.newPlan()
-                  .fixedPoint(
-                      {std::make_shared<VectorStateDeclaration>(
-                          "outer",
-                          outerSchema,
-                          builder.newPlan().tableScan(outerSchema).planNode())},
-                      {builder.newPlan()
-                           .stateSource("outer", outerSchema)
-                           .partitionedOutput(
-                               {"key"},
-                               kNumWorkers,
-                               /*replicateNullsAndAny=*/false,
-                               moduloSpec)
-                           .planNode(),
-                       builder.newPlan()
-                           .exchange(outerSchema, "Presto")
-                           .singleAggregation({"key"}, {"sum(val)"})
-                           .project({"key", "a0 AS val"})
-                           .hashJoin(
-                               {"key"},
-                               {"ikey"},
-                               innerFixedPoint,
-                               "",
-                               {"key", "val", "ival"})
-                           .project({"key", "val + ival AS val"})
-                           .planNode()},
-                      ConvergenceConfig::converging(
-                          builder.newPlan()
-                              .stateSource("outer", outerSchema)
-                              .project({"val >= 6 AS converged"})
-                              .planNode(),
-                          100),
-                      /*outputStateEntry=*/"outer")
-                  .planNode();
+  auto plan =
+      builder.newPlan()
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "outer",
+                  outerSchema,
+                  builder.newPlan().tableScan(outerSchema).planNode())},
+              {builder.newPlan()
+                   .stateSource("outer", outerSchema)
+                   .partitionedOutput(
+                       {"key"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       moduloSpec)
+                   .planNode(),
+               builder.newPlan()
+                   .exchange(outerSchema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val)"})
+                   .project({"key", "a0 AS val"})
+                   .hashJoin(
+                       "key = ikey", innerFixedPoint, {"key", "val", "ival"})
+                   .project({"key", "val + ival AS val"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  builder.newPlan()
+                      .stateSource("outer", outerSchema)
+                      .project({"val >= 6 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"outer")
+          .planNode();
 
   // The inner loop yields 3 every outer round, so each worker goes 0 -> 3 -> 6
   // and stops on the second.

@@ -362,10 +362,22 @@ class SharedDictionaryAlphabet {
     std::copy(entries.begin(), entries.end(), physicalOutput.begin());
   }
 
+  /// Reads the string entries selected by 'indices' into 'output', which must
+  /// have room for indices.size() values. Passes to 'addStringBuffer', which
+  /// must not be null, buffers that hold every non-empty entry it returns.
+  /// The entries stay valid while those buffers live, also after the alphabet
+  /// is gone, so a reader can keep them instead of copying them. The alphabet
+  /// must hold strings.
+  void readStrings(
+      std::span<const uint32_t> indices,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::string_view* output) const;
+
  private:
   SharedDictionaryAlphabet(
       std::string_view encoded,
       const Encoding::Options& options,
+      velox::BufferPtr encodedAlphabetBuffer,
       std::shared_ptr<const void> encodedAlphabetOwner,
       velox::memory::MemoryPool* pool);
 
@@ -459,14 +471,20 @@ class SharedDictionaryAlphabet {
 
   // Keeps borrowed encoded bytes alive when create() receives an owner.
   const std::shared_ptr<const void> encodedAlphabetOwner_;
+  // Holds the encoded bytes for entryView_, whose options point to it. The view
+  // passes it to the reads whose strings point into those bytes, which keeps
+  // the bytes alive after the alphabet is gone. Declared before entryView_ so
+  // that it outlives the view.
+  const velox::BufferPtr encodedAlphabetBuffer_;
   const std::string_view encodedAlphabet_;
   const DataType dataType_;
   const EncodingType encodingType_;
   uint32_t entryCount_{0};
-  // entryView_ and entries_ are mutually exclusive lookup modes. entryPayload_
-  // is used by decoded entry storage when variable-width values in entries_
-  // need owned payload bytes.
-  Buffer entryPayload_;
+
+  // entryView_ and entries_ are mutually exclusive lookup modes. entryBuffers_
+  // hold the bytes of the variable-width values in entries_, and readStrings()
+  // passes them so that those values can outlive the alphabet.
+  std::vector<velox::BufferPtr> entryBuffers_;
   // Entries decoded up front for encodings without a view.
   velox::BufferPtr entries_;
   // Reads entries straight from the encoded stream when the encoding supports

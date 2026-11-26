@@ -25,9 +25,17 @@ namespace facebook::velox::connector::hive {
 /// Sorting Writer object is used to write sorted data into a single file.
 class SortingWriter : public dwio::common::Writer {
  public:
+  /// The list of runtime stats reported by the sort writer when it dedupes
+  /// rows.
+  static constexpr const char* kSortingWriterDedupedRows =
+      "sortWriterDedupedRows";
+  static constexpr const char* kSortingWriterDedupeNanos =
+      "sortWriterDedupeNanos";
+
   SortingWriter(
       std::unique_ptr<dwio::common::Writer> writer,
       std::unique_ptr<exec::SortBuffer> sortBuffer,
+      std::vector<column_index_t> dedupeKeyChannels,
       vector_size_t maxOutputRowsConfig,
       uint64_t maxOutputBytesConfig,
       uint64_t outputTimeSliceLimitMs);
@@ -46,8 +54,12 @@ class SortingWriter : public dwio::common::Writer {
   /// available (e.g. for an empty file).
   std::unique_ptr<dwio::common::FileMetadata> close() override;
 
-  folly::F14FastMap<std::string, RuntimeMetric> runtimeStats() const override {
-    return outputWriter_->runtimeStats();
+  /// Returns the stats of the underlying writer plus the dedupe stats when
+  /// dedupe is enabled.
+  folly::F14FastMap<std::string, RuntimeMetric> runtimeStats() const override;
+
+  uint64_t numDuplicateRows() const override {
+    return dedupedRows_;
   }
 
   void abort() override;
@@ -84,14 +96,25 @@ class SortingWriter : public dwio::common::Writer {
 
   vector_size_t outputBatchRows();
 
+  // Keeps the first row of each run of equal keys as a dictionary over 'batch'.
+  // Returns 'batch' as is when there is no dedupe key or no duplicate row.
+  RowVectorPtr dedupe(const RowVectorPtr& batch);
+
   const std::unique_ptr<dwio::common::Writer> outputWriter_;
   const vector_size_t maxOutputRowsConfig_;
   const uint64_t maxOutputBytesConfig_;
   const uint64_t finishTimeSliceLimitMs_;
   memory::MemoryPool* const sortPool_;
   const bool canReclaim_;
+  // Leading sort columns that form the dedupe key. Empty disables the dedupe.
+  const std::vector<column_index_t> dedupeKeyChannels_;
 
   std::unique_ptr<exec::SortBuffer> sortBuffer_;
+
+  // Dedupe state: last key of the previous output batch and counters.
+  std::vector<VectorPtr> lastKeys_;
+  uint64_t dedupedRows_{0};
+  uint64_t dedupeNs_{0};
 };
 
 } // namespace facebook::velox::connector::hive

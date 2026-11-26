@@ -158,16 +158,15 @@ class GcsMultipleEndpointsTest : public testing::Test,
                           .endTableScan()
                           .capturePlanNodeId(scan1)
                           .planNode();
-    auto join =
-        builder.newPlan()
-            .startTableScan()
-            .tableName("hive_table1")
-            .outputType(rowType2)
-            .connectorId(std::string(connectorId2))
-            .endTableScan()
-            .capturePlanNodeId(scan2)
-            .hashJoin({"b0"}, {"a0"}, table1Scan, "", {"a0", "a1", "a2", "a3"})
-            .planNode();
+    auto join = builder.newPlan()
+                    .startTableScan()
+                    .tableName("hive_table1")
+                    .outputType(rowType2)
+                    .connectorId(std::string(connectorId2))
+                    .endTableScan()
+                    .capturePlanNodeId(scan2)
+                    .hashJoin("b0 = a0", table1Scan, {"a0", "a1", "a2", "a3"})
+                    .planNode();
 
     auto split1 = createSplit(
         table1WriteInfo, outputDirectory.data(), std::string(connectorId1));

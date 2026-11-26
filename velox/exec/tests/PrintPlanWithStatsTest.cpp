@@ -131,10 +131,8 @@ TEST_F(PrintPlanWithStatsTest, innerJoinWithTableScan) {
                 .tableScan(probeType)
                 .capturePlanNodeId(leftScanId)
                 .hashJoin(
-                    {"c0"},
-                    {"u_c0"},
+                    "c0 = u_c0",
                     buildSide,
-                    "",
                     {"c0", "c1", "u_c1"},
                     core::JoinType::kInner)
                 .project({"c0", "c1 + 1", "c1 + u_c1"})

@@ -217,9 +217,10 @@ std::optional<RowVectorPtr> TpchDataSource::next(
   // average 4 times more records than what is requested. Dividing by 4 so it
   // generates about the right amount of records. Note that the exact amount of
   // lineitems for an order is random (from 1 to 7), so this function may
-  // generate slightly more or fewer records than `size`.
+  // generate slightly more or fewer records than `size`. Each batch covers at
+  // least one order: an empty batch ends the split.
   if (isLineItem()) {
-    size /= 4;
+    size = std::max<uint64_t>(1, size / 4);
   }
 
   size_t maxRows = std::min(size, (splitEnd_ - splitOffset_));

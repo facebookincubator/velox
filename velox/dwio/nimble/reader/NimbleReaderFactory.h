@@ -36,7 +36,13 @@ std::unique_ptr<dwio::common::Reader> createBatchReader(
 /// `ReaderOptions::selectiveNimbleReaderEnabled()`.
 class NimbleReaderFactory : public dwio::common::ReaderFactory {
  public:
-  NimbleReaderFactory() : ReaderFactory(dwio::common::FileFormat::NIMBLE) {}
+  /// Passes 'tabletReaderCache' to the selective reader factory, which shares
+  /// tablets among the readers that load the cluster index. See
+  /// facebook::nimble::SelectiveNimbleReaderFactory.
+  explicit NimbleReaderFactory(
+      facebook::nimble::TabletReaderCache* tabletReaderCache = nullptr)
+      : ReaderFactory(dwio::common::FileFormat::NIMBLE),
+        selectiveFactory_{tabletReaderCache} {}
 
   std::unique_ptr<dwio::common::Reader> createReader(
       std::unique_ptr<dwio::common::BufferedInput>,
@@ -46,7 +52,10 @@ class NimbleReaderFactory : public dwio::common::ReaderFactory {
   facebook::nimble::SelectiveNimbleReaderFactory selectiveFactory_;
 };
 
-void registerNimbleReaderFactory();
+/// Registers a NimbleReaderFactory with 'tabletReaderCache'. Does nothing if a
+/// Nimble reader factory is already registered.
+void registerNimbleReaderFactory(
+    facebook::nimble::TabletReaderCache* tabletReaderCache = nullptr);
 
 void unregisterNimbleReaderFactory();
 

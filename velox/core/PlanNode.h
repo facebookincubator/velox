@@ -3414,6 +3414,16 @@ inline bool isProbeOnlyJoin(JoinType joinType) {
       isCountingJoin(joinType);
 }
 
+/// Returns true if a join of 'joinType' emits its output in the order of the
+/// probe (left) rows within each driver: the output of a probe row comes
+/// before the output of the next one. Holds for joins that emit no unmatched
+/// build rows. A hash join that spills does not keep this order; see
+/// https://github.com/facebookincubator/velox/issues/20613.
+inline bool isPreservingProbeOrder(JoinType joinType) {
+  return joinType == JoinType::kInner || joinType == JoinType::kLeft ||
+      isProbeOnlyJoin(joinType);
+}
+
 inline bool isNullAwareSupported(JoinType joinType) {
   return joinType == JoinType::kAnti ||
       joinType == JoinType::kLeftSemiProject ||
@@ -3566,22 +3576,6 @@ class AbstractJoinNode : public PlanNode {
 
   bool isCountingJoin() const {
     return core::isCountingJoin(joinType_);
-  }
-
-  bool isPreservingProbeOrder() const {
-    return isInnerJoin() || isLeftJoin() || isAntiJoin();
-  }
-
-  /// Indicates if this joinNode can drop duplicate rows with same join key.
-  /// For left semi and anti join, it is not necessary to store duplicate rows.
-  /// For counting joins, duplicates are folded into a per-key count.
-  bool canDropDuplicates() const {
-    // Left semi and anti join with no extra filter only needs to know whether
-    // there is a match. Hence, no need to store entries with duplicate keys.
-    // Counting joins always deduplicate and track counts.
-    return isCountingJoin() ||
-        (!filter() &&
-         (isLeftSemiFilterJoin() || isLeftSemiProjectJoin() || isAntiJoin()));
   }
 
   const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
@@ -4267,9 +4261,9 @@ bool isIndexLookupJoin(const core::PlanNode* planNode);
 ///
 /// Nested loop join (NLJ) supports both equal and non-equal joins.
 /// Expressions specified in joinCondition are evaluated on every combination
-/// of left/right tuple, to emit result. Results are emitted following the
-/// same input order of probe rows for inner and left joins, for each thread
-/// of execution.
+/// of left/right tuple, to emit result. Results follow the order of the probe
+/// rows for the join types isPreservingProbeOrder() accepts, for each thread of
+/// execution.
 ///
 /// To create Cartesian product of the left/right's output, use the
 /// constructor without `joinType` and `joinCondition` parameter.
@@ -4810,10 +4804,9 @@ using SpatialJoinNodePtr = std::shared_ptr<const SpatialJoinNode>;
 /// probe side, each streaming index is searched with the query rows it
 /// matches, and an index row is decoded once per probe batch.
 ///
-/// Unlike inner and left joins of AbstractJoinNode (see
-/// isPreservingProbeOrder()), the join does not preserve the order of the
-/// probe rows within an input batch: it outputs the results of one local index
-/// at a time.
+/// Unlike the joins isPreservingProbeOrder() accepts, the join does not
+/// preserve the order of the probe rows within an input batch: it outputs the
+/// results of one local index at a time.
 class VectorSearchJoinNode : public PlanNode {
  public:
   /// The side of the join with the index rows: the probe side, the left, or

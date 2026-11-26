@@ -69,6 +69,10 @@ void HiveConnectorTestBase::TearDown() {
   dwrf::unregisterDwrfWriterFactory();
   connector::ConnectorRegistry::global().erase(kHiveConnectorId);
   text::unregisterTextReaderFactory();
+  // Injection hooks capture test-local state, so they must not outlive the
+  // test that set them.
+  tests::utils::faultyFileSystem()->clearFileFaultInjections();
+  tests::utils::faultyFileSystem()->clearFileSystemInjections();
   OperatorTestBase::TearDown();
 }
 

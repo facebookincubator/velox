@@ -175,6 +175,22 @@ TEST_F(LeastTest, timestamp) {
       Timestamp(581, 1651));
 }
 
+TEST_F(LeastTest, timestampUtc) {
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1569, 25), Timestamp(581, 1651)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(4859, 482), Timestamp(4859, 482)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(581, 1651), Timestamp(1569, 25)}, TIMESTAMP_UTC()),
+  });
+  auto result = evaluate("least(c0, c1, c2)", data);
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<Timestamp>(
+          {Timestamp(581, 1651), Timestamp(581, 1651)}, TIMESTAMP_UTC()),
+      result);
+}
+
 TEST_F(LeastTest, date) {
   EXPECT_EQ(least<int32_t>(100, 1000, 10000, DATE()), 100);
 }
@@ -342,6 +358,22 @@ TEST_F(GreatestTest, timestamp) {
       greatest<Timestamp>(
           Timestamp(1569, 25), Timestamp(4859, 482), Timestamp(581, 1651)),
       Timestamp(4859, 482));
+}
+
+TEST_F(GreatestTest, timestampUtc) {
+  auto data = makeRowVector({
+      makeFlatVector<Timestamp>(
+          {Timestamp(1569, 25), Timestamp(581, 1651)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(4859, 482), Timestamp(4859, 482)}, TIMESTAMP_UTC()),
+      makeFlatVector<Timestamp>(
+          {Timestamp(581, 1651), Timestamp(1569, 25)}, TIMESTAMP_UTC()),
+  });
+  auto result = evaluate("greatest(c0, c1, c2)", data);
+  facebook::velox::test::assertEqualVectors(
+      makeFlatVector<Timestamp>(
+          {Timestamp(4859, 482), Timestamp(4859, 482)}, TIMESTAMP_UTC()),
+      result);
 }
 
 TEST_F(GreatestTest, date) {

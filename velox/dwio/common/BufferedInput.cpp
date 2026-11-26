@@ -27,6 +27,43 @@ using ::facebook::velox::common::Region;
 
 namespace facebook::velox::dwio::common {
 
+namespace detail {
+FileIoContext withIoStats(
+    FileIoContext fileIoContext,
+    velox::IoStats* ioStats) {
+  VELOX_CHECK_NULL(
+      fileIoContext.ioStats,
+      "FileIoContext ioStats must be null: the input takes ioStats as a parameter");
+  fileIoContext.ioStats = ioStats;
+  return fileIoContext;
+}
+} // namespace detail
+
+namespace {
+memory::MemoryPool& checkedPool(const FileIoContext& fileIoContext) {
+  VELOX_CHECK_NOT_NULL(
+      fileIoContext.pool, "BufferedInput requires a FileIoContext pool");
+  return *fileIoContext.pool;
+}
+} // namespace
+
+BufferedInput::BufferedInput(
+    std::shared_ptr<ReadFile> readFile,
+    FileIoContext fileIoContext,
+    const MetricsLogPtr& metricsLog,
+    IoStatistics* stats,
+    uint64_t maxMergeDistance,
+    std::optional<bool> wsVRLoad)
+    : BufferedInput(
+          std::make_shared<ReadFileInputStream>(
+              std::move(readFile),
+              metricsLog,
+              stats,
+              fileIoContext),
+          checkedPool(fileIoContext),
+          maxMergeDistance,
+          wsVRLoad) {}
+
 CachedRegion::CachedRegion(cache::CachePin pin) : pin_(std::move(pin)) {
   VELOX_CHECK(!pin_.empty(), "CachedRegion requires a non-empty cache pin");
   auto* entry = pin_.checkedEntry();

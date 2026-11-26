@@ -712,10 +712,8 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
   auto plan = builder.newPlan()
                   .values(probe)
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0 AND t1 > u1",
                       builder.newPlan().values(build).planNode(),
-                      "t1 > u1",
                       {"t0", "t1", "u2", "t2"},
                       core::JoinType::kInner)
                   .planNode();
@@ -725,10 +723,8 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
   plan = builder.newPlan()
              .values(probe)
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0 AND t3 = ARRAY[1,2,3]",
                  builder.newPlan().values(build).planNode(),
-                 "t3 = ARRAY[1,2,3]",
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kInner)
              .planNode();
@@ -738,10 +734,8 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
   plan = builder.newPlan()
              .values(probe)
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0",
                  builder.newPlan().values(build).planNode(),
-                 "", // no filter
                  {"t0", "t1", "u2", "t2"},
                  core::JoinType::kLeft)
              .planNode();
@@ -752,10 +746,8 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
   plan = builder.newPlan()
              .values(probe)
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0",
                  builder.newPlan().values(build).planNode(),
-                 "",
                  {"t0", "t1"},
                  core::JoinType::kAnti,
                  /*nullAware=*/false,
@@ -768,10 +760,8 @@ TEST_F(PlanNodeSerdeTest, hashJoin) {
   plan = builder.newPlan()
              .values(probe)
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0",
                  builder.newPlan().values(build).planNode(),
-                 "",
                  {"u1", "u2"},
                  core::JoinType::kRightAnti)
              .planNode();
@@ -1272,13 +1262,11 @@ TEST_F(PlanNodeSerdeTest, countingJoin) {
     auto plan = builder.newPlan()
                     .values(data_)
                     .hashJoin(
-                        {"c0"},
-                        {"u_c0"},
+                        "c0 = u_c0",
                         builder.newPlan()
                             .values(data_)
                             .project({"c0 as u_c0"})
                             .planNode(),
-                        "",
                         {"c0", "c1"},
                         joinType)
                     .planNode();

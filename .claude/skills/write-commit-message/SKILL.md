@@ -79,6 +79,7 @@ The per-pattern rules below all derive from this principle. If a draft passes th
      ```
 
      Short fragments (a single column name, a flag, a 2-3-word error name) stay inline.
+   - Use backticks only where the text would misread without them: an identifier that is also an English word (`required`, `filter`), or an expression whose operators blend into the sentence. Function names, file paths and examples set apart in a list read fine without them.
    - When in doubt, read the paragraph aloud. If you pause mid-sentence to decode it, split or simplify it.
 
 4. **Self-check before showing** — Walk every item; do not skip any.
@@ -87,7 +88,7 @@ The per-pattern rules below all derive from this principle. If a draft passes th
    - [ ] Para 1 has a concrete anchor (example, error message, before/after).
    - [ ] Mechanism is one concept, not a diff retrace with sibling-function names.
    - [ ] No reasoning journey (alternatives considered, sibling reused, layered fixes).
-   - [ ] Code symbols in plain backticks; never `` \`escaped\` ``.
+   - [ ] Backticks only where the text would misread without them; plain, never `` \`escaped\` ``.
    - [ ] Each paragraph is ONE long line. No hard wrap at 72/80 columns. Bullet lists in the test plan are the exception.
    - [ ] No "tests pass" / "N tests pass" / "CI green".
    - [ ] Every factual claim verified against the diff, not recalled.

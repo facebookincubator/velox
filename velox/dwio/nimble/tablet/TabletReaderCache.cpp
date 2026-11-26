@@ -20,6 +20,7 @@
 #include <folly/Singleton.h>
 #include <folly/Synchronized.h>
 #include <glog/logging.h>
+#include <atomic>
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -167,12 +168,16 @@ TabletReaderCache::Generator TabletReaderCache::createGenerator(
     const Options& options) {
   checkOptions(options);
 
+  // Pool names must be unique in the memory manager, so the shard pools of
+  // each cache carry the cache's own number.
+  static std::atomic_uint64_t nextCacheId{0};
+  const auto cacheId = nextCacheId.fetch_add(1);
   std::vector<std::shared_ptr<velox::memory::MemoryPool>> pools;
   pools.reserve(options.numShards);
   for (uint32_t i = 0; i < options.numShards; ++i) {
     pools.push_back(
         velox::memory::memoryManager()->addLeafPool(
-            fmt::format("tablet_reader_cache_{}", i)));
+            fmt::format("tablet_reader_cache_{}_{}", cacheId, i)));
   }
   return Generator(
       std::move(pools), options.executor, options.onCreate, options.onRelease);

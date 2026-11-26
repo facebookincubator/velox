@@ -15,11 +15,14 @@
  */
 
 #include "velox/connectors/common/BufferedInputBuilder.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/dwio/common/CachedBufferedInput.h"
+#include "velox/dwio/common/DirectBufferedInput.h"
 
 namespace facebook::velox::connector {
 
-class DefaultBufferInputBuilder : public BufferedInputBuilder {
+namespace {
+
+class DefaultBufferedInputBuilder : public BufferedInputBuilder {
  public:
   std::unique_ptr<dwio::common::BufferedInput> create(
       const FileHandle& fileHandle,
@@ -29,7 +32,7 @@ class DefaultBufferInputBuilder : public BufferedInputBuilder {
       std::shared_ptr<IoStats> ioStats,
       folly::Executor* executor,
       const folly::F14FastMap<std::string, std::string>& fileReadOps) override {
-    return createBufferedInput(
+    return createDefault(
         fileHandle,
         readerOpts,
         connectorQueryCtx,
@@ -40,8 +43,68 @@ class DefaultBufferInputBuilder : public BufferedInputBuilder {
   }
 };
 
+} // namespace
+
+// static
+std::unique_ptr<dwio::common::BufferedInput>
+BufferedInputBuilder::createDefault(
+    const FileHandle& fileHandle,
+    const dwio::common::ReaderOptions& readerOpts,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    std::shared_ptr<io::IoStatistics> ioStatistics,
+    std::shared_ptr<IoStats> ioStats,
+    folly::Executor* executor,
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  if (connectorQueryCtx->cache()) {
+    return std::make_unique<dwio::common::CachedBufferedInput>(
+        fileHandle.file,
+        dwio::common::MetricsLog::voidLog(),
+        fileHandle.uuid,
+        connectorQueryCtx->cache(),
+        Connector::getTracker(
+            connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
+        fileHandle.groupId,
+        ioStatistics,
+        std::move(ioStats),
+        executor,
+        readerOpts,
+        FileIoContext{
+            .fileOpts = fileReadOps,
+            .cacheable = readerOpts.cacheable(),
+            .pool = &readerOpts.memoryPool(),
+        });
+  }
+  if (readerOpts.fileFormat() == dwio::common::FileFormat::NIMBLE &&
+      !readerOpts.nimbleDirectBufferedInputEnabled()) {
+    return std::make_unique<dwio::common::BufferedInput>(
+        fileHandle.file,
+        FileIoContext{
+            .ioStats = ioStats.get(),
+            .fileOpts = fileReadOps,
+            .pool = &readerOpts.memoryPool(),
+        },
+        dwio::common::MetricsLog::voidLog(),
+        ioStatistics.get());
+  }
+  return std::make_unique<dwio::common::DirectBufferedInput>(
+      fileHandle.file,
+      dwio::common::MetricsLog::voidLog(),
+      fileHandle.uuid,
+      Connector::getTracker(
+          connectorQueryCtx->scanId(), readerOpts.loadQuantum()),
+      fileHandle.groupId,
+      std::move(ioStatistics),
+      std::move(ioStats),
+      executor,
+      readerOpts,
+      FileIoContext{
+          .fileOpts = fileReadOps,
+          .pool = &readerOpts.memoryPool(),
+      });
+}
+
 // static
 std::shared_ptr<BufferedInputBuilder> BufferedInputBuilder::builder_ =
-    std::make_shared<DefaultBufferInputBuilder>();
+    std::make_shared<DefaultBufferedInputBuilder>();
 
 } // namespace facebook::velox::connector

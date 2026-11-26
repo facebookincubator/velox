@@ -117,6 +117,12 @@ class HiveConnectorTestBase : public OperatorTestBase {
       int64_t splitWeight = 0,
       bool cacheable = true);
 
+  /// Makes a split that covers the whole of 'file'.
+  static std::shared_ptr<connector::hive::HiveConnectorSplit>
+  makeHiveConnectorSplit(const std::shared_ptr<TempFilePath>& file) {
+    return makeHiveConnectorSplit(file->getPath());
+  }
+
   static std::shared_ptr<connector::hive::HiveConnectorSplit>
   makeHiveConnectorSplit(
       const std::string& filePath,

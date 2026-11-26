@@ -591,11 +591,11 @@ class FormatStringExpr final : public exec::SpecialForm {
     return true;
   }
 
+ private:
   bool evaluatesArgumentsOnNonIncreasingSelection() const override {
     return true;
   }
 
- private:
   void computePropagatesNulls() override {
     propagatesNulls_ = false;
   }

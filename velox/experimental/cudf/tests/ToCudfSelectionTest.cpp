@@ -370,14 +370,12 @@ DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesBuildSideTypeForJoin) {
       builder.newPlan()
           .values(probe)
           .hashJoin(
-              {"p_key"},
-              {"b_key"},
+              "p_key = b_key",
               builder.newPlan()
                   .values(build)
                   // Falls back to the CPU, so CudfFromVelox feeds HashBuild.
                   .project({"date_add(unit, amount, event_date) AS d", "b_key"})
                   .planNode(),
-              "",
               {"p_name", "d"})
           .planNode();
 

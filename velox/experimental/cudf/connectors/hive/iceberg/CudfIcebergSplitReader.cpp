@@ -649,7 +649,6 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
             hiveConfig_,
             ioStatistics_,
             ioStats_,
-            runtimeStats,
             icebergSplit_->connectorId));
   }
 

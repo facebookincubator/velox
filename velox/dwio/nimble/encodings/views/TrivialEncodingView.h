@@ -19,6 +19,9 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <span>
+#include <string_view>
 #include <type_traits>
 
 #include "velox/common/base/BitUtil.h"
@@ -183,6 +186,25 @@ class TrivialEncodingView<std::string_view> final
   }
 
  private:
+  // Passes the buffer that holds the payload, which the strings point into:
+  // the payload that the view decompressed, or else its input string buffer.
+  // Copies the strings when the view has neither. Passes nothing for an empty
+  // payload, which holds only empty strings.
+  void addStrings(
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::span<std::string_view> values) const final {
+    if (blobSize_ == 0) {
+      return;
+    }
+    if (this->decompressedPayload_ == nullptr) {
+      this->addInputStrings(addStringBuffer, values);
+      return;
+    }
+    if (!values.empty()) {
+      addStringBuffer(this->decompressedPayload_);
+    }
+  }
+
   // Reads the length of every row once and keeps the offset of every row, so
   // that reads need no stream access.
   void initializeCached(std::string_view encodedLengths) {

@@ -121,7 +121,8 @@ class DirectBufferedInputTest : public testing::Test {
         ioStatistics_,
         ioStats,
         executor_.get(),
-        *opts_);
+        *opts_,
+        FileIoContext{.pool = &opts_->memoryPool()});
   }
 
   // Reads and checks the result of reading ''regions' and checks that this
@@ -289,7 +290,8 @@ TEST_F(DirectBufferedInputTest, cancelledLocalLoadFallsBackToSyncRead) {
       ioStatistics_,
       ioStats_,
       &executor,
-      *opts_);
+      *opts_,
+      FileIoContext{.pool = &opts_->memoryPool()});
 
   auto first = input->enqueue({0, kRegionSize}, nullptr);
   auto second = input->enqueue({kRegionSize, kRegionSize}, nullptr);

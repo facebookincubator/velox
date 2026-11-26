@@ -16,7 +16,57 @@
 
 #include "velox/connectors/common/FileTableHandle.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace facebook::velox::connector {
+
+namespace {
+
+void checkLowerCase(const std::string& name) {
+  VELOX_USER_CHECK(
+      std::none_of(
+          name.begin(),
+          name.end(),
+          [](unsigned char c) { return std::isupper(c); }),
+      "Column name must be lowercase when file column names are read as lowercase: {}",
+      name);
+}
+
+void checkLowerCase(const Type& type) {
+  if (type.isRow()) {
+    for (const auto& name : type.asRow().names()) {
+      checkLowerCase(name);
+    }
+  }
+  for (auto i = 0; i < type.size(); ++i) {
+    checkLowerCase(*type.childAt(i));
+  }
+}
+
+void checkLowerCase(const core::ITypedExpr& expr) {
+  checkLowerCase(*expr.type());
+  for (const auto& input : expr.inputs()) {
+    checkLowerCase(*input);
+  }
+}
+
+} // namespace
+
+void FileTableHandle::checkColumnNamesLowerCase(
+    const RowType& outputType) const {
+  checkLowerCase(outputType);
+  for (const auto& [subfield, filter] : subfieldFilters()) {
+    for (const auto& element : subfield.path()) {
+      if (const auto* field = element->as<common::Subfield::NestedField>()) {
+        checkLowerCase(field->name());
+      }
+    }
+  }
+  if (remainingFilter() != nullptr) {
+    checkLowerCase(*remainingFilter());
+  }
+}
 
 FileTableHandle::FileTableHandle(
     std::string connectorId,
