@@ -363,7 +363,7 @@ class HashBuild final : public Operator {
 
   // Rows allocated by RowContainer::newRows() for the selected rows of one
   // input batch. Kept as a member to reuse its capacity across batches.
-  std::vector<char*> newRowsBuffer_;
+  std::vector<char*> newRows_;
 
   // True if this is a build side of an anti or left semi project join and has
   // at least one entry with null join keys.

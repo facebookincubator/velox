@@ -400,11 +400,11 @@ class RowContainer {
     return layout_.types;
   }
 
-  /// Allocates 'numRows' rows into 'rows', equivalent to calling newRow()
-  /// 'numRows' times. When there are no free rows to reuse, allocates several
+  /// Allocates rows.size() rows into 'rows', equivalent to calling newRow()
+  /// that many times. When there are no free rows to reuse, allocates several
   /// rows at a time within each allocation run and initializes them by copying
-  /// a prototype row.
-  void newRows(int32_t numRows, char** rows);
+  /// an initialized row.
+  void newRows(std::span<char*> rows);
 
   int32_t rawDependentSize() const {
     return layout_.rawDependentSize;
@@ -1305,11 +1305,17 @@ class RowContainer {
   // Frees the out-of-line data of the variable-width values of 'rows'.
   void freeVariableWidthValues(RowSpan rows);
 
-  // Allocates 'numRows' contiguous rows from the current allocation run, counts
-  // them and registers them in 'rowPointers_' if used. Returns the first row.
-  // The rows are not initialized. 'numRows' must fit in the current run unless
-  // it is 1.
-  char* allocateRows(int32_t numRows);
+  // Allocates rows.size() contiguous rows from the current allocation run,
+  // counts them, registers them in 'rowPointers_' if used and writes their
+  // addresses to 'rows'. The rows are not initialized. They must fit in the
+  // current run unless there is only one.
+  void allocateRows(std::span<char*> rows);
+
+  // The bytes a row takes from the allocation runs: the fixed-size part and the
+  // normalized key.
+  uint64_t allocatedRowSize() const {
+    return layout_.fixedRowSize + normalizedKeySize_;
+  }
 
   // Frees the memory the accumulators of 'rows' hold outside the rows.
   void freeAggregates(std::span<char*> rows);
@@ -1345,8 +1351,9 @@ class RowContainer {
   // The count of entries that have an extra normalized_key_t before the
   // start.
   int64_t numRowsWithNormalizedKey_{0};
-  // Prototype of an initialized fixed-size row, copied by newRows().
-  std::vector<char> newRowProto_;
+  // The fixed-size part of a row as initializeRow() leaves it, copied by
+  // newRows().
+  std::vector<char> initializedRow_;
   // Extra bytes to reserve before each added row for a normalized key. Set to
   // 0 after deciding not to use normalized keys.
   int normalizedKeySize_;
