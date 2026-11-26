@@ -299,6 +299,29 @@ void fixedWidthScan(
       !std::is_same_v<TFilter, velox::common::AlwaysTrue>;
   constexpr bool hasHook = !std::is_same_v<THook, NoHook>;
   auto rawValues = reinterpret_cast<T*>(voidValues);
+  // Gathers 'width' 16-bit values at 'batchRows' from a stream buffer that
+  // starts at row 'rowOffset'. The SIMD gather reads 2 bytes past each value,
+  // so a batch that holds the buffer's last value is read one value at a time:
+  // the stream buffer has no padding. Generic, so that only 16-bit T, whose
+  // gather takes a count, compiles the body.
+  auto gatherShorts = [&](const auto* buffer,
+                          int32_t rowOffset,
+                          const int32_t* batchRows,
+                          int32_t width) {
+    const int64_t numBufferValues =
+        (bufferEnd - reinterpret_cast<const char*>(buffer)) / sizeof(T);
+    if (batchRows[width - 1] - rowOffset + 1 < numBufferValues) {
+      return simd::gather(buffer - rowOffset, batchRows, width);
+    }
+    T lastValues[kWidth]{};
+    for (auto i = 0; i < width; ++i) {
+      std::memcpy(
+          &lastValues[i],
+          fixedWidthValueBytes<T>(buffer, batchRows[i], rowOffset),
+          sizeof(T));
+    }
+    return xsimd::load_unaligned(lastValues);
+  };
   loopOverBuffers<T>(
       rows,
       0,
@@ -391,7 +414,7 @@ void fixedWidthScan(
                 xsimd::batch<T> values;
                 if constexpr (kHasSecondIndexBatch) {
                   values =
-                      simd::gather(buffer - rowOffset, rows + rowIndex, kWidth);
+                      gatherShorts(buffer, rowOffset, rows + rowIndex, kWidth);
                 } else {
                   values = simd::gather(buffer - rowOffset, indices);
                 }
@@ -446,7 +469,7 @@ void fixedWidthScan(
                 int width = std::min<int32_t>(kWidth, numRows - step);
                 if constexpr (kHasSecondIndexBatch) {
                   values =
-                      simd::gather(buffer - rowOffset, rows + rowIndex, width);
+                      gatherShorts(buffer, rowOffset, rows + rowIndex, width);
                 } else {
                   auto indices = simd::loadGatherIndices<T>(rows + rowIndex);
                   if (width < kWidth) {
