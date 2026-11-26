@@ -31,78 +31,66 @@ void NimbleData::loadLazyInputStreams() {
   }
 }
 
+namespace {
+
+// Returns the descriptor of the stream that holds the nulls of a column of
+// 'type': the nulls stream of a row or flat map, or the lengths or offsets
+// stream of the other kinds. Returns nullptr for the kinds that decode their
+// nulls with their values.
+const StreamDescriptor* nullsDescriptor(const Type& type) {
+  switch (type.kind()) {
+    case Kind::Scalar:
+      // Nulls in scalar types will be decoded along with values.
+      return nullptr;
+    case Kind::TimestampMicroNano:
+      // Nulls are decoded along with micros values (nullable stream).
+      return nullptr;
+    case Kind::Row:
+      return &type.asRow().nullsDescriptor();
+    case Kind::Array:
+      return &type.asArray().lengthsDescriptor();
+    case Kind::Map:
+      return &type.asMap().lengthsDescriptor();
+    case Kind::ArrayWithOffsets:
+      return &type.asArrayWithOffsets().offsetsDescriptor();
+    case Kind::SlidingWindowMap:
+      return &type.asSlidingWindowMap().offsetsDescriptor();
+    case Kind::FlatMap:
+      return &type.asFlatMap().nullsDescriptor();
+    default:
+      NIMBLE_UNSUPPORTED("{}", toString(type.kind()));
+  }
+}
+
+} // namespace
+
 NimbleData::NimbleData(
     const std::shared_ptr<const Type>& nimbleType,
     StripeStreams& streams,
     memory::MemoryPool& memoryPool,
     ChunkedDecoder* inMapDecoder,
     const EncodingFactory& encodingFactory,
-    bool nimblePreserveDictionaryEncoding,
+    bool preserveDictionaryEncoding,
     bool lazyColumnIo,
     velox::dwio::common::DecodingStats* decodingStats,
     bool dictionaryAwareReads,
     bool scanFastPath)
     : nimbleType_(nimbleType),
+      nullsDescriptor_(nullsDescriptor(*nimbleType)),
       streams_(&streams),
       pool_(&memoryPool),
       inMapDecoder_(inMapDecoder),
       encodingFactory_(&encodingFactory),
       lazyColumnIo_(lazyColumnIo),
+      preserveDictionaryEncoding_(preserveDictionaryEncoding),
       decodingStats_(decodingStats),
       dictionaryAwareReads_(dictionaryAwareReads),
       scanFastPath_(scanFastPath) {
-  switch (nimbleType->kind()) {
-    case Kind::Scalar:
-      // Nulls in scalar types will be decoded along with values.
-      break;
-    case Kind::TimestampMicroNano:
-      // Nulls are decoded along with micros values (nullable stream).
-      break;
-    case Kind::Row: {
-      auto& rowType = nimbleType->asRow();
-      nullsDecoder_ = makeDecoder(
-          rowType.nullsDescriptor(), /*decodeValuesWithNulls=*/false);
-      break;
-    }
-    case Kind::Array: {
-      auto& arrayType = nimbleType->asArray();
-      nullsDecoder_ = makeDecoder(
-          arrayType.lengthsDescriptor(), /*decodeValuesWithNulls=*/true);
-      break;
-    }
-    case Kind::Map: {
-      auto& mapType = nimbleType->asMap();
-      nullsDecoder_ = makeDecoder(
-          mapType.lengthsDescriptor(), /*decodeValuesWithNulls=*/true);
-      break;
-    }
-    case Kind::ArrayWithOffsets: {
-      auto& arrayWithOffsetsType = nimbleType->asArrayWithOffsets();
-      nullsDecoder_ = makeDecoder(
-          arrayWithOffsetsType.offsetsDescriptor(),
-          /*decodeValuesWithNulls=*/true);
-      break;
-    }
-    case Kind::SlidingWindowMap: {
-      auto& slidingWindowMapType = nimbleType->asSlidingWindowMap();
-      nullsDecoder_ = makeDecoder(
-          slidingWindowMapType.offsetsDescriptor(),
-          /*decodeValuesWithNulls=*/true);
-      break;
-    }
-    case Kind::FlatMap: {
-      auto& flatMapType = nimbleType->asFlatMap();
-      nullsDecoder_ = makeDecoder(
-          flatMapType.nullsDescriptor(), /*decodeValuesWithNulls=*/false);
-      break;
-    }
-    default:
-      NIMBLE_UNSUPPORTED("{}", toString(nimbleType->kind()));
-  }
+  nullsDecoder_ = makeNullsDecoder();
+
   // Nimble encodings hand out StringViews into decoder-owned buffers, which the
   // reader keeps alive via setStringBuffers, so values are never copied.
   stringDecoderZeroCopy_ = true;
-  nimblePreserveDictionaryEncoding_ = nimblePreserveDictionaryEncoding;
 }
 
 void NimbleData::setNullsOnlyDecoder(ChunkedDecoder* decoder) {
@@ -212,6 +200,57 @@ ChunkedDecoder NimbleData::makeScalarDecoder() {
       streams_->dictionaryAlphabetLoader(streamId),
       dictionaryAwareReads_,
       scanFastPath_);
+}
+
+void NimbleData::rebindNullsDecoder() {
+  if (nullsDecoder_ == nullptr) {
+    // This column has no such stream, or the earlier stripe lacked it.
+    nullsDecoder_ = makeNullsDecoder();
+    return;
+  }
+  if (!rebindDecoder(*nullsDecoder_, nullsDescriptor_->offset())) {
+    // The current stripe lacks the stream.
+    nullsDecoder_.reset();
+  }
+}
+
+void NimbleData::unbindNullsDecoder() {
+  if (nullsDecoder_ != nullptr) {
+    nullsDecoder_->unbindStream();
+  }
+}
+
+bool NimbleData::rebindScalarDecoder(ChunkedDecoder& decoder) {
+  return rebindDecoder(
+      decoder, nimbleType_->asScalar().scalarDescriptor().offset());
+}
+
+std::unique_ptr<ChunkedDecoder> NimbleData::makeNullsDecoder() {
+  if (nullsDescriptor_ == nullptr) {
+    return nullptr;
+  }
+
+  // Rows and flat maps decode only their nulls. The other kinds decode their
+  // lengths or offsets with their nulls.
+  const auto kind = nimbleType_->kind();
+  return makeDecoder(
+      *nullsDescriptor_,
+      /*decodeValuesWithNulls=*/kind != Kind::Row && kind != Kind::FlatMap);
+}
+
+bool NimbleData::rebindDecoder(ChunkedDecoder& decoder, uint32_t streamId) {
+  auto input = streams_->enqueue(static_cast<int>(streamId), lazyColumnIo_);
+
+  // The current stripe has no data in the stream, for example the elements
+  // stream of an array column whose arrays in that stripe are all empty.
+  if (input == nullptr) {
+    return false;
+  }
+  decoder.rebindStream(
+      std::move(input),
+      streams_->streamIndex(static_cast<int>(streamId)),
+      streams_->dictionaryAlphabetLoader(streamId));
+  return true;
 }
 
 ChunkedDecoder NimbleData::makeMicrosDecoder() {

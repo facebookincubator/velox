@@ -59,4 +59,18 @@ bool IntegerColumnReader::estimateMaterializedSize(
   return true;
 }
 
+bool IntegerColumnReader::rebind(dwio::common::FormatParams& /*params*/) {
+  // A scalar column decodes its nulls with its values, so 'decoder_' is its
+  // only decoder.
+  if (!formatData().as<NimbleData>().rebindScalarDecoder(decoder_)) {
+    return false;
+  }
+  resetReadState();
+  return true;
+}
+
+void IntegerColumnReader::unbind() {
+  decoder_.unbindStream();
+}
+
 } // namespace facebook::nimble

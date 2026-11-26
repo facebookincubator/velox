@@ -27,6 +27,7 @@
 namespace facebook::nimble {
 
 class ChunkedDecoder;
+class FlatMapKeyNodePool;
 
 class NimbleData : public velox::dwio::common::FormatData {
  public:
@@ -36,7 +37,7 @@ class NimbleData : public velox::dwio::common::FormatData {
       velox::memory::MemoryPool& memoryPool,
       ChunkedDecoder* inMapDecoder,
       const EncodingFactory& encodingFactory,
-      bool nimblePreserveDictionaryEncoding = false,
+      bool preserveDictionaryEncoding = false,
       bool lazyColumnIo = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
       bool dictionaryAwareReads = false,
@@ -82,6 +83,35 @@ class NimbleData : public velox::dwio::common::FormatData {
 
   ChunkedDecoder makeScalarDecoder();
 
+  /// Rebinds the decoder that this column owns for its nulls, lengths or
+  /// offsets stream to the stripe that its StripeStreams now reads. Makes the
+  /// decoder if only the new stripe has the stream, and drops it if only the
+  /// earlier stripe had it, as a column made for the new stripe would. Scalar
+  /// columns decode their nulls with their values and own no such decoder. The
+  /// columns of a reader tree share one StripeStreams. The caller moves it to
+  /// the new stripe once for all of them with StripeStreams::setStripe()
+  /// before this call, and loads the streams enqueued with
+  /// StripeStreams::load() after it (see rebindColumnReader()).
+  void rebindNullsDecoder();
+
+  /// Drops the stream of the decoder that rebindNullsDecoder() rebinds, and
+  /// keeps the decoder and its buffers for a later stripe (see
+  /// SelectiveColumnReader::unbind()).
+  void unbindNullsDecoder();
+
+  /// Points 'decoder', which makeScalarDecoder() made for an earlier stripe, at
+  /// this column's scalar stream in the current stripe. Call it between
+  /// StripeStreams::setStripe() and StripeStreams::load(), like
+  /// rebindNullsDecoder(). Returns false, having enqueued no stream, if the
+  /// current stripe has no such stream.
+  bool rebindScalarDecoder(ChunkedDecoder& decoder);
+
+  /// Returns the StripeStreams that this column reads its streams from, which
+  /// the columns of a reader tree share.
+  const StripeStreams& streams() const {
+    return *streams_;
+  }
+
   /// Enables nulls-only reads through 'decoder', which decodes this scalar
   /// column's value stream. Takes effect only when:
   ///
@@ -122,7 +152,7 @@ class NimbleData : public velox::dwio::common::FormatData {
   std::unique_ptr<ChunkedDecoder> makeLengthDecoder();
 
   bool nimblePreserveDictionaryEncoding() const {
-    return nimblePreserveDictionaryEncoding_;
+    return preserveDictionaryEncoding_;
   }
 
   /// Loads the deferred lazy clone of this column's streams. Called from the
@@ -136,23 +166,39 @@ class NimbleData : public velox::dwio::common::FormatData {
       const StreamDescriptor& descriptor,
       bool decodeValuesWithNulls);
 
+  // Makes the decoder of the stream of 'nullsDescriptor_' in the current
+  // stripe. Returns nullptr if this column has no such stream, or the current
+  // stripe lacks it.
+  std::unique_ptr<ChunkedDecoder> makeNullsDecoder();
+
+  // Points 'decoder' at stream 'streamId' of the current stripe. Returns false
+  // if the current stripe has no such stream.
+  bool rebindDecoder(ChunkedDecoder& decoder, uint32_t streamId);
+
   const std::shared_ptr<const Type> nimbleType_;
+
+  // Descriptor of the stream that 'nullsDecoder_' decodes: the nulls of a row
+  // or flat map, or the lengths or offsets, with their nulls, of the other
+  // kinds. Null for the kinds that decode their nulls with their values.
+  const StreamDescriptor* const nullsDescriptor_;
+
   StripeStreams* const streams_;
   velox::memory::MemoryPool* const pool_;
   ChunkedDecoder* const inMapDecoder_;
-  // Decoder of a scalar column's value stream (which holds its nulls), owned by
-  // the column reader. Null when nulls-only reads are disabled.
-  ChunkedDecoder* nullsOnlyDecoder_{nullptr};
-  std::unique_ptr<ChunkedDecoder> nullsDecoder_;
-  velox::BufferPtr inMap_;
   const EncodingFactory* const encodingFactory_;
-  bool nimblePreserveDictionaryEncoding_{false};
-  bool lazyColumnIo_{false};
+  const bool lazyColumnIo_{false};
+  const bool preserveDictionaryEncoding_{false};
   // Per-column decoding statistics. May be nullptr if column stats collection
   // is disabled.
   velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
   const bool dictionaryAwareReads_{false};
   const bool scanFastPath_{false};
+
+  // Decoder of a scalar column's value stream (which holds its nulls), owned by
+  // the column reader. Null when nulls-only reads are disabled.
+  ChunkedDecoder* nullsOnlyDecoder_{nullptr};
+  std::unique_ptr<ChunkedDecoder> nullsDecoder_;
+  velox::BufferPtr inMap_;
 };
 
 class NimbleParams : public velox::dwio::common::FormatParams {
@@ -169,7 +215,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
       const folly::F14FastSet<std::string>* lazyIoColumns = nullptr,
       bool lazyColumnIo = false,
       bool dictionaryAwareReads = false,
-      bool scanFastPath = false)
+      bool scanFastPath = false,
+      FlatMapKeyNodePool* flatMapKeyNodePool = nullptr)
       : FormatParams(pool, stats),
         nimbleType_(nimbleType),
         streams_(&streams),
@@ -177,17 +224,18 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         preserveFlatMapsInMemory_(preserveFlatMapsInMemory),
         lazyIoColumns_(lazyIoColumns),
         encodingFactory_(&encodingFactory),
-        lazyColumnIo_(lazyColumnIo),
         nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding},
         dictionaryAwareReads_{dictionaryAwareReads},
-        scanFastPath_{scanFastPath} {}
+        scanFastPath_{scanFastPath},
+        flatMapKeyNodePool_{flatMapKeyNodePool},
+        lazyColumnIo_(lazyColumnIo) {}
 
   std::unique_ptr<velox::dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& /*type*/,
       const velox::common::ScanSpec& /*scanSpec*/) override;
 
   NimbleParams makeChildParams(const std::shared_ptr<const Type>& type) {
-    return NimbleParams(
+    NimbleParams childParams(
         pool(),
         splitStats(),
         type,
@@ -199,7 +247,9 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         /*lazyIoColumns=*/nullptr,
         lazyColumnIo_,
         dictionaryAwareReads_,
-        scanFastPath_);
+        scanFastPath_,
+        flatMapKeyNodePool_);
+    return childParams;
   }
 
   const std::shared_ptr<const Type>& nimbleType() const {
@@ -224,6 +274,10 @@ class NimbleParams : public velox::dwio::common::FormatParams {
 
   void setInMapDecoder(ChunkedDecoder* decoder) {
     inMapDecoder_ = decoder;
+  }
+
+  FlatMapKeyNodePool* flatMapKeyNodePool() const {
+    return flatMapKeyNodePool_;
   }
 
   bool preserveFlatMapsInMemory() const {
@@ -263,14 +317,20 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   const bool preserveFlatMapsInMemory_{false};
   const folly::F14FastSet<std::string>* const lazyIoColumns_{nullptr};
   const EncodingFactory* const encodingFactory_;
+  const bool nimblePreserveDictionaryEncoding_{false};
+  const bool dictionaryAwareReads_{false};
+  const bool scanFastPath_{false};
+
+  // Lets the FlatMap readers built with these params, or with params derived
+  // from them, rebind the key readers kept in it, and keeps theirs when they
+  // are destroyed. Null builds every key reader anew.
+  FlatMapKeyNodePool* const flatMapKeyNodePool_{nullptr};
+
   // When true, enqueue() routes to the lazy input clone instead of the
   // main eager input. Set for lazy columns; propagated to children via
   // makeChildParams() so nested streams inherit the parent's routing.
   bool lazyColumnIo_{false};
   ChunkedDecoder* inMapDecoder_{nullptr};
-  bool nimblePreserveDictionaryEncoding_{false};
-  bool dictionaryAwareReads_{false};
-  bool scanFastPath_{false};
 };
 
 } // namespace facebook::nimble

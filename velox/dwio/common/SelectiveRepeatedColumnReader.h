@@ -59,6 +59,8 @@ class SelectiveRepeatedColumnReader : public SelectiveColumnReader {
   /// in.
   void makeOffsetsAndSizes(const RowSet& rows, ArrayVectorBase&);
 
+  void resetReadState() override;
+
   /// Creates a struct if '*result' is empty and 'type' is a row.
   void prepareStructResult(const TypePtr& type, VectorPtr* result) {
     if (!*result && type->kind() == TypeKind::ROW) {

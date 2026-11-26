@@ -16,6 +16,7 @@ add_library(
   ChunkedDecoder.cpp
   ColumnReader.cpp
   FlatMapColumnReader.cpp
+  FlatMapKeyNode.cpp
   IntegerColumnReader.cpp
   IntegerColumnReader_processFilter_DropValues.cpp
   IntegerColumnReader_processFilter_ExtractToReader.cpp
@@ -43,6 +44,7 @@ add_library(
   NimbleReaderFuzzerStats.h
   IntegerColumnReader.h
   FloatingPointColumnReader.h
+  FlatMapKeyNode.h
   FlatMapColumnReader.h
   ColumnReader.h
   ColumnLoader.h
