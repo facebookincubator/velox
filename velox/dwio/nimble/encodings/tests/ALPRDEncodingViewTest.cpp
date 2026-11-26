@@ -208,6 +208,7 @@ class ALPRDEncodingViewTest : public EncodingViewTest {
           view->read(
               indices,
               [&](uint32_t index) { nullIndices.push_back(index); },
+              /*addStringBuffer=*/nullptr,
               output.data()),
           5);
       EXPECT_THAT(nullIndices, ::testing::ElementsAre(1, 5));

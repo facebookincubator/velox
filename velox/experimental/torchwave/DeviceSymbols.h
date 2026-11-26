@@ -33,10 +33,15 @@ namespace facebook::velox::wave {
 class Stream;
 } // namespace facebook::velox::wave
 
+namespace torch::nativert {
+class ExecutionFrame;
+} // namespace torch::nativert
+
 namespace torch::wave {
 
 namespace nativert = torch::nativert;
 
+struct AllocGroup;
 struct ExecutionState;
 struct StepProgram;
 class WaveGraph;
@@ -134,11 +139,14 @@ class DeviceSymbols {
 
   /// Launches the fixups of a step on 'stream', after its parameters have
   /// been copied to 'deviceBase'.
+  /// With 'checkFailure' false the setup neither checks nor marks the
+  /// failure words: a probe for its demands.
   void runFixups(
       ExecutionState& state,
       SymbolFixups& fixups,
       uint8_t* deviceBase,
-      facebook::velox::wave::Stream* stream);
+      facebook::velox::wave::Stream* stream,
+      bool checkFailure = true);
 
   /// Gives the outputs of the bound steps of 'state' the shapes the symbolic
   /// forms of their ReserveFns compute, where the export has none. An integer
@@ -151,6 +159,28 @@ class DeviceSymbols {
   void reportSizeExprs(
       const folly::F14FastMap<std::string, int64_t>& symbols) const;
 
+  /// Under WaveConfig::deviceSizeCheck: adds to each step's fixups a check
+  /// record for every tensor parameter whose size derived from graph-input
+  /// dims has all its symbols written to the device by then. Input dims are
+  /// read from the tensor parameters of the graph inputs, data-decided
+  /// symbols from integer parameters. The setup kernel evaluates the records
+  /// and counts the parameters whose dims differ from the host's.
+  void bindSizeChecks(ExecutionState& state);
+
+  /// Logs and zeroes the counts the check records added over the previous
+  /// execution of 'state'. The streams must be idle.
+  void reportSizeChecks(ExecutionState& state) const;
+
+  /// Under WaveConfig::deviceSizingPoison: zeroes the dims the host wrote at
+  /// 'params' for the tensor parameters whose every dim 'fixups' writes.
+  static void poisonSizedParams(const SymbolFixups& fixups, uint8_t* params);
+
+  /// Copies the values of the input symbols bindSizeChecks placed from
+  /// 'frame' to the device. Called at each execution start.
+  void writeInputSymbols(
+      const nativert::ExecutionFrame& frame,
+      ExecutionState& state) const;
+
   /// True if the export gave the shape of 'valueId'; see hostShaped_.
   bool isHostShaped(int32_t valueId) const;
 
@@ -160,6 +190,13 @@ class DeviceSymbols {
   /// Under WaveConfig::sizeExprsFromInputs: shapes for every value derived
   /// from graph-input dims taken as symbols, kept apart from the export's.
   int32_t deriveShapesFromInputs(const ExecutionState& state);
+
+  /// One pass of deriveShapesFromInputs, starting from the shapes in
+  /// 'preset'. Sets 'numAdded' to how many shapes the rules added.
+  std::shared_ptr<SymShapes> deriveOnce(
+      const ExecutionState& state,
+      const folly::F14FastMap<std::string, SymShape>& preset,
+      int32_t& numAdded);
 
   /// Runs the rules of the nodes of the variant graphs, which produce the
   /// values grid generation makes. Returns how many main-graph values it
@@ -214,6 +251,15 @@ class DeviceSymbols {
   static constexpr int32_t kMaxSymbols = 1024;
 
  private:
+  /// One pass of bindSizeChecks. 'capacityRegion' says in which groups the
+  /// setup places the members of device symbols' regions at their
+  /// capacities: none (nullptr) or the groups in the set; 'allRegions'
+  /// places them so in every group.
+  void bindSizeChecksPass(
+      ExecutionState& state,
+      const folly::F14FastSet<const AllocGroup*>* capacityRegion,
+      bool allRegions);
+
   int32_t symbolIndex(const std::string& symbol);
 
   // Renames the symbols a broadcast proves equal to one of them, then defines
@@ -268,6 +314,9 @@ class DeviceSymbols {
   // Outputs of ops no rule describes, shaped from the export: the host
   // decides them when the op returns.
   folly::F14FastSet<std::string> hostShaped_;
+  // By value name: the shape the reserve's symbolic form gives an output, a
+  // capacity where the data decides the extent. Set by applySymReserves.
+  folly::F14FastMap<std::string, SymShape> capacityByName_;
   WaveGraph& waveGraph_;
   // For checkSizeExprs: parameters without an expression by producer.
   mutable std::mutex noShapeMutex_;

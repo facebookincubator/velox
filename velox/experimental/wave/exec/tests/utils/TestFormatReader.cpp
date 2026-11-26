@@ -174,85 +174,43 @@ void TestFormatData::griddize(
   programs.programs.back().push_back(std::move(count));
 }
 
-void TestFormatData::startOp(
-    ColumnOp& op,
-    const ColumnOp* previousFilter,
+void TestFormatData::stage(
     ResultStaging& deviceStaging,
-    ResultStaging& resultStaging,
-    SplitStaging& splitStaging,
-    DecodePrograms& program,
-    ReadStream& stream) {
+    SplitStaging& splitStaging) {
   VELOX_CHECK_NOT_NULL(column_);
-  BufferId id = kNoBufferId;
   // If nulls were not staged on device in griddize() they will be moved now for
   // the single TB.
   stageNulls(deviceStaging, splitStaging);
-  if (!staged_) {
-    staged_ = true;
-    Staging staging(
-        column_->values->as<char>(), column_->values->size(), column_->region);
-    id = splitStaging.add(staging);
-    lastStagingId_ = splitStaging.id();
-  } else {
-    splitStaging.addDependency(lastStagingId_);
+  if (values_.empty()) {
+    values_.add(Staging(
+        column_->values->as<char>(),
+        static_cast<int32_t>(column_->values->size()),
+        column_->region));
   }
-  auto rowsPerBlock = FLAGS_wave_reader_rows_per_tb;
-  int32_t numBlocks =
-      bits::roundUp(op.rows.size(), rowsPerBlock) / rowsPerBlock;
-  if (numBlocks > 1) {
-    VELOX_CHECK(griddized_);
+  values_.stage(splitStaging);
+}
+
+void TestFormatData::setDecode(
+    GpuDecode& step,
+    ColumnOp& op,
+    int32_t /*blockIdx*/,
+    SplitStaging& splitStaging) {
+  if (column_->encoding != Encoding::kFlat && column_->encoding != kDict) {
+    VELOX_NYI("Unsupported test encoding");
   }
-  VELOX_CHECK_LT(numBlocks, 256 * 256, "Overflow 16 bit block number");
-  for (auto blockIdx = 0; blockIdx < numBlocks; ++blockIdx) {
-    auto columnKind = static_cast<WaveTypeKind>(column_->kind);
-
-    auto step = makeStep(
-        op,
-        previousFilter,
-        deviceStaging,
-        splitStaging,
-        stream,
-        columnKind,
-        blockIdx);
-    if (column_->encoding == Encoding::kFlat || column_->encoding == kDict) {
-      step->encoding = DecodeStep::kDictionaryOnBitpack;
-      // alphabet is set if there is a dict.
-      step->dictMode =
-          column_->encoding == kFlat ? DictMode::kNone : DictMode::kDict;
-      step->data.dictionaryOnBitpack.alphabet = decodedAlphabet_;
-      step->data.dictionaryOnBitpack.baseline = column_->baseline;
-      step->data.dictionaryOnBitpack.bitWidth = column_->bitWidth;
-      step->data.dictionaryOnBitpack.indices = nullptr;
-      step->data.dictionaryOnBitpack.begin = currentRow_;
-      if (id != kNoBufferId) {
-        splitStaging.registerPointer(
-            id, &step->data.dictionaryOnBitpack.indices, true);
-        if (blockIdx == 0) {
-          splitStaging.registerPointer(id, &deviceBuffer_, true);
-        }
-      } else {
-        step->data.dictionaryOnBitpack.indices =
-            reinterpret_cast<uint64_t*>(deviceBuffer_);
-      }
-      if (column_->encoding == kDict && op.reader->scanSpec().filter()) {
-        step->dictMode = DictMode::kDictFilter;
-        step->filterBitmap = filterBitmap_;
-      }
-
-    } else {
-      VELOX_NYI("Unsupported test encoding");
-    }
-    op.isFinal = true;
-    std::vector<std::unique_ptr<GpuDecode>>* steps;
-
-    // Programs are parallel after filters
-    if (stream.filtersDone() || !previousFilter) {
-      program.programs.emplace_back();
-      steps = &program.programs.back();
-    } else {
-      steps = &program.programs[blockIdx];
-    }
-    steps->push_back(std::move(step));
+  step.encoding = DecodeStep::kDictionaryOnBitpack;
+  // alphabet is set if there is a dict.
+  step.dictMode =
+      column_->encoding == kFlat ? DictMode::kNone : DictMode::kDict;
+  auto& data = step.data.dictionaryOnBitpack;
+  data.alphabet = decodedAlphabet_;
+  data.baseline = column_->baseline;
+  data.bitWidth = column_->bitWidth;
+  data.begin = currentRow_;
+  values_.setPointer(0, data.indices, 0, splitStaging);
+  if (column_->encoding == kDict && op.reader->scanSpec().filter()) {
+    step.dictMode = DictMode::kDictFilter;
+    step.filterBitmap = filterBitmap_;
   }
 }
 
@@ -263,7 +221,7 @@ class TestStructColumnReader : public StructColumnReader {
       const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
       TestFormatParams& params,
       common::ScanSpec& scanSpec,
-      std::vector<std::unique_ptr<Subfield::PathElement>>& path,
+      Path& path,
       const DefinesMap& defines,
       bool isRoot)
       : StructColumnReader(
@@ -272,39 +230,28 @@ class TestStructColumnReader : public StructColumnReader {
             pathToOperand(defines, path),
             params,
             scanSpec,
-            isRoot) {
-    // A reader tree may be constructed while the ScanSpec is being used
-    // for another read. This happens when the next stripe is being
-    // prepared while the previous one is reading.
-    const auto stableChildren = scanSpec.stableChildren();
-    const auto& childSpecs = *stableChildren;
-    for (auto i = 0; i < childSpecs.size(); ++i) {
-      const auto& childSpec = childSpecs[i];
-      if (isChildConstant(*childSpec)) {
-        VELOX_NYI();
-        continue;
-      }
-      auto childFileType = fileType_->childByName(childSpec->fieldName());
-      auto childRequestedType = requestedType_->as<TypeKind::ROW>().findChild(
-          folly::StringPiece(childSpec->fieldName()));
-      auto childParams = TestFormatParams(
-          params.pool(), params.runtimeStatistics(), params.stripe());
-
-      path.push_back(
-          std::make_unique<common::Subfield::NestedField>(
-              childSpec->fieldName()));
-      addChild(
-          TestFormatReader::build(
-              childRequestedType,
-              childFileType,
-              params,
-              *childSpec,
-              path,
-              defines));
-      path.pop_back();
-      childSpec->setSubscript(children_.size() - 1);
-    }
+            isRoot),
+        params_(params) {
+    addChildren(scanSpec, path, defines);
   }
+
+ protected:
+  std::unique_ptr<ColumnReader> makeChild(
+      common::ScanSpec& childSpec,
+      int32_t fileChildIdx,
+      const TypePtr& requestedType,
+      const std::shared_ptr<const dwio::common::TypeWithId>& fileType,
+      Path& path,
+      const DefinesMap& defines) override {
+    if (fileChildIdx < 0) {
+      VELOX_NYI("Columns that are not in the file are not supported");
+    }
+    return TestFormatReader::build(
+        requestedType, fileType, params_, childSpec, path, defines);
+  }
+
+ private:
+  TestFormatParams& params_;
 };
 
 std::unique_ptr<ColumnReader> buildIntegerReader(

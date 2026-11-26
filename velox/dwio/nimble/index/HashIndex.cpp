@@ -213,6 +213,7 @@ std::string_view HashIndex::maxKey() const {
 
 IndexLookup::LookupResult HashIndex::lookup(
     const LookupRequest& request) const {
+  validateLookupRequest(request);
   NIMBLE_CHECK_EQ(
       request.mode(),
       LookupRequest::Mode::PointLookup,

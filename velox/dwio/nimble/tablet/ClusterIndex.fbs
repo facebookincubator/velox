@@ -59,7 +59,7 @@ table ClusterIndexGroup {
   stripe_keys:[string];
 }
 
-/// Root index table shared by the flat and hierarchical cluster indexes.
+/// Root index table shared by the flat and trie cluster indexes.
 table ClusterIndex {
   /// Names of columns used for indexing.
   index_columns:[string];

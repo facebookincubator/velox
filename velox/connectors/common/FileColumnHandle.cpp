@@ -456,4 +456,21 @@ FileColumnHandle::ColumnType FileColumnHandle::columnTypeFromName(
   VELOX_FAIL("Unknown column type name: {}", name);
 }
 
+void FileColumnHandle::checkConsistentWith(
+    const FileColumnHandle& other) const {
+  VELOX_CHECK_EQ(
+      columnType(),
+      other.columnType(),
+      "Inconsistent column handle type: {}, expected {}, got {}",
+      name(),
+      columnTypeName(columnType()),
+      columnTypeName(other.columnType()));
+  VELOX_CHECK(
+      dataType()->equivalent(*other.dataType()),
+      "Inconsistent column handle data type: {}, expected {}, got {}",
+      name(),
+      dataType()->toString(),
+      other.dataType()->toString());
+}
+
 } // namespace facebook::velox::connector

@@ -17,6 +17,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include <gtest/gtest.h>
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -72,6 +73,14 @@ class ExprToSubfieldFilterTest : public testing::Test {
 
   core::ExpressionEvaluator* evaluator() {
     return &evaluator_;
+  }
+
+  core::TypedExprPtr extractFilters(
+      const core::TypedExprPtr& expr,
+      common::SubfieldFilters& filters,
+      double& sampleRate) {
+    return ExprToSubfieldFilterParser::extractFilters(
+        expr, evaluator(), filters, sampleRate);
   }
 
   std::pair<common::Subfield, std::unique_ptr<common::Filter>>
@@ -645,7 +654,7 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterFloat) {
 
 TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesValues) {
   // a = 'FRANCE' or a = 'JAPAN' ==> a in ('FRANCE', 'JAPAN')
-  // Note: equal(string) generates BytesValues filter
+  // Note: equal(string) generates common::BytesValues filter
   {
     auto expected = in({"FRANCE", "JAPAN"});
     VELOX_ASSERT_FILTER(expected, makeOr(equal("FRANCE"), equal("JAPAN")));
@@ -699,7 +708,7 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesRange) {
         makeOr(between("FRANCE", "FRANCE"), between("JAPAN", "JAPAN")));
   }
 
-  // Test mixing BytesRange (single value) with BytesValues
+  // Test mixing BytesRange (single value) with common::BytesValues
   {
     auto expected = in({"FRANCE", "JAPAN", "GERMANY"});
     VELOX_ASSERT_FILTER(
@@ -710,7 +719,8 @@ TEST_F(ExprToSubfieldFilterTest, makeOrFilterBytesRange) {
         makeOr(in({"JAPAN", "GERMANY"}), between("FRANCE", "FRANCE")));
   }
 
-  // Test BytesRange with single value combined with equal() (BytesValues)
+  // Test BytesRange with single value combined with equal()
+  // (common::BytesValues)
   {
     auto expected = in({"FRANCE", "JAPAN"});
     VELOX_ASSERT_FILTER(
@@ -949,6 +959,196 @@ TEST_F(ExprToSubfieldFilterTest, gteNullTinyint) {
 
   auto expected = std::make_unique<common::AlwaysFalse>();
   VELOX_ASSERT_FILTER(expected, filter);
+}
+
+TEST_F(ExprToSubfieldFilterTest, extractFilters) {
+  auto rowType = ROW(
+      {{"c0", BIGINT()},
+       {"c1", BIGINT()},
+       {"c2", DECIMAL(20, 0)},
+       {"c3", BOOLEAN()}});
+
+  auto expr = parseExpr("not (c0 > 0 or c1 > 0)", rowType);
+  common::SubfieldFilters filters;
+  double sampleRate = 1;
+  auto remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_EQ(filters.size(), 2);
+  ASSERT_GT(filters.count(Subfield("c0")), 0);
+  ASSERT_GT(filters.count(Subfield("c1")), 0);
+
+  expr = parseExpr("not (c0 > 0 or c1 > c0)", rowType);
+  filters.clear();
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_EQ(filters.size(), 1);
+  ASSERT_GT(filters.count(Subfield("c0")), 0);
+  ASSERT_TRUE(remaining);
+  ASSERT_EQ(remaining->toString(), "not(gt(ROW[\"c1\"],ROW[\"c0\"]))");
+
+  expr = parseExpr(
+      "not (c2 > 1::decimal(20, 0) or c2 < 0::decimal(20, 0))", rowType);
+  filters.clear();
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_GT(filters.count(Subfield("c2")), 0);
+  auto expectedFilter = betweenHugeint(0, 1);
+  ASSERT_TRUE(expectedFilter->testingEquals(*filters.at(Subfield("c2"))));
+  ASSERT_FALSE(remaining);
+
+  expr = parseExpr("c3", rowType);
+  filters.clear();
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(filters.size(), 1);
+  VELOX_ASSERT_FILTER(boolEqual(true), filters.at(Subfield("c3")));
+
+  expr = parseExpr("not c3", rowType);
+  filters.clear();
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(filters.size(), 1);
+  VELOX_ASSERT_FILTER(boolEqual(false), filters.at(Subfield("c3")));
+
+  // parseExpr gives AND/OR with 2 arguments.  We need to construct the node
+  // manually to have more than 2.
+  expr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      expression::kAnd,
+      parseExpr("c0 > 0", rowType),
+      parseExpr("c1 > 0", rowType),
+      parseExpr("c2 > 0::decimal(20, 0)", rowType));
+  filters.clear();
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_EQ(filters.size(), 3);
+  ASSERT_TRUE(filters.contains(Subfield("c0")));
+  ASSERT_TRUE(filters.contains(Subfield("c1")));
+  ASSERT_TRUE(filters.contains(Subfield("c2")));
+  ASSERT_FALSE(remaining);
+
+  expr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      expression::kAnd,
+      parseExpr("c0 % 2 = 0", rowType),
+      parseExpr("c1 % 3 = 0", rowType),
+      parseExpr("c2 > 0::decimal(20, 0)", rowType));
+  filters.clear();
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_EQ(filters.size(), 1);
+  ASSERT_TRUE(filters.contains(Subfield("c2")));
+  ASSERT_TRUE(remaining);
+  ASSERT_EQ(
+      remaining->toString(),
+      "and(eq(mod(ROW[\"c0\"],2),0),eq(mod(ROW[\"c1\"],3),0))");
+
+  // Test VARCHAR OR filter pushdown:
+  // n_name = 'FRANCE' OR n_name = 'GERMANY' should push down as
+  // common::BytesValues('FRANCE', 'GERMANY').
+  {
+    expr = parseExpr(
+        "n_name = 'FRANCE' or n_name = 'GERMANY'", ROW("n_name", VARCHAR()));
+    filters.clear();
+    remaining = extractFilters(expr, filters, sampleRate);
+    ASSERT_FALSE(remaining);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    ASSERT_TRUE(filters.contains(Subfield("n_name")));
+    auto* filter = filters.at(Subfield("n_name")).get();
+    ASSERT_TRUE(filter->is(common::FilterKind::kBytesValues));
+    auto* bytesValues = filter->as<common::BytesValues>();
+    ASSERT_EQ(bytesValues->values().size(), 2);
+    ASSERT_TRUE(bytesValues->values().count("FRANCE"));
+    ASSERT_TRUE(bytesValues->values().count("GERMANY"));
+  }
+}
+
+TEST_F(ExprToSubfieldFilterTest, extractFiltersSampleRate) {
+  auto rowType = ROW({"c0"}, {BIGINT()});
+
+  auto expr = parseExpr("rand() < 0.5", rowType);
+  common::SubfieldFilters filters;
+  double sampleRate = 1;
+  auto remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 0.5);
+  ASSERT_TRUE(filters.empty());
+
+  expr = parseExpr("c0 > 0 and rand() < 0.5", rowType);
+  filters.clear();
+  sampleRate = 1;
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 0.5);
+  ASSERT_EQ(filters.size(), 1);
+  ASSERT_GT(filters.count(Subfield("c0")), 0);
+
+  expr = parseExpr("rand() < 0.5 and rand() < 0.5", rowType);
+  filters.clear();
+  sampleRate = 1;
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_FALSE(remaining);
+  ASSERT_EQ(sampleRate, 0.25);
+  ASSERT_TRUE(filters.empty());
+
+  expr = parseExpr("c0 > 0 or rand() < 0.5", rowType);
+  filters.clear();
+  sampleRate = 1;
+  remaining = extractFilters(expr, filters, sampleRate);
+  ASSERT_TRUE(remaining);
+  ASSERT_EQ(*remaining, *expr);
+  ASSERT_EQ(sampleRate, 1);
+  ASSERT_TRUE(filters.empty());
+}
+
+TEST_F(ExprToSubfieldFilterTest, extractFiltersDisjuncts) {
+  auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), BIGINT(), DECIMAL(20, 0)});
+
+  {
+    auto expr =
+        parseExpr("(c0 > 0 and c0 < 10) or (c0 > 5 and c0 < 15)", rowType);
+
+    common::SubfieldFilters filters;
+    double sampleRate = 1;
+    auto remaining = extractFilters(expr, filters, sampleRate);
+    ASSERT_TRUE(remaining == nullptr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    VELOX_ASSERT_FILTER(between(1, 14), filters.begin()->second);
+  }
+
+  {
+    auto expr = parseExpr("(c0 between -10 and 12)", rowType);
+
+    common::SubfieldFilters filters;
+    double sampleRate = 1;
+    auto remaining = extractFilters(expr, filters, sampleRate);
+    ASSERT_TRUE(remaining == nullptr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    ASSERT_EQ(filters.begin()->first, Subfield("c0"));
+    VELOX_ASSERT_FILTER(between(-10, 12), filters.begin()->second);
+
+    expr = parseExpr("(c0 > 0 and c0 < 10) or (c0 > 5 and c0 < 15)", rowType);
+    remaining = extractFilters(expr, filters, sampleRate);
+    ASSERT_TRUE(remaining == nullptr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_EQ(filters.size(), 1);
+    ASSERT_EQ(filters.begin()->first, Subfield("c0"));
+    VELOX_ASSERT_FILTER(between(1, 12), filters.begin()->second);
+  }
+
+  {
+    auto expr = parseExpr("c0 not in (1, 3) or c0 in (1, 2)", rowType);
+    common::SubfieldFilters filters;
+    double sampleRate = 1;
+    auto remaining = extractFilters(expr, filters, sampleRate);
+    ASSERT_EQ(remaining, expr);
+    ASSERT_EQ(sampleRate, 1);
+    ASSERT_TRUE(filters.empty());
+  }
 }
 
 } // namespace

@@ -400,7 +400,8 @@ void CacheFuzzer::initializeInputs() {
             ioStatistics,
             ioStats,
             withExecutor ? executor_.get() : nullptr,
-            readOptions));
+            readOptions,
+            FileIoContext{.pool = &readOptions.memoryPool()}));
 
     // Divide file into fragments.
     std::vector<std::pair<int32_t, int32_t>> fragments;

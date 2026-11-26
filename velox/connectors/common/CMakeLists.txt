@@ -29,21 +29,21 @@ velox_add_library(
   velox_file_connector
   STATIC
   BufferedInputBuilder.cpp
+  DeletionVectorReader.cpp
   ExtractionUtils.cpp
   FileColumnHandle.cpp
   FileConnector.cpp
-  FileConnectorUtil.cpp
   FileDataSource.cpp
   FileSplitReader.cpp
   FileTableHandle.cpp
   PartitionValue.cpp
   HEADERS
   BufferedInputBuilder.h
+  DeletionVectorReader.h
   ExtractionUtils.h
   FileColumnHandle.h
   FileConnector.h
   FileConnectorSplit.h
-  FileConnectorUtil.h
   FileDataSource.h
   FileScanState.h
   FileSplitReader.h

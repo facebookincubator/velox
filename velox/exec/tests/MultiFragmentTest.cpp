@@ -1552,11 +1552,7 @@ core::PlanNodePtr makeJoinOverExchangePlan(
   return builder.newPlan()
       .exchange(exchangeType, serdeKind)
       .hashJoin(
-          {"c0"},
-          {"u_c0"},
-          builder.newPlan().values(buildData).planNode(),
-          "",
-          {"c0"})
+          "c0 = u_c0", builder.newPlan().values(buildData).planNode(), {"c0"})
       .partitionedOutput({}, 1, /*outputLayout=*/{}, serdeKind)
       .planNode();
 }
@@ -1740,10 +1736,8 @@ TEST_P(MultiFragmentTest, earlyCompletionMerge) {
         builder.newPlan()
             .mergeExchange(data->rowType(), {"c0"}, serdeKind())
             .hashJoin(
-                {"c0"},
-                {"u_c0"},
+                "c0 = u_c0",
                 builder.newPlan().values(buildData).planNode(),
-                "",
                 {"c0"})
             .partitionedOutput({}, 1, /*outputLayout=*/{}, serdeKind())
             .planNode();
@@ -2018,13 +2012,11 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, lateNoMoreSplits) {
       builder.newPlan()
           .values({makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})})
           .hashJoin(
-              {"c0"},
-              {"u_c0"},
+              "c0 = u_c0",
               builder.newPlan()
                   .exchange(data->rowType(), serdeKind())
                   .capturePlanNodeId(exchangeId)
                   .planNode(),
-              "",
               {"c0"},
               core::JoinType::kAnti,
               /*nullAware=*/true)
@@ -2385,13 +2377,11 @@ DEBUG_ONLY_TEST_P(MultiFragmentTest, terminateWithBadSplit) {
   auto plan = builder.newPlan()
                   .values({probeData}, true)
                   .hashJoin(
-                      {"p_c0"},
-                      {"c0"},
+                      "p_c0 = c0",
                       builder.newPlan()
                           .mergeExchange(rowType_, {"c0"}, serdeKind())
                           .capturePlanNodeId(exchangeNodeId)
                           .planNode(),
-                      "",
                       {"c0"})
                   .partitionedOutput({}, 1, /*outputLayout=*/{}, serdeKind())
                   .planNode();

@@ -183,6 +183,53 @@ int32_t setOutput(
       shapes, node.outputs()[output], denseShape(std::move(dims)));
 }
 
+// The storage 'self' of 'node' views and where 'self' starts in it, moved
+// 'delta' elements on.
+std::pair<std::string, SymExpr>
+viewOfSelf(const SymShapes& shapes, const Node& node, const SymExpr& delta) {
+  const auto* input = node.tryGetInput("self");
+  if (input == nullptr) {
+    return {std::string(), SymExpr::constant(0)};
+  }
+  auto it = shapes.byName.find(std::string(input->value->name()));
+  if (it == shapes.byName.end() || it->second.base.empty()) {
+    return {std::string(input->value->name()), delta};
+  }
+  return {it->second.base, symAdd(it->second.offset, delta)};
+}
+
+// Sets a view's output: its dims over the strides of its base, starting
+// 'delta' elements after the start of 'self'.
+int32_t setViewOutput(
+    SymShapes& shapes,
+    const Node& node,
+    std::vector<SymExpr> dims,
+    std::vector<SymExpr> strides,
+    const SymExpr& delta = SymExpr::constant(0)) {
+  if (node.outputs().empty()) {
+    return 0;
+  }
+  if (strides.size() != dims.size()) {
+    return setOutput(shapes, node, std::move(dims));
+  }
+  auto [base, offset] = viewOfSelf(shapes, node, delta);
+  return addValueShape(
+      shapes,
+      node.outputs()[0],
+      SymShape{
+          .dims = std::move(dims),
+          .strides = std::move(strides),
+          .base = std::move(base),
+          .offset = std::move(offset)});
+}
+
+// The strides of 'self', or dense strides when it has none for every dim.
+std::vector<SymExpr> stridesOf(const SymShape& self) {
+  return self.strides.size() == self.dims.size()
+      ? self.strides
+      : denseShape(self.dims).strides;
+}
+
 // The number of elements of a list output that its ListUnpack takes apart.
 std::optional<size_t> unpackedCount(const Node& node) {
   if (node.outputs().empty()) {
@@ -196,16 +243,27 @@ std::optional<size_t> unpackedCount(const Node& node) {
   return std::nullopt;
 }
 
+// Sets the elements of a list output, dense, or as views over 'strides'
+// when given.
 int32_t setListElements(
     SymShapes& shapes,
     const Node& node,
-    const std::vector<std::vector<SymExpr>>& elements) {
+    const std::vector<std::vector<SymExpr>>& elements,
+    const std::vector<SymExpr>* strides = nullptr,
+    const std::vector<SymExpr>* starts = nullptr) {
   const auto list = node.outputs()[0]->name();
   int32_t numAdded = 0;
   for (size_t i = 0; i < elements.size(); ++i) {
+    auto shape = strides != nullptr && strides->size() == elements[i].size()
+        ? SymShape{.dims = elements[i], .strides = *strides}
+        : denseShape(elements[i]);
+    if (starts != nullptr && i < starts->size() && strides != nullptr &&
+        strides->size() == elements[i].size()) {
+      std::tie(shape.base, shape.offset) =
+          viewOfSelf(shapes, node, (*starts)[i]);
+    }
     numAdded +=
-        shapes.byName.emplace(listElementName(list, i), denseShape(elements[i]))
-            .second
+        shapes.byName.emplace(listElementName(list, i), std::move(shape)).second
         ? 1
         : 0;
   }
@@ -257,7 +315,12 @@ int32_t sliceRule(SymShapes& shapes, const Node& node) {
   }
   auto dims = self->dims;
   dims[*dim] = length;
-  return setOutput(shapes, node, std::move(dims));
+  auto strides = stridesOf(*self);
+  auto& stride = strides.at(*dim);
+  const auto delta = symMul(start, stride);
+  stride = symMul(stride, SymExpr::constant(step));
+  return setViewOutput(
+      shapes, node, std::move(dims), std::move(strides), delta);
 }
 
 int32_t selectRule(SymShapes& shapes, const Node& node) {
@@ -269,9 +332,30 @@ int32_t selectRule(SymShapes& shapes, const Node& node) {
   if (!dim) {
     return 0;
   }
+  auto index = intOperand(shapes, node, "index");
+  if (index && index->isConstant() && index->value < 0) {
+    index = symAdd(self->dims[*dim], *index);
+  } else if (index && !index->isConstant()) {
+    // A symbolic index may be negative, counting from the end.
+    index.reset();
+  }
   auto dims = self->dims;
   dims.erase(dims.begin() + static_cast<std::ptrdiff_t>(*dim));
-  return setOutput(shapes, node, std::move(dims));
+  auto strides = stridesOf(*self);
+  // Without the index the view's start is unknown: it gets no base.
+  const auto delta =
+      index ? symMul(*index, strides.at(*dim)) : SymExpr::constant(0);
+  strides.erase(strides.begin() + static_cast<std::ptrdiff_t>(*dim));
+  if (!index) {
+    const auto added =
+        setViewOutput(shapes, node, std::move(dims), std::move(strides));
+    if (added != 0) {
+      shapes.byName.at(std::string(node.outputs()[0]->name())).base.clear();
+    }
+    return added;
+  }
+  return setViewOutput(
+      shapes, node, std::move(dims), std::move(strides), delta);
 }
 
 int32_t unsqueezeRule(SymShapes& shapes, const Node& node) {
@@ -284,9 +368,15 @@ int32_t unsqueezeRule(SymShapes& shapes, const Node& node) {
     return 0;
   }
   auto dims = self->dims;
+  auto strides = stridesOf(*self);
+  // A size-1 dim's stride is never stepped; the one a contiguous base would
+  // give keeps the result contiguous.
+  const auto stride = *dim < strides.size() ? symMul(strides[*dim], dims[*dim])
+                                            : SymExpr::constant(1);
   dims.insert(
       dims.begin() + static_cast<std::ptrdiff_t>(*dim), SymExpr::constant(1));
-  return setOutput(shapes, node, std::move(dims));
+  strides.insert(strides.begin() + static_cast<std::ptrdiff_t>(*dim), stride);
+  return setViewOutput(shapes, node, std::move(dims), std::move(strides));
 }
 
 // Drops the given dims, or every dim, that are 1.
@@ -321,13 +411,16 @@ int32_t squeezeRule(SymShapes& shapes, const Node& node) {
       drop[i] = isUnit(i);
     }
   }
+  const auto selfStrides = stridesOf(*self);
   std::vector<SymExpr> dims;
+  std::vector<SymExpr> strides;
   for (size_t i = 0; i < rank; ++i) {
     if (!drop[i]) {
       dims.push_back(self->dims[i]);
+      strides.push_back(selfStrides[i]);
     }
   }
-  return setOutput(shapes, node, std::move(dims));
+  return setViewOutput(shapes, node, std::move(dims), std::move(strides));
 }
 
 int32_t catRule(SymShapes& shapes, const Node& node) {
@@ -445,6 +538,43 @@ size_t alignFromEnd(
 
 // Lines the target sizes of a view up with the input's dims from both ends;
 // see alignFromEnd. A -1 is what the other dims leave.
+// The strides of a view of 'self' with 'dims'. A view that only adds or
+// drops size-1 dims keeps the strides of the dims it keeps, and reads a
+// size-1 dim through stride 0, as the host does. Any other view is dense. A
+// target dim the export traced as 1 but that is not 1 for every input makes
+// the view dense: its stride must not be 0 when the dim is larger, and the
+// setup gives a dim that is 1 at run time stride 0 anyway.
+std::vector<SymExpr> viewStrides(
+    const SymShape& self,
+    const std::vector<SymExpr>& dims) {
+  auto tracedOnly = [](const SymExpr& dim) {
+    return !isOne(dim) && tracedValue(dim) == 1;
+  };
+  if (std::any_of(dims.begin(), dims.end(), tracedOnly)) {
+    return denseShape(dims).strides;
+  }
+  const auto selfStrides = stridesOf(self);
+  std::vector<size_t> kept;
+  for (size_t i = 0; i < self.dims.size(); ++i) {
+    if (!isOne(self.dims[i]) && tracedValue(self.dims[i]) != 1) {
+      kept.push_back(i);
+    }
+  }
+  std::vector<SymExpr> strides;
+  size_t next = 0;
+  for (const auto& dim : dims) {
+    if (isOne(dim) || tracedValue(dim) == 1) {
+      strides.push_back(SymExpr::constant(0));
+      continue;
+    }
+    if (next >= kept.size() || !sameDim(dim, self.dims.at(kept[next]))) {
+      return denseShape(dims).strides;
+    }
+    strides.push_back(selfStrides[kept[next++]]);
+  }
+  return next == kept.size() ? strides : denseShape(dims).strides;
+}
+
 int32_t viewRule(SymShapes& shapes, const Node& node) {
   const auto* self = inputShape(shapes, node, "self");
   auto targets = intListOperand(shapes, node, "size");
@@ -508,7 +638,7 @@ int32_t viewRule(SymShapes& shapes, const Node& node) {
     }
     dims.at(*inferred) = symFloorDiv(numelOf(*self), others);
   }
-  return setOutput(shapes, node, std::move(dims));
+  return setViewOutput(shapes, node, dims, viewStrides(*self, dims));
 }
 
 int32_t expandRule(SymShapes& shapes, const Node& node) {
@@ -518,15 +648,23 @@ int32_t expandRule(SymShapes& shapes, const Node& node) {
     return 0;
   }
   const auto offset = targets->size() - self->dims.size();
+  const auto selfStrides = stridesOf(*self);
   std::vector<SymExpr> dims;
+  std::vector<SymExpr> strides;
   for (size_t i = 0; i < targets->size(); ++i) {
     const auto& target = (*targets)[i];
     const SymExpr* own = i >= offset ? &self->dims[i - offset] : nullptr;
     const bool keep = own != nullptr &&
         ((target.isConstant() && target.value == -1) || !isOne(*own));
     dims.push_back(keep ? *own : target);
+    // An expanded dim reads its one element through stride 0.
+    if (keep) {
+      strides.push_back(selfStrides[i - offset]);
+    } else {
+      strides.push_back(SymExpr::constant(0));
+    }
   }
-  return setOutput(shapes, node, std::move(dims));
+  return setViewOutput(shapes, node, std::move(dims), std::move(strides));
 }
 
 int32_t sizeListRule(SymShapes& shapes, const Node& node) {
@@ -562,7 +700,9 @@ int32_t permuteRule(SymShapes& shapes, const Node& node) {
   if (self == nullptr || !order || order->size() != self->dims.size()) {
     return 0;
   }
+  const auto selfStrides = stridesOf(*self);
   std::vector<SymExpr> dims;
+  std::vector<SymExpr> strides;
   for (const auto& dim : *order) {
     auto index = dim.isConstant() ? normalizeDim(dim.value, self->dims.size())
                                   : std::nullopt;
@@ -570,8 +710,9 @@ int32_t permuteRule(SymShapes& shapes, const Node& node) {
       return 0;
     }
     dims.push_back(self->dims[*index]);
+    strides.push_back(selfStrides[*index]);
   }
-  return setOutput(shapes, node, std::move(dims));
+  return setViewOutput(shapes, node, std::move(dims), std::move(strides));
 }
 
 int32_t transposeRule(SymShapes& shapes, const Node& node) {
@@ -580,9 +721,11 @@ int32_t transposeRule(SymShapes& shapes, const Node& node) {
     return 0;
   }
   auto dims = self->dims;
+  auto strides = stridesOf(*self);
   if (node.target() == "torch.ops.aten.t.default") {
     std::reverse(dims.begin(), dims.end());
-    return setOutput(shapes, node, std::move(dims));
+    std::reverse(strides.begin(), strides.end());
+    return setViewOutput(shapes, node, std::move(dims), std::move(strides));
   }
   auto first = dimOperand(node, "dim0", dims.size());
   auto second = dimOperand(node, "dim1", dims.size());
@@ -590,7 +733,8 @@ int32_t transposeRule(SymShapes& shapes, const Node& node) {
     return 0;
   }
   std::swap(dims[*first], dims[*second]);
-  return setOutput(shapes, node, std::move(dims));
+  std::swap(strides.at(*first), strides.at(*second));
+  return setViewOutput(shapes, node, std::move(dims), std::move(strides));
 }
 
 int32_t unbindRule(SymShapes& shapes, const Node& node) {
@@ -610,8 +754,20 @@ int32_t unbindRule(SymShapes& shapes, const Node& node) {
   }
   auto dims = self->dims;
   dims.erase(dims.begin() + static_cast<std::ptrdiff_t>(*dim));
+  auto strides = stridesOf(*self);
+  std::vector<SymExpr> starts;
+  starts.reserve(*count);
+  for (size_t i = 0; i < *count; ++i) {
+    starts.push_back(
+        symMul(SymExpr::constant(static_cast<int64_t>(i)), strides.at(*dim)));
+  }
+  strides.erase(strides.begin() + static_cast<std::ptrdiff_t>(*dim));
   return setListElements(
-      shapes, node, std::vector<std::vector<SymExpr>>(*count, dims));
+      shapes,
+      node,
+      std::vector<std::vector<SymExpr>>(*count, dims),
+      &strides,
+      &starts);
 }
 
 int32_t splitWithSizesRule(SymShapes& shapes, const Node& node) {
@@ -624,12 +780,17 @@ int32_t splitWithSizesRule(SymShapes& shapes, const Node& node) {
   if (!dim) {
     return 0;
   }
+  const auto strides = stridesOf(*self);
   std::vector<std::vector<SymExpr>> elements;
+  std::vector<SymExpr> starts;
+  SymExpr start = SymExpr::constant(0);
   for (const auto& size : *sizes) {
     auto& dims = elements.emplace_back(self->dims);
     dims.at(*dim) = size;
+    starts.push_back(symMul(start, strides[*dim]));
+    start = symAdd(start, size);
   }
-  return setListElements(shapes, node, elements);
+  return setListElements(shapes, node, elements, &strides, &starts);
 }
 
 // Chunks of 'split_size', the last one what remains.
@@ -651,7 +812,15 @@ int32_t splitRule(SymShapes& shapes, const Node& node) {
   elements.at(*count - 1).at(*dim) = symSub(
       self->dims[*dim],
       symMul(SymExpr::constant(static_cast<int64_t>(*count - 1)), *chunk));
-  return setListElements(shapes, node, elements);
+  const auto strides = stridesOf(*self);
+  std::vector<SymExpr> starts;
+  starts.reserve(*count);
+  for (size_t i = 0; i < *count; ++i) {
+    starts.push_back(symMul(
+        symMul(SymExpr::constant(static_cast<int64_t>(i)), *chunk),
+        strides[*dim]));
+  }
+  return setListElements(shapes, node, elements, &strides, &starts);
 }
 
 // Leading dims indexed by tensors give their broadcast shape; the rest stay.
@@ -762,6 +931,16 @@ int32_t lengthOperandRule(SymShapes& shapes, const Node& node) {
   return setOutput(shapes, node, {*length});
 }
 
+// A vector as long as the 'size' operand: tw.unpack_slot, which decodes one
+// slot of a packed input.
+int32_t sizeOperandRule(SymShapes& shapes, const Node& node) {
+  auto length = intOperand(shapes, node, "size");
+  if (!length) {
+    return 0;
+  }
+  return setOutput(shapes, node, {*length});
+}
+
 // A count only the data decides: masked_select's selected elements, and
 // nonzero's rows of indices, one column per dim of 'self'.
 int32_t selectedCountRule(SymShapes& shapes, const Node& node) {
@@ -818,10 +997,13 @@ int32_t diagonalRule(SymShapes& shapes, const Node& node) {
   if (!first || !second || *first == *second) {
     return 0;
   }
+  const auto selfStrides = stridesOf(*self);
   std::vector<SymExpr> dims;
+  std::vector<SymExpr> strides;
   for (size_t i = 0; i < rank; ++i) {
     if (i != *first && i != *second) {
       dims.push_back(self->dims[i]);
+      strides.push_back(selfStrides[i]);
     }
   }
   const auto& lhs = self->dims[*first];
@@ -831,7 +1013,9 @@ int32_t diagonalRule(SymShapes& shapes, const Node& node) {
   } else {
     dims.push_back(symMin(lhs, rhs));
   }
-  return setOutput(shapes, node, std::move(dims));
+  // A step along the diagonal steps both dims.
+  strides.push_back(symAdd(selfStrides[*first], selfStrides[*second]));
+  return setViewOutput(shapes, node, std::move(dims), std::move(strides));
 }
 
 // The open-addressing table isin builds: the smallest power of two at least
@@ -1193,6 +1377,7 @@ void registerAtenShapeRules() {
   registerSymShapeRule("tw.gather", indexShapedRule);
   registerSymShapeRule("torch.ops.aten.gather.default", indexShapedRule);
   registerSymShapeRule("tw.repeat_interleave_index_final", lengthOperandRule);
+  registerSymShapeRule("tw.unpack_slot", sizeOperandRule);
   registerSymShapeRule("tw.isin_head", isinHeadRule);
   registerSymShapeRule(
       "torch.ops.aten.exclusive_sum.default", completeCumsumRule);
@@ -1203,6 +1388,7 @@ void registerAtenShapeRules() {
   registerSymShapeRule("torch.ops.aten.sort.stable", allLikeSelfRule);
   registerSymShapeRule("torch.ops.aten.isin.Tensor_Tensor", elementsShapedRule);
   registerSymShapeRule("tw.scatter", sameShapeRule);
+  registerSymShapeRule("tw.scatter_add", sameShapeRule);
   registerSymShapeRule("torch.ops.aten.pow.Scalar", exponentShapedRule);
   registerSymShapeRule("torch.ops.aten.diagonal.default", diagonalRule);
   registerSymShapeRule("tw.isin_final", elementsShapedRule);

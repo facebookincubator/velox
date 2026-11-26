@@ -96,6 +96,7 @@ class FlatVector final : public SimpleVector<T> {
           "FlatVector with null values buffer must have all rows set to null");
       return;
     }
+    VELOX_DCHECK_BUFFER_ALIGNED(values_, T);
     auto byteSize = BaseVector::byteSize<T>(BaseVector::length_);
     VELOX_CHECK_GE(values_->capacity(), byteSize);
     if (values_->size() < byteSize) {
@@ -542,6 +543,7 @@ class FlatVector final : public SimpleVector<T> {
   }
 
   void unsafeSetValues(BufferPtr values) {
+    VELOX_DCHECK_BUFFER_ALIGNED(values, T);
     values_ = std::move(values);
     rawValues_ = values_ ? const_cast<T*>(values_->as<T>()) : nullptr;
   }

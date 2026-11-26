@@ -105,11 +105,12 @@ ParquetReaderBundle ParquetReaderBuilder::build() {
     reader = std::make_unique<ParquetReader>(
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<InMemoryReadFile>(std::move(data)),
-            readerOpts.memoryPool()),
+            FileIoContext{.pool = &readerOpts.memoryPool()}),
         readerOpts);
   } else {
     auto input = std::make_unique<dwio::common::BufferedInput>(
-        std::make_shared<LocalReadFile>(*filePath_), readerOpts.memoryPool());
+        std::make_shared<LocalReadFile>(*filePath_),
+        FileIoContext{.pool = &readerOpts.memoryPool()});
     reader = std::make_unique<ParquetReader>(std::move(input), readerOpts);
   }
 
@@ -135,7 +136,8 @@ ParquetTestBase::createReader(
     const dwio::common::ReaderOptions& opts) {
   const auto path = getExampleFilePath(fileName);
   auto input = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(path), opts.memoryPool());
+      std::make_shared<LocalReadFile>(path),
+      FileIoContext{.pool = &opts.memoryPool()});
   return std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::move(input), opts);
 }
@@ -306,7 +308,7 @@ std::unique_ptr<ParquetReader> ParquetTestBase::createReaderInMemory(
   return std::make_unique<ParquetReader>(
       std::make_unique<dwio::common::BufferedInput>(
           std::make_shared<InMemoryReadFile>(std::move(data)),
-          opts.memoryPool()),
+          FileIoContext{.pool = &opts.memoryPool()}),
       opts);
 }
 

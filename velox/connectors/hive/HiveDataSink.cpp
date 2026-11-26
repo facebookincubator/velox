@@ -20,7 +20,6 @@
 #include "velox/common/base/Fs.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/config/Config.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 #include "velox/connectors/hive/SortingWriter.h"
@@ -228,6 +227,19 @@ HiveDataSink::HiveDataSink(
       "Unsupported commit strategy: {}",
       CommitStrategyName::toName(commitStrategy_));
 
+  const uint32_t numUniqueKeyColumns =
+      hiveConfig_->sortWriterNumUniqueKeyColumns(
+          connectorQueryCtx->sessionProperties());
+  if (numUniqueKeyColumns > 0) {
+    VELOX_USER_CHECK(
+        isBucketed(),
+        "Unique key columns require a bucketed table with sort columns");
+    VELOX_USER_CHECK_LE(
+        numUniqueKeyColumns,
+        insertTableHandle_->bucketProperty()->sortedBy().size(),
+        "The number of unique key columns is above the number of sort columns");
+  }
+
   if (insertTableHandle_->writeEmptyFile()) {
     VELOX_CHECK(
         !isPartitioned() && !isBucketed(),
@@ -238,7 +250,8 @@ HiveDataSink::HiveDataSink(
   if (!isBucketed()) {
     return;
   }
-  const auto& sortedProperty = insertTableHandle_->bucketProperty()->sortedBy();
+  const auto& bucketProperty = *insertTableHandle_->bucketProperty();
+  const auto& sortedProperty = bucketProperty.sortedBy();
   if (!sortedProperty.empty()) {
     sortColumnIndices_.reserve(sortedProperty.size());
     sortCompareFlags_.reserve(sortedProperty.size());
@@ -246,8 +259,17 @@ HiveDataSink::HiveDataSink(
       auto columnIndex =
           getNonPartitionTypes(dataChannels_, inputType_)
               ->getChildIdxIfExists(sortedProperty.at(i)->sortColumn());
+      if (i < numUniqueKeyColumns) {
+        VELOX_USER_CHECK(
+            columnIndex.has_value(),
+            "Unique key column is not among the written columns: {}",
+            sortedProperty.at(i)->sortColumn());
+      }
       if (columnIndex.has_value()) {
         sortColumnIndices_.push_back(columnIndex.value());
+        if (i < numUniqueKeyColumns) {
+          dedupeKeyChannels_.push_back(columnIndex.value());
+        }
         sortCompareFlags_.push_back(
             {sortedProperty.at(i)->sortOrder().isNullsFirst(),
              sortedProperty.at(i)->sortOrder().isAscending(),
@@ -392,8 +414,8 @@ std::shared_ptr<dwio::common::WriterOptions> HiveDataSink::createWriterOptions(
       connectorQueryCtx_->adjustTimestampToTimezone();
   options->maxTargetFileSizeBytes =
       (isBucketed() || sortWrite()) ? 0 : maxTargetFileBytes_;
-  auto formatScopedConfigs = connector::makeFormatScopedConfigs(
-      *hiveConfig_, *connectorSessionProperties, writerFactory_->fileFormat());
+  auto formatScopedConfigs = hiveConfig_->formatScopedConfigs(
+      writerFactory_->fileFormat(), *connectorSessionProperties);
   auto sessionFormatOptions = writerFactory_->createFormatOptions(
       formatScopedConfigs.connectorConfig,
       formatScopedConfigs.sessionProperties);
@@ -470,6 +492,7 @@ HiveDataSink::maybeCreateBucketSortWriter(
   return std::make_unique<SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
+      dedupeKeyChannels_,
       hiveConfig_->sortWriterMaxOutputRows(
           connectorQueryCtx_->sessionProperties()),
       hiveConfig_->sortWriterMaxOutputBytes(

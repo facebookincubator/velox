@@ -133,6 +133,26 @@ TEST(WriterOptionsAdapterTest, parquetPreConfigsSetsTimestampSerdeParameters) {
       "");
 }
 
+TEST(
+    WriterOptionsAdapterTest,
+    parquetPreConfigsPreservesCallerTimestampTimezone) {
+  auto adapter = createWriterOptionsAdapter(dwio::common::FileFormat::PARQUET);
+  ASSERT_NE(adapter, nullptr);
+
+  dwio::common::WriterOptions options;
+  const auto tzKey =
+      std::string(parquet::ParquetConfig::kWriterSerdeTimestampTimezone);
+  options.serdeParameters[tzKey] = "UTC";
+
+  adapter->applyPreConfigs(options);
+
+  EXPECT_EQ(
+      options.serdeParameters[std::string(
+          parquet::ParquetConfig::kWriterSerdeTimestampUnit)],
+      "6");
+  EXPECT_EQ(options.serdeParameters[tzKey], "UTC");
+}
+
 // Verifies the DWRF adapter's post-config hook overrides timestamp settings
 // regardless of what config processing left in place. The Iceberg spec
 // requires timestamps NOT be adjusted to UTC;

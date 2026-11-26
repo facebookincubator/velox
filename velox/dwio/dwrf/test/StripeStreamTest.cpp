@@ -178,9 +178,8 @@ TEST_P(StripeStreamFormatTypeTest, planReads) {
       *pool_,
       std::make_unique<BufferedInput>(
           std::move(is),
-          *pool_,
+          facebook::velox::FileIoContext{.pool = pool_.get()},
           MetricsLog::voidLog(),
-          nullptr,
           nullptr,
           BufferedInput::kMaxMergeDistance,
           true),
@@ -269,7 +268,8 @@ TEST_F(StripeStreamTest, filterSequences) {
   auto isPtr = is.get();
   auto readerBase = std::make_shared<ReaderBase>(
       *pool_,
-      std::make_unique<BufferedInput>(std::move(is), *pool_),
+      std::make_unique<BufferedInput>(
+          std::move(is), facebook::velox::FileIoContext{.pool = pool_.get()}),
       std::make_unique<PostScript>(proto::PostScript{}),
       footer,
       nullptr,
@@ -340,7 +340,8 @@ TEST_P(StripeStreamFormatTypeTest, zeroLength) {
   auto isPtr = is.get();
   auto readerBase = std::make_shared<ReaderBase>(
       *pool_,
-      std::make_unique<BufferedInput>(std::move(is), *pool_),
+      std::make_unique<BufferedInput>(
+          std::move(is), facebook::velox::FileIoContext{.pool = pool_.get()}),
       std::make_unique<PostScript>(std::move(ps)),
       footer,
       nullptr,
@@ -477,7 +478,8 @@ TEST_P(StripeStreamFormatTypeTest, planReadsIndex) {
   auto isPtr = is.get();
   auto readerBase = std::make_shared<ReaderBase>(
       *pool_,
-      std::make_unique<BufferedInput>(std::move(is), *pool_),
+      std::make_unique<BufferedInput>(
+          std::move(is), facebook::velox::FileIoContext{.pool = pool_.get()}),
       std::make_unique<PostScript>(std::move(ps)),
       footer,
       std::move(cache),
@@ -665,7 +667,7 @@ TEST_F(StripeStreamTest, readEncryptedStreams) {
       *readerPool,
       std::make_unique<BufferedInput>(
           std::make_shared<facebook::velox::InMemoryReadFile>(std::string()),
-          *readerPool),
+          facebook::velox::FileIoContext{.pool = readerPool.get()}),
       std::make_unique<PostScript>(std::move(ps)),
       footer,
       nullptr,
@@ -751,7 +753,7 @@ TEST_F(StripeStreamTest, schemaMismatch) {
       *readerPool,
       std::make_unique<BufferedInput>(
           std::make_shared<facebook::velox::InMemoryReadFile>(std::string()),
-          *pool_),
+          facebook::velox::FileIoContext{.pool = pool_.get()}),
       std::make_unique<PostScript>(std::move(ps)),
       footer,
       nullptr,

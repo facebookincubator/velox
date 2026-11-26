@@ -173,7 +173,8 @@ class AggregationPushdownBenchmark : public velox::test::VectorTestBase {
     Readers readers;
     readers.reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(
-            std::make_shared<InMemoryReadFile>(file(config)), *pool()),
+            std::make_shared<InMemoryReadFile>(file(config)),
+            FileIoContext{.pool = pool()}),
         readerOptions);
     dwio::common::RowReaderOptions rowReaderOptions;
     rowReaderOptions.setScanSpec(scanSpec);

@@ -386,6 +386,10 @@ bool BigintValuesUsingBitmask::testingEquals(const Filter& other) const {
 }
 
 folly::dynamic BigintValuesUsingBloomFilter::serialize() const {
+  // A merged bloom filter exists only in a task's scan spec, which is built
+  // after the plan is deserialized. Nothing serializes it.
+  VELOX_CHECK_NULL(
+      exact_, "Serialization of a merged bloom filter is not supported");
   auto obj = Filter::serializeBase();
   folly::dynamic words = folly::dynamic::array;
   for (auto& block : blocks_) {
@@ -416,13 +420,30 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::create(
     }
   }
   return std::unique_ptr<BigintValuesUsingBloomFilter>(
-      new BigintValuesUsingBloomFilter(nullAllowed, std::move(blocks)));
+      new BigintValuesUsingBloomFilter(
+          nullAllowed, std::move(blocks), /*exact=*/nullptr));
+}
+
+std::unique_ptr<Filter> BigintValuesUsingBloomFilter::clone(
+    std::optional<bool> nullAllowed) const {
+  const bool newNullAllowed = nullAllowed.value_or(nullAllowed_);
+  return std::unique_ptr<BigintValuesUsingBloomFilter>(
+      new BigintValuesUsingBloomFilter(
+          newNullAllowed,
+          blocks_,
+          exact_ ? exact_->clone(newNullAllowed) : nullptr));
 }
 
 bool BigintValuesUsingBloomFilter::testingEquals(const Filter& other) const {
   auto* typedOther =
       Filter::testingBaseEquals<BigintValuesUsingBloomFilter>(other);
   if (!typedOther) {
+    return false;
+  }
+  if ((exact_ == nullptr) != (typedOther->exact_ == nullptr)) {
+    return false;
+  }
+  if (exact_ && !exact_->testingEquals(*typedOther->exact_)) {
     return false;
   }
   return blocks_.size() == typedOther->blocks_.size() &&
@@ -2435,7 +2456,7 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       int64_t range;
       if (__builtin_sub_overflow(filter->upper(), filter->lower(), &range) ||
           range > 100'000) {
-        return other->clone();
+        return mergeWithExact(*other);
       }
       std::vector<int64_t> values;
       values.reserve(range + 1);
@@ -2473,14 +2494,29 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
     case FilterKind::kNegatedBigintValuesUsingHashTable:
     case FilterKind::kNegatedBigintValuesUsingBitmask:
     case FilterKind::kBigintMultiRange:
-    case FilterKind::kBigintValuesUsingBloomFilter:
-      // Bloom filter allows false positive so dropping it will not affect
-      // correctness.  We can do so if we think merging will not improve
-      // performance.
-      return other->clone();
+      return mergeWithExact(*other);
+    case FilterKind::kBigintValuesUsingBloomFilter: {
+      // Bloom filters allow false positives, so the other bloom filter can be
+      // dropped. Its exact filter must still apply.
+      const auto* otherBloom = other->as<BigintValuesUsingBloomFilter>();
+      if (otherBloom->exact_) {
+        return mergeWithExact(*otherBloom->exact_);
+      }
+      return clone(nullAllowed_ && other->testNull());
+    }
     default:
       VELOX_FAIL("Cannot merge {} with {}", kindName(), other->kindName());
   }
+}
+
+std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWithExact(
+    const Filter& other) const {
+  const bool bothNullAllowed = nullAllowed_ && other.testNull();
+  std::shared_ptr<const Filter> exact =
+      exact_ ? exact_->mergeWith(&other) : other.clone(bothNullAllowed);
+  return std::unique_ptr<BigintValuesUsingBloomFilter>(
+      new BigintValuesUsingBloomFilter(
+          bothNullAllowed, blocks_, std::move(exact)));
 }
 
 namespace {

@@ -322,6 +322,13 @@ class DataSink {
     return input.size();
   }
 
+  /// Returns the number of duplicate rows passed to appendData() that the sink
+  /// dropped instead of writing. Final once close() is called. The table
+  /// writer subtracts it from the row count it reports.
+  virtual uint64_t numDuplicateRows() const {
+    return 0;
+  }
+
   /// Called after all data has been added via possibly multiple calls to
   /// appendData() This function finishes the data procesing like sort all the
   /// added data and write them to the file writer. The finish might take long
@@ -823,7 +830,7 @@ class ConnectorQueryCtx {
   const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
-      core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};
+      core::QueryConfig::RowSizeTrackingMode::kEnabledForAll};
 };
 
 class Connector;

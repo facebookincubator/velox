@@ -87,6 +87,9 @@ TabletReader::Options TabletReader::configureOptions(
   tabletOptions.preloadOptionalSections = {
       std::string(kSchemaSection), std::string(kVectorizedStatsSection)};
   tabletOptions.loadClusterIndex = options.loadClusterIndex();
+  if (!options.clusterIndexName().empty()) {
+    tabletOptions.clusterIndexName = options.clusterIndexName();
+  }
   tabletOptions.preloadIndex = options.preloadIndex();
   tabletOptions.loadChunkStats = options.loadChunkStats();
   if (tabletOptions.loadChunkStats) {
@@ -269,9 +272,10 @@ TabletReader::TabletReader(
         indexOptions.blockCache = options.blockCache;
 
         // Only a cache uses the handle. Without one, the handle's file may not
-        // be the reader's file.
-        if (indexOptions.blockCache != nullptr) {
-          indexOptions.fileHandle = options.fileHandle;
+        // be the reader's file, and a copy would keep it alive.
+        if (indexOptions.blockCache != nullptr &&
+            options.fileHandle != nullptr) {
+          indexOptions.fileHandle = *options.fileHandle;
         }
         return indexOptions;
       }()},

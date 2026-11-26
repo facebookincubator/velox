@@ -97,6 +97,14 @@ void maybeRecordTransferTime(Stream& stream, WaveStream& waveStream) {
     stream.wait();
   }
 }
+
+void recordDecodeLaunch(WaveStream& waveStream, const DecodeLaunchInfo& info) {
+  WaveStats& stats = waveStream.stats();
+  stats.numThreadBlocks += info.numBlocks;
+  ++stats.numReaderKernels;
+  stats.numNewReaderKernels += info.isNewKernel;
+  stats.readerLaunchMicros += info.launchMicros;
+}
 } // namespace
 
 void ReadStream::makeGrid(Stream* stream) {
@@ -140,7 +148,7 @@ void ReadStream::makeGrid(Stream* stream) {
     {
       maybeRecordTransferTime(*stream, *waveStream);
       PrintTime l("grid");
-      launchDecode(programs_, params, stream);
+      recordDecodeLaunch(*waveStream, launchDecode(programs_, params, stream));
     }
     reader_->recordGriddize(*stream);
     if (params.device) {
@@ -191,8 +199,8 @@ void ReadStream::makeCompact(bool isSerial) {
           step->data.compact.sourceRows =
               filters_[i].deviceResult + blockIdx * rowsPerBlock;
         } else {
-          step->data.compact.sourceRows =
-              reinterpret_cast<int32_t*>(blockIdx * rowsPerBlock);
+          step->data.compact.sourceRows = reinterpret_cast<int32_t*>(
+              blockIdx * rowsPerBlock * sizeof(int32_t));
           deviceStaging_.registerPointer(
               filters_[i].deviceResultId,
               &step->data.compact.sourceRows,
@@ -219,7 +227,6 @@ void ReadStream::makeCompact(bool isSerial) {
 
 void ReadStream::makeOps() {
   auto& children = reader_->children();
-  bool isMultiChunkFilter = false;
   for (auto i = 0; i < children.size(); ++i) {
     auto* child = reader_->children()[i];
     if (child->scanSpec().filter()) {
@@ -230,13 +237,7 @@ void ReadStream::makeOps() {
           this,
           filterOnly ? ColumnAction::kFilter : ColumnAction::kValues,
           filters_.back());
-      decodeLevel_ =
-          std::max(decodeLevel_, child->formatData()->maxDecodeLevel());
-      isMultiChunkFilter |= filters_.back().hasMultiChunks;
     }
-  }
-  for (auto& filter : filters_) {
-    filter.hasMultiChunks = isMultiChunkFilter;
   }
   for (auto i = 0; i < children.size(); ++i) {
     auto* child = reader_->children()[i];
@@ -284,7 +285,6 @@ bool ReadStream::makePrograms(bool& needSync) {
     // Filters are done consecutively, each TB does all the filters for its
     // range.
     for (auto& filter : filters_) {
-      filter.decodeLevel = decodeLevel_;
       filter.reader->formatData()->startOp(
           filter,
           previousFilter,
@@ -295,7 +295,6 @@ bool ReadStream::makePrograms(bool& needSync) {
           *this);
       previousFilter = &filter;
     }
-    decodeLevel_--;
     filtersDone_ = filterOpsFinal();
 
     // the decode is already done here if the filters are dispatched and there
@@ -444,7 +443,9 @@ void ReadStream::launch(
           {
             maybeRecordTransferTime(*stream, *readStream->waveStream);
             PrintTime l("decode");
-            launchDecode(readStream->programs(), params, stream);
+            recordDecodeLaunch(
+                *readStream->waveStream,
+                launchDecode(readStream->programs(), params, stream));
           }
           if (params.device) {
             readStream->commands_.push_back(std::move(params));
@@ -470,7 +471,9 @@ void ReadStream::launch(
         {
           maybeRecordTransferTime(*stream, *readStream->waveStream);
           PrintTime l("decode-f");
-          launchDecode(readStream->programs(), params, stream);
+          recordDecodeLaunch(
+              *readStream->waveStream,
+              launchDecode(readStream->programs(), params, stream));
         }
         if (params.device) {
           readStream->commands_.push_back(std::move(params));

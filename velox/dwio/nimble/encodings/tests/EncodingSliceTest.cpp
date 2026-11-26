@@ -18,12 +18,14 @@
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 #include <random>
 #include <span>
 #include <string_view>
 #include <type_traits>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/BitUtil.h"
@@ -237,6 +239,51 @@ class EncodingSliceTest : public ::testing::Test {
   slice(std::string_view encoded, uint32_t offset, uint32_t length) {
     return nimble::EncodingFactory::slice(
         encoded, offset, length, *buffer_, nimble::Encoding::Options{});
+  }
+
+  // Slices every range of a Varint stream of 'values' and checks that each
+  // slice keeps the source baseline, copies the source varint bytes and reads
+  // back the range.
+  template <typename T>
+  void expectVarintSlicesCopyBytes(
+      const nimble::Vector<T>& values,
+      bool useVarintRowCount) {
+    nimble::Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    const auto encoded =
+        nimble::test::Encoder<nimble::VarintEncoding<T>>::encode(
+            *buffer_, values, nimble::CompressionType::Uncompressed, options);
+    const auto baselineOffset = nimble::EncodingPrefix::serializedSize(
+        static_cast<uint32_t>(values.size()), useVarintRowCount);
+    const auto sourceBaseline = encoded.substr(baselineOffset, sizeof(T));
+    const auto sourcePayload = encoded.substr(baselineOffset + sizeof(T));
+
+    for (uint32_t offset = 0; offset < values.size(); ++offset) {
+      for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+        SCOPED_TRACE(
+            testing::Message() << "offset=" << offset << ", length=" << length);
+        const auto sliced = nimble::EncodingFactory::slice(
+            encoded, offset, length, *buffer_, options);
+
+        const auto sliceBaselineOffset =
+            nimble::EncodingPrefix::serializedSize(length, useVarintRowCount);
+        EXPECT_EQ(
+            sliced.substr(sliceBaselineOffset, sizeof(T)), sourceBaseline);
+        EXPECT_NE(
+            sourcePayload.find(sliced.substr(sliceBaselineOffset + sizeof(T))),
+            std::string_view::npos);
+
+        auto encoding = nimble::EncodingFactory{options}.create(
+            *pool_, sliced, [](uint32_t /*totalLength*/) { return nullptr; });
+        EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Varint);
+        nimble::Vector<T> output{pool_.get(), length};
+        encoding->materialize(length, output.data());
+        EXPECT_THAT(
+            std::vector<T>(output.begin(), output.end()),
+            testing::ElementsAreArray(
+                values.begin() + offset, values.begin() + offset + length));
+      }
+    }
   }
 
   template <typename T>
@@ -657,6 +704,93 @@ TEST_F(EncodingSliceTest, materializesFixedBitWidthRangeWithoutWrapper) {
 
   const std::vector<int32_t> expected{11, 12, 13};
   EXPECT_EQ(std::vector<int32_t>(output.begin(), output.end()), expected);
+}
+
+TEST_F(EncodingSliceTest, slicesVarintByCopyingBytes) {
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(
+        testing::Message() << "useVarintRowCount=" << useVarintRowCount);
+    expectVarintSlicesCopyBytes(
+        makeVector<uint64_t>(
+            {1'000, 1, 300, 70'000, 5'000'000'000, 2, 300, 301}),
+        useVarintRowCount);
+    expectVarintSlicesCopyBytes(
+        makeVector<int32_t>(
+            {-1'000, 5, -2'000'000'000, 7, 2'000'000'000, 0, -1}),
+        useVarintRowCount);
+    expectVarintSlicesCopyBytes(
+        makeVector<float>({1.5F, -2.0F, 1e10F, 0.0F, 3.25F, -1e-3F}),
+        useVarintRowCount);
+  }
+}
+
+TEST_F(EncodingSliceTest, slicesVarintAcrossRowCountPrefixBoundary) {
+  constexpr uint32_t kRowCount{130};
+  nimble::Vector<uint64_t> values{pool_.get(), kRowCount};
+  std::iota(values.begin(), values.end(), uint64_t{0});
+
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(useVarintRowCount);
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = useVarintRowCount,
+    };
+    const auto encoded =
+        nimble::test::Encoder<nimble::VarintEncoding<uint64_t>>::encode(
+            *buffer_, values, nimble::CompressionType::Uncompressed, options);
+    const std::vector<char> storage{encoded.begin(), encoded.end()};
+    const std::string_view source{storage.data(), storage.size()};
+
+    for (const uint32_t count : {127, 128}) {
+      SCOPED_TRACE(count);
+      const auto sliced = nimble::EncodingFactory::slice(
+          source, /*offset=*/1, count, *buffer_, options);
+      auto encoding = nimble::EncodingFactory{options}.create(
+          *pool_, sliced, [](uint32_t /*totalLength*/) { return nullptr; });
+      EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Varint);
+      EXPECT_EQ(encoding->rowCount(), count);
+      std::vector<uint64_t> output(count);
+      encoding->materialize(count, output.data());
+      EXPECT_THAT(
+          output,
+          testing::ElementsAreArray(
+              values.begin() + 1, values.begin() + 1 + count));
+    }
+  }
+}
+
+TEST_F(EncodingSliceTest, rejectsVarintSliceOfTruncatedData) {
+  const auto values =
+      makeVector<uint64_t>({1'000, 1, 300, 70'000, 5'000'000'000, 2, 300, 301});
+  const auto encoded =
+      nimble::test::Encoder<nimble::VarintEncoding<uint64_t>>::encode(
+          *buffer_, values);
+  const auto headerSize = nimble::EncodingPrefix::serializedSize(
+                              static_cast<uint32_t>(values.size()),
+                              /*useVarint=*/false) +
+      sizeof(uint64_t);
+  {
+    const auto truncated = encoded.substr(0, headerSize + 3);
+    NIMBLE_ASSERT_FILE_THROW(
+        slice(truncated, /*offset=*/5, /*length=*/3),
+        "Varint slice range exceeds the encoded data.");
+  }
+  {
+    const std::vector<char> truncated{
+        encoded.begin(), encoded.begin() + headerSize + 1};
+    const std::string_view truncatedView{truncated.data(), truncated.size()};
+    NIMBLE_ASSERT_FILE_THROW(
+        slice(truncatedView, /*offset=*/0, /*length=*/1),
+        "Varint skip runs past the end of the encoding.");
+  }
+  {
+    std::vector<char> truncated(headerSize + 8, static_cast<char>(0x80));
+    std::copy_n(encoded.begin(), headerSize, truncated.begin());
+    const std::string_view truncatedView{truncated.data(), truncated.size()};
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::VarintEncoding<uint64_t>::slice(
+            truncatedView, /*offset=*/0, /*length=*/8, *buffer_, {}),
+        "Varint skip runs past the end of the encoding.");
+  }
 }
 
 TEST_F(EncodingSliceTest, materializesCompressedTrivialRangeWithoutWrapper) {

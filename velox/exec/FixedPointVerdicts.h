@@ -18,7 +18,6 @@
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/futures/SharedPromise.h>
-#include <functional>
 #include <map>
 #include <string>
 
@@ -36,8 +35,12 @@ namespace facebook::velox::exec {
 ///   verdicts.publish(workerZero, iteration, converged);  // On worker 0.
 ///   auto verdict = verdicts.get(workerZero, iteration);  // On a peer.
 ///
-/// The workers of a loop run in lockstep, so once one of them reaches a new
-/// iteration's verdict, none needs the previous one: only the latest is kept.
+/// Worker 0 can run ahead of its peers, but it starts iteration t+1 only when
+/// the verdict for t is "not converged". So keeping each loop's latest
+/// iteration answers every request:
+///  - an earlier iteration is "not converged";
+///  - the latest iteration gets its verdict, once worker 0 publishes it;
+///  - a later iteration waits until worker 0 publishes it.
 class FixedPointVerdicts {
  public:
   /// Records worker 0's verdict for 'iteration' of its loop.
@@ -46,8 +49,9 @@ class FixedPointVerdicts {
       int32_t iteration,
       bool converged);
 
-  /// Returns the verdict for 'iteration' of the loop of 'workerZero', which
-  /// resolves once worker 0 publishes it.
+  /// Returns the verdict for 'iteration' of the loop of 'workerZero'. It
+  /// resolves to false at once for an iteration before the loop's latest, and
+  /// otherwise once worker 0 publishes the verdict.
   folly::SemiFuture<bool> get(
       const FixedPointOptions::LoopAddress& workerZero,
       int32_t iteration);
@@ -56,17 +60,12 @@ class FixedPointVerdicts {
   void erase(const std::string& worker);
 
  private:
+  // A loop's latest iteration, and the verdict worker 0 published or will
+  // publish for it.
   struct Verdict {
     int32_t iteration;
     folly::SharedPromise<bool> promise;
   };
-
-  // Runs 'action' on the promise of the verdict for 'iteration' of the loop,
-  // under the lock.
-  void withVerdict(
-      const FixedPointOptions::LoopAddress& workerZero,
-      int32_t iteration,
-      const std::function<void(folly::SharedPromise<bool>&)>& action);
 
   // Worker 0's name to the latest verdict of each of its loops, by nesting.
   folly::Synchronized<folly::F14FastMap<

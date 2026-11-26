@@ -130,21 +130,27 @@ class ReaderBase {
   bool hasFileColumnStatistics() const;
 
   /// Returns the file-level statistics of a schema node, or null if the file
-  /// has none for it.
+  /// has none for it. In lazy mode, builds the node's statistics on first
+  /// call.
   const ColumnStatistics* fileColumnStatistics(uint32_t nodeId) const;
 
   /// Returns the logical size from the node's file-level statistics, or
-  /// std::nullopt if the file has none for it.
+  /// std::nullopt if the file has none for it. In lazy mode, reads only the
+  /// logical size stream.
   std::optional<uint64_t> fileColumnLogicalSize(uint32_t nodeId) const;
 
  private:
+  // 'sharedTablet' is true when other readers may use 'tablet', so this reader
+  // leaves the tablet's preloaded stats section for them instead of taking it.
   ReaderBase(
       std::unique_ptr<velox::dwio::common::BufferedInput> input,
       std::shared_ptr<TabletReader> tablet,
+      bool sharedTablet,
       const std::shared_ptr<velox::random::RandomSkipTracker>& randomSkip,
       const std::shared_ptr<velox::common::ScanSpec>& scanSpec,
       std::shared_ptr<const Type> nimbleSchema,
       velox::RowTypePtr fileSchema,
+      bool lazyFileStats,
       velox::memory::MemoryPool* pool);
 
   const std::unique_ptr<velox::dwio::common::BufferedInput> input_;
@@ -154,9 +160,12 @@ class ReaderBase {
   const std::shared_ptr<velox::common::ScanSpec> scanSpec_;
   const std::shared_ptr<const Type> nimbleSchema_;
   const velox::RowTypePtr fileSchema_;
-  // File-level column statistics deserialized from the vectorized stats
-  // optional section at construction.
+  // Empty in lazy mode.
+  // TODO: Delete once the lazy path is fully rolled out.
   const std::vector<std::unique_ptr<ColumnStatistics>> fileColumnStats_;
+  // Null in eager mode, or if the file has no stats section. Holds the
+  // section, and its cache pin when cached.
+  const std::unique_ptr<VectorizedFileStats> lazyStats_;
   mutable std::shared_ptr<const velox::dwio::common::TypeWithId>
       fileSchemaWithId_;
 };

@@ -100,7 +100,8 @@ TEST_F(BinaryStreamReaderTest, encryptionNotSupported) {
   auto is = std::make_shared<RecordingInputStream>();
   auto readerBase = std::make_shared<ReaderBase>(
       *pool,
-      std::make_unique<BufferedInput>(is, *pool),
+      std::make_unique<BufferedInput>(
+          is, facebook::velox::FileIoContext{.pool = pool.get()}),
       std::make_unique<PostScript>(proto::PostScript{}),
       footer,
       nullptr,
@@ -123,7 +124,8 @@ TEST_F(BinaryStreamReaderTest, columnIdsEmpty) {
   auto is = std::make_shared<RecordingInputStream>();
   auto readerBase = std::make_shared<ReaderBase>(
       *pool,
-      std::make_unique<BufferedInput>(is, *pool),
+      std::make_unique<BufferedInput>(
+          is, facebook::velox::FileIoContext{.pool = pool.get()}),
       std::make_unique<PostScript>(proto::PostScript{}),
       footer,
       nullptr,
@@ -147,7 +149,8 @@ TEST_F(BinaryStreamReaderTest, emptyFile) {
   auto is = std::make_shared<RecordingInputStream>();
   auto readerBase = std::make_shared<ReaderBase>(
       *pool,
-      std::make_unique<BufferedInput>(is, *pool),
+      std::make_unique<BufferedInput>(
+          is, facebook::velox::FileIoContext{.pool = pool.get()}),
       std::make_unique<PostScript>(proto::PostScript{}),
       footer,
       nullptr,
@@ -229,7 +232,7 @@ TEST_F(BinaryStreamReaderTest, basicFlow) {
   auto input = std::make_unique<BufferedInput>(
       std::make_shared<facebook::velox::InMemoryReadFile>(
           std::string(sinkPtr->data(), sinkPtr->size())),
-      *pool);
+      facebook::velox::FileIoContext{.pool = pool.get()});
 
   facebook::velox::dwio::common::ReaderOptions readerOpts(pool.get());
   readerOpts.setFileFormat(FileFormat::DWRF);

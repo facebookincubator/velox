@@ -65,6 +65,7 @@ class DictionaryEncoding
       const Encoding::Options& options = {});
 
   ~DictionaryEncoding() override {
+    this->releaseVectorBuffer(alphabet_);
     this->releaseBuffer(indicesBuffer_);
   }
 
@@ -153,6 +154,11 @@ class DictionaryEncoding
   const Encoding* indicesEncoding() const {
     return indicesEncoding_.get();
   }
+
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
 
  private:
   // Uses unique-value statistics so repeated input values do not skew sampling.
@@ -289,7 +295,7 @@ DictionaryEncoding<T>::DictionaryEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
-      alphabet_{this->pool_} {
+      alphabet_{this->template getVectorBuffer<T>()} {
   const auto* pos = data.data() + this->dataOffset();
   const uint32_t alphabetSize = encoding::readUint32(pos);
   alphabetEncoding_ = EncodingFactory().create(
@@ -309,6 +315,26 @@ DictionaryEncoding<T>::DictionaryEncoding(
 template <typename T>
 void DictionaryEncoding<T>::reset() {
   indicesEncoding_->reset();
+}
+
+template <typename T>
+bool DictionaryEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const auto* pos = data.data() + this->dataOffset();
+  const uint32_t alphabetSize = encoding::readUint32(pos);
+  alphabetEncoding_ = this->rebindChild(
+      {pos, alphabetSize}, stringBufferFactory, std::move(alphabetEncoding_));
+  const uint32_t alphabetCount = alphabetEncoding_->rowCount();
+  alphabet_.resize(alphabetCount);
+  alphabetEncoding_->materialize(alphabetCount, alphabet_.data());
+  pos += alphabetSize;
+  indicesEncoding_ = this->rebindChild(
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+      stringBufferFactory,
+      std::move(indicesEncoding_));
+  filterCacheInitialized_ = false;
+  return true;
 }
 
 template <typename T>
@@ -408,16 +434,11 @@ template <typename DictionaryVisitor>
 class FusedDictionaryIndicesHook : public velox::ValueHook {
  public:
   /// Constructs a hook bound to the given dictionary visitor.
-  /// 'filterCache' is the visitor's per-index verdict cache. It may be null
-  /// for reads without a filter. 'dictionarySize' is the number of dictionary
-  /// entries.
+  /// 'dictionarySize' is the number of dictionary entries.
   FusedDictionaryIndicesHook(
       DictionaryVisitor& visitor,
-      const uint8_t* filterCache,
       uint64_t dictionarySize)
-      : visitor_{visitor},
-        filterCache_{filterCache},
-        dictionarySize_{dictionarySize} {}
+      : visitor_{visitor}, dictionarySize_{dictionarySize} {}
 
   bool acceptsNulls() const final {
     return false;
@@ -446,8 +467,10 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
 
   /// Processes a batch of non-null indices with their requested-row positions.
   /// The visitor handles the non-null values. This hook handles the null gaps
-  /// between 'rows': it writes their null bits in projection output and merges
-  /// passing nulls into filtered output.
+  /// between 'rows':
+  /// - Projection output: it writes their null bits.
+  /// - Filtered output: the null rows fail the filter, because the fused read
+  ///   never runs a filter that keeps nulls on a read with nulls.
   void addValues(
       const vector_size_t* rows,
       const int32_t* indices,
@@ -464,9 +487,9 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     const auto numNulls = rows[size - 1] + 1 - startRowIndex - size;
     if (numNulls > 0) {
       if constexpr (DictionaryVisitor::kHasFilter) {
-        if (visitor_.allowNulls()) {
-          mergeBulkNulls(rows, indices, size, numNulls, outputOffset);
-        }
+        NIMBLE_CHECK(
+            !visitor_.allowNulls(),
+            "Fused dictionary read must not get null rows that pass the filter");
       } else {
         setProjectionNulls(rows, size, startRowIndex, outputOffset);
       }
@@ -525,104 +548,6 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
     }
   }
 
-  // Inserts the null rows between 'rows' into the filtered output. Walks
-  // backward because the inserted nulls shift passing values to the right.
-  void mergeBulkNulls(
-      const vector_size_t* rows,
-      const int32_t* indices,
-      vector_size_t size,
-      vector_size_t numNulls,
-      vector_size_t outputOffset) {
-    using T = typename DictionaryVisitor::DataType;
-    const auto numValues = visitor_.reader().numValues();
-    auto* filterHits = visitor_.outputRows(numNulls) - numValues;
-    auto* values = reinterpret_cast<T*>(visitor_.reader().rawValues());
-    uint64_t* nulls{nullptr};
-    if constexpr (!DictionaryVisitor::kFilterOnly) {
-      nulls = visitor_.rawNulls(numNulls);
-      velox::bits::fillBits(
-          nulls, outputOffset, numValues + numNulls, velox::bits::kNotNull);
-      visitor_.setHasNulls();
-    }
-    auto passingPosition = numValues - 1;
-    auto outputPosition = numValues + numNulls - 1;
-
-    if (numNulls * 4 >= size) {
-      paths_.recordMergeBulkNullsDense();
-
-      // Dense nulls leave few passing rows between gaps, in counts a branch
-      // cannot predict. Visit every non-null row instead, and take its verdict
-      // from the filter cache, which processBulk() filled for every index in
-      // 'indices'. Each row copies the current passing value and moves the
-      // cursors only if it passed, so no branch depends on the filter result.
-      // The loop stops once every null is placed, because the passing values
-      // below are already in their final slots.
-      for (auto position = size - 1; outputPosition > passingPosition;
-           --position) {
-        NIMBLE_DCHECK_GT(position, 0);
-        const bool passed = filterCache_[indices[position]] ==
-            velox::dwio::common::FilterResult::kSuccess;
-
-        // Slots above 'passingPosition' are free, so the copy is harmless
-        // when the row failed the filter.
-        const auto source = std::max(passingPosition, outputOffset);
-        NIMBLE_DCHECK(
-            !passed || filterHits[source] == visitor_.rowAt(rows[position]),
-            "Filter cache disagrees with the passing rows");
-        filterHits[outputPosition] = filterHits[source];
-        if constexpr (!DictionaryVisitor::kFilterOnly) {
-          values[outputPosition] = values[source];
-        }
-        passingPosition -= passed;
-        outputPosition -= passed;
-
-        const auto nullBegin = rows[position - 1] + 1;
-        for (auto nullPosition = rows[position]; nullPosition-- > nullBegin;) {
-          filterHits[outputPosition] = visitor_.rowAt(nullPosition);
-          if constexpr (!DictionaryVisitor::kFilterOnly) {
-            velox::bits::setNull(nulls, outputPosition);
-          }
-          --outputPosition;
-        }
-      }
-    } else {
-      paths_.recordMergeBulkNullsSparse();
-
-      // Sparse nulls leave long runs between gaps, so jump from gap to gap and
-      // move the passing values in between. The branches mispredict only
-      // around the gaps, which are rare.
-      for (auto position = size - 1; position > 0; --position) {
-        const auto nullBegin = rows[position - 1] + 1;
-        const auto nullEnd = rows[position];
-        if (nullBegin == nullEnd) {
-          continue;
-        }
-        const auto firstNullRow = visitor_.rowAt(nullBegin);
-        while (passingPosition >= outputOffset &&
-               filterHits[passingPosition] > firstNullRow) {
-          filterHits[outputPosition] = filterHits[passingPosition];
-          if constexpr (!DictionaryVisitor::kFilterOnly) {
-            values[outputPosition] = values[passingPosition];
-          }
-          --passingPosition;
-          --outputPosition;
-        }
-        for (auto nullPosition = nullEnd; nullPosition-- > nullBegin;) {
-          filterHits[outputPosition] = visitor_.rowAt(nullPosition);
-          if constexpr (!DictionaryVisitor::kFilterOnly) {
-            velox::bits::setNull(nulls, outputPosition);
-          }
-          --outputPosition;
-        }
-      }
-    }
-    NIMBLE_CHECK_EQ(
-        outputPosition,
-        passingPosition,
-        "Merged nulls must fill the gaps in the filtered output exactly");
-    visitor_.addNumValues(numNulls);
-  }
-
   // Handles nulls from the current visitor row to the given row. For
   // filter-only reads, records null rows. For projection reads, outputs
   // nulls or skips them depending on the visitor's extraction mode.
@@ -661,9 +586,6 @@ class FusedDictionaryIndicesHook : public velox::ValueHook {
   // output.
   DictionaryVisitor& visitor_;
 
-  // Verdict per dictionary index, filled by the visitor's processBulk().
-  const uint8_t* filterCache_;
-
   // Number of dictionary entries. Each index from addValue() must be below it.
   const uint64_t dictionarySize_;
 
@@ -685,10 +607,12 @@ void DictionaryEncoding<T>::readWithVisitor(
   //      - No hook (aggregation pushdown): processBulk() does not support one.
   //      - A bulk path: Nimble's float reader has none for REAL read as DOUBLE.
   //      - dictionaryAwareReads, the rollout switch, is on.
+  //      - The fast path is enabled (useBulkPath()): the fused read's slow
+  //        path is less efficient than the regular read below.
   if constexpr (
       detail::dictionaryColumnVisitorSupported<T, V>() && !V::kHasHook &&
       V::kHasBulkPath) {
-    if (params.dictionaryAwareReads) {
+    if (params.dictionaryAwareReads && visitor.reader().useBulkPath()) {
       using DictionaryVisitor = velox::dwio::common::DictionaryColumnVisitor<
           T,
           typename V::FilterType,
@@ -743,7 +667,7 @@ void DictionaryEncoding<T>::readWithVisitor(
       // The filter applies to dictionary values, not indices, so decode indices
       // unfiltered and let the dictionary visitor translate and filter them.
       detail::FusedDictionaryIndicesHook<DictionaryVisitor> dictionaryHook{
-          dictionaryVisitor, dictionaryState.filterCache, alphabet_.size()};
+          dictionaryVisitor, alphabet_.size()};
       detail::ForwardingIndicesHook indicesHook{dictionaryHook};
       using IndicesExtract =
           velox::dwio::common::ExtractToHook<detail::ForwardingIndicesHook>;

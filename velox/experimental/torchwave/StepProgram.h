@@ -123,6 +123,10 @@ struct FillOp {
     kUninited,
   };
 
+  /// 'kernel' of a tensor no launch reads: a view the step makes, which the
+  /// setup writes there for steps off the device path to fetch.
+  static constexpr int32_t kExport = -2;
+
   Kind kind{kTensor};
   /// From the start of the step's pinned parameter region.
   int32_t offset{0};
@@ -330,9 +334,10 @@ struct GridLaunchDesc {
   /// Whether the launch always runs in one block.
   bool singleBlock{false};
   /// How the launch's element count combines its terms: the largest, their
-  /// sum, or the product of their broadcast dims. kHost when the count needs
+  /// sum, the product of their broadcast dims, or the product of their counts
+  /// (all combinations of the terms). kHost when the count needs
   /// what the parameters do not carry, such as a nested expression.
-  enum class Count : uint8_t { kHost, kMax, kSum, kBroadcast };
+  enum class Count : uint8_t { kHost, kMax, kSum, kBroadcast, kProduct };
   Count count{Count::kHost};
   /// The terms: offsets in the step's parameter region of a tensor, whose
   /// numEl or dims count, or of an integer, whose value counts.
@@ -359,6 +364,12 @@ struct GridDescriptor {
   int32_t blockCapacity{0};
 };
 
+/// The element count 'desc' gives a launch from its parameters at 'base', or
+/// -1 for one the host has to give, as the device grid kernel computes it. A
+/// launch with an operand absent this execution is empty whatever this gives;
+/// the host's value table knows that.
+int64_t gridCount(const GridLaunchDesc& desc, const uint8_t* base);
+
 /// One step of one node.
 struct StepProgram {
   std::vector<BoundSize> sizes;
@@ -372,6 +383,12 @@ struct StepProgram {
   std::vector<int32_t> standaloneOps;
   /// What the dependent launches read, for the wait.
   folly::F14FastSet<int32_t> waitReads;
+  /// The offsets of the kExport fills the setup writes completely.
+  folly::F14FastSet<int32_t> placedExports;
+  /// Values the host makes whose address the setup reads from their value's
+  /// address slot, for the views of them. The host writes the slots before
+  /// the step.
+  std::vector<int32_t> rootAddressIds;
   std::vector<FillOp> fills;
   /// Tensor shapes the step's kernels were compiled for.
   std::vector<ShapeCheck> shapeChecks;

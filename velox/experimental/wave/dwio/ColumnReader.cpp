@@ -22,11 +22,15 @@ void ColumnReader::makeOp(
     ReadStream* readStream,
     ColumnAction action,
     ColumnOp& op) {
-  VELOX_CHECK(action == ColumnAction::kValues, "Only values supported");
+  VELOX_CHECK(
+      action == ColumnAction::kValues || action == ColumnAction::kFilter,
+      "Only values and filters are supported");
   op.action = action;
   op.reader = this;
-  op.waveVector = readStream->operandVector(operand_->id, requestedType_);
-  op.hasMultiChunks = op.reader->formatData()->hasMultiChunks();
+  // A column that is only filtered on has no operand and produces no values.
+  if (operand_ != nullptr) {
+    op.waveVector = readStream->operandVector(operand_->id, requestedType_);
+  }
 };
 
 bool ColumnReader::hasNonNullFilter() const {

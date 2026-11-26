@@ -88,14 +88,21 @@ class RecordingMaterializer final
     co_return entries;
   }
 
-  bool hasLoadedStripe(uint32_t stripeIndex) const override {
-    return keptStripe_ == stripeIndex;
+  const ProjectedStripe* loadedStripe(uint32_t stripeIndex) const override {
+    if (!keptStripe_.has_value() ||
+        keptStripe_->selection.stripeIndex != stripeIndex) {
+      return nullptr;
+    }
+    return &keptStripe_.value();
   }
 
-  // Makes hasLoadedStripe() report that the materializer keeps the streams of
-  // the stripe 'stripeIndex', or of no stripe when it is nullopt.
+  // Makes loadedStripe() report that the materializer keeps the stripe
+  // 'stripeIndex', or no stripe when it is nullopt.
   void setKeptStripe(std::optional<uint32_t> stripeIndex) {
-    keptStripe_ = stripeIndex;
+    keptStripe_.reset();
+    if (stripeIndex.has_value()) {
+      keptStripe_.emplace().selection.stripeIndex = stripeIndex.value();
+    }
   }
 
   // Returns the stripe that 'entries' were materialized from.
@@ -125,8 +132,8 @@ class RecordingMaterializer final
       [](size_t capacity) { return folly::IOBuf::create(capacity); }};
   std::function<void(const ProjectedStripe&)> onMaterialize_;
   std::atomic_uint32_t numMaterializeCalls_{0};
-  // The stripe whose streams hasLoadedStripe() reports as kept.
-  std::optional<uint32_t> keptStripe_;
+  // The stripe that loadedStripe() reports as kept.
+  std::optional<ProjectedStripe> keptStripe_;
   // The stripes of the entries that the test has not taken, by entries.
   folly::Synchronized<folly::F14FastMap<const Entries*, ProjectedStripe>>
       stripes_;
@@ -285,6 +292,23 @@ TEST_P(IndexScanCursorTest, skipsLoadingAStripeThatTheMaterializerHolds) {
       nextStripe(*cursor, 5),
       "A cursor that prefetches must load every stripe");
   cursor->reset();
+}
+
+// With a co-load, a seek resolves its lower bound in the key chunk of the
+// stripe that the materializer holds, so the held stripe must come with it.
+TEST_P(IndexScanCursorTest, coLoadSeekRequiresTheKeyChunkOfAHeldStripe) {
+  writeStripeKeyStreamData(
+      makeEvenKeyBatches(*vectorMaker_, /*numBatches=*/3),
+      /*enableStreamChecksums=*/false);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  NimbleIterator::Options options;
+  options.forGet = true;
+  auto cursor = makeCursor(std::move(options));
+  // The stripe that the recording materializer keeps has no key chunk.
+  materializer_->setKeptStripe(1);
+  NIMBLE_ASSERT_THROW(
+      cursor->seek(makePointLookup(rowType, {"key"}, 202)),
+      "A co-loaded stripe must come with its key chunk");
 }
 
 TEST_P(IndexScanCursorTest, collectsTimingsOnlyWhenEnabled) {
@@ -471,8 +495,8 @@ TEST_P(IndexScanCursorTest, releasesSelectiveReaderStripeOwnership) {
       /*cacheData=*/false,
       /*verifyStreamChecksums=*/false);
   auto file = std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
-  auto input =
-      std::make_unique<velox::dwio::common::BufferedInput>(file, *leafPool_);
+  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+      file, velox::FileIoContext{.pool = leafPool_.get()});
   auto readerBase = ReaderBase::create(std::move(input), options);
   std::weak_ptr<ReaderBase> owner = readerBase;
   {
@@ -502,29 +526,12 @@ TEST_P(IndexScanCursorTest, seeksFirstMiddleAndLastPoints) {
     EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(row, row + 1));
     cursor->reset();
   }
-}
-
-TEST_P(IndexScanCursorTest, seeksKeys) {
-  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
-  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
-  auto cursor = makeCursor();
-  for (const uint32_t row : {0, 5, 11}) {
-    SCOPED_TRACE(row);
-    const auto range =
-        cursor->seek(*makePointLookup(rowType, {"key"}, row).lowerKey);
-    EXPECT_EQ(range, std::optional<RowRange>(RowRange{row, row + 1}));
-    const auto& stripe = nextStripe(*cursor, row);
-    EXPECT_EQ(stripe.selection.stripeIndex, row / 4);
-    EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(row, row + 1));
-    cursor->reset();
-  }
 
   // A key without rows is a miss, and the cursor seeks again afterwards.
   EXPECT_EQ(
-      cursor->seek(*makePointLookup(rowType, {"key"}, 1'000).lowerKey),
-      std::nullopt);
+      cursor->seek(makePointLookup(rowType, {"key"}, 1'000)), std::nullopt);
   EXPECT_EQ(
-      cursor->seek(*makePointLookup(rowType, {"key"}, 7).lowerKey),
+      cursor->seek(makePointLookup(rowType, {"key"}, 7)),
       std::optional<RowRange>(RowRange{7, 8}));
   cursor->reset();
 }

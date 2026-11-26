@@ -22,11 +22,13 @@ Generic Configuration
      - 1024
      - Preferred number of rows to be returned by operators from Operator::getOutput. It is used when an estimate of
        average row size is not known. When the estimate of average row size is known, preferred_output_batch_bytes is used.
+       Must be at least 1.
    * - max_output_batch_rows
      - integer
      - 10000
      - Max number of rows that could be return by operators from Operator::getOutput. It is used when an estimate of
        average row size is known and preferred_output_batch_bytes is used to compute the number of output rows.
+       Must be at least 1.
    * - merge_join_output_batch_start_size
      - integer
      - 0
@@ -122,11 +124,11 @@ Generic Configuration
      - Used for backpressure to block local exchange producers when the local exchange buffer reaches or exceeds this size.
    * - max_local_exchange_partition_count
      - integer
-     - 2^32
+     - 2^32 - 1
      - Limits the number of partitions created by a local exchange. Partitioning data too granularly can lead to poor performance.
        This setting allows increasing the task concurrency for all pipelines except the ones that require a local partitioning.
        Affects the number of drivers for pipelines containing LocalPartitionNode and cannot exceed the maximum number of
-       pipeline drivers configured for the task.
+       pipeline drivers configured for the task. Must be at least 1.
    * - exchange.max_buffer_size
      - integer
      - 32MB
@@ -166,6 +168,7 @@ Generic Configuration
      - integer
      - 2
      - Maximum number of vectors buffered in each local merge source before blocking to wait for consumers.
+       Must be at least 1.
    * - max_page_partitioning_buffer_size
      - integer
      - 32MB
@@ -197,10 +200,15 @@ Generic Configuration
    * - hash_probe_bloom_filter_pushdown_max_size
      - integer
      - 0
-     - The maximum byte size of Bloom filter that can be generated from hash
-       probe.  When set to 0, no Bloom filter will be generated.  To achieve
-       optimal performance, this should not be too larger than the CPU cache
-       size on the host.
+     - Maximum size in bytes of the Bloom filter that a hash join build
+       pushes down to the probe-side scan. 0 disables Bloom filters. A
+       build uses a Bloom filter when its keys have too many distinct
+       values for an exact filter. The filter takes about 1.2 bytes per
+       build-side row, so 16 MB covers builds of up to about 14 million
+       rows. Larger builds produce no Bloom filter. The scan tests every
+       row against the filter, so the filter should fit in the L3 cache
+       with room to spare. Half the L3 size works well, for example
+       16 MB on hosts with a 32 MB L3.
    * - bypass_hash_probe_bloom_filter_min_rows
      - integer
      - 0
@@ -490,6 +498,11 @@ Spilling
      - boolean
      - false
      - When `spill_enabled` is true, determines whether LocalMerge operators can spill to disk to cap memory usage.
+   * - local_merge_max_num_merge_sources
+     - integer
+     - 2^32 - 1
+     - When `local_merge_spill_enabled` is true, the maximum number of sources a LocalMerge operator merges at a time.
+       Must be at least 1.
    * - mixed_grouped_mode_hash_join_spill_enabled
      - boolean
      - false
@@ -734,13 +747,13 @@ Table Writer
      - Description
    * - task_writer_count
      - integer
-     - 1
-     - The number of parallel table writer threads per task.
+     - 4
+     - The number of parallel table writer threads per task. Must be at least 1.
    * - task_partitioned_writer_count
      - integer
      - task_writer_count
      - The number of parallel table writer threads per task for partitioned
-       table writes. If not set, use 'task_writer_count' as default.
+       table writes. If not set, use 'task_writer_count' as default. Must be at least 1.
    * - scaled_writer_rebalance_max_memory_usage_ratio
      - double
      - 0.7
@@ -951,6 +964,13 @@ Common Options
      - integer
      - 5000
      - Time slice limit in milliseconds for sort writer finish. 0 means no limit. Session: ``sort_writer_finish_time_slice_limit_ms``.
+   * - ``sort-writer-num-unique-key-columns``
+     - integer
+     - 0
+     - Number of leading sort columns that identify a row in a sorted bucketed write. The sort writer keeps the first row
+       of each run of equal values in these columns within a bucket file and drops the rest. Zero keeps every row.
+       The write fails if this is above zero and the write is not bucketed, or if it is above the number of sort columns.
+       Session: ``sort_writer_num_unique_key_columns``.
    * - ``file-preload-threshold``
      - integer
      - 8MB
@@ -1567,7 +1587,14 @@ Spark-specific Configuration
      - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
        Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
        Set to true to match Spark 3.x's replacement behavior for the supported charsets.
-       Additional JDK charset names and aliases remain unsupported in either mode.
+       This setting does not enable additional JDK charset names or aliases.
+   * - spark.legacy_java_charsets
+     - bool
+     - false
+     - If true, the Spark :spark:func:`encode` function accepts JDK 17-verified aliases for its standard charsets and its documented single-byte charset subset.
+       Corresponds to Spark's ``spark.sql.legacy.javaCharsets`` setting.
+       Spark accepts any JDK charset with that setting enabled; Velox raises an error for names outside its documented subset.
+       Dotless i (U+0131) and long s (U+017F) variants are rejected even where JDK 17 accepts them.
    * - spark.legacy_date_formatter
      - bool
      - false

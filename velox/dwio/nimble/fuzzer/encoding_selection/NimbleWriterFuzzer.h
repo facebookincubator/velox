@@ -204,6 +204,10 @@ struct PointLookupCoverage {
   /// Keyed by the number of filtered columns.
   std::map<uint32_t, LookupCounts> byNumColumns;
 
+  /// Keyed by how the reader read the file statistics: "eager" decodes all of
+  /// them when it opens the file, and "lazy" reads each one on first use.
+  std::map<std::string, LookupCounts> byFileStatsMode;
+
   /// Keyed by column type, such as BIGINT, then by filter kind: equal, in,
   /// atMost, atLeast, between, aboveMax, isNull or isNotNull. A lookup counts
   /// once under each of its filters.
@@ -413,8 +417,8 @@ class NimbleWriterFuzzer {
   /// their chunk stats recorded.
   void logChunkStatsCoverage() const;
 
-  /// Logs the point lookups run, by filtered columns, rows returned, and column
-  /// type and filter kind.
+  /// Logs the point lookups run, by filtered columns, file statistics mode,
+  /// rows returned, and column type and filter kind.
   void logPointLookupCoverage() const;
 
   /// Candidate encodings that were never applied to a single chunk, either
@@ -445,9 +449,9 @@ class NimbleWriterFuzzer {
 
  private:
   // Writes 'batches', returning the file bytes. When 'encodingType' is set,
-  // that is the only candidate offered to the random policy; otherwise the
-  // policy chooses from its full default set. The write type is taken from
-  // batches[0].
+  // that is the only value candidate. Reversed additionally offers ordered
+  // encodings for its nested values. Otherwise the policy chooses from its
+  // full default set. The write type is taken from batches[0].
   std::string writeFile(
       const std::vector<velox::VectorPtr>& batches,
       std::optional<EncodingType> encodingType,
@@ -474,11 +478,14 @@ class NimbleWriterFuzzer {
   //   writer's rules.
   // - Every stored min/max holds the node's values, NaN counting as larger than
   //   every other value, whatever those rules are.
+  // - A lazy read of the statistics returns what the eager read returned, for
+  //   every node. It visits the nodes in an order drawn from 'lazyReadSeed'.
   void verifyColumnStatistics(
       const std::string& file,
       const velox::RowTypePtr& schema,
       const std::vector<velox::VectorPtr>& batches,
-      const VectorizedFileStats::Options& statsOptions);
+      const VectorizedFileStats::Options& statsOptions,
+      uint64_t lazyReadSeed);
 
   // Verifies the serialized schema round-trips back to the written Velox type,
   // and that per-stream byte ranges within each stripe are non-overlapping.
@@ -504,9 +511,9 @@ class NimbleWriterFuzzer {
   // and each skip seeks with the chunk index, so a wrong stat, merged skip
   // range or lookup returns the wrong rows. Also runs the connector's check
   // for skipping the whole file by its column statistics, and fails when it
-  // would skip a file holding a row that passes every filter. Unanchored
-  // lookups can filter above a column's largest value, which only NaN rows
-  // pass.
+  // would skip a file holding a row that passes every filter. Half of the
+  // lookups read those statistics lazily. Unanchored lookups can filter above
+  // a column's largest value, which only NaN rows pass.
   void verifyPointLookup(
       const std::string& file,
       const velox::RowTypePtr& schema,

@@ -951,13 +951,11 @@ TEST_F(IcebergReadTest, partitionEnforcedFilterKeptForDynamicFilter) {
             .endTableScan()
             .capturePlanNodeId(scanId)
             .hashJoin(
-                {"part"},
-                {"bpart"},
+                "part = bpart",
                 builder.newPlan()
                     .values({makeRowVector(
                         {"bpart"}, {makeFlatVector<int32_t>({buildKey})})})
                     .planNode(),
-                /*filter=*/"",
                 {"value"})
             .planNode();
     auto splits = makeIcebergSplits(dataFile->getPath());
@@ -2683,13 +2681,11 @@ TEST_F(IcebergReadTest, rowLineageDynamicFilterOnRowId) {
                 .endTableScan()
                 .capturePlanNodeId(scanId)
                 .hashJoin(
-                    {"_row_id"},
-                    {"u0"},
+                    "_row_id = u0",
                     builder.newPlan()
                         .values({makeRowVector(
                             {"u0"}, {makeFlatVector<int64_t>(joinKeys)})})
                         .planNode(),
-                    /*filter=*/"",
                     {"c0", "_row_id"})
                 .planNode();
 

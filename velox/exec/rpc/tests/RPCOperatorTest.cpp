@@ -904,6 +904,28 @@ class UndeclaredBoundsRPCFunction : public DemoAsyncRPCFunction {
   }
 };
 
+class WideCeilingRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  int64_t configuredCeiling() const override {
+    return 500;
+  }
+
+  std::string admissionKey() const override {
+    return "wide-ceiling-rpc";
+  }
+};
+
+class NegativeCeilingRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  int64_t configuredCeiling() const override {
+    return -8;
+  }
+
+  std::string admissionKey() const override {
+    return "negative-ceiling-rpc";
+  }
+};
+
 class DifferentFloorSameKeyRPCFunction : public CappedRPCFunction {
  public:
   double configuredAdaptiveFloor() const override {
@@ -1293,6 +1315,8 @@ class RPCOperatorTest : public OperatorTestBase {
     registerFunction<CappedRPCFunction>("capped_rpc");
     registerFunction<BackendErrorRPCFunction>("backend_error_rpc");
     registerFunction<UndeclaredBoundsRPCFunction>("undeclared_bounds_rpc");
+    registerFunction<WideCeilingRPCFunction>("wide_ceiling_rpc");
+    registerFunction<NegativeCeilingRPCFunction>("negative_ceiling_rpc");
     registerFunction<DifferentFloorSameKeyRPCFunction>(
         "different_floor_same_key_rpc");
     registerFunction<ConstantSetupRPCFunction>("constant_setup_rpc");
@@ -3272,6 +3296,85 @@ TEST_F(RPCOperatorTest, defaultHardLimitKeepsSessionPrecedence) {
   EXPECT_EQ(limiter.stats().hardLimit, 200);
 }
 
+// The stats report the bounds a function declares beside the ones in effect,
+// so a query whose session limits replace them can be told apart.
+TEST_F(RPCOperatorTest, statsReportFunctionBoundsBesideEffectiveOnes) {
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
+  const auto runtimeStats =
+      [&](const std::string& functionName,
+          const std::unordered_map<std::string, std::string>& config = {}) {
+        RPCRateLimiterRegistry::global().testingReset();
+        auto plan = PlanBuilder()
+                        .values(input)
+                        .rpc(functionName + "(prompt)")
+                        .planNode();
+        std::shared_ptr<exec::Task> task;
+        AssertQueryBuilder(plan).configs(config).countResults(task);
+        return PlanNodeStats::extract(task->taskStats(), plan->id());
+      };
+  {
+    // Session defaults replace both of the function's bounds.
+    const auto stats = runtimeStats("capped_rpc");
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcFunctionCeiling).max, 64);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcFunctionFloorMilli).max,
+        500);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
+        200);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        50'000);
+  }
+  {
+    // hard_limit 0 selects the function's bounds, so the pairs match.
+    const auto stats = runtimeStats(
+        "capped_rpc", {{core::QueryConfig::kRpcRateLimiterHardLimit, "0"}});
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
+        64);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        500);
+  }
+  {
+    // A floor at or above the ceiling holds the window there, so no floor
+    // applies.
+    const auto stats = runtimeStats(
+        "capped_rpc", {{core::QueryConfig::kRpcRateLimiterMaxLimit, "4"}});
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterHardLimit).max,
+        4);
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli));
+  }
+  {
+    // A function that declares only a floor reports only the floor.
+    const auto stats = runtimeStats(
+        "demo_rpc", {{core::QueryConfig::kRpcRateLimiterMinLimit, "0"}});
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcFunctionCeiling));
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcFunctionFloorMilli).max,
+        250);
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        250);
+  }
+  {
+    const auto stats = runtimeStats("undeclared_bounds_rpc");
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcFunctionCeiling));
+    EXPECT_FALSE(
+        stats.hasCustomStat(RPCOperatorStatNames::kRpcFunctionFloorMilli));
+    EXPECT_EQ(
+        stats.customStat(RPCOperatorStatNames::kRpcRateLimiterFloorMilli).max,
+        50'000);
+  }
+}
+
 TEST_F(RPCOperatorTest, zeroHardLimitSelectsFunctionBounds) {
   auto input =
       makeNamedRowVector("prompt", makeFlatVector<StringView>({"healthy"}));
@@ -3799,6 +3902,76 @@ TEST_F(RPCOperatorTest, legacySessionLimitPreservesOverrideSemantics) {
   const auto limiterStats =
       RPCRateLimiterRegistry::global().get("capped-rpc").stats();
   EXPECT_EQ(limiterStats.hardLimit, 128);
+}
+
+// With rpc.ratelimiter.tighten_limit, a positive max_limit can only lower the
+// function's ceiling. Zero and a hard limit keep their meaning, and the limiter
+// starts at its ceiling when that is below 200.
+TEST_F(RPCOperatorTest, tightenLimitOnlyLowersFunctionCeiling) {
+  auto input =
+      makeNamedRowVector("prompt", makeFlatVector<StringView>({"bounded"}));
+  struct Case {
+    std::string function;
+    std::string key;
+    std::unordered_map<std::string, std::string> config;
+    int64_t expectedCeiling;
+  };
+  for (const auto& testCase : std::vector<Case>{
+           // The default max_limit (200) leaves a smaller declared ceiling.
+           {"capped_rpc", "capped-rpc", {}, 64},
+           {"capped_rpc",
+            "capped-rpc",
+            {{core::QueryConfig::kRpcRateLimiterAdaptiveEnabled, "false"}},
+            64},
+           {"capped_rpc",
+            "capped-rpc",
+            {{core::QueryConfig::kRpcRateLimiterMaxLimit, "32"}},
+            32},
+           {"wide_ceiling_rpc", "wide-ceiling-rpc", {}, 200},
+           {"wide_ceiling_rpc",
+            "wide-ceiling-rpc",
+            {{core::QueryConfig::kRpcRateLimiterMaxLimit, "1000"}},
+            500},
+           // With no declared ceiling, max_limit applies alone.
+           {"undeclared_bounds_rpc",
+            "undeclared-bounds-rpc",
+            {{core::QueryConfig::kRpcRateLimiterMaxLimit, "128"}},
+            128},
+           {"negative_ceiling_rpc",
+            "negative-ceiling-rpc",
+            {{core::QueryConfig::kRpcRateLimiterMaxLimit, "32"}},
+            32},
+           // Zero leaves the function's ceiling, or the limiter's default (20).
+           {"capped_rpc",
+            "capped-rpc",
+            {{core::QueryConfig::kRpcRateLimiterMaxLimit, "0"}},
+            64},
+           {"undeclared_bounds_rpc",
+            "undeclared-bounds-rpc",
+            {{core::QueryConfig::kRpcRateLimiterMaxLimit, "0"}},
+            20},
+           // A hard limit of 0 or more takes max_limit's place.
+           {"capped_rpc",
+            "capped-rpc",
+            {{core::QueryConfig::kRpcRateLimiterHardLimit, "48"},
+             {core::QueryConfig::kRpcRateLimiterMaxLimit, "32"}},
+            48},
+       }) {
+    SCOPED_TRACE(
+        fmt::format("{} {}", testCase.function, testCase.expectedCeiling));
+    RPCRateLimiterRegistry::global().testingReset();
+    auto config = testCase.config;
+    config.emplace(core::QueryConfig::kRpcRateLimiterTightenLimit, "true");
+    auto plan = PlanBuilder()
+                    .values(input)
+                    .rpc(testCase.function + "(prompt)")
+                    .planNode();
+    ASSERT_EQ(AssertQueryBuilder(plan).configs(config).countResults(), 1);
+    const auto stats =
+        RPCRateLimiterRegistry::global().get(testCase.key).stats();
+    EXPECT_EQ(stats.hardLimit, testCase.expectedCeiling);
+    EXPECT_EQ(stats.capacity, std::min<int64_t>(testCase.expectedCeiling, 200));
+  }
 }
 
 TEST_F(RPCOperatorTest, negativeRateLimiterBoundsAreRejected) {
@@ -4683,9 +4856,10 @@ class HeldPacedCeilingRPCFunction : public HeldPacedRPCFunction {
 
 // A PER_ROW driver window starts at 100. Under CAPACITY_PROBING it rises to
 // the limiter's ceiling, here 300 from the session, but not past a ceiling the
-// function declares; it never falls below 100. A driver window ceiling the
-// session sets holds under either policy. A request with adaptation off is not
-// eligible for CAPACITY_PROBING, so its window stays at 100.
+// function declares; it never falls below 100. With tighten_limit, a declared
+// 64 also caps the limiter, so 64 calls are in flight. A driver window ceiling
+// the session sets holds under either policy. A request with adaptation off is
+// not eligible for CAPACITY_PROBING, so its window stays at 100.
 TEST_F(RPCOperatorTest, capacityProbingDriverWindowRisesToLimiterCeiling) {
   constexpr int32_t kRows = 150;
   struct Case {
@@ -4694,21 +4868,24 @@ TEST_F(RPCOperatorTest, capacityProbingDriverWindowRisesToLimiterCeiling) {
     int64_t sessionMaxWindow;
     bool adaptive;
     int64_t expectedInFlight;
+    bool tightenLimit{false};
   };
   for (const auto& testCase : std::vector<Case>{
            {"WINDOW_AIMD", 0, 0, true, 100},
            {"CAPACITY_PROBING", 0, 0, true, kRows},
            {"CAPACITY_PROBING", 120, 0, true, 120},
            {"CAPACITY_PROBING", 64, 0, true, 100},
+           {"CAPACITY_PROBING", 64, 0, true, 64, true},
            {"CAPACITY_PROBING", 0, 120, true, 120},
            {"CAPACITY_PROBING", 0, 0, false, 100},
        }) {
     const auto name = fmt::format(
-        "driver_window_ceiling_{}_{}_{}_{}",
+        "driver_window_ceiling_{}_{}_{}_{}_{}",
         testCase.policyName,
         testCase.functionCeiling,
         testCase.sessionMaxWindow,
-        testCase.adaptive);
+        testCase.adaptive,
+        testCase.tightenLimit);
     SCOPED_TRACE(name);
     auto function = std::make_shared<HeldPacedCeilingRPCFunction>(
         name, testCase.functionCeiling);
@@ -4731,6 +4908,8 @@ TEST_F(RPCOperatorTest, capacityProbingDriverWindowRisesToLimiterCeiling) {
          testCase.adaptive ? "true" : "false"},
         {core::QueryConfig::kRpcRateLimiterMaxLimit, "300"},
         {core::QueryConfig::kRpcRateLimiterMinLimit, "1"},
+        {core::QueryConfig::kRpcRateLimiterTightenLimit,
+         testCase.tightenLimit ? "true" : "false"},
     };
     if (testCase.sessionMaxWindow > 0) {
       params.queryConfigs.emplace(

@@ -29,11 +29,15 @@ IndexLookup::LookupRequest::defaultOptions() {
   return kDefaultOptions;
 }
 
+void IndexLookup::validateLookupRequest(const LookupRequest& request) const {
+  request.validateFor(*this);
+}
+
 void IndexLookup::Options::validate() const {
   NIMBLE_CHECK_NOT_NULL(file.get());
   NIMBLE_CHECK_NOT_NULL(ioOptions);
   NIMBLE_CHECK_NOT_NULL(ioOptions->indexIoStats(), "indexIoStats must be set");
-  if (fileHandle != nullptr) {
+  if (fileHandle.has_value()) {
     NIMBLE_CHECK_EQ(
         static_cast<const void*>(file.get()),
         static_cast<const void*>(fileHandle->file.get()),
@@ -52,7 +56,8 @@ std::shared_ptr<MetadataInput> createIndexMetadataInput(
       .maxCoalesceDistance = options.ioOptions->maxCoalesceDistance(),
       .maxCoalesceBytes = options.ioOptions->maxCoalesceBytes(),
       .executor = options.ioOptions->ioExecutor().get(),
-      .fileHandle = options.fileHandle,
+      .fileHandle =
+          options.fileHandle.has_value() ? &*options.fileHandle : nullptr,
       .maxCacheEntrySize = options.maxCacheEntrySize,
       .fileIoContext = options.fileIoContext,
       .blockCache = options.blockCache,
@@ -65,8 +70,8 @@ std::shared_ptr<DataInput> createIndexDataInput(
   auto* pool = &options.ioOptions->memoryPool();
   auto ioStats = options.ioOptions->indexIoStats();
   if (options.blockCache != nullptr) {
-    NIMBLE_USER_CHECK_NOT_NULL(
-        options.fileHandle, "blockCache requires fileHandle");
+    NIMBLE_USER_CHECK(
+        options.fileHandle.has_value(), "blockCache requires fileHandle");
     NIMBLE_USER_CHECK(
         options.fileHandle->uuid.hasValue(),
         "blockCache requires fileHandle->uuid");

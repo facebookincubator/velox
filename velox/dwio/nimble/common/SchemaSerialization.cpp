@@ -73,6 +73,8 @@ serialization::Kind nodeToSerializationKind(const SchemaNode* node) {
       return serialization::Kind_Map;
     case Kind::SlidingWindowMap:
       return serialization::Kind_SlidingWindowMap;
+    case Kind::SlidingWindowArray:
+      return serialization::Kind_SlidingWindowArray;
     case Kind::FlatMap: {
       switch (node->scalarKind()) {
         case ScalarKind::Int8:
@@ -186,6 +188,8 @@ std::pair<Kind, ScalarKind> serializationNodeToKind(
       return {Kind::Map, ScalarKind::Undefined};
     case nimble::serialization::Kind_SlidingWindowMap:
       return {Kind::SlidingWindowMap, ScalarKind::Undefined};
+    case nimble::serialization::Kind_SlidingWindowArray:
+      return {Kind::SlidingWindowArray, ScalarKind::Undefined};
     case nimble::serialization::Kind_FlatMapInt8:
       return {Kind::FlatMap, ScalarKind::Int8};
     case nimble::serialization::Kind_FlatMapUInt8:

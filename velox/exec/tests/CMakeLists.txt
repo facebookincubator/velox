@@ -91,14 +91,13 @@ set(
   SpillStatsTest.cpp
   MarkSortedTest.cpp
   PartitionedOutputTest.cpp
-  # group3 (~584s): SpillerTest 584 + 9 lightweight
+  # group3 (~584s): SpillerTest 584 + 8 lightweight
   SpillerTest.cpp
   PlanNodeToSummaryStringTest.cpp
   CountingJoinTest.cpp
   CustomJoinTest.cpp
   TaskListenerTest.cpp
   SplitTest.cpp
-  SqlTest.cpp
   WindowFunctionRegistryTest.cpp
   StreamingEnforceDistinctTest.cpp
   HashBitRangeTest.cpp
@@ -129,6 +128,7 @@ set(
   # group6 (~467s): TableScanTest 189 + AggregationTest 105
   # + OrderBy 71 + HashTable 60 + RowNumber 42
   TableScanTest.cpp
+  DynamicFilterPushdownTest.cpp
   AggregationTest.cpp
   OrderByTest.cpp
   HashTableCacheTest.cpp

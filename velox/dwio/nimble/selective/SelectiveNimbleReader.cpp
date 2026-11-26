@@ -33,6 +33,7 @@
 #include "velox/dwio/nimble/selective/ReaderBase.h"
 #include "velox/dwio/nimble/selective/RowSizeTracker.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleIndexReader.h"
+#include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble {
@@ -657,34 +658,43 @@ void SelectiveNimbleRowReader::computeSkipRowRanges() {
       streams_.stripeIndex(),
       currentStripe_,
       "Chunk statistics must come from the current stripe.");
-  const auto* scanSpec = options_.scanSpec().get();
+  auto* scanSpec = options_.scanSpec().get();
   if (scanSpec == nullptr) {
     return;
   }
 
   const auto& nimbleRoot = readerBase_->nimbleSchema()->asRow();
   const auto& rootType = readerBase_->fileSchemaWithId();
+  const auto& rootRowType = rootType->type()->asRow();
   const auto numStripeRows =
       readerBase_->tablet().stripeRowCount(currentStripe_);
-  for (uint32_t i = 0; i < rootType->size() && i < nimbleRoot.childrenCount();
-       ++i) {
-    const auto* childSpec =
-        scanSpec->childByName(rootType->type()->asRow().nameOf(i));
-    if (childSpec == nullptr || childSpec->filter() == nullptr ||
-        !childSpec->readFromFile() || childSpec->hasTransform() ||
-        !nimbleRoot.childAt(i)->isScalar()) {
+
+  // Visits the scan spec's children because a file can have hundreds of columns
+  // and a scan usually filters a few. Uses stableChildren() because the
+  // constructor can run this on a read-ahead thread.
+  const auto stableChildren = scanSpec->stableChildren();
+  for (const auto& childSpec : *stableChildren) {
+    const auto* filter = childSpec->filter();
+    if (filter == nullptr || !childSpec->readFromFile() ||
+        childSpec->hasTransform()) {
+      continue;
+    }
+    const auto fileColumn =
+        rootRowType.getChildIdxIfExists(childSpec->fieldName());
+    if (!fileColumn.has_value() || *fileColumn >= nimbleRoot.childrenCount() ||
+        !nimbleRoot.childAt(*fileColumn)->isScalar()) {
       continue;
     }
     const auto streamId =
-        nimbleRoot.childAt(i)->asScalar().scalarDescriptor().offset();
+        nimbleRoot.childAt(*fileColumn)->asScalar().scalarDescriptor().offset();
     const auto streamIndex = streams_.streamIndex(streamId);
     if (streamIndex == nullptr) {
       continue;
     }
     filterStreamByChunkStats(
         *streamIndex,
-        childSpec->filter(),
-        rootType->childAt(i)->type(),
+        filter,
+        rootType->childAt(*fileColumn)->type(),
         numStripeRows,
         skipRanges_);
   }
@@ -975,7 +985,7 @@ void SelectiveNimbleRowReader::initIndexBounds() {
 
   // Single lookup to get the exact file-level row range.
   const auto lookupResult = clusterIndex_->lookup(
-      index::IndexLookup::LookupRequest::rangeScan({encodedBounds}));
+      *index::IndexLookup::LookupRequest::rangeScan({encodedBounds}));
   const auto rowRanges = lookupResult[0];
   if (rowRanges.empty()) {
     skipRemainingStripes();
@@ -1211,7 +1221,24 @@ std::unique_ptr<dwio::common::Reader>
 SelectiveNimbleReaderFactory::createReader(
     std::unique_ptr<dwio::common::BufferedInput> input,
     const dwio::common::ReaderOptions& options) {
-  return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
+  if (tabletReaderCache_ == nullptr || !options.loadClusterIndex()) {
+    return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
+  }
+
+  // The shared tablet outlives this reader, so it must not keep the reader's
+  // file handle. It pins its metadata and index instead of caching them in the
+  // data cache, whose entries the file handle keys.
+  auto tabletOptions = TabletReader::configureOptions(options);
+  tabletOptions.fileHandle = nullptr;
+  tabletOptions.blockCache = nullptr;
+  tabletOptions.cacheMetadata = false;
+  tabletOptions.cacheIndex = false;
+  tabletOptions.pinMetadata = true;
+  tabletOptions.pinIndex = true;
+  const auto cachedTablet =
+      tabletReaderCache_->get(input->getReadFile(), tabletOptions);
+  return std::make_unique<SelectiveNimbleReader>(
+      ReaderBase::create(std::move(input), cachedTablet, options), options);
 }
 
 std::unique_ptr<dwio::common::Reader>

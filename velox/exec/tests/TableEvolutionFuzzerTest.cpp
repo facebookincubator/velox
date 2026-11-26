@@ -215,6 +215,7 @@ TEST_F(TableEvolutionFuzzerTest, coverageFrameworkAndConfig) {
       .subfieldFilterTypes = {},
       .remainingFilterTypes = {},
       .filterKinds = {},
+      .subfieldFilterShapes = {},
       .nullAcceptingSubfieldFilterTypes = {},
       .groupingKeyTypes = {},
       .aggregateTypes = {},
@@ -311,6 +312,7 @@ TEST_F(TableEvolutionFuzzerTest, configurationCountedOncePerSetup) {
       .subfieldFilterTypes = {},
       .remainingFilterTypes = {},
       .filterKinds = {},
+      .subfieldFilterShapes = {},
       .nullAcceptingSubfieldFilterTypes = {},
       .groupingKeyTypes = {},
       .aggregateTypes = {},
@@ -522,6 +524,148 @@ TEST_F(TableEvolutionFuzzerTest, queryShapeCoverageDimensions) {
   EXPECT_EQ(coverage.queryShapes.projectedByType.at("VARCHAR"), 2);
   EXPECT_EQ(coverage.failuresByPhase.at("scanExecution"), 1);
   EXPECT_EQ(coverage.failuresByPhase.at("verification"), 1);
+}
+
+TEST_F(TableEvolutionFuzzerTest, statsPruningCoverage) {
+  const auto makeQuery =
+      [](std::vector<TableEvolutionFuzzer::SubfieldFilterShape> shapes) {
+        TableEvolutionFuzzer::QueryCoverage query;
+        query.pushdown.numQueries = 1;
+        query.reference.numQueries = 1;
+        query.hasSubfieldFilters = true;
+        query.subfieldFilterShapes = std::move(shapes);
+        query.executionSucceeded = true;
+        query.verificationPassed = true;
+        return query;
+      };
+  const TableEvolutionFuzzer::SubfieldFilterShape nanPassingRange{
+      .type = "DOUBLE", .kind = "DoubleRange", .passesNaN = true};
+  TableEvolutionFuzzer::CoverageAccumulator coverage;
+
+  // Counts a query whose one filter is a subfield filter under that filter.
+  auto fileAndChunkSkips = makeQuery({nanPassingRange});
+  fileAndChunkSkips.pushdown.skippedSplits = 2;
+  fileAndChunkSkips.pushdown.skippedStrides = 3;
+  fileAndChunkSkips.pushdown.chunkSkippedRows = 10;
+  coverage.add(fileAndChunkSkips);
+  auto chunkSkips = makeQuery({{.type = "DOUBLE", .kind = "DoubleRange"}});
+  chunkSkips.pushdown.chunkSkippedRows = 5;
+  coverage.add(chunkSkips);
+
+  // Leaves out a query whose skips another of its filters may have made, and a
+  // query that failed.
+  auto twoFilters = makeQuery(
+      {{.type = "BIGINT", .kind = "BigintRange"},
+       {.type = "VARCHAR", .kind = "BytesRange"}});
+  twoFilters.pushdown.skippedSplits = 1;
+  coverage.add(twoFilters);
+  auto withRemainingFilter =
+      makeQuery({{.type = "REAL", .kind = "FloatRange"}});
+  withRemainingFilter.hasRemainingFilter = true;
+  coverage.add(withRemainingFilter);
+  auto failed = makeQuery({nanPassingRange});
+  failed.executionSucceeded = false;
+  failed.failurePhase = "scanExecution";
+  coverage.add(failed);
+
+  const auto& filters = coverage.queryShapes.filters;
+  ASSERT_EQ(filters.statsPruningByTypeAndKind.size(), 1);
+  const auto& doubleRange =
+      filters.statsPruningByTypeAndKind.at("DOUBLE").at("DoubleRange");
+  EXPECT_EQ(doubleRange.numQueries, 2);
+  EXPECT_EQ(doubleRange.numWithSkippedFiles, 1);
+  EXPECT_EQ(doubleRange.numWithSkippedStrides, 1);
+  EXPECT_EQ(doubleRange.numWithSkippedChunks, 2);
+  ASSERT_EQ(filters.statsPruningOfNaNPassingFilters.size(), 1);
+  const auto& nanPassing =
+      filters.statsPruningOfNaNPassingFilters.at("DoubleRange");
+  EXPECT_EQ(nanPassing.numQueries, 1);
+  EXPECT_EQ(nanPassing.numWithSkippedFiles, 1);
+  EXPECT_EQ(nanPassing.numWithSkippedStrides, 1);
+  EXPECT_EQ(nanPassing.numWithSkippedChunks, 1);
+}
+
+TEST_F(TableEvolutionFuzzerTest, coverageGaps) {
+  auto config = makeDwrfConfig(pool_.get(), /*evolutionCount=*/3);
+  config.dataSpec.includeNaN = true;
+  config.fileFormatCoverageGaps = [] {
+    return std::vector<std::string>{"format gap"};
+  };
+
+  // A run that wrote tables without flat maps, filtered DOUBLE columns but not
+  // TIMESTAMP ones, and whose DoubleRange filters never skipped data.
+  TableEvolutionFuzzer::CoverageAccumulator coverage;
+  coverage.numTablesWritten = 2;
+  coverage.numQueriesCompleted = 20;
+  coverage.configs.numBucketed = 1;
+  coverage.configs.numTypeTransitions = 3;
+  coverage.queryShapes.projectedByType = {{"DOUBLE", 20}, {"TIMESTAMP", 5}};
+  auto& filters = coverage.queryShapes.filters;
+  filters.numExecuted = 19;
+  filters.numFilterOnly = 1;
+  filters.numQueriesWithSplitPruning = 1;
+  filters.byType["DOUBLE"].numExecuted = 19;
+  filters.statsPruningByTypeAndKind["DOUBLE"]["DoubleRange"] = {
+      .numQueries = 10};
+  // Too few queries to call the missing skips a gap.
+  filters.statsPruningByTypeAndKind["DOUBLE"]["IsNull"] = {.numQueries = 9};
+  filters.statsPruningOfNaNPassingFilters["DoubleRange"] = {.numQueries = 10};
+
+  EXPECT_THAT(
+      TableEvolutionFuzzer::coverageGaps(coverage, config),
+      testing::ElementsAre(
+          "flat maps: no table had a map column written as a flat map in every file",
+          "filters: no query filtered a column of type TIMESTAMP",
+          "statistics never skipped data for: DOUBLE DoubleRange (10 queries)",
+          "NaN: statistics never skipped data for a filter that NaN passes",
+          "format gap"));
+
+  // Leaves out the gaps of generated tables when the run only read input
+  // files.
+  coverage.numTablesWritten = 0;
+  EXPECT_THAT(
+      TableEvolutionFuzzer::coverageGaps(coverage, config),
+      testing::ElementsAre(
+          "filters: no query filtered a column of type TIMESTAMP",
+          "statistics never skipped data for: DOUBLE DoubleRange (10 queries)",
+          "NaN: statistics never skipped data for a filter that NaN passes",
+          "format gap"));
+}
+
+TEST_F(TableEvolutionFuzzerTest, coverageTable) {
+  EXPECT_EQ(
+      formatCoverageTable(
+          {"type", "queries", "%"},
+          {{"DOUBLE", "220", "40%"}, {"REAL", "7", "-"}},
+          /*numLabelColumns=*/1,
+          "  "),
+      "  type    queries    %\n"
+      "  DOUBLE      220  40%\n"
+      "  REAL          7    -");
+
+  // Trims the padding of a left-aligned last column.
+  EXPECT_EQ(
+      formatCoverageTable(
+          {"type", "kind"},
+          {{"ROW", "IsNull"}, {"MAP", "-"}},
+          /*numLabelColumns=*/2,
+          ""),
+      "type  kind\n"
+      "ROW   IsNull\n"
+      "MAP   -");
+
+  VELOX_ASSERT_THROW(
+      formatCoverageTable({"type", "queries"}, {{"ROW"}}, 1, ""),
+      "Coverage table row must have one cell per column");
+}
+
+TEST_F(TableEvolutionFuzzerTest, coveragePercent) {
+  EXPECT_EQ(formatCoveragePercent(87, 220), "40%");
+  EXPECT_EQ(formatCoveragePercent(0, 220), "0%");
+  EXPECT_EQ(formatCoveragePercent(220, 220), "100%");
+  EXPECT_EQ(formatCoveragePercent(1, 1'000), "<1%");
+  EXPECT_EQ(formatCoveragePercent(999, 1'000), ">99%");
+  EXPECT_EQ(formatCoveragePercent(0, 0), "-");
 }
 
 TEST_F(TableEvolutionFuzzerTest, ignoresCoverageObserverFailure) {

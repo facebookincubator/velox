@@ -146,7 +146,8 @@ TEST_F(ChunkedDecoderTest, bufferedInput) {
       fileIoStats,
       nullptr,
       executor.get(),
-      readerOpts);
+      readerOpts,
+      FileIoContext{.pool = &readerOpts.memoryPool()});
 
   auto chunkedDecoder = std::make_unique<nimble::ChunkedDecoder>(
       input->read(0, kFileSize, velox::dwio::common::LogType::TEST),

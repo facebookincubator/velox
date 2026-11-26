@@ -18,13 +18,21 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <optional>
 #include <random>
+#include <string>
+#include <string_view>
 #include <vector>
 
+#include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
@@ -86,6 +94,35 @@ class NullableEncodingViewTest : public EncodingViewTest {
     options.cacheEncodingView = cacheEncodingView();
     return createEncodingView(encoded, pool_.get(), options);
   }
+
+  // Encodes 'rows' as Nullable, with the non-null values in an uncompressed
+  // child of 'childType': Trivial or Fsst.
+  std::string encodeStrings(
+      const std::vector<std::optional<std::string_view>>& rows,
+      EncodingType childType) {
+    Vector<std::string_view> nonNullValues{pool_.get()};
+    Vector<bool> isNonNull{pool_.get(), rows.size()};
+    for (size_t i{0}; i < rows.size(); ++i) {
+      isNonNull[i] = rows[i].has_value();
+      if (rows[i].has_value()) {
+        nonNullValues.push_back(*rows[i]);
+      }
+    }
+    const std::string values{
+        childType == EncodingType::Fsst
+            ? Encoder<FsstEncoding>::encode(
+                  *buffer_,
+                  nonNullValues,
+                  CompressionType::Uncompressed,
+                  {.fsstCompressionTargetRatio =
+                       std::numeric_limits<double>::max()})
+            : Encoder<TrivialEncoding<std::string_view>>::encode(
+                  *buffer_, nonNullValues)};
+    const std::string nulls{
+        Encoder<TrivialEncoding<bool>>::encode(*buffer_, isNonNull)};
+    return std::string{NullableEncoding<std::string_view>::encodeNullable(
+        static_cast<uint32_t>(rows.size()), values, nulls, *buffer_)};
+  }
 };
 
 TEST_P(NullableEncodingViewTest, requiresNonNullRowsForSingleValueReads) {
@@ -110,6 +147,7 @@ TEST_P(NullableEncodingViewTest, readsMixedRows) {
   const auto numNonNulls = view->read(
       indices,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, 2);
@@ -126,6 +164,7 @@ TEST_P(NullableEncodingViewTest, readsNonNullRows) {
   const auto numNonNulls = view->read(
       indices,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, indices.size());
@@ -142,6 +181,7 @@ TEST_P(NullableEncodingViewTest, readsNullRows) {
   const auto numNonNulls = view->read(
       indices,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, 0);
@@ -175,6 +215,7 @@ TEST_P(NullableEncodingViewTest, readsScatteredIndicesAndRanges) {
   const auto numNonNullIndices = view->read(
       indices,
       [&](uint32_t outputIndex) { indexNulls.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       indexOutput.data());
   EXPECT_EQ(
       numNonNullIndices,
@@ -201,6 +242,7 @@ TEST_P(NullableEncodingViewTest, readsScatteredIndicesAndRanges) {
   const auto numNonNullRanges = view->read(
       ranges,
       [&](uint32_t index) { rangeNulls.push_back(index); },
+      /*addStringBuffer=*/nullptr,
       rangeOutput.data());
   EXPECT_EQ(
       numNonNullRanges,
@@ -218,6 +260,7 @@ TEST_P(NullableEncodingViewTest, readsRanges) {
   const auto numNonNulls = view->read(
       ranges,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, 2);
@@ -234,6 +277,7 @@ TEST_P(NullableEncodingViewTest, readsNonNullRangesAfterNulls) {
   const auto numNonNulls = view->read(
       ranges,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, ranges[0].numRows() + ranges[1].numRows());
@@ -250,6 +294,7 @@ TEST_P(NullableEncodingViewTest, readsRangesWithoutNulls) {
   const auto numNonNulls = view->read(
       ranges,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, 5);
@@ -266,6 +311,7 @@ TEST_P(NullableEncodingViewTest, readsRangesWithoutNulls) {
       view->read(
           indices,
           [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          /*addStringBuffer=*/nullptr,
           indexedOutput.data()),
       indices.size());
   EXPECT_EQ(indexedOutput, (std::array<int64_t, 3>{15, 10, 13}));
@@ -282,6 +328,7 @@ TEST_P(NullableEncodingViewTest, readsRangesWithOnlyNulls) {
   const auto numNonNulls = view->read(
       ranges,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, 0);
@@ -301,6 +348,7 @@ TEST_P(NullableEncodingViewTest, readsRangesAroundSelectedNulls) {
   const auto numNonNulls = view->read(
       ranges,
       [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   EXPECT_EQ(numNonNulls, 5);
@@ -348,6 +396,7 @@ TEST_P(NullableEncodingViewTest, readsLongRunsAroundSelectedNulls) {
   const auto numNonNulls = makeView(rows)->read(
       ranges,
       [&](uint32_t outputIndex) { isNull[outputIndex] = true; },
+      /*addStringBuffer=*/nullptr,
       output.data());
 
   std::vector<std::optional<int64_t>> actual;
@@ -396,6 +445,7 @@ TEST_P(NullableEncodingViewTest, readsRandomRanges) {
     const auto numNonNulls = view->read(
         ranges,
         [&](uint32_t outputIndex) { isNull[outputIndex] = true; },
+        /*addStringBuffer=*/nullptr,
         output.data());
 
     std::vector<std::optional<int64_t>> actual;
@@ -448,6 +498,7 @@ TEST_P(NullableEncodingViewTest, readsWideRandomRanges) {
       const auto numNonNulls = view->read(
           ranges,
           [&](uint32_t outputIndex) { isNull[outputIndex] = true; },
+          /*addStringBuffer=*/nullptr,
           output.data());
 
       std::vector<std::optional<int64_t>> actual;
@@ -463,6 +514,112 @@ TEST_P(NullableEncodingViewTest, readsWideRandomRanges) {
               expected.begin(), expected.end(), [](const auto& value) {
                 return value.has_value();
               })));
+    }
+  }
+}
+
+TEST_P(NullableEncodingViewTest, readsPassBuffersThatHoldTheirStrings) {
+  constexpr uint32_t kNumRows{2'000};
+  std::vector<std::string> storage(kNumRows);
+  std::vector<std::optional<std::string_view>> rows(kNumRows);
+  for (uint32_t row{0}; row < kNumRows; ++row) {
+    storage[row] = fmt::format("repeated fsst prefix value {:06d}", row);
+    if (row % 5 != 0) {
+      rows[row] =
+          row % 7 == 3 ? std::string_view{} : std::string_view{storage[row]};
+    }
+  }
+
+  // A few rows, too few for a cached FSST child to decode its chunks, among
+  // them a null and an empty string, or most rows in two ranges.
+  const std::vector<uint32_t> indices{1'999, 1'000, 6, 7, 3};
+  const std::array<RowRange, 2> ranges{
+      RowRange{0, 900}, RowRange{1'000, kNumRows}};
+  std::vector<uint32_t> rangeRows;
+  for (const auto& range : ranges) {
+    for (auto row = range.startRow; row < range.endRow; ++row) {
+      rangeRows.push_back(row);
+    }
+  }
+  const auto liesIn = [](std::string_view value,
+                         const std::vector<velox::BufferPtr>& buffers) {
+    return std::any_of(
+        buffers.begin(), buffers.end(), [&](const velox::BufferPtr& buffer) {
+          const auto* begin = buffer->as<char>();
+          return value.data() >= begin &&
+              value.data() + value.size() <= begin + buffer->size();
+        });
+  };
+
+  for (const auto childType : {EncodingType::Trivial, EncodingType::Fsst}) {
+    for (const bool holdsInput : {false, true}) {
+      for (const bool readsIndices : {false, true}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "childType={}, holdsInput={}, readsIndices={}",
+                childType,
+                holdsInput,
+                readsIndices));
+        const auto encoded = encodeStrings(rows, childType);
+
+        // The input of the view lies in a buffer, which the options of the
+        // view point to when 'holdsInput' is set.
+        const auto input =
+            velox::AlignedBuffer::allocate<char>(encoded.size(), pool_.get());
+        std::copy(encoded.begin(), encoded.end(), input->asMutable<char>());
+        Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+        if (holdsInput) {
+          options.inputStringBuffer = input.get();
+        }
+        const auto view = createEncodingView(
+            {input->as<char>(), input->size()}, pool_.get(), options);
+        ASSERT_EQ(view->encodingType(), EncodingType::Nullable);
+        const auto& selectedRows = readsIndices ? indices : rangeRows;
+        std::vector<std::string_view> output(selectedRows.size());
+        std::vector<uint32_t> nullIndices;
+        std::vector<velox::BufferPtr> buffers;
+        const auto setNull = [&](uint32_t index) {
+          nullIndices.push_back(index);
+        };
+        const auto addStringBuffer = [&](velox::BufferPtr buffer) {
+          buffers.push_back(std::move(buffer));
+        };
+        const auto numNonNulls = readsIndices
+            ? view->read(indices, setNull, addStringBuffer, output.data())
+            : view->read(ranges, setNull, addStringBuffer, output.data());
+
+        std::vector<uint32_t> expectedNullIndices;
+        for (uint32_t i{0}; i < selectedRows.size(); ++i) {
+          const auto& row = rows[selectedRows[i]];
+          if (!row.has_value()) {
+            expectedNullIndices.push_back(i);
+            continue;
+          }
+          EXPECT_EQ(output[i], *row) << "row " << selectedRows[i];
+          EXPECT_TRUE(row->empty() || liesIn(output[i], buffers))
+              << "row " << selectedRows[i];
+        }
+        EXPECT_EQ(nullIndices, expectedNullIndices);
+        EXPECT_EQ(
+            numNonNulls, selectedRows.size() - expectedNullIndices.size());
+        if (childType == EncodingType::Trivial) {
+          // The child returns strings of the input, so the read passes the
+          // input string buffer, or copies the strings into a buffer that it
+          // passes.
+          if (holdsInput) {
+            EXPECT_THAT(buffers, testing::ElementsAre(input));
+          } else {
+            ASSERT_EQ(buffers.size(), 1);
+            EXPECT_NE(buffers[0], input);
+          }
+          continue;
+        }
+
+        // The child takes the addStringBuffer of the read, so it decodes the
+        // strings into buffers that it passes rather than into itself, where
+        // no buffer holds them.
+        EXPECT_FALSE(buffers.empty());
+      }
     }
   }
 }
@@ -520,6 +677,7 @@ TEST_P(NullableEncodingViewTest, concurrentReads) {
       view->read(
           indices,
           [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          /*addStringBuffer=*/nullptr,
           output.data());
       if (!matches(indices, output, nullIndices)) {
         return false;
@@ -545,6 +703,7 @@ TEST_P(NullableEncodingViewTest, concurrentReads) {
       view->read(
           ranges,
           [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          /*addStringBuffer=*/nullptr,
           output.data());
       if (!matches(selected, output, nullIndices)) {
         return false;

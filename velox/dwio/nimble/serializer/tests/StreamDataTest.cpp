@@ -28,10 +28,13 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/ConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/StreamData.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
@@ -101,6 +104,53 @@ TEST_F(StreamDataTest, decodeWithoutEncodingThrows) {
           static_cast<uint32_t>(output.size()),
           sizeof(int32_t)),
       "StreamData has no encoding to decode");
+}
+
+TEST_F(StreamDataTest, resetRebindsAlternatingEncodings) {
+  // A stream whose segments alternate between two encodings, as a stream
+  // does across payloads of different shapes, rebuilds its encoding on each
+  // switch, as the current one does not rebind; every segment decodes as its
+  // own.
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto makeValues = [&](const std::vector<int32_t>& values) {
+    Vector<int32_t> vector{pool_.get(), values.size()};
+    std::copy(values.begin(), values.end(), vector.begin());
+    return vector;
+  };
+  const std::vector<int32_t> constantValues{5, 5, 5};
+  const std::vector<int32_t> trivialValues{1, 2};
+  const auto constant = test::Encoder<ConstantEncoding<int32_t>>::encode(
+      buffer, makeValues(constantValues));
+  const auto trivial = test::Encoder<TrivialEncoding<int32_t>>::encode(
+      buffer, makeValues(trivialValues));
+
+  std::vector<BufferPtr> stringBuffers;
+  BufferPtr decompressionBuffer;
+  serde::StreamData stream(
+      constant,
+      ScalarKind::Int32,
+      stringBuffers,
+      pool_.get(),
+      serde::StreamData::Options{
+          .streamEncodingUsesVarintRowCount = false,
+          .decompressionBuffer = &decompressionBuffer});
+  for (int round = 0; round < 3; ++round) {
+    for (const auto& [data, expected] :
+         {std::pair{constant, constantValues},
+          std::pair{trivial, trivialValues}}) {
+      stream.reset(
+          data,
+          /*streamEncodingUsesVarintRowCount=*/false,
+          /*rebindEncoding=*/true);
+      std::vector<int32_t> output(expected.size());
+      stream.decode(
+          output.data(),
+          /*offset=*/0,
+          static_cast<uint32_t>(output.size()),
+          sizeof(int32_t));
+      EXPECT_EQ(output, expected);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +252,12 @@ TEST_F(StreamDataParserHeaderTest, readsStreamRowCountEncodingByVersion) {
           .streamEncodingUsesVarintRowCount = false,
           .buffer = buildTabletBuffer(kRowCount),
       },
+      {
+          .version = SerializationVersion::kBlob,
+          .streamEncodingUsesVarintRowCount = true,
+          .buffer = buildSerializedBuffer(
+              SerializationVersion::kBlob, kRowCount, "stream-data"),
+      },
   };
 
   for (const auto& testCase : testCases) {
@@ -215,6 +271,70 @@ TEST_F(StreamDataParserHeaderTest, readsStreamRowCountEncodingByVersion) {
         parser.streamEncodingUsesVarintRowCount(),
         testCase.streamEncodingUsesVarintRowCount);
   }
+}
+
+class StreamDataParserBlobTest : public StreamDataParserHeaderTest {
+ protected:
+  // Returns a kBlob buffer with one stream. The body holds the
+  // stream and the trailer. The payload is the u32 body size, then the body
+  // as an Lz4 block.
+  static std::string buildLz4Buffer(
+      uint32_t rowCount,
+      std::string_view stream) {
+    const auto uncompressed =
+        buildSerializedBuffer(SerializationVersion::kBlob, rowCount, stream);
+    const auto headerSize =
+        estimateSerializationHeaderSize(SerializationVersion::kBlob, rowCount);
+    const std::string_view body{
+        uncompressed.data() + headerSize, uncompressed.size() - headerSize};
+
+    // The blob compression byte ends the header.
+    std::string buffer{uncompressed.data(), headerSize};
+    buffer.back() = static_cast<char>(CompressionType::Lz4);
+    std::string payload(
+        sizeof(uint32_t) + LZ4_compressBound(static_cast<int>(body.size())),
+        '\0');
+    char* pos = payload.data();
+    encoding::writeUint32(static_cast<uint32_t>(body.size()), pos);
+    const auto blockSize = LZ4_compress_default(
+        body.data(),
+        pos,
+        static_cast<int>(body.size()),
+        static_cast<int>(payload.size() - sizeof(uint32_t)));
+    payload.resize(sizeof(uint32_t) + blockSize);
+    return buffer + payload;
+  }
+};
+
+TEST_F(StreamDataParserBlobTest, keepsDecompressedBodyUntilReset) {
+  constexpr uint32_t kRowCount{7};
+  const std::string stream(4'096, 'a');
+  const auto buffer = buildLz4Buffer(kRowCount, stream);
+
+  // The fixture's pool hangs off the memory manager's default root, which does
+  // not track usage.
+  const auto rootPool = memory::memoryManager()->addRootPool("blob_parser");
+  const auto parserPool = rootPool->addLeafChild("parser");
+  StreamDataParser parser{parserPool.get()};
+  const auto initialUsedBytes = parserPool->usedBytes();
+
+  // initialize() does not decompress yet: a caller may still call reset() for
+  // an earlier decode run before iterateStreams() reads this batch.
+  EXPECT_EQ(parser.initialize(buffer), kRowCount);
+  EXPECT_EQ(parserPool->usedBytes(), initialUsedBytes);
+  parser.reset();
+
+  std::vector<std::pair<uint32_t, std::string>> streams;
+  parser.iterateStreams([&](uint32_t offset, std::string_view data) {
+    streams.emplace_back(offset, std::string{data});
+  });
+  const std::vector<std::pair<uint32_t, std::string>> expectedStreams{
+      {0, stream}};
+  EXPECT_EQ(streams, expectedStreams);
+  EXPECT_GT(parserPool->usedBytes(), initialUsedBytes);
+
+  parser.reset();
+  EXPECT_EQ(parserPool->usedBytes(), initialUsedBytes);
 }
 
 class TabletChunkStripTest : public ::testing::Test {
@@ -1002,6 +1122,25 @@ TEST_F(WriteHeaderTest, maxRowCount) {
       {});
 }
 
+TEST_F(WriteHeaderTest, rejectsUnsupportedBlobCompression) {
+  const SerializerOptions options{
+      .version = SerializationVersion::kBlob,
+      .blobCompressionOptions =
+          {.compressionType = static_cast<CompressionType>(99)},
+  };
+  std::string buffer;
+
+  NIMBLE_ASSERT_USER_THROW(
+      (StreamDataWriter<std::string>{
+          options,
+          buffer,
+          /*rowCount=*/1,
+          pool_.get(),
+          /*streamEncodingLayouts=*/nullptr}),
+      "kBlob blob compression must be Lz4, Zstd, MetaInternal, OpenZL or Uncompressed");
+  EXPECT_TRUE(buffer.empty());
+}
+
 TEST_F(WriteHeaderTest, estimateHeaderSizeCompactRaw) {
   struct TestParam {
     uint32_t rowCount;
@@ -1713,6 +1852,33 @@ TEST_F(StreamDataEncodedResetTest, resetUpdatesRowCountEncodingFlag) {
     streamData.reset(fixedEncoded, /*streamEncodingUsesVarintRowCount=*/false);
     expectDecoded(streamData, fixedValues);
   }
+}
+
+// With rebinding, a segment shorter than its encoding prefix is rejected
+// before the stream rebinds or rebuilds its encoding, including
+// one cut inside a multi-byte varint row count.
+TEST_F(StreamDataEncodedResetTest, rebindRejectsTruncatedPrefix) {
+  facebook::nimble::Buffer buffer(*pool_);
+  // 200 rows need a 2-byte varint row count.
+  const std::vector<int32_t> values(200, 7);
+  const auto encoded = encode(values, buffer, /*useVarintRowCount=*/true);
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData streamData(stringBuffers, pool_.get());
+  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/true);
+  expectDecoded(streamData, values);
+
+  NIMBLE_ASSERT_THROW(
+      streamData.reset(
+          encoded.substr(0, 3),
+          /*streamEncodingUsesVarintRowCount=*/true,
+          /*rebindEncoding=*/true),
+      "Truncated uint32 varint.");
+  NIMBLE_ASSERT_THROW(
+      streamData.reset(
+          encoded.substr(0, 1),
+          /*streamEncodingUsesVarintRowCount=*/true,
+          /*rebindEncoding=*/true),
+      "Truncated encoding prefix.");
 }
 
 TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBits) {

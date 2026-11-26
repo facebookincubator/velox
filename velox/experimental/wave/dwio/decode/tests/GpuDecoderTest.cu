@@ -19,11 +19,13 @@
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 #include "velox/experimental/gpu/Common.h"
-#include "velox/experimental/wave/dwio/decode/GpuDecoder.cuh"
+#include "velox/experimental/wave/dwio/decode/DecodeOps.cuh"
+#include "velox/experimental/wave/dwio/decode/DecodeStep.h"
+#include "velox/experimental/wave/dwio/decode/ReaderKernel.h"
 
 DEFINE_int32(device_id, 0, "");
 DEFINE_bool(benchmark, false, "");
-DEFINE_bool(print_kernels, false, "Print register and smem usage");
+DEFINE_bool(print_kernels, false, "Print registered kernels");
 DEFINE_bool(use_selective, false, "Use selective path for test");
 
 namespace facebook::velox::wave {
@@ -170,12 +172,20 @@ struct SelectiveOptions {
 };
 
 class GpuDecoderTest : public ::testing::Test {
+  // Runs ops[i] on TB i.
+  template <int32_t kBlockSize>
+  void decodeOps(GpuDecode* ops, int32_t numOps) {
+    launchDecodeOps(ops, numOps, kBlockSize, stream_.get());
+    stream_->wait();
+  }
+
  protected:
   void SetUp() override {
     if (int device; cudaGetDevice(&device) != cudaSuccess) {
       GTEST_SKIP() << "No CUDA detected, skipping all tests";
     }
     arena_ = std::make_unique<GpuArena>(100000000, getAllocator(getDevice()));
+    stream_ = std::make_unique<Stream>();
     CUDA_CHECK_FATAL(cudaEventCreate(&startEvent_));
     CUDA_CHECK_FATAL(cudaEventCreate(&stopEvent_));
   }
@@ -245,7 +255,7 @@ class GpuDecoderTest : public ::testing::Test {
             sizeof(T) * 8,
             numValues,
             useScatter),
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numOps); },
+        [&] { decodeOps<kBlockSize>(ops.get(), numOps); },
         numValues * sizeof(T),
         10);
     if (!scatter) {
@@ -404,7 +414,7 @@ class GpuDecoderTest : public ::testing::Test {
 #ifdef USE_PROGRAM_API
           callViaPrograms(ops.get(), numOps);
 #else
-          decodeGlobal<kBlockSize>(ops.get(), numOps);
+          decodeOps<kBlockSize>(ops.get(), numOps);
 #endif
         },
         numValues * sizeof(T),
@@ -452,7 +462,7 @@ class GpuDecoderTest : public ::testing::Test {
     }
     testCase(
         "",
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numBlocks); },
+        [&] { decodeOps<kBlockSize>(ops.get(), numBlocks); },
         resultSize * numBlocks,
         3);
     for (int j = 0; j < numBlocks; ++j) {
@@ -494,7 +504,7 @@ class GpuDecoderTest : public ::testing::Test {
     }
     testCase(
         "",
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numBlocks); },
+        [&] { decodeOps<kBlockSize>(ops.get(), numBlocks); },
         numValues * sizeof(uint64_t) * numBlocks,
         3);
     for (int j = 0; j < numBlocks; ++j) {
@@ -529,7 +539,7 @@ class GpuDecoderTest : public ::testing::Test {
     }
     testCase(
         "",
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numBlocks); },
+        [&] { decodeOps<kBlockSize>(ops.get(), numBlocks); },
         numValues * numBlocks * sizeof(T),
         3);
     for (int k = 0; k < numBlocks; ++k) {
@@ -563,7 +573,7 @@ class GpuDecoderTest : public ::testing::Test {
     }
     testCase(
         "",
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numBlocks); },
+        [&] { decodeOps<kBlockSize>(ops.get(), numBlocks); },
         numValues * sizeof(int32_t),
         5);
     for (int i = 0; i < numBlocks; ++i) {
@@ -598,7 +608,7 @@ class GpuDecoderTest : public ::testing::Test {
       op.count = std::min(valuesPerOp, numValues - i * valuesPerOp);
       op.result = &results[i];
     }
-    decodeGlobal<kBlockSize>(ops.get(), numBlocks);
+    decodeOps<kBlockSize>(ops.get(), numBlocks);
     CUDA_CHECK_FATAL(cudaGetLastError());
     CUDA_CHECK_FATAL(cudaDeviceSynchronize());
     auto result = allocate<T>(totalLength);
@@ -616,7 +626,7 @@ class GpuDecoderTest : public ::testing::Test {
     }
     testCase(
         "",
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numBlocks); },
+        [&] { decodeOps<kBlockSize>(ops.get(), numBlocks); },
         totalLength * sizeof(T),
         3);
     for (int i = 0; i < numBlocks; ++i) {
@@ -647,7 +657,7 @@ class GpuDecoderTest : public ::testing::Test {
     }
     testCase(
         "",
-        [&] { decodeGlobal<kBlockSize>(ops.get(), numBlocks); },
+        [&] { decodeOps<kBlockSize>(ops.get(), numBlocks); },
         numValues * numBlocks * sizeof(int32_t),
         3);
     for (int i = 0; i < numBlocks; ++i) {
@@ -748,6 +758,7 @@ class GpuDecoderTest : public ::testing::Test {
 
  private:
   std::unique_ptr<GpuArena> arena_;
+  std::unique_ptr<Stream> stream_;
 
   cudaEvent_t startEvent_;
   cudaEvent_t stopEvent_;
@@ -824,17 +835,6 @@ TEST_F(GpuDecoderTest, streamApi) {
 } // namespace
 } // namespace facebook::velox::wave
 
-void printFuncAttrs(
-    const std::string& heading,
-    const cudaFuncAttributes& attrs) {
-  std::cout << heading << " sharedSizeBytes=" << attrs.sharedSizeBytes
-            << " constSizeBytes" << attrs.constSizeBytes
-            << " localSizeBytes =" << attrs.localSizeBytes
-            << "maxThreadsPerBlock=" << attrs.maxThreadsPerBlock
-            << " numRegs=" << attrs.numRegs
-            << " maxDynamicSharedSizeBytes=" << attrs.maxDynamicSharedSizeBytes
-            << std::endl;
-}
 using namespace facebook::velox::wave;
 
 int main(int argc, char** argv) {
@@ -851,17 +851,6 @@ int main(int argc, char** argv) {
   printf("Running on device: %s\n", prop.name);
   CUDA_CHECK_FATAL(cudaSetDevice(FLAGS_device_id));
   if (FLAGS_print_kernels) {
-    cudaFuncAttributes attrs;
-    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<128>));
-    printFuncAttrs("decode blocksize 128", attrs);
-    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<256>));
-    printFuncAttrs("decode blocksize 256", attrs);
-    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<512>));
-    printFuncAttrs("decode blocksize 512", attrs);
-    CUDA_CHECK_FATAL(cudaFuncGetAttributes(&attrs, detail::decodeGlobal<1024>));
-    printFuncAttrs("decode blocksize 1024", attrs);
-    printFuncAttrs("decode2", attrs);
-
     printKernels();
   }
   return RUN_ALL_TESTS();

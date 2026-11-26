@@ -36,6 +36,7 @@
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <fmt/core.h>
+#include <fmt/ranges.h> // IWYU pragma: keep
 
 using namespace facebook::nimble;
 using namespace facebook;
@@ -134,6 +135,36 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
     return file;
   }
 
+  // Writes 'numColumns' columns that alternate BIGINT and VARCHAR.
+  std::string writeWideTestFile(int numColumns) {
+    velox::test::VectorMaker vectorMaker(pool_.get());
+    std::vector<std::string> names;
+    std::vector<velox::VectorPtr> columns;
+    for (int column = 0; column < numColumns; ++column) {
+      names.push_back(fmt::format("c{}", column));
+      if (column % 2 == 0) {
+        columns.push_back(vectorMaker.flatVector<int64_t>(
+            100, [column](auto row) { return row + column; }));
+      } else {
+        columns.push_back(
+            vectorMaker.flatVector<velox::StringView>(100, [](auto row) {
+              return velox::StringView::makeInline("val" + std::to_string(row));
+            }));
+      }
+    }
+    auto vector = vectorMaker.rowVector(names, columns);
+
+    std::string file;
+    auto writer = std::make_unique<Writer>(
+        vector->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *pool_,
+        WriterOptions{});
+    writer->write(vector);
+    writer->close();
+    return file;
+  }
+
   velox::dwio::common::ReaderOptions makeReaderOptions() {
     velox::dwio::common::ReaderOptions opts(pool_.get());
     opts.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
@@ -147,13 +178,18 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
   }
 
   std::shared_ptr<ReaderBase> createReaderBase(const std::string& fileData) {
+    return createReaderBase(fileData, makeReaderOptions());
+  }
+
+  std::shared_ptr<ReaderBase> createReaderBase(
+      const std::string& fileData,
+      const velox::dwio::common::ReaderOptions& readerOpts) {
     auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData);
-    auto readerOpts = makeReaderOptions();
 
     switch (GetParam()) {
       case CreationMode::kDirect: {
         auto input = std::make_unique<velox::dwio::common::BufferedInput>(
-            readFile, *pool_);
+            readFile, velox::FileIoContext{.pool = pool_.get()});
         return ReaderBase::create(std::move(input), readerOpts);
       }
       case CreationMode::kCached: {
@@ -162,7 +198,7 @@ class ReaderBaseTest : public ::testing::TestWithParam<CreationMode> {
         auto cached = cache_->get(readFile, tabletOpts);
 
         auto input = std::make_unique<velox::dwio::common::BufferedInput>(
-            readFile, *pool_);
+            readFile, velox::FileIoContext{.pool = pool_.get()});
         return ReaderBase::create(std::move(input), cached, readerOpts);
       }
     }
@@ -288,8 +324,8 @@ TEST_F(ReaderBaseCacheLifetimeTest, evictionDoesNotRetireEntryUnderLiveReader) {
   {
     auto cached =
         cache.get(readFile, TabletReader::configureOptions(readerOpts));
-    auto input =
-        std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+    auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+        readFile, velox::FileIoContext{.pool = pool_.get()});
     reader = ReaderBase::create(std::move(input), cached, readerOpts);
   }
   EXPECT_FALSE(released);
@@ -305,6 +341,43 @@ TEST_F(ReaderBaseCacheLifetimeTest, evictionDoesNotRetireEntryUnderLiveReader) {
 
   reader.reset();
   EXPECT_TRUE(released);
+}
+
+// Readers built from one cached tablet share its preloaded metadata, so only
+// building the tablet reads metadata from the file.
+class ReaderBaseSharedTabletTest : public ReaderBaseTest {};
+
+TEST_F(ReaderBaseSharedTabletTest, laterReadersReadNoMetadata) {
+  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/true);
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData);
+  ensureCache();
+  for (const bool lazyFileStats : {false, true}) {
+    SCOPED_TRACE(fmt::format("lazyFileStats {}", lazyFileStats));
+    auto readerOpts = makeReaderOptions();
+    readerOpts.setNimbleLazyFileStats(lazyFileStats);
+    const auto cached =
+        cache_->get(readFile, TabletReader::configureOptions(readerOpts));
+    const auto createReader = [&]() {
+      return ReaderBase::create(
+          std::make_unique<velox::dwio::common::BufferedInput>(
+              readFile, velox::FileIoContext{.pool = pool_.get()}),
+          cached,
+          readerOpts);
+    };
+
+    const auto first = createReader();
+    const auto metadataBytes = cached->metadataIoStats().rawBytesRead();
+    const auto second = createReader();
+    EXPECT_EQ(cached->metadataIoStats().rawBytesRead(), metadataBytes);
+    ASSERT_TRUE(second->hasFileColumnStatistics());
+    const uint32_t numNodes = first->fileSchemaWithId()->maxId() + 1;
+    for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+      SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
+      EXPECT_EQ(
+          second->fileColumnLogicalSize(nodeId),
+          first->fileColumnLogicalSize(nodeId));
+    }
+  }
 }
 
 TEST_P(ReaderBaseTest, basic) {
@@ -333,16 +406,16 @@ TEST_P(ReaderBaseTest, equivalentAcrossModes) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData_);
   auto readerOpts = makeReaderOptions();
 
-  auto inputDirect =
-      std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+  auto inputDirect = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile, velox::FileIoContext{.pool = pool_.get()});
   auto direct = ReaderBase::create(std::move(inputDirect), readerOpts);
 
   ensureCache();
   auto tabletOpts = TabletReader::configureOptions(readerOpts);
   auto cached = cache_->get(readFile, tabletOpts);
 
-  auto inputCached =
-      std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+  auto inputCached = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile, velox::FileIoContext{.pool = pool_.get()});
   auto fromCache =
       ReaderBase::create(std::move(inputCached), cached, readerOpts);
 
@@ -383,12 +456,77 @@ TEST_P(ReaderBaseTest, fileColumnStatistics) {
   EXPECT_EQ(reader->fileColumnLogicalSize(numNodes), std::nullopt);
 }
 
+TEST_P(ReaderBaseTest, lazyFileStatsMatchEager) {
+  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/true);
+  const auto eager = createReaderBase(fileData, makeReaderOptions());
+  auto lazyOpts = makeReaderOptions();
+  lazyOpts.setNimbleLazyFileStats(true);
+  const auto lazy = createReaderBase(fileData, lazyOpts);
+
+  EXPECT_TRUE(eager->hasFileColumnStatistics());
+  EXPECT_TRUE(lazy->hasFileColumnStatistics());
+  const uint32_t numNodes = eager->fileSchemaWithId()->maxId() + 1;
+  for (uint32_t nodeId = 0; nodeId < numNodes; ++nodeId) {
+    SCOPED_TRACE(fmt::format("nodeId {}", nodeId));
+    const auto* expected = eager->fileColumnStatistics(nodeId);
+    const auto* actual = lazy->fileColumnStatistics(nodeId);
+    ASSERT_NE(expected, nullptr);
+    ASSERT_NE(actual, nullptr);
+    EXPECT_EQ(actual->getType(), expected->getType());
+    EXPECT_EQ(actual->getValueCount(), expected->getValueCount());
+    EXPECT_EQ(actual->getNullCount(), expected->getNullCount());
+    EXPECT_EQ(actual->getLogicalSize(), expected->getLogicalSize());
+    EXPECT_EQ(actual->getPhysicalSize(), expected->getPhysicalSize());
+    EXPECT_EQ(
+        actual->toCommonStatistics()->toString(),
+        expected->toCommonStatistics()->toString());
+    EXPECT_EQ(
+        lazy->fileColumnLogicalSize(nodeId),
+        eager->fileColumnLogicalSize(nodeId));
+  }
+  EXPECT_EQ(eager->fileColumnStatistics(numNodes), nullptr);
+  EXPECT_EQ(lazy->fileColumnStatistics(numNodes), nullptr);
+  EXPECT_EQ(eager->fileColumnLogicalSize(numNodes), std::nullopt);
+  EXPECT_EQ(lazy->fileColumnLogicalSize(numNodes), std::nullopt);
+}
+
+TEST_P(ReaderBaseTest, lazyFileStatsAllocateLess) {
+  const auto fileData = writeWideTestFile(/*numColumns=*/100);
+  struct Allocations {
+    uint64_t open;
+    uint64_t lookups;
+  };
+  const auto countAllocations = [&](bool lazyFileStats) {
+    auto readerOpts = makeReaderOptions();
+    readerOpts.setNimbleLazyFileStats(lazyFileStats);
+    const auto start = pool_->stats().numAllocs;
+    const auto reader = createReaderBase(fileData, readerOpts);
+    const auto opened = pool_->stats().numAllocs;
+    // A split prunes on one column and estimates the row size from four.
+    EXPECT_NE(reader->fileColumnStatistics(1), nullptr);
+    for (uint32_t nodeId = 1; nodeId <= 4; ++nodeId) {
+      EXPECT_TRUE(reader->fileColumnLogicalSize(nodeId).has_value());
+    }
+    return Allocations{opened - start, pool_->stats().numAllocs - opened};
+  };
+  const auto eager = countAllocations(/*lazyFileStats=*/false);
+  const auto lazy = countAllocations(/*lazyFileStats=*/true);
+  EXPECT_EQ(eager.lookups, 0);
+  EXPECT_LT(lazy.open, eager.open);
+  EXPECT_LT((lazy.open + lazy.lookups) * 2, eager.open);
+}
+
 TEST_P(ReaderBaseTest, fileStatsAbsent) {
-  const auto reader =
-      createReaderBase(writeStatsTestFile(/*enableVectorizedStats=*/false));
-  EXPECT_FALSE(reader->hasFileColumnStatistics());
-  EXPECT_EQ(reader->fileColumnStatistics(1), nullptr);
-  EXPECT_EQ(reader->fileColumnLogicalSize(1), std::nullopt);
+  const auto fileData = writeStatsTestFile(/*enableVectorizedStats=*/false);
+  for (const bool lazyFileStats : {false, true}) {
+    SCOPED_TRACE(fmt::format("lazyFileStats {}", lazyFileStats));
+    auto readerOpts = makeReaderOptions();
+    readerOpts.setNimbleLazyFileStats(lazyFileStats);
+    const auto reader = createReaderBase(fileData, readerOpts);
+    EXPECT_FALSE(reader->hasFileColumnStatistics());
+    EXPECT_EQ(reader->fileColumnStatistics(1), nullptr);
+    EXPECT_EQ(reader->fileColumnLogicalSize(1), std::nullopt);
+  }
 }
 
 TEST_P(ReaderBaseTest, locateStreams) {
@@ -607,8 +745,8 @@ TEST_P(StripeStreamsMultiStripeTest, locateStreams) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(fileData_);
   auto opts = makeReaderOptions();
 
-  auto input =
-      std::make_unique<velox::dwio::common::BufferedInput>(readFile, *pool_);
+  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+      readFile, velox::FileIoContext{.pool = pool_.get()});
   auto reader = ReaderBase::create(std::move(input), opts);
   const auto& tablet = reader->tablet();
   ASSERT_EQ(tablet.stripeCount(), 3);
@@ -656,7 +794,7 @@ TEST_P(StripeStreamsMultiStripeTest, preloadCollapsesStripeReads) {
     auto opts = makeReaderOptions();
     opts.setFilePreloadThreshold(preloadThreshold);
     auto input = std::make_unique<velox::dwio::common::BufferedInput>(
-        countingFile, *pool_);
+        countingFile, velox::FileIoContext{.pool = pool_.get()});
     auto reader = ReaderBase::create(std::move(input), opts);
     EXPECT_EQ(reader->tablet().stripeCount(), kStripeCount);
 

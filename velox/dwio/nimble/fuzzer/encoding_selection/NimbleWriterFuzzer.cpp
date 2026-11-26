@@ -39,7 +39,6 @@
 #include "velox/common/file/File.h"
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/io/IoStatistics.h"
-#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -229,6 +228,47 @@ bool hasDataPrecondition(EncodingType encodingType) {
       encodingType == EncodingType::Huffman;
 }
 
+// Keeps Reversed as the only value candidate through a Nullable wrapper.
+// Its transformed values need ordered nested candidates for estimation and
+// encoding.
+template <typename T>
+class ForcedReversedEncodingSelectionPolicy
+    : public ManualEncodingSelectionPolicy<T> {
+ public:
+  explicit ForcedReversedEncodingSelectionPolicy(
+      std::optional<CompressionOptions> compressionOptions)
+      : ManualEncodingSelectionPolicy<T>{
+            {{EncodingType::Reversed, 1.0f}},
+            compressionOptions,
+            std::nullopt,
+            std::vector<std::pair<EncodingType, float>>{
+                {EncodingType::EliasFano, 1.0f},
+                {EncodingType::PartitionedEliasFano, 1.0f},
+                {EncodingType::DeltaBlock, 1.0f},
+            }},
+        compressionOptions_{std::move(compressionOptions)} {}
+
+ protected:
+  std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
+      EncodingType parentEncodingType,
+      NestedEncodingIdentifier nestedEncodingIdentifier,
+      DataType nestedDataType) override {
+    if (parentEncodingType == EncodingType::Nullable &&
+        nestedEncodingIdentifier == EncodingIdentifiers::Nullable::Data) {
+      UNIQUE_PTR_FACTORY(
+          nestedDataType,
+          ForcedReversedEncodingSelectionPolicy,
+          compressionOptions_);
+    }
+    return ManualEncodingSelectionPolicy<T>::createImpl(
+        parentEncodingType, nestedEncodingIdentifier, nestedDataType);
+  }
+
+ private:
+  // Compression settings inherited by the nullable values policy.
+  const std::optional<CompressionOptions> compressionOptions_;
+};
+
 // Wraps 'creator' so an integral-only encoding is skipped on floating-point
 // streams alone, instead of being dropped from every schema that holds one.
 // Excluding it schema-wide would also exclude it from the integer columns
@@ -324,6 +364,10 @@ DrawnWriterSettings randomizeWriterOptions(
 
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
+  // Typed lanes with a floor anywhere from every chunk to the default, so
+  // small fuzzed chunks reach them too.
+  options.fixedBitWidthTypedLanes = folly::Random::oneIn(2, rng);
+  options.fixedBitWidthTypedLanesMinValues = folly::Random::rand32(257, rng);
   // Ratios above 1.0 keep FSST even when it does not shrink the data, so the
   // encoding is actually exercised instead of rejected on size.
   options.fsstCompressionTargetRatio =
@@ -459,6 +503,15 @@ void collectPhysicalStreamRoles(const Type& type, PhysicalStreamRoles& roles) {
           array.offsetsDescriptor().offset(), "ArrayWithOffsets.offsets");
       roles.kinds.emplace(
           array.lengthsDescriptor().offset(), "ArrayWithOffsets.lengths");
+      collectPhysicalStreamRoles(*array.elements(), roles);
+      return;
+    }
+    case Kind::SlidingWindowArray: {
+      const auto& array = type.asSlidingWindowArray();
+      roles.kinds.emplace(
+          array.offsetsDescriptor().offset(), "SlidingWindowArray.offsets");
+      roles.kinds.emplace(
+          array.lengthsDescriptor().offset(), "SlidingWindowArray.lengths");
       collectPhysicalStreamRoles(*array.elements(), roles);
       return;
     }
@@ -1013,18 +1066,18 @@ void makeAllNull(velox::BaseVector& vector) {
   }
 }
 
-// Rewrites an integer column to a non-decreasing sequence, the one shape
-// DeltaBlock accepts. Repeats are drawn in so the result is not a pure ramp,
-// which would make the delta stream uniformly one. 'cursor' carries the last
+// Rewrites an integer column to a monotonic sequence. Repeats avoid a pure
+// ramp whose delta stream is uniformly one. 'cursor' carries the last
 // value emitted for this column across batches: the estimator checks ordering
 // per block and chunk boundaries do not follow batch boundaries, so a
 // per-batch restart would leave most blocks out of order and the shape
 // unusable.
 template <typename T>
-void makeNonDecreasing(
+void makeMonotonic(
     velox::FlatVector<T>* vector,
     int64_t& cursor,
     uint64_t totalRows,
+    bool descending,
     FuzzerGenerator& rng) {
   constexpr int64_t kMinValue = std::numeric_limits<T>::min();
   constexpr int64_t kMaxValue = std::numeric_limits<T>::max();
@@ -1042,16 +1095,16 @@ void makeNonDecreasing(
       continue;
     }
     // The range guard is a backstop for a caller passing too few rows;
-    // saturating is still non-decreasing, just degenerate.
-    if (cursor < kMaxValue &&
-        folly::Random::randDouble01(rng) < stepProbability) {
-      ++cursor;
+    // saturating is still monotonic, just degenerate.
+    const bool canStep = descending ? cursor > kMinValue : cursor < kMaxValue;
+    if (canStep && folly::Random::randDouble01(rng) < stepProbability) {
+      cursor += descending ? -1 : 1;
     }
     vector->set(i, static_cast<T>(cursor));
   }
 }
 
-// The signed integer kinds makeNonDecreasing can rewrite. TIMESTAMP also
+// The signed integer kinds makeMonotonic can rewrite. TIMESTAMP also
 // reaches the writer as Int64 but is left alone: its Velox representation is
 // not a plain integer.
 bool isIntegerKind(velox::TypeKind kind) {
@@ -1086,6 +1139,7 @@ enum class ColumnShape {
   kDefault,
   kConstant,
   kNonDecreasing,
+  kNonIncreasing,
   kCappingJson,
   kSharedPrefixes,
   // Nulls every row of every other batch, so a chunk cut at a batch boundary
@@ -1111,7 +1165,9 @@ std::vector<ColumnShape> drawColumnShapes(
     } else if (
         isIntegerKind(schema->childAt(i)->kind()) &&
         folly::Random::oneIn(4, rng)) {
-      shapes.push_back(ColumnShape::kNonDecreasing);
+      shapes.push_back(
+          folly::Random::oneIn(2, rng) ? ColumnShape::kNonDecreasing
+                                       : ColumnShape::kNonIncreasing);
     } else if (
         schema->childAt(i)->kind() == velox::TypeKind::VARCHAR &&
         folly::Random::oneIn(2, rng)) {
@@ -1134,7 +1190,7 @@ std::vector<ColumnShape> drawColumnShapes(
 // the one shape that also applies to complex columns. Applied to only some
 // iterations so purely random data is still exercised.
 //
-// 'cursors' holds the running value of each non-decreasing column and is
+// 'cursors' holds the running value of each monotonic column and is
 // updated in place, so successive batches continue the sequence. 'batchIndex'
 // picks the batches kNullBatches nulls.
 void applyEncodingFriendlyShapes(
@@ -1166,8 +1222,11 @@ void applyEncodingFriendlyShapes(
     }
     const bool collapseToConstant =
         shapes.at(childIndex) == ColumnShape::kConstant;
-    const bool makeMonotonic =
-        shapes.at(childIndex) == ColumnShape::kNonDecreasing;
+    const bool isMonotonic =
+        shapes.at(childIndex) == ColumnShape::kNonDecreasing ||
+        shapes.at(childIndex) == ColumnShape::kNonIncreasing;
+    const bool descending =
+        shapes.at(childIndex) == ColumnShape::kNonIncreasing;
     const bool makeJson = shapes.at(childIndex) == ColumnShape::kCappingJson;
     auto& cursor = cursors.at(childIndex);
     switch (child->typeKind()) {
@@ -1179,33 +1238,49 @@ void applyEncodingFriendlyShapes(
       case velox::TypeKind::TINYINT:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int8_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int8_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int8_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::SMALLINT:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int16_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int16_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int16_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::INTEGER:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int32_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int32_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int32_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::BIGINT:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<int64_t>());
-        } else if (makeMonotonic) {
-          makeNonDecreasing(
-              child->asFlatVector<int64_t>(), cursor, totalRows, rng);
+        } else if (isMonotonic) {
+          makeMonotonic(
+              child->asFlatVector<int64_t>(),
+              cursor,
+              totalRows,
+              descending,
+              rng);
         }
         break;
       case velox::TypeKind::REAL:
@@ -1477,6 +1552,14 @@ std::string NimbleWriterFuzzer::writeFile(
       "Encoding selection config produced no policy creator for '{}'.",
       selectionConfig);
   EncodingSelectionPolicyCreator policyCreator = std::move(*parsedCreator);
+  if (encodingType == EncodingType::Reversed) {
+    policyCreator =
+        [compressionOptions = writerOptions.compressionOptions](
+            DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+      UNIQUE_PTR_FACTORY(
+          dataType, ForcedReversedEncodingSelectionPolicy, compressionOptions);
+    };
+  }
 
   // The write-side gate admits floating point directly for SimdForBitpack and
   // Huffman. A Nullable float's nested policy can also admit DeltaBlock after
@@ -1508,7 +1591,12 @@ std::string NimbleWriterFuzzer::writeFile(
       drawnSettings.metadataFlushThreshold);
   auto schema =
       std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
-  verifyColumnStatistics(file, schema, batches, statsOptions);
+  verifyColumnStatistics(
+      file,
+      schema,
+      batches,
+      statsOptions,
+      folly::hash::hash_combine(iterationSeed, std::string_view{"lazyStats"}));
   verifySchemaAndStripeGroupConsistency(file, schema);
   return file;
 }
@@ -2106,13 +2194,137 @@ std::optional<std::string> findFileBoundsViolation(
   return std::nullopt;
 }
 
+// Formats a statistics bound, or "absent" when there is none.
+template <typename T>
+std::string formatBound(const std::optional<T>& bound) {
+  return bound.has_value() ? fmt::format("{}", *bound) : std::string{"absent"};
+}
+
+// Describes every field of 'stats', so that two statistics are equal exactly
+// when their descriptions are. Unlike the value, a NaN bound's description
+// equals itself.
+std::string describeStatistics(const ColumnStatistics& stats) {
+  const auto counts = fmt::format(
+      "values {}, nulls {}, logical size {}, physical size {}",
+      stats.getValueCount(),
+      stats.getNullCount(),
+      stats.getLogicalSize(),
+      stats.getPhysicalSize());
+  const auto describeBounded =
+      [&](std::string_view kind, const auto& min, const auto& max) {
+        return fmt::format(
+            "{}: {}, min {}, max {}",
+            kind,
+            counts,
+            formatBound(min),
+            formatBound(max));
+      };
+  switch (stats.getType()) {
+    case StatType::INTEGRAL: {
+      const auto* integral = stats.as<IntegralStatistics>();
+      return describeBounded(
+          "integral", integral->getMin(), integral->getMax());
+    }
+    case StatType::FLOATING_POINT: {
+      const auto* floating = stats.as<FloatingPointStatistics>();
+      return describeBounded(
+          "floating point", floating->getMin(), floating->getMax());
+    }
+    case StatType::STRING: {
+      const auto* strings = stats.as<StringStatistics>();
+      return describeBounded("string", strings->getMin(), strings->getMax());
+    }
+    case StatType::DEDUPLICATED: {
+      const auto* deduplicated = stats.as<DeduplicatedColumnStatistics>();
+      return fmt::format(
+          "deduplicated: count {}, logical size {}, base {}",
+          deduplicated->getDedupedCount(),
+          deduplicated->getDedupedLogicalSize(),
+          describeStatistics(*deduplicated->getBaseStatistics()));
+    }
+    case StatType::DEFAULT:
+      return fmt::format("default: {}", counts);
+  }
+  NIMBLE_UNREACHABLE("Unknown statistics type.");
+}
+
+// Checks that a lazy read of the stats section 'payload' returns, for every
+// node, the statistics and logical size in 'eager', which the eager read
+// returned. The lazy read builds each node's statistics, and the view of each
+// stream they read, on first use. So the nodes are visited in an order drawn
+// from 'lazyReadSeed', and half of them have their logical size read first.
+void verifyLazyColumnStatistics(
+    std::string_view payload,
+    const RowTypePtr& schema,
+    const std::vector<std::unique_ptr<ColumnStatistics>>& eager,
+    uint64_t lazyReadSeed,
+    uint64_t seed,
+    velox::memory::MemoryPool& pool) {
+  const auto lazy = VectorizedFileStats::deserialize(
+      payload, /*payloadHolder=*/nullptr, schema, pool);
+  FuzzerGenerator rng(lazyReadSeed);
+  std::vector<uint32_t> nodes(eager.size());
+  std::iota(nodes.begin(), nodes.end(), 0);
+  std::shuffle(nodes.begin(), nodes.end(), rng);
+  for (const auto node : nodes) {
+    const auto& expected = eager[node];
+    if (expected == nullptr) {
+      continue;
+    }
+    const auto verifyLogicalSize = [&] {
+      const auto logicalSize = lazy->logicalSize(node);
+      NIMBLE_CHECK(
+          logicalSize.has_value(),
+          "Lazy read has no logical size for node {} (seed {}).",
+          node,
+          seed);
+      NIMBLE_CHECK_EQ(
+          *logicalSize,
+          expected->getLogicalSize(),
+          "Node {} lazy logical size mismatch (seed {}).",
+          node,
+          seed);
+    };
+    const bool logicalSizeFirst = folly::Random::oneIn(2, rng);
+    if (logicalSizeFirst) {
+      verifyLogicalSize();
+    }
+    const auto* actual = lazy->columnStatistics(node);
+    NIMBLE_CHECK_NOT_NULL(
+        actual,
+        "Lazy read has no statistics for node {} (seed {}).",
+        node,
+        seed);
+    NIMBLE_CHECK_EQ(
+        describeStatistics(*actual),
+        describeStatistics(*expected),
+        "Node {} lazy statistics mismatch (seed {}).",
+        node,
+        seed);
+    if (!logicalSizeFirst) {
+      verifyLogicalSize();
+    }
+  }
+
+  const auto numNodes = static_cast<uint32_t>(eager.size());
+  NIMBLE_CHECK_NULL(
+      lazy->columnStatistics(numNodes),
+      "Lazy read has statistics past the last node (seed {}).",
+      seed);
+  NIMBLE_CHECK(
+      !lazy->logicalSize(numNodes).has_value(),
+      "Lazy read has a logical size past the last node (seed {}).",
+      seed);
+}
+
 } // namespace
 
 void NimbleWriterFuzzer::verifyColumnStatistics(
     const std::string& file,
     const RowTypePtr& schema,
     const std::vector<VectorPtr>& batches,
-    const VectorizedFileStats::Options& statsOptions) {
+    const VectorizedFileStats::Options& statsOptions,
+    uint64_t lazyReadSeed) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   auto tablet = TabletReader::create(
       readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
@@ -2270,6 +2482,14 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
           applyLengthLimit(expectedStr->getMaximum()));
     }
   }
+
+  verifyLazyColumnStatistics(
+      statsSection->content(),
+      schema,
+      columnStats,
+      lazyReadSeed,
+      options_.seed,
+      *leafPool_);
 }
 
 void NimbleWriterFuzzer::verifySchemaAndStripeGroupConsistency(
@@ -2451,7 +2671,7 @@ void NimbleWriterFuzzer::readAndVerify(
     readerOptions.setScanSpec(scanSpec);
     auto reader = factory->createReader(
         std::make_unique<velox::dwio::common::BufferedInput>(
-            readFile, *leafPool_),
+            readFile, velox::FileIoContext{.pool = leafPool_.get()}),
         readerOptions);
     checkSchema(*reader->rowType());
 
@@ -3112,7 +3332,7 @@ std::string describeFilters(
 // statistics of a filtered column show that no row of the file passes its
 // filter. Returns whether the connector would skip the file. Fails when it
 // would skip a file holding 'expectedRows', the input rows that pass every
-// filter.
+// filter. 'fileStatsMode' names how 'reader' reads the statistics.
 bool fileSkippedByStats(
     const velox::common::ScanSpec& scanSpec,
     const velox::dwio::common::Reader& reader,
@@ -3120,14 +3340,9 @@ bool fileSkippedByStats(
     const std::vector<VectorPtr>& batches,
     const std::vector<ColumnFilter>& filters,
     const std::vector<RowPosition>& expectedRows,
+    std::string_view fileStatsMode,
     uint64_t seed) {
-  if (velox::connector::testFilters(
-          &scanSpec,
-          &reader,
-          /*filePath=*/"point lookup file",
-          /*partitionKey=*/{},
-          /*partitionKeysHandle=*/{},
-          /*asLocalTime=*/false)) {
+  if (velox::common::testFilters(scanSpec, reader)) {
     return false;
   }
   if (!expectedRows.empty()) {
@@ -3148,8 +3363,9 @@ bool fileSkippedByStats(
               stats == nullptr ? std::string{"none"} : stats->toString()));
     }
     NIMBLE_FAIL(
-        "File statistics skip a file holding a row that passes every filter (seed {}, batch {}, row {}). {}",
+        "File statistics skip a file holding a row that passes every filter (seed {}, {} file stats, batch {}, row {}). {}",
         seed,
+        fileStatsMode,
         batchIndex,
         row,
         fmt::join(columns, "; "));
@@ -3173,6 +3389,8 @@ void NimbleWriterFuzzer::verifyPointLookup(
     return;
   }
   const auto description = describeFilters(schema, filters);
+  const bool lazyFileStats = folly::Random::oneIn(2, rng);
+  const std::string_view fileStatsMode = lazyFileStats ? "lazy" : "eager";
 
   std::vector<RowPosition> expectedRows;
   for (const auto& [batchIndex, row] : rows.all) {
@@ -3199,12 +3417,14 @@ void NimbleWriterFuzzer::verifyPointLookup(
   readerOptions.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
   readerOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
   readerOptions.setScanSpec(scanSpec);
-  auto reader = velox::dwio::common::getReaderFactory(
-                    velox::dwio::common::FileFormat::NIMBLE)
-                    ->createReader(
-                        std::make_unique<velox::dwio::common::BufferedInput>(
-                            readFile, *leafPool_),
-                        readerOptions);
+  readerOptions.setNimbleLazyFileStats(lazyFileStats);
+  auto reader =
+      velox::dwio::common::getReaderFactory(
+          velox::dwio::common::FileFormat::NIMBLE)
+          ->createReader(
+              std::make_unique<velox::dwio::common::BufferedInput>(
+                  readFile, velox::FileIoContext{.pool = leafPool_.get()}),
+              readerOptions);
   // The file is still read when the connector would skip it, so the row reader
   // is checked to return no rows for it.
   const bool skippedByFileStats = fileSkippedByStats(
@@ -3214,6 +3434,7 @@ void NimbleWriterFuzzer::verifyPointLookup(
       batches,
       filters,
       expectedRows,
+      fileStatsMode,
       options_.seed);
   velox::dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);
@@ -3266,6 +3487,7 @@ void NimbleWriterFuzzer::verifyPointLookup(
     }
   };
   record(pointLookupCoverage_.byNumColumns[filters.size()]);
+  record(pointLookupCoverage_.byFileStatsMode[std::string{fileStatsMode}]);
   for (const auto& [column, lookup] : filters) {
     record(pointLookupCoverage_.byType[schema->childAt(column)->toString()]
                                       [std::string{lookup.kind}]);
@@ -3597,13 +3819,15 @@ void NimbleWriterFuzzer::run() {
           columnShapes.begin(),
           columnShapes.end(),
           ColumnShape::kNullBatches) != columnShapes.end();
-  // Seeded from the type minimum so a non-decreasing column spans the widest
-  // range its type allows before saturating.
+  // Starts each monotonic column at its type's boundary so it has room to
+  // step throughout the file.
   std::vector<int64_t> monotonicCursors(
       schema->size(), std::numeric_limits<int64_t>::min());
   for (auto i = 0; i < schema->size(); ++i) {
     if (columnShapes.at(i) == ColumnShape::kNonDecreasing) {
       monotonicCursors.at(i) = minValueOf(schema->childAt(i)->kind());
+    } else if (columnShapes.at(i) == ColumnShape::kNonIncreasing) {
+      monotonicCursors.at(i) = -(minValueOf(schema->childAt(i)->kind()) + 1);
     }
   }
 
@@ -4034,6 +4258,10 @@ void NimbleWriterFuzzer::logPointLookupCoverage() const {
   for (const auto& [numColumns, counts] : pointLookupCoverage_.byNumColumns) {
     byNumColumns.push_back(formatCounts(std::to_string(numColumns), counts));
   }
+  std::vector<std::string> byFileStatsMode;
+  for (const auto& [mode, counts] : pointLookupCoverage_.byFileStatsMode) {
+    byFileStatsMode.push_back(formatCounts(mode, counts));
+  }
   std::vector<std::string> typeLines;
   for (const auto& [type, byKind] : pointLookupCoverage_.byType) {
     std::vector<std::string> kinds;
@@ -4046,10 +4274,14 @@ void NimbleWriterFuzzer::logPointLookupCoverage() const {
   LOG(WARNING) << fmt::format(
       "\nPoint lookup coverage:\n"
       "  columnsPerLookup: {}\n"
+      "  fileStatsModes: {}\n"
       "  matchedRowsPerLookup:\n{}\n"
       "  filtersByType:\n{}",
       byNumColumns.empty() ? std::string{"none"}
                            : fmt::format("{}", fmt::join(byNumColumns, " ")),
+      byFileStatsMode.empty()
+          ? std::string{"none"}
+          : fmt::format("{}", fmt::join(byFileStatsMode, " ")),
       formatKeyedCountBuckets(
           pointLookupCoverage_.lookupsByMatchedRows, kMaxMatchedRowsBucket),
       typeLines.empty() ? std::string{"    none"}

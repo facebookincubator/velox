@@ -22,6 +22,7 @@
 
 #include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
+#include <folly/json.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <re2/re2.h>
 #include "velox/common/base/Fs.h"
@@ -30,12 +31,15 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConnector.h"
 #include "velox/connectors/hive/HiveDataSink.h"
+#include "velox/connectors/hive/SortingWriter.h"
+#include "velox/core/TableWriteTraits.h"
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/tests/utils/RuntimeStatsInjectingWriter.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/RegisterParquetReader.h"
@@ -207,6 +211,124 @@ class HiveDataSinkTest : public exec::test::HiveConnectorTestBase {
       }
     }
     return files;
+  }
+
+  std::shared_ptr<HiveBucketProperty> uniqueKeyBucketProperty() {
+    const auto sortColumn = [](const char* name, bool ascending) {
+      return std::make_shared<HiveSortingColumn>(
+          name, core::SortOrder{ascending, ascending});
+    };
+    return std::make_shared<HiveBucketProperty>(
+        HiveBucketProperty::Kind::kHiveCompatible,
+        1,
+        std::vector<std::string>{"k1"},
+        std::vector<TypePtr>{INTEGER()},
+        std::vector<HiveSortingColumnPtr>{
+            sortColumn("k1", true),
+            sortColumn("k2", true),
+            sortColumn("version", false),
+            sortColumn("payload", true)});
+  }
+
+  static RowTypePtr uniqueKeyRowType() {
+    return ROW(
+        {{"k1", INTEGER()},
+         {"k2", VARCHAR()},
+         {"version", BIGINT()},
+         {"payload", VARCHAR()}});
+  }
+
+  // Duplicates of (1, a) within a write and across writes, and an exact copy of
+  // (2, b). The winner of (1, a) is version 200 with the smaller payload.
+  std::vector<RowVectorPtr> uniqueKeyInput() {
+    const auto names = uniqueKeyRowType()->names();
+    return {
+        makeRowVector(
+            names,
+            {makeFlatVector<int32_t>({2, 1, 1}),
+             makeFlatVector<std::string>({"b", "a", "a"}),
+             makeFlatVector<int64_t>({10, 100, 200}),
+             makeFlatVector<std::string>({"q", "x", "y"})}),
+        makeRowVector(
+            names,
+            {makeFlatVector<int32_t>({1, 1, 2}),
+             makeFlatVector<std::string>({"a", "c", "b"}),
+             makeFlatVector<int64_t>({200, 50, 10}),
+             makeFlatVector<std::string>({"b", "z", "q"})})};
+  }
+
+  RowVectorPtr uniqueKeyRows() {
+    return makeRowVector(
+        {makeFlatVector<int32_t>({1, 1, 2}),
+         makeFlatVector<std::string>({"a", "c", "b"}),
+         makeFlatVector<int64_t>({200, 50, 10}),
+         makeFlatVector<std::string>({"b", "z", "q"})});
+  }
+
+  RowVectorPtr allUniqueKeyInputRows() {
+    return makeRowVector(
+        {makeFlatVector<int32_t>({1, 1, 1, 1, 2, 2}),
+         makeFlatVector<std::string>({"a", "a", "a", "c", "b", "b"}),
+         makeFlatVector<int64_t>({200, 200, 100, 50, 10, 10}),
+         makeFlatVector<std::string>({"b", "y", "x", "z", "q", "q"})});
+  }
+
+  struct UniqueKeyWrite {
+    RowVectorPtr rows;
+    DataSink::Stats stats;
+    uint64_t numDuplicateRows;
+    int64_t committedRowCount;
+  };
+
+  // Writes 'uniqueKeyInput()' into one bucket file and reads it back in file
+  // order.
+  UniqueKeyWrite writeUniqueKeyRows(uint32_t numUniqueKeyColumns, bool spill) {
+    connectorSessionProperties_->set(
+        HiveConfig::kSortWriterNumUniqueKeyColumnsSession,
+        std::to_string(numUniqueKeyColumns));
+    const auto outputDirectory = TempDirectoryPath::create();
+    const auto spillDirectory = TempDirectoryPath::create();
+    const auto spillConfig = getSpillConfig(spillDirectory->getPath(), 1);
+    if (spill) {
+      setConnectorQueryContext(
+          connector::ConnectorQueryCtx::Builder()
+              .operatorPool(opPool_.get())
+              .connectorPool(connectorPool_.get())
+              .sessionProperties(connectorSessionProperties_.get())
+              .spillConfig(spillConfig.get())
+              .queryId("query.HiveDataSinkTest")
+              .taskId("task.HiveDataSinkTest")
+              .planNodeId("planNodeId.HiveDataSinkTest")
+              .build());
+    }
+    auto dataSink = createDataSink(
+        uniqueKeyRowType(),
+        outputDirectory->getPath(),
+        dwio::common::FileFormat::DWRF,
+        {},
+        uniqueKeyBucketProperty());
+    for (const auto& vector : uniqueKeyInput()) {
+      dataSink->appendData(vector);
+      if (spill) {
+        memory::testingRunArbitration();
+      }
+    }
+    while (!dataSink->finish()) {
+    }
+    int64_t committedRowCount = 0;
+    for (const auto& message : dataSink->close()) {
+      committedRowCount += folly::parseJson(message)["rowCount"].asInt();
+    }
+    const auto files = listFiles(outputDirectory->getPath());
+    VELOX_CHECK_EQ(files.size(), 1);
+    return {
+        AssertQueryBuilder(
+            PlanBuilder().tableScan(uniqueKeyRowType()).planNode())
+            .split(makeHiveConnectorSplit(files[0]))
+            .copyResults(pool()),
+        dataSink->stats(),
+        dataSink->numDuplicateRows(),
+        committedRowCount};
   }
 
   void verifyWrittenData(const std::string& dirPath, uint32_t numFiles = 1) {
@@ -996,6 +1118,146 @@ TEST_F(HiveDataSinkTest, sortWriterMemoryReclaimDuringFinish) {
   verifyWrittenData(outputDirectory->getPath(), numBuckets);
 }
 
+TEST_F(HiveDataSinkTest, uniqueKeyDropsDuplicateKeys) {
+  const auto write = writeUniqueKeyRows(2, /*spill=*/false);
+  velox::test::assertEqualVectors(uniqueKeyRows(), write.rows);
+  ASSERT_EQ(
+      write.stats.writerRuntimeStats
+          .at(SortingWriter::kSortingWriterDedupedRows)
+          .sum,
+      3);
+  ASSERT_EQ(write.numDuplicateRows, 3);
+  ASSERT_EQ(write.committedRowCount, 3);
+}
+
+TEST_F(HiveDataSinkTest, uniqueKeyAbsentKeepsEveryRow) {
+  const auto write = writeUniqueKeyRows(0, /*spill=*/false);
+  velox::test::assertEqualVectors(allUniqueKeyInputRows(), write.rows);
+  ASSERT_EQ(
+      write.stats.writerRuntimeStats.count(
+          SortingWriter::kSortingWriterDedupedRows),
+      0);
+  ASSERT_EQ(write.numDuplicateRows, 0);
+  ASSERT_EQ(write.committedRowCount, 6);
+}
+
+TEST_F(HiveDataSinkTest, uniqueKeyCoversMoreColumns) {
+  // Unique on (k1, k2, version): version 100 of (1, a) survives, and the
+  // payload y of version 200 and the copy of (2, b) are dropped.
+  velox::test::assertEqualVectors(
+      makeRowVector(
+          {makeFlatVector<int32_t>({1, 1, 1, 2}),
+           makeFlatVector<std::string>({"a", "a", "c", "b"}),
+           makeFlatVector<int64_t>({200, 100, 50, 10}),
+           makeFlatVector<std::string>({"b", "x", "z", "q"})}),
+      writeUniqueKeyRows(3, /*spill=*/false).rows);
+}
+
+TEST_F(HiveDataSinkTest, uniqueKeyColumnMustBeWritten) {
+  // k2 is a partition column, so the file does not hold it and it cannot be
+  // part of the key.
+  const auto outputDirectory = TempDirectoryPath::create();
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterNumUniqueKeyColumnsSession, "2");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          uniqueKeyRowType(),
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          {"k2"},
+          uniqueKeyBucketProperty()),
+      "Unique key column is not among the written columns: k2");
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterNumUniqueKeyColumnsSession, "1");
+  createDataSink(
+      uniqueKeyRowType(),
+      outputDirectory->getPath(),
+      dwio::common::FileFormat::DWRF,
+      {"k2"},
+      uniqueKeyBucketProperty());
+}
+
+TEST_F(HiveDataSinkTest, uniqueKeyRequiresBucketedTable) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterNumUniqueKeyColumnsSession, "1");
+  VELOX_ASSERT_THROW(
+      createDataSink(uniqueKeyRowType(), outputDirectory->getPath()),
+      "Unique key columns require a bucketed table with sort columns");
+}
+
+TEST_F(HiveDataSinkTest, uniqueKeyAboveSortColumns) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterNumUniqueKeyColumnsSession, "5");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          uniqueKeyRowType(),
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          {},
+          uniqueKeyBucketProperty()),
+      "The number of unique key columns is above the number of sort columns");
+
+  // A bucketed table without sort columns has none to build a key from.
+  const auto unsorted = std::make_shared<HiveBucketProperty>(
+      HiveBucketProperty::Kind::kHiveCompatible,
+      1,
+      std::vector<std::string>{"k1"},
+      std::vector<TypePtr>{INTEGER()},
+      std::vector<HiveSortingColumnPtr>{});
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterNumUniqueKeyColumnsSession, "1");
+  VELOX_ASSERT_THROW(
+      createDataSink(
+          uniqueKeyRowType(),
+          outputDirectory->getPath(),
+          dwio::common::FileFormat::DWRF,
+          {},
+          unsorted),
+      "The number of unique key columns is above the number of sort columns");
+}
+
+TEST_F(HiveDataSinkTest, uniqueKeyDropsDuplicateKeysAcrossSpilledRuns) {
+  connectorSessionProperties_->set(
+      HiveConfig::kSortWriterMaxOutputRowsSession, "2");
+  const auto write = writeUniqueKeyRows(2, /*spill=*/true);
+  velox::test::assertEqualVectors(uniqueKeyRows(), write.rows);
+  ASSERT_GT(write.stats.spillStats.spilledBytes, 0);
+  ASSERT_EQ(
+      write.stats.writerRuntimeStats
+          .at(SortingWriter::kSortingWriterDedupedRows)
+          .sum,
+      3);
+  ASSERT_EQ(write.committedRowCount, 3);
+}
+
+TEST_F(HiveDataSinkTest, uniqueKeyTableWriterReportsRowsKept) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto plan = PlanBuilder()
+                        .values(uniqueKeyInput())
+                        .startTableWriter()
+                        .insertHandle(createHiveInsertTableHandle(
+                            uniqueKeyRowType(),
+                            outputDirectory->getPath(),
+                            dwio::common::FileFormat::DWRF,
+                            {},
+                            uniqueKeyBucketProperty()))
+                        .endTableWriter()
+                        .planNode();
+  const auto result = AssertQueryBuilder(plan)
+                          .connectorSessionProperty(
+                              exec::test::kHiveConnectorId,
+                              HiveConfig::kSortWriterNumUniqueKeyColumnsSession,
+                              "2")
+                          .copyResults(pool());
+  const auto* rowCount =
+      result->childAt(core::TableWriteTraits::kRowCountChannel)
+          ->asFlatVector<int64_t>();
+  ASSERT_FALSE(rowCount->isNullAt(0));
+  ASSERT_EQ(rowCount->valueAt(0), 3);
+}
+
 DEBUG_ONLY_TEST_F(HiveDataSinkTest, sortWriterFailureTest) {
   auto vectors = createVectors(500, 10);
 
@@ -1150,7 +1412,7 @@ TEST_F(HiveDataSinkTest, parquetRowGroupRows) {
   auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::make_unique<dwio::common::BufferedInput>(
           std::make_shared<LocalReadFile>(filePaths[0]),
-          readerOpts.memoryPool()),
+          FileIoContext{.pool = &readerOpts.memoryPool()}),
       readerOpts);
   const auto fileMeta = reader->fileMetaData();
   ASSERT_EQ(fileMeta.numRowGroups(), 10);
@@ -1206,7 +1468,8 @@ TEST_F(
   ASSERT_EQ(filePaths.size(), 1);
 
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
-      std::make_shared<LocalReadFile>(filePaths[0]), readerOpts.memoryPool());
+      std::make_shared<LocalReadFile>(filePaths[0]),
+      FileIoContext{.pool = &readerOpts.memoryPool()});
   auto reader = std::make_unique<facebook::velox::parquet::ParquetReader>(
       std::move(bufferedInput), readerOpts);
   auto fileMeta = reader->fileMetaData();

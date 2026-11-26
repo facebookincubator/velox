@@ -704,11 +704,10 @@ class TaskTest : public HiveConnectorTestBase {
 
     VELOX_CHECK(TaskMonitor::waitForCompletion(*task));
 
-    auto planNodeStats = toPlanStats(task->taskStats());
-    VELOX_CHECK(planNodeStats.count(plan.planNode->id()));
-    VELOX_CHECK_EQ(numRows, planNodeStats.at(plan.planNode->id()).outputRows);
-    VELOX_CHECK_EQ(
-        results.size(), planNodeStats.at(plan.planNode->id()).outputVectors);
+    const auto stats =
+        PlanNodeStats::extract(task->taskStats(), plan.planNode->id());
+    VELOX_CHECK_EQ(numRows, stats.outputRows);
+    VELOX_CHECK_EQ(results.size(), stats.outputVectors);
 
     return {task, results};
   }
@@ -1316,13 +1315,11 @@ DEBUG_ONLY_TEST_F(
                     .exchange(ROW("a", BIGINT()), "Presto", transportKind)
                     .capturePlanNodeId(exchangeNodeId)
                     .hashJoin(
-                        {"a"},
-                        {"b"},
+                        "a = b",
                         builder.newPlan()
                             .values({makeNamedRowVector(
                                 "b", makeFlatVector<int64_t>({1}))})
                             .planNode(),
-                        "",
                         {"a"})
                     .planFragment();
     plan.executionStrategy = core::ExecutionStrategy::kGrouped;
@@ -1525,12 +1522,10 @@ TEST_F(TaskTest, duplicatePlanNodeIds) {
   auto plan = PlanBuilder()
                   .tableScan(ROW({"a", "b"}, {INTEGER(), DOUBLE()}))
                   .hashJoin(
-                      {"a"},
-                      {"a1"},
+                      "a = a1",
                       PlanBuilder()
                           .tableScan(ROW({"a1", "b1"}, {INTEGER(), DOUBLE()}))
                           .planNode(),
-                      "",
                       {"b", "b1"})
                   .planFragment();
 
@@ -1569,9 +1564,7 @@ TEST_F(TaskTest, concurrentSplitGroups) {
 
 TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
   // Create data for all sources
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(100)});
 
   // Create temp files for each data source
 
@@ -1591,23 +1584,19 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
                   .capturePlanNodeId(scanNodeId1)
                   .project({"c0 as t0"})
                   .hashJoin(
-                      {"t0"},
-                      {"c0"},
+                      "t0 = c0",
                       builder.newPlan()
                           .tableScan(data->rowType())
                           .capturePlanNodeId(scanNodeId2)
                           .planNode(),
-                      "",
                       {"c0"})
                   .project({"c0 as u0"})
                   .hashJoin(
-                      {"u0"},
-                      {"c0"},
+                      "u0 = c0",
                       builder.newPlan()
                           .tableScan(data->rowType())
                           .capturePlanNodeId(scanNodeId3)
                           .planNode(),
-                      "",
                       {"c0"})
                   .planFragment();
 
@@ -1659,9 +1648,7 @@ TEST_F(TaskTest, allSplitsConsumedMultipleSources) {
 
 TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
   // Create data for all sources
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(100)});
 
   PlanBuilder builder;
 
@@ -1678,24 +1665,20 @@ TEST_F(TaskTest, hasMixedExecutionGroupJoin) {
                           .capturePlanNodeId(groupedScanNodeId1)
                           .project({"c0 as t0"})
                           .hashJoin(
-                              {"t0"},
-                              {"c0"},
+                              "t0 = c0",
                               builder.newPlan()
                                   .tableScan(data->rowType())
                                   .capturePlanNodeId(groupedScanNodeId2)
                                   .planNode(),
-                              "",
                               {"c0"})
                           .capturePlanNode(nonMixedGroupedModeJoinNode)
                           .project({"c0 as u0"})
                           .hashJoin(
-                              {"u0"},
-                              {"c0"},
+                              "u0 = c0",
                               builder.newPlan()
                                   .tableScan(data->rowType())
                                   .capturePlanNodeId(ungroupedScanNodeId1)
                                   .planNode(),
-                              "",
                               {"c0"})
                           .capturePlanNode(mixedGroupedModeJoinNode)
                           .planFragment();
@@ -1744,10 +1727,8 @@ TEST_F(TaskTest, testTerminateDeadlock) {
   exec::Operator::registerOperator(
       std::make_unique<TestSkewedJoinBridgeTranslator>());
 
-  auto leftBatch = makeRowVector(
-      {makeFlatVector<int32_t>(100, [](auto row) { return row; })});
-  auto rightBatch = makeRowVector(
-      {makeFlatVector<int32_t>(10, [](auto row) { return row; })});
+  auto leftBatch = makeRowVector({makeFlatIdentityVector<int32_t>(100)});
+  auto rightBatch = makeRowVector({makeFlatIdentityVector<int32_t>(10)});
 
   PlanBuilder builder;
   auto leftNode = builder.newPlan().values({leftBatch}, true).planNode();
@@ -1796,9 +1777,7 @@ TEST_F(TaskTest, testTerminateDeadlock) {
 }
 
 TEST_F(TaskTest, serialExecution) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   // Filter + Project.
   auto plan = PlanBuilder()
@@ -1868,9 +1847,7 @@ TEST_F(TaskTest, serialExecution) {
 }
 
 TEST_F(TaskTest, serialExecutionOutputPool) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
 
   auto outputPool =
       memory::memoryManager()->addLeafPool("serialExecutionOutputPool");
@@ -1886,9 +1863,7 @@ TEST_F(TaskTest, serialExecutionOutputPool) {
 }
 
 TEST_F(TaskTest, serialExecutionOutputPoolZeroCopy) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
 
   auto outputPool =
       memory::memoryManager()->addLeafPool("serialExecutionOutputPoolZeroCopy");
@@ -1906,9 +1881,7 @@ TEST_F(TaskTest, serialExecutionOutputPoolZeroCopy) {
 
 // The purpose of the test is to check the running task list APIs.
 TEST_F(TaskTest, runningTaskList) {
-  const auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  const auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   ASSERT_EQ(Task::numRunningTasks(), 0);
   ASSERT_TRUE(Task::getRunningTasks().empty());
@@ -1986,13 +1959,11 @@ TEST_F(TaskTest, serialHashJoin) {
                   .tableScan(left->rowType())
                   .capturePlanNodeId(leftScanId)
                   .hashJoin(
-                      {"t_c0"},
-                      {"u_c0"},
+                      "t_c0 = u_c0",
                       builder.newPlan()
                           .tableScan(right->rowType())
                           .capturePlanNodeId(rightScanId)
                           .planNode(),
-                      "",
                       {"t_c0", "t_c1", "u_c0"})
                   .planFragment();
 
@@ -2050,9 +2021,7 @@ TEST_F(TaskTest, serialCrossJoin) {
 TEST_F(TaskTest, serialExecutionExternalBlockable) {
   exec::Operator::registerOperator(
       std::make_unique<TestExternalBlockableTranslator>());
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   auto blocker = std::make_shared<ExternalBlocker>();
   core::PlanNodeId blockerNodeId;
   // Filter + Project.
@@ -2088,8 +2057,8 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
   }
   EXPECT_EQ(3, results.size());
   {
-    auto planStats = toPlanStats(nonBlockingTask->taskStats());
-    auto& blockerNodeStats = planStats.at(blockerNodeId);
+    const auto blockerNodeStats =
+        PlanNodeStats::extract(nonBlockingTask->taskStats(), blockerNodeId);
     ASSERT_EQ(blockerNodeStats.blockedWallNanos, 0);
   }
   return;
@@ -2128,8 +2097,8 @@ TEST_F(TaskTest, serialExecutionExternalBlockable) {
   }
   EXPECT_EQ(3, results.size());
   {
-    auto planStats = toPlanStats(blockingTask->taskStats());
-    auto& blockerNodeStats = planStats.at(blockerNodeId);
+    const auto blockerNodeStats =
+        PlanNodeStats::extract(blockingTask->taskStats(), blockerNodeId);
     ASSERT_GT(blockerNodeStats.blockedWallNanos, 0);
   }
 }
@@ -2512,9 +2481,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
         std::function<void(Values*)>([&](Values* /*unused*/) {
           getOutputWait.await([&]() { return getOutputWaitFlag.load(); });
         }));
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-    });
+    auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
     CursorParameters params;
     params.planNode =
@@ -2538,9 +2505,7 @@ DEBUG_ONLY_TEST_F(TaskTest, inconsistentExecutionMode) {
     // Scenario 2: Serial execution starts first then kicks in Parallel
     // execution mode.
 
-    auto data = makeRowVector({
-        makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-    });
+    auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
     auto plan =
         PlanBuilder().values({data, data, data}).project({"c0"}).planFragment();
     auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -2582,10 +2547,8 @@ DEBUG_ONLY_TEST_F(TaskTest, findPeerOperators) {
         builder.newPlan()
             .values(probeVectors, true)
             .hashJoin(
-                {"t_c0"},
-                {"u_c0"},
+                "t_c0 = u_c0",
                 builder.newPlan().values(buildVectors, true).planNode(),
-                "",
                 {"t_c0", "t_c1", "u_c0"})
             .planNode();
     params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -2772,9 +2735,7 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFutureAfterTaskTerminated) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   auto filePath = writeToFile(std::vector{data, data});
 
   core::PlanNodeId scanNodeId;
@@ -2875,9 +2836,7 @@ DEBUG_ONLY_TEST_F(TaskTest, driverCounters) {
 
 TEST_F(TaskTest, driverCreationMemoryAllocationCheck) {
   exec::Operator::registerOperator(std::make_unique<TestBadMemoryTranslator>());
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   auto plan =
       PlanBuilder()
           .values(data)
@@ -2916,7 +2875,7 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   // handles creating it on first use and eventually deleting it on destruction.
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 300; }),
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(1'000),
   });
   core::PlanNodeId aggrNodeId;
   const auto plan = PlanBuilder()
@@ -2971,6 +2930,9 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   bool parentDirectoryCreated = false;
   bool spillDirectoryCreated = false;
   tests::utils::FileSystemFaultInjectionHook hook = [&](auto* op) {
+    if (op->type != tests::utils::FaultFileSystemOperation::Type::kMkdir) {
+      return;
+    }
     auto mkdirOp =
         static_cast<tests::utils::FaultFileSystemMkdirOperation*>(op);
     if (mkdirOp->path ==
@@ -3000,8 +2962,8 @@ TEST_F(TaskTest, spillDirectoryCallback) {
   EXPECT_TRUE(parentDirectoryCreated);
   EXPECT_TRUE(spillDirectoryCreated);
   EXPECT_EQ(exec::TaskState::kFinished, task->state());
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& stats = taskStats.at(aggrNodeId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
   ASSERT_GT(stats.spilledRows, 0);
   cursor.reset(); // ensure 'task' has no other shared pointer.
   OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
@@ -3012,7 +2974,7 @@ DEBUG_ONLY_TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
   // removes it after successful completion once all drivers close.
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 300; }),
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(1'000),
   });
   core::PlanNodeId aggrNodeId;
   const auto plan = PlanBuilder()
@@ -3045,8 +3007,8 @@ DEBUG_ONLY_TEST_F(TaskTest, spillDirectoryLifecycleManagement) {
   }
   ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 5'000'000));
   EXPECT_EQ(exec::TaskState::kFinished, task->state());
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& stats = taskStats.at(aggrNodeId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), aggrNodeId);
   ASSERT_GT(stats.spilledRows, 0);
   const auto spillDirectory = task->spillDirectory();
   auto fs = filesystems::getFileSystem(spillDirectory, nullptr);
@@ -3094,10 +3056,8 @@ TEST_F(TaskTest, spillDirNotCreated) {
       builder.newPlan()
           .values(probeVectors, true)
           .hashJoin(
-              {"t_c0"},
-              {"u_c0"},
+              "t_c0 = u_c0",
               builder.newPlan().values(buildVectors, true).planNode(),
-              "",
               {"t_c0", "t_c1", "u_c0"})
           .capturePlanNodeId(hashJoinNodeId)
           .planNode();
@@ -3116,8 +3076,8 @@ TEST_F(TaskTest, spillDirNotCreated) {
   }
   ASSERT_TRUE(TaskMonitor::waitForCompletion(*task, 5'000'000));
   ASSERT_EQ(exec::TaskState::kFinished, task->state());
-  auto taskStats = exec::toPlanStats(task->taskStats());
-  auto& stats = taskStats.at(hashJoinNodeId);
+  const auto stats =
+      exec::PlanNodeStats::extract(task->taskStats(), hashJoinNodeId);
   ASSERT_EQ(stats.spilledRows, 0);
   // Check for spill folder without destroying the Task object to ensure its
   // destructor has not removed the directory if it was created earlier.
@@ -3126,18 +3086,16 @@ TEST_F(TaskTest, spillDirNotCreated) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
-  auto probeVector = makeNamedRowVector(
-      "t_c0", makeFlatVector<int32_t>(10, [](auto row) { return row; }));
-  auto buildVector = makeNamedRowVector(
-      "u_c0", makeFlatVector<int32_t>(10, [](auto row) { return row; }));
+  auto probeVector =
+      makeNamedRowVector("t_c0", makeFlatIdentityVector<int32_t>(10));
+  auto buildVector =
+      makeNamedRowVector("u_c0", makeFlatIdentityVector<int32_t>(10));
   PlanBuilder builder;
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"t_c0"},
-                      {"u_c0"},
+                      "t_c0 = u_c0",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"t_c0", "u_c0"})
                   .planFragment();
 
@@ -3176,9 +3134,7 @@ DEBUG_ONLY_TEST_F(TaskTest, resumeAfterTaskFinish) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, serialLongRunningOperatorInTaskReclaimerAbort) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   // Filter + Project.
   auto plan =
@@ -3249,9 +3205,7 @@ DEBUG_ONLY_TEST_F(TaskTest, serialLongRunningOperatorInTaskReclaimerAbort) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, longRunningOperatorInTaskReclaimerAbort) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   folly::EventCount getOutputWait;
   std::atomic_bool getOutputWaitFlag{false};
   SCOPED_TESTVALUE_SET(
@@ -3495,14 +3449,14 @@ TEST_F(TaskTest, updateStatsWhileCloseOffThreadDriver) {
 TEST_F(TaskTest, driverLifecycleTimingStats) {
   auto data = makeRowVector({
       makeFlatVector<int64_t>(1'000, [](auto row) { return row % 10; }),
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(1'000),
   });
 
   auto buildData = makeRowVector(
       {"u0", "u1"},
       {
           makeFlatVector<int64_t>(100, [](auto row) { return row % 10; }),
-          makeFlatVector<int64_t>(100, [](auto row) { return row; }),
+          makeFlatIdentityVector<int64_t>(100),
       });
 
   PlanBuilder builder;
@@ -3515,10 +3469,8 @@ TEST_F(TaskTest, driverLifecycleTimingStats) {
                   .values(data)
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"c0"},
-                      {"u0"},
+                      "c0 = u0",
                       builder.newPlan().values(buildData).planNode(),
-                      "",
                       {"c0", "c1"})
                   .planNode();
 
@@ -3594,8 +3546,8 @@ TEST_F(TaskTest, driverLifecycleTimingStats) {
 
 DEBUG_ONLY_TEST_F(TaskTest, driverEnqueAfterFailedAndPausedTask) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan = PlanBuilder()
                         .values(data)
@@ -3918,8 +3870,8 @@ TEST_F(TaskTest, allDriversClosedFutureWithQueuedSplitGroup) {
 
 DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
   const auto data = makeRowVector({
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
-      makeFlatVector<int64_t>(50, [](auto row) { return row; }),
+      makeFlatIdentityVector<int64_t>(50),
+      makeFlatIdentityVector<int64_t>(50),
   });
   const auto plan = PlanBuilder()
                         .values(data)
@@ -3970,9 +3922,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {
 }
 
 TEST_F(TaskTest, finishTiming) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
   core::PlanNodeId projectId;
   core::PlanNodeId orderById;
   auto plan = PlanBuilder()
@@ -3995,9 +3945,7 @@ TEST_F(TaskTest, finishTiming) {
 }
 
 TEST_F(TaskTest, invalidPlanNodeForBarrier) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   const auto plan = PlanBuilder()
                         .values({data, data})
@@ -4044,9 +3992,7 @@ TEST_F(TaskTest, invalidPlanNodeForBarrier) {
 }
 
 TEST_F(TaskTest, barrierAfterNoMoreSplits) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   auto filePath = writeToFile(std::vector{data, data});
 
@@ -4108,9 +4054,7 @@ TEST_F(TaskTest, barrierAfterNoMoreSplits) {
 }
 
 TEST_F(TaskTest, addSplitAfterBarrier) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(1'000)});
 
   auto filePath = writeToFile(std::vector{data, data});
 
@@ -4175,9 +4119,7 @@ TEST_F(TaskTest, addSplitAfterBarrier) {
 
 TEST_F(TaskTest, testTerminateDuringBarrier) {
   const int numRows{100};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
   auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
@@ -4243,9 +4185,7 @@ TEST_F(TaskTest, testTerminateDuringBarrier) {
 }
 
 TEST_F(TaskTest, testBarrierClearedOnTerminate) {
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(100)});
   auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
@@ -4431,9 +4371,7 @@ TEST_F(TaskTest, operatorErrorDuringBarrier) {
   exec::Operator::registerOperator(
       std::make_unique<TestBarrierOperatorTranslator>());
   const int numRows{10};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
   auto filePath = writeToFile(data);
 
   std::string errMsg{"injectedError"};
@@ -4489,9 +4427,7 @@ TEST_F(TaskTest, dropOutputDuringBarrier) {
   exec::Operator::registerOperator(
       std::make_unique<TestBarrierOperatorTranslator>());
   const int numRows{10};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
   auto filePath = writeToFile(data);
 
   auto injectionCallback = [&](size_t numInputs, bool draining, Operator* op) {
@@ -4554,9 +4490,7 @@ TEST_F(TaskTest, dropOutputDuringBarrier) {
 TEST_F(TaskTest, testTerminateDuringBarrierWithUnion) {
   const auto rowType = ROW({"c0"}, {BIGINT()});
   const int numRows{10};
-  auto vector = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
+  auto vector = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
   auto filePath = writeToFile(vector);
 
   PlanBuilder builder;
@@ -4616,9 +4550,7 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
   // form (coalesce) are also included.
   const std::string projection = "coalesce(c0 + 1, 0)";
   const int numRows{10};
-  auto data = makeRowVector({
-      makeFlatVector<int64_t>(numRows, [](auto row) { return row; }),
-  });
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(numRows)});
   auto filePath = writeToFile(data);
 
   core::PlanNodeId scanId;
@@ -4684,12 +4616,14 @@ TEST_F(TaskTest, expressionStatsInBetweenBarriers) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
-  std::vector<RowVectorPtr> vectors;
   const int numSplits{5};
   const int numRowsPerSplit{1'000};
+
+  std::vector<RowVectorPtr> vectors;
+  vectors.reserve(numSplits);
   for (int32_t i = 0; i < numSplits; ++i) {
     vectors.push_back(makeRowVector(
-        {makeFlatVector<int32_t>(numRowsPerSplit, [](auto row) { return row; }),
+        {makeFlatIdentityVector<int32_t>(numRowsPerSplit),
          makeFlatVector<int32_t>(
              numRowsPerSplit, [](auto row) { return row * 2; })}));
   }
@@ -4732,9 +4666,7 @@ DEBUG_ONLY_TEST_F(TaskTest, taskExecutionEndTime) {
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, operatorShouldYieldMethod) {
-  const auto data = makeRowVector({
-      makeFlatVector<int64_t>(3, [](auto row) { return row; }),
-  });
+  const auto data = makeRowVector({makeFlatIdentityVector<int64_t>(3)});
   const uint64_t kDriverCpuTimeSliceLimitMs = 100;
 
   struct {

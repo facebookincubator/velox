@@ -392,9 +392,6 @@ TEST_F(MakeTimestampTest, makeTimestampNtz) {
   assertMakeTimestamp(
       "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data, expected);
 
-  SCOPE_EXIT {
-    setQueryTimeZone("");
-  };
   setQueryTimeZone("America/Los_Angeles");
   assertMakeTimestamp(
       "make_timestamp_ntz(c0, c1, c2, c3, c4, c5)", data, expected);

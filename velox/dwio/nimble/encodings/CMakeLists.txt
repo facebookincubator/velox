@@ -68,6 +68,8 @@ add_library(
   selection/EncodingSelectionPolicy.cpp
   selection/NestedAlpSizeEstimation.cpp
   selection/Statistics.cpp
+  views/DecodedStringBuffers.cpp
+  views/DecodedStringBuffers.h
   views/EncodingView.cpp
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h

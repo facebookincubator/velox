@@ -197,7 +197,7 @@ class ConstantEncodingBenchmark : public velox::test::VectorTestBase {
     readers.reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<InMemoryReadFile>(file<T>(config.nullable)),
-            *pool()),
+            FileIoContext{.pool = pool()}),
         readerOptions);
     dwio::common::RowReaderOptions rowReaderOptions;
     rowReaderOptions.setScanSpec(scanSpec);

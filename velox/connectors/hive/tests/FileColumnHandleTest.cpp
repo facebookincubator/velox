@@ -18,8 +18,10 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/TableHandle.h"
 
-using namespace facebook::velox::connector;
+namespace facebook::velox::connector {
+namespace {
 
 TEST(FileColumnHandleTest, columnTypeName) {
   EXPECT_EQ(
@@ -96,3 +98,27 @@ TEST(FileColumnHandleTest, fmtFormatter) {
       fmt::format("{}", FileColumnHandle::ColumnType::kPartitionKey),
       "PartitionKey");
 }
+
+TEST(FileColumnHandleTest, checkConsistentWith) {
+  using ColumnType = FileColumnHandle::ColumnType;
+  const hive::HiveColumnHandle handle(
+      "col1", ColumnType::kRegular, BIGINT(), BIGINT());
+
+  handle.checkConsistentWith(
+      hive::HiveColumnHandle("col1", ColumnType::kRegular, BIGINT(), BIGINT()));
+
+  VELOX_ASSERT_THROW(
+      handle.checkConsistentWith(
+          hive::HiveColumnHandle(
+              "col1", ColumnType::kPartitionKey, BIGINT(), BIGINT())),
+      "Inconsistent column handle type: col1, expected Regular, got PartitionKey");
+
+  VELOX_ASSERT_THROW(
+      handle.checkConsistentWith(
+          hive::HiveColumnHandle(
+              "col1", ColumnType::kRegular, VARCHAR(), VARCHAR())),
+      "Inconsistent column handle data type: col1, expected BIGINT, got VARCHAR");
+}
+
+} // namespace
+} // namespace facebook::velox::connector

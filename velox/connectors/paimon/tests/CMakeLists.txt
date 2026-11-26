@@ -40,6 +40,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_paimon_connector_test
     velox_paimon_connector
     velox_hive_connector
+    velox_hive_iceberg_splitreader
     velox_exec_test_lib
     velox_dwio_orc_reader
     GTest::gtest
@@ -104,6 +105,20 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(
     velox_paimon_deletion_file_test
     velox_paimon_split
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+  )
+
+  add_executable(velox_paimon_deletion_vector_reader_test PaimonDeletionVectorReaderTest.cpp)
+  add_test(velox_paimon_deletion_vector_reader_test velox_paimon_deletion_vector_reader_test)
+
+  target_link_libraries(
+    velox_paimon_deletion_vector_reader_test
+    velox_paimon_connector
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_test_util
     GTest::gtest
     GTest::gtest_main
     GTest::gmock

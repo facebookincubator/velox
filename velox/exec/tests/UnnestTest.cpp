@@ -327,7 +327,7 @@ TEST_P(UnnestTest, arrayWithIdentityMap) {
                     .assertResults("SELECT c0, UNNEST(c1) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         testData.expectedOutputBatches);
   }
 }
@@ -389,7 +389,7 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
             .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         testData.expectedOutputBatches);
   }
 }
@@ -420,7 +420,8 @@ TEST_P(UnnestTest, arrayWithNull) {
                   .assertResults("SELECT c0, UNNEST(c1), UNNEST(c2) FROM tmp");
   const auto taskStats = task->taskStats();
   ASSERT_EQ(
-      exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors, 164);
+      exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
+      164);
 }
 
 TEST_P(UnnestTest, arrayWithOrdinality) {
@@ -998,14 +999,14 @@ TEST_P(UnnestTest, batchSize) {
       AssertQueryBuilder(plan)
           .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize_)
           .assertResults({expected});
-  auto stats = exec::toPlanStats(task->taskStats());
+  const auto stats = exec::PlanNodeStats::extract(task->taskStats(), unnestId);
 
-  ASSERT_EQ(3'000, stats.at(unnestId).outputRows);
+  ASSERT_EQ(3'000, stats.outputRows);
   int32_t expectedNumVectors = 3'000 / batchSize_;
   if (3'000 % batchSize_ != 0) {
     expectedNumVectors++;
   }
-  ASSERT_EQ(expectedNumVectors, stats.at(unnestId).outputVectors);
+  ASSERT_EQ(expectedNumVectors, stats.outputVectors);
 }
 
 TEST_P(UnnestTest, barrier) {
@@ -1080,14 +1081,12 @@ TEST_P(UnnestTest, barrier) {
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.barrierExecution ? numSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numSplits);
-    ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputRows,
-        numSplits * numRowsPerSplit * 3);
+    const auto unnestStats =
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId);
+    ASSERT_EQ(unnestStats.outputRows, numSplits * numRowsPerSplit * 3);
     // NOTE: unnest operator produce the same number of output batches no
     // matter it is under barrier execution mode or not.
-    ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
-        numExpectedOutputVectors);
+    ASSERT_EQ(unnestStats.outputVectors, numExpectedOutputVectors);
   }
 }
 
@@ -1142,7 +1141,7 @@ TEST_P(UnnestTest, spiltOutput) {
             .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         testData.expectedNumOutputVectors);
   }
 }
@@ -1240,7 +1239,7 @@ TEST_P(UnnestTest, splitOutputNodeOverride) {
             .assertResults(expectedResult);
     const auto taskStats = task->taskStats();
     ASSERT_EQ(
-        exec::toPlanStats(taskStats).at(unnestPlanNodeId).outputVectors,
+        exec::PlanNodeStats::extract(taskStats, unnestPlanNodeId).outputVectors,
         expectedNumOutputVectors);
   }
 }

@@ -15,12 +15,16 @@
  */
 #include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <limits>
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <vector>
+
+#include <gmock/gmock.h>
 
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -171,13 +175,19 @@ class SentinelEncodingViewTest : public EncodingViewTest {
           }
           verifySelected(indices, [&](auto setNull, void* output) {
             return length == 0
-                ? view->read(std::span<const RowRange>{}, setNull, output)
-                : view->read(range, setNull, output);
+                ? view->read(
+                      std::span<const RowRange>{},
+                      setNull,
+                      /*addStringBuffer=*/nullptr,
+                      output)
+                : view->read(
+                      range, setNull, /*addStringBuffer=*/nullptr, output);
           });
         }
         const std::vector<uint32_t> indices{numRows - 1, 0, 1, 1, 2};
         verifySelected(indices, [&](auto setNull, void* output) {
-          return view->read(indices, setNull, output);
+          return view->read(
+              indices, setNull, /*addStringBuffer=*/nullptr, output);
         });
         const std::array<RowRange, 2> ranges{
             RowRange{0, numRows / 2}, RowRange{numRows / 2 + 1, numRows}};
@@ -188,7 +198,8 @@ class SentinelEncodingViewTest : public EncodingViewTest {
           }
         }
         verifySelected(rangeIndices, [&](auto setNull, void* output) {
-          return view->read(ranges, setNull, output);
+          return view->read(
+              ranges, setNull, /*addStringBuffer=*/nullptr, output);
         });
       }
     }
@@ -235,6 +246,94 @@ TEST_P(SentinelEncodingViewTest, readsBooleanAndStringValues) {
   verifyReads<std::string_view>(
       {"", "alpha", std::nullopt, "longer string value", std::nullopt},
       "<null>");
+}
+
+TEST_P(SentinelEncodingViewTest, readsPassBuffersThatHoldTheirStrings) {
+  // Long runs of one byte, so that Zstd compresses the strings rather than
+  // keeping them uncompressed.
+  const std::string first(100, 'a');
+  const std::string fourth(100, 'b');
+  const std::string sixth(100, 'c');
+  const std::vector<std::optional<std::string_view>> rows{
+      first,
+      std::nullopt,
+      "",
+      fourth,
+      std::nullopt,
+      sixth,
+  };
+  const std::vector<uint32_t> indices{5, 0, 1, 3, 2};
+  const std::array<RowRange, 2> ranges{RowRange{0, 2}, RowRange{3, 6}};
+  for (const auto compression :
+       {CompressionType::Uncompressed, CompressionType::Zstd}) {
+    for (const bool holdsInput : {false, true}) {
+      for (const bool readsIndices : {false, true}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "compression={}, holdsInput={}, readsIndices={}",
+                compression,
+                holdsInput,
+                readsIndices));
+        const auto encoded =
+            encode<std::string_view>(rows, "<null>", {}, compression);
+        ASSERT_EQ(
+            encoded.find(first) == std::string::npos,
+            compression != CompressionType::Uncompressed);
+
+        // The input of the view lies in a buffer, which the options of the
+        // view point to when 'holdsInput' is set.
+        const auto input =
+            velox::AlignedBuffer::allocate<char>(encoded.size(), pool_.get());
+        std::copy(encoded.begin(), encoded.end(), input->asMutable<char>());
+        Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+        if (holdsInput) {
+          options.inputStringBuffer = input.get();
+        }
+        const auto view = createEncodingView(
+            {input->as<char>(), input->size()}, pool_.get(), options);
+        std::vector<std::string_view> output(5);
+        std::vector<uint32_t> nullIndices;
+        std::vector<velox::BufferPtr> buffers;
+        const auto setNull = [&](uint32_t index) {
+          nullIndices.push_back(index);
+        };
+        const auto addStringBuffer = [&](velox::BufferPtr buffer) {
+          buffers.push_back(std::move(buffer));
+        };
+        if (readsIndices) {
+          EXPECT_EQ(
+              view->read(indices, setNull, addStringBuffer, output.data()), 4);
+          EXPECT_THAT(
+              output, testing::ElementsAre(sixth, first, "", fourth, ""));
+          EXPECT_THAT(nullIndices, testing::ElementsAre(2));
+        } else {
+          EXPECT_EQ(
+              view->read(ranges, setNull, addStringBuffer, output.data()), 3);
+          EXPECT_THAT(
+              output, testing::ElementsAre(first, "", fourth, "", sixth));
+          EXPECT_THAT(nullIndices, testing::ElementsAre(1, 3));
+        }
+
+        // An uncompressed child returns strings of the input, so the read
+        // passes the input string buffer, or copies the strings into a buffer
+        // that it passes. A compressed child passes its decompressed payload.
+        if (compression == CompressionType::Uncompressed && holdsInput) {
+          EXPECT_THAT(buffers, testing::ElementsAre(input));
+        } else {
+          ASSERT_EQ(buffers.size(), 1);
+          EXPECT_NE(buffers[0], input);
+        }
+        const auto* begin = buffers[0]->as<char>();
+        for (const auto value : output) {
+          EXPECT_TRUE(
+              value.empty() ||
+              (value.data() >= begin &&
+               value.data() + value.size() <= begin + buffers[0]->size()))
+              << value;
+        }
+      }
+    }
+  }
 }
 
 TEST_P(SentinelEncodingViewTest, readsZeroSentinel) {
@@ -331,6 +430,7 @@ TEST_P(SentinelEncodingViewTest, concurrentReads) {
       view->read(
           indices,
           [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          /*addStringBuffer=*/nullptr,
           output.data());
       size_t numNulls{0};
       for (uint32_t i{0}; i < indices.size(); ++i) {

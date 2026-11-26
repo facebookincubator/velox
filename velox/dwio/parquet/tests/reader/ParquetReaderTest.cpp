@@ -1709,7 +1709,8 @@ TEST_F(ParquetReaderTest, preloadSmallFile) {
   const std::string sample(getExampleFilePath("sample.parquet"));
 
   auto file = std::make_shared<LocalReadFile>(sample);
-  auto input = std::make_unique<BufferedInput>(file, *leafPool_);
+  auto input = std::make_unique<BufferedInput>(
+      file, FileIoContext{.pool = leafPool_.get()});
 
   auto reader = std::make_unique<ParquetReader>(
       std::move(input), makeDefaultReaderOptions());
@@ -2417,7 +2418,7 @@ TEST_F(ParquetReaderTest, readerWithSchema) {
   std::string dataBuf(sinkPtr->data(), sinkPtr->size());
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
-      file, readerOptions.memoryPool());
+      file, FileIoContext{.pool = &readerOptions.memoryPool()});
   ParquetReader reader(std::move(buffer), readerOptions);
 
   EXPECT_EQ(reader.rowType()->toString(), schema->toString());
@@ -2441,7 +2442,7 @@ TEST_F(ParquetReaderTest, corruptFooterLengthWraps) {
   auto readerOptions = makeDefaultReaderOptions();
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
-      file, readerOptions.memoryPool());
+      file, FileIoContext{.pool = &readerOptions.memoryPool()});
 
   VELOX_ASSERT_THROW(
       ParquetReader(std::move(buffer), readerOptions),
