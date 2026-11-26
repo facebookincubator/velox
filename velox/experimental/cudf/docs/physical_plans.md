@@ -99,7 +99,8 @@ it. `validateCudfPlan` asks the cuDF plan nodes of the plan it is given. The
 cuDF operators do not decide again: what remains
 in them are internal checks and limits that depend on the data. The definition
 keeps only what the cuDF plan node cannot know, because lowering does not carry
-it over, such as the masks of a MarkDistinct.
+it over, such as the masks of a MarkDistinct or the `nullAsValue` flag of a
+hash join.
 
 The rewriter and the cuDF driver adapter start from a core plan node and use
 the first two. `CudfPlanNodeTranslator` starts from a cuDF plan node and uses

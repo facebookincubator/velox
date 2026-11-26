@@ -241,7 +241,31 @@ class PlanRewriterTest
         {makeFlatVector<int64_t>({1, 1, 1, 1}),
          makeArrayVector<int64_t>({{2}, {1}, {2}, {3}})});
 
+    // (1, null) is on both sides.
+    auto nullableProbe = makeRowVector(
+        {"c0", "c1"},
+        {makeNullableFlatVector<int64_t>({1, 2}),
+         makeNullableFlatVector<int64_t>({std::nullopt, 3})});
+    auto nullableBuild = makeRowVector(
+        {"u0", "u1"},
+        {makeNullableFlatVector<int64_t>({1, 2}),
+         makeNullableFlatVector<int64_t>({std::nullopt, 4})});
+
     return {
+        {"NullAsValueJoin",
+         {PlanBuilder(ids)
+              .values({nullableProbe})
+              .hashJoin(
+                  {"c0", "c1"},
+                  {"u0", "u1"},
+                  PlanBuilder(ids).values({nullableBuild}).planNode(),
+                  "",
+                  {"c0", "c1"},
+                  core::JoinType::kAnti,
+                  /*nullAware=*/false,
+                  /*nullAsValue=*/true)
+              .planNode(),
+          "HashProbe"}},
         {"NestedLoopJoinCustomComparison",
          {PlanBuilder(ids)
               .values({customProbe})
@@ -517,6 +541,34 @@ TEST_F(PlanRewriterTest, loweringBuildsOverTheGivenSources) {
           {std::make_shared<CudfFromVeloxNode>(
               "masked_gpu", maskedMarkDistinct->sources()[0])}),
       "MarkDistinct masks are not supported by cuDF");
+
+  // So does the lowering of a hash join with nullAsValue.
+  const auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  const auto nullAsValueJoin = PlanBuilder(ids)
+                                   .values({input_})
+                                   .hashJoin(
+                                       {"c0"},
+                                       {"u0"},
+                                       PlanBuilder(ids)
+                                           .values({input_})
+                                           .project({"c0 AS u0"})
+                                           .planNode(),
+                                       "",
+                                       {"c0"},
+                                       core::JoinType::kAnti,
+                                       /*nullAware=*/false,
+                                       /*nullAsValue=*/true)
+                                   .planNode();
+  const auto* joinLowering = detail::findCudfPlanNodeLowering(nullAsValueJoin);
+  ASSERT_NE(joinLowering, nullptr);
+  VELOX_ASSERT_THROW(
+      joinLowering->lower(
+          nullAsValueJoin,
+          {std::make_shared<CudfFromVeloxNode>(
+               "probe_gpu", nullAsValueJoin->sources()[0]),
+           std::make_shared<CudfFromVeloxNode>(
+               "build_gpu", nullAsValueJoin->sources()[1])}),
+      "HashJoin nullAsValue is not supported by cuDF");
 }
 
 TEST_F(PlanRewriterTest, batchConcatGoesBelowAggregationAndJoinProbe) {

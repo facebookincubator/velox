@@ -201,7 +201,7 @@ class CudfAggregationNode : public CudfUnaryPlanNode {
 };
 
 /// Hash join that runs on cuDF. The first source is the probe side and the
-/// second is the build side.
+/// second is the build side. NULL join keys never match each other.
 class CudfHashJoinNode : public CudfPlanNode {
  public:
   /// Returns why cuDF does not implement a hash join of 'joinType' with this

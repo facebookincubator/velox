@@ -372,7 +372,12 @@ struct HashJoinDefinition {
   using CoreNode = core::HashJoinNode;
   using CudfNode = CudfHashJoinNode;
 
+  // CudfHashJoinNode has no nullAsValue: the cuDF join always treats NULL
+  // join keys as unequal.
   static std::optional<std::string> unsupportedReason(const CoreNode& node) {
+    if (node.isNullAsValue()) {
+      return "HashJoin nullAsValue is not supported by cuDF";
+    }
     return CudfNode::unsupportedReason(
         node.joinType(), node.isNullAware(), node.filter() != nullptr);
   }
@@ -381,6 +386,9 @@ struct HashJoinDefinition {
       const std::shared_ptr<const CoreNode>& node,
       std::vector<core::PlanNodePtr> sources) {
     VELOX_CHECK_EQ(sources.size(), 2);
+    VELOX_CHECK(
+        !node->isNullAsValue(),
+        "HashJoin nullAsValue is not supported by cuDF");
     return std::make_shared<CudfNode>(
         node->id(),
         std::move(sources[0]),
