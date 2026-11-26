@@ -55,6 +55,19 @@ TEST(ScratchTest, basic) {
   EXPECT_EQ(0, scratch.retainedSize());
 }
 
+TEST(ScratchTest, paddedData) {
+  Scratch scratch;
+  // Inline and heap-allocated data, each followed by a full SIMD store's room.
+  for (const int32_t size : {0, 1'000}) {
+    SCOPED_TRACE(size);
+    ScratchPtr<int32_t> ints(scratch);
+    ints.get(size);
+    const auto padded = ints.paddedData();
+    EXPECT_EQ(padded.get(), ints.get());
+    xsimd::batch<int32_t>::broadcast(-1).store_unaligned(padded.get() + size);
+  }
+}
+
 TEST(ScratchTest, large) {
   constexpr int32_t kSize = 100;
   Scratch scratch;
