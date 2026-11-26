@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <iterator>
@@ -74,6 +75,20 @@ inline Vector<std::string_view> makeFsstData(
       value.append("/" + std::to_string(i));
     }
     data.push_back(buffer->writeString(value));
+  }
+
+  // Now and then a few long strings, since a decode of many strings is cut by
+  // size, and strings above the string page size are decoded another way.
+  if (rng() % 8 == 0) {
+    constexpr std::array<size_t, 3> kLongLengths{
+        70 * 1'024, 130 * 1'024, 300 * 1'024};
+    const auto numLongStrings = 1 + rng() % 3;
+    for (uint32_t i = 0; i < numLongStrings; ++i) {
+      data[rng() % rowCount] = buffer->writeString(
+          std::string(
+              kLongLengths[rng() % kLongLengths.size()],
+              static_cast<char>('a' + rng() % 26)));
+    }
   }
   return data;
 }
