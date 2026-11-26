@@ -148,20 +148,21 @@ class UcxOutputQueueManagerTest : public testing::Test {
     queueManager_->noMoreData(taskId);
   }
 
+  // Reads one step of 'destination', which must be ready and of
+  // 'expectedKind'. A chunk must carry data.
   void fetch(
       std::string_view taskId,
       int destination,
-      bool expectedEndMarker = false) {
-    bool receivedData = false;
-    queueManager_->getData(
-        taskId,
-        destination,
-        [destination, expectedEndMarker, &receivedData](ReaderStep step) {
-          ASSERT_EQ(expectedEndMarker, isCleanEnd(step))
-              << "for destination " << destination;
-          receivedData = true;
-        });
-    ASSERT_TRUE(receivedData) << "for destination " << destination;
+      ReaderStep::Kind expectedKind) {
+    std::optional<ReaderStep> step;
+    queueManager_->getData(taskId, destination, storeStep(step));
+    ASSERT_TRUE(step.has_value()) << "for destination " << destination;
+    ASSERT_EQ(step->kind, expectedKind)
+        << "for destination " << destination << ": "
+        << testing::PrintToString(*step);
+    if (expectedKind == ReaderStep::Kind::kChunk) {
+      EXPECT_NE(step->data, nullptr) << "for destination " << destination;
+    }
   }
 
   static bool isCleanEnd(const ReaderStep& step) {
@@ -234,15 +235,26 @@ class UcxOutputQueueManagerTest : public testing::Test {
       bool atEnd{false};
       folly::EventCount dataWait;
       auto dataWaitKey = dataWait.prepareWait();
+      bool stopped{false};
       queueManager_->getData(taskId, destination, [&](ReaderStep step) {
-        if (step.kind == ReaderStep::Kind::kEnd) {
-          atEnd = true;
-        } else {
-          received++;
+        switch (step.kind) {
+          case ReaderStep::Kind::kChunk:
+            received++;
+            break;
+          case ReaderStep::Kind::kEnd:
+            atEnd = true;
+            break;
+          case ReaderStep::Kind::kStop:
+            stopped = true;
+            break;
         }
         dataWait.notify();
       });
       dataWait.wait(dataWaitKey);
+      // Only deleteResults() below Releases the destination, so a stop before
+      // the end is wrong.
+      ASSERT_FALSE(stopped)
+          << "Destination stopped before its end: " << destination;
       if (atEnd) {
         break;
       }
@@ -415,7 +427,7 @@ TEST_F(UcxOutputQueueManagerTest, basicPartitioned) {
   EXPECT_FALSE(queueManager_->isFinished(taskId));
 
   for (int destination = 0; destination < 5; destination++) {
-    fetch(taskId, destination);
+    fetch(taskId, destination, ReaderStep::Kind::kChunk);
   }
 
   EXPECT_FALSE(queueManager_->isFinished(taskId));
@@ -425,7 +437,7 @@ TEST_F(UcxOutputQueueManagerTest, basicPartitioned) {
   }
 
   for (int destination = 0; destination < 3; destination++) {
-    fetch(taskId, destination);
+    fetch(taskId, destination, ReaderStep::Kind::kChunk);
   }
 
   // destinations 0-2 received 2 packed_columns each
@@ -656,7 +668,7 @@ TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPendingEntry) {
       taskId, /*numDestinations=*/1, /*numDrivers=*/1, /*cleanup=*/false);
   enqueue(taskId, /*size=*/10);
   noMoreData(taskId);
-  fetch(taskId, 0);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 0);
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   EXPECT_FALSE(fired);
@@ -1218,7 +1230,7 @@ TEST_F(
       core::PartitionedOutputNode::Kind::kBroadcast);
   enqueue(taskId, 0, 50);
   noMoreData(taskId);
-  fetch(taskId, 0);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 0);
 
   task->requestAbort().wait();
@@ -1620,7 +1632,7 @@ TEST_F(UcxOutputQueueManagerTest, releasingGoneConsumerDeletesItsResults) {
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 1);
 
   noMoreData(taskId);
-  fetch(taskId, 1);
+  fetch(taskId, 1, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 1);
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
@@ -1918,7 +1930,7 @@ TEST_F(UcxOutputQueueManagerTest, broadcastBasic) {
 
   // All destinations should receive the data.
   for (int dest = 0; dest < numDestinations; ++dest) {
-    fetch(taskId, dest);
+    fetch(taskId, dest, ReaderStep::Kind::kChunk);
   }
 
   // Signal no more data.
@@ -1951,24 +1963,24 @@ TEST_F(UcxOutputQueueManagerTest, broadcastLateDestination) {
   enqueue(taskId, 0, size);
 
   // Fetch from existing destinations to verify data is there.
-  fetch(taskId, 0);
-  fetch(taskId, 1);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
+  fetch(taskId, 1, ReaderStep::Kind::kChunk);
 
   // Now add a 3rd destination (late arrival). It should be backfilled.
   queueManager_->updateOutputBuffers(taskId, 3, false);
 
   // The new destination should have both batches.
-  fetch(taskId, 2);
-  fetch(taskId, 2);
+  fetch(taskId, 2, ReaderStep::Kind::kChunk);
+  fetch(taskId, 2, ReaderStep::Kind::kChunk);
 
   // Finalize destinations and data.
   queueManager_->updateOutputBuffers(taskId, 3, true);
   noMoreData(taskId);
 
   // Fetch remaining data + end markers.
-  fetch(taskId, 0);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 0);
-  fetch(taskId, 1);
+  fetch(taskId, 1, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 1);
   fetchEndMarker(taskId, 2);
 
@@ -2089,7 +2101,7 @@ TEST_F(UcxOutputQueueManagerTest, deleteUnpublishedReader) {
   queueManager_->getData(taskId, 1, storeStep(retry));
   EXPECT_THAT(retry, testing::Optional(discarded));
   noMoreData(taskId);
-  fetch(taskId, 0);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 0);
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
@@ -2118,7 +2130,7 @@ TEST_F(
 
   queueManager_->updateOutputBuffers(taskId, 2, true);
   noMoreData(taskId);
-  fetch(taskId, 0);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 0);
   EXPECT_TRUE(queueManager_->isFinished(taskId));
   queueManager_->removeTask(taskId);
@@ -2143,7 +2155,7 @@ TEST_F(UcxOutputQueueManagerTest, deleteUnpublishedDestinationBeforeGetData) {
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 2 * pageBytes);
   noMoreData(taskId);
   for (int destination : {0, 1}) {
-    fetch(taskId, destination);
+    fetch(taskId, destination, ReaderStep::Kind::kChunk);
     fetchEndMarker(taskId, destination);
   }
   EXPECT_TRUE(queueManager_->isFinished(taskId));
@@ -2231,7 +2243,7 @@ TEST_F(UcxOutputQueueManagerTest, unpublishedReadersDoNotAmplifyBackpressure) {
   ContinueFuture future;
   EXPECT_FALSE(queueManager_->checkBlocked(taskId, &future));
   noMoreData(taskId);
-  fetch(taskId, 0);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 0);
   EXPECT_EQ(endCount, 0);
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
@@ -2262,11 +2274,11 @@ TEST_F(UcxOutputQueueManagerTest, broadcastEndMarkerToLateDestination) {
   queueManager_->updateOutputBuffers(taskId, 2, true);
 
   // Destination 0: data + end marker.
-  fetch(taskId, 0);
+  fetch(taskId, 0, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 0);
 
   // Destination 1 (late): backfilled data + end marker.
-  fetch(taskId, 1);
+  fetch(taskId, 1, ReaderStep::Kind::kChunk);
   fetchEndMarker(taskId, 1);
 
   EXPECT_TRUE(queueManager_->isFinished(taskId));

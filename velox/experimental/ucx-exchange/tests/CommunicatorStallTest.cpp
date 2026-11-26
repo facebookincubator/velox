@@ -201,11 +201,17 @@ TEST_F(CommunicatorStallTest, endpointCleanupRunsWhileAnElementRequeuesItself) {
   auto communicator = Communicator::getInstance();
   auto element = startSpinningElement(communicator);
   auto probe = std::make_shared<EndpointClosedProbe>(communicator);
+  // A Baton may be waited on only once after it is posted, so the guard waits
+  // only if the body did not see the post.
+  bool closed = false;
+  bool cleanupDeferred = false;
   SCOPE_EXIT {
     EXPECT_TRUE(element->stopAndWait(std::chrono::seconds(5)))
         << "The spinning element did not stop";
     // The cleanup may still be queued, so wait for it before the probe goes.
-    EXPECT_TRUE(probe->waitForClosed(std::chrono::seconds(5)));
+    if (cleanupDeferred && !closed) {
+      EXPECT_TRUE(probe->waitForClosed(std::chrono::seconds(5)));
+    }
   };
   ASSERT_GE(element->numProcessed(), 1'000)
       << "The element never started spinning";
@@ -213,7 +219,9 @@ TEST_F(CommunicatorStallTest, endpointCleanupRunsWhileAnElementRequeuesItself) {
   auto endpoint = std::make_shared<EndpointRef>(nullptr);
   endpoint->addCommElem(probe);
   communicator->deferEndpointCleanup(endpoint);
-  EXPECT_TRUE(probe->waitForClosed(std::chrono::milliseconds(2'000)))
+  cleanupDeferred = true;
+  closed = probe->waitForClosed(std::chrono::milliseconds(2'000));
+  EXPECT_TRUE(closed)
       << "Deferred endpoint cleanup did not run within 2 s while an element "
          "requeued itself";
 }
@@ -236,6 +244,9 @@ TEST_F(CommunicatorStallTest, closeMessageHandledWhileAnElementRequeuesItself) {
       key.taskId, key.destination, /*onReleased=*/nullptr);
   SCOPE_EXIT {
     queueManager()->releaseReader(entry, key.destination);
+    // A Released destination keeps the Pending entry, so remove the task to
+    // drop it.
+    queueManager()->removeTask(key.taskId);
   };
   ASSERT_EQ(entry->destinationState(0), DestinationState::kUnpublished);
 

@@ -1793,7 +1793,7 @@ TEST_F(UcxExchangeFocusedTest, closedSourceWithUnreachableProducerEndsQuietly) {
 // worker. Its server then waits on a Pending entry. When the consumer closes,
 // its close message Releases the destination, and the entry keeps it: the
 // producer that initializes later finishes without waiting for a reader.
-TEST_F(UcxExchangeFocusedTest, closedExchangeDropsPendingEntry) {
+TEST_F(UcxExchangeFocusedTest, closedExchangeKeepsReleasedPendingEntry) {
   const std::string srcTaskId =
       getUniqueTaskPrefix() + "closedConsumerOfPendingSrc";
   // Initialized only after the consumer is gone.
