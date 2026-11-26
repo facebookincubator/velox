@@ -92,6 +92,11 @@ class TrivialEncoding final
         rowCount * sizeof(physicalType);
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   // Numeric trivial stores one byte after the common encoding prefix for the
   // payload compression type.
@@ -173,6 +178,11 @@ class TrivialEncoding<std::string_view> final
         lengthsEncodingSize;
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   uint32_t row_;
   const char* blob_;
@@ -235,6 +245,11 @@ class TrivialEncoding<bool> final : public TypedEncoding<bool, bool> {
         FixedBitArray::bufferSize(rowCount, 1);
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   // Bool trivial stores one byte after the common encoding prefix for the
   // bitmap compression type.
@@ -285,6 +300,39 @@ TrivialEncoding<T>::TrivialEncoding(
 template <typename T>
 void TrivialEncoding<T>::reset() {
   row_ = 0;
+}
+
+template <typename T>
+bool TrivialEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& /*stringBufferFactory*/) {
+  row_ = 0;
+  const auto valuesOffset = this->dataOffset() + kPrefixSize;
+  NIMBLE_CHECK_FILE_GE(data.size(), valuesOffset, "Truncated trivial encoding");
+  const auto compressionType =
+      static_cast<CompressionType>(data[this->dataOffset()]);
+  this->releaseBuffer(uncompressed_);
+  if (compressionType != CompressionType::Uncompressed) {
+    uncompressed_ = Compression::uncompress(
+        *this->pool_,
+        compressionType,
+        TypeTraits<T>::dataType,
+        {data.data() + valuesOffset, data.size() - valuesOffset},
+        this->options_.decompressCounter(),
+        this->options_.bufferPool);
+    values_ = reinterpret_cast<const T*>(uncompressed_->as<char>());
+    NIMBLE_CHECK_EQ(
+        reinterpret_cast<const char*>(values_ + this->rowCount()),
+        uncompressed_->as<char>() + uncompressed_->size(),
+        "Unexpected trivial encoding end");
+  } else {
+    values_ = reinterpret_cast<const T*>(data.data() + valuesOffset);
+    NIMBLE_CHECK_EQ(
+        reinterpret_cast<const char*>(values_ + this->rowCount()),
+        data.data() + data.size(),
+        "Unexpected trivial encoding end");
+  }
+  return true;
 }
 
 template <typename T>

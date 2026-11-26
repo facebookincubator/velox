@@ -190,6 +190,11 @@ class FixedBitWidthEncoding final
 
   std::string debugString(int offset) const final;
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   static constexpr int kPrefixSize = 2 + sizeof(T);
 
@@ -284,6 +289,33 @@ FixedBitWidthEncoding<T>::FixedBitWidthEncoding(
 template <typename T>
 void FixedBitWidthEncoding<T>::reset() {
   row_ = 0;
+}
+
+template <typename T>
+bool FixedBitWidthEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& /*stringBufferFactory*/) {
+  auto pos = data.data() + this->dataOffset();
+  auto compressionType = static_cast<CompressionType>(encoding::readChar(pos));
+  baseline_ = encoding::read<const physicalType>(pos);
+  bitWidth_ = static_cast<uint32_t>(encoding::readChar(pos));
+  this->releaseBuffer(uncompressedData_);
+  if (compressionType != CompressionType::Uncompressed) {
+    uncompressedData_ = Compression::uncompress(
+        *this->pool_,
+        compressionType,
+        DataType::Undefined,
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+        this->options_.decompressCounter(),
+        this->options_.bufferPool);
+    fixedBitArray_ = FixedBitArray{
+        {uncompressedData_->as<char>(), uncompressedData_->size()}, bitWidth_};
+  } else {
+    fixedBitArray_ = FixedBitArray{
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)}, bitWidth_};
+  }
+  reset();
+  return true;
 }
 
 template <typename T>

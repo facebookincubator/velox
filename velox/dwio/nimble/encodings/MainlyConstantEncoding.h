@@ -910,11 +910,40 @@ class MainlyConstantEncoding final : public MainlyConstantEncodingBase<T> {
     return MainlyConstantEncodingBase<T>::slice(
         encoded, offset, length, buffer, options);
   }
+
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
 };
 
 //
 // End of public API. Implementation follows.
 //
+
+template <typename T>
+bool MainlyConstantEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const char* pos = data.data() + this->dataOffset();
+  const uint32_t isCommonBytes = encoding::readUint32(pos);
+  this->isCommon_ = this->rebindChild(
+      {pos, isCommonBytes}, stringBufferFactory, std::move(this->isCommon_));
+  pos += isCommonBytes;
+  const uint32_t otherValuesBytes = encoding::readUint32(pos);
+  this->otherValues_ = this->rebindChild(
+      {pos, otherValuesBytes},
+      stringBufferFactory,
+      std::move(this->otherValues_));
+  pos += otherValuesBytes;
+  this->commonValue_ = encoding::read<physicalType>(pos);
+  this->dictionaryAlphabet_.resize(0);
+  NIMBLE_CHECK_EQ(
+      pos,
+      data.data() + data.size(),
+      "Unexpected mainly constant encoding end");
+  return true;
+}
 
 template <typename T>
 MainlyConstantEncoding<T>::MainlyConstantEncoding(
