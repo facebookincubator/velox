@@ -42,6 +42,7 @@
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
+#include "velox/dwio/nimble/selective/SelectiveNimbleIndexReader.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
@@ -5192,6 +5193,694 @@ TEST_F(E2EIndexTestBase, indexReadersShareCachedTablet) {
                         readerOptions);
   EXPECT_EQ(reader->numberOfRows().value(), 3);
   EXPECT_EQ(tabletReaderCache.stats().numLookups, numLookups);
+}
+
+namespace {
+
+// Reads through 'stream', and counts itself in 'numLiveStreams[load]' while it
+// is alive.
+class LiveCountedStream : public SeekableInputStream {
+ public:
+  LiveCountedStream(
+      std::unique_ptr<SeekableInputStream> stream,
+      std::shared_ptr<std::vector<int64_t>> numLiveStreams,
+      size_t load)
+      : stream_{std::move(stream)},
+        numLiveStreams_{std::move(numLiveStreams)},
+        load_{load} {
+    ++(*numLiveStreams_)[load_];
+  }
+
+  ~LiveCountedStream() override {
+    --(*numLiveStreams_)[load_];
+  }
+
+  bool Next(const void** data, int32_t* size) override {
+    return stream_->Next(data, size);
+  }
+
+  void BackUp(int32_t count) override {
+    stream_->BackUp(count);
+  }
+
+  bool SkipInt64(int64_t count) override {
+    return stream_->SkipInt64(count);
+  }
+
+  int64_t ByteCount() const override {
+    return stream_->ByteCount();
+  }
+
+  void seekToPosition(PositionProvider& position) override {
+    stream_->seekToPosition(position);
+  }
+
+  std::string getName() const override {
+    return stream_->getName();
+  }
+
+  size_t positionSize() const override {
+    return stream_->positionSize();
+  }
+
+ private:
+  const std::unique_ptr<SeekableInputStream> stream_;
+  const std::shared_ptr<std::vector<int64_t>> numLiveStreams_;
+  // The number of loads before 'stream_' was enqueued.
+  const size_t load_;
+};
+
+// Counts the streams that a reader tree enqueues in vain or keeps too long:
+//
+// - A stream enqueued again before the load that reads it. A reader tree
+//   enqueues each stream it reads once per stripe, so a stream enqueued again
+//   was enqueued for a reader that was then discarded.
+// - A stream of an earlier stripe that is still alive when the next stripe
+//   loads. A reader kept for a later stripe must not keep the data it read.
+class StreamCountingInput : public DirectBufferedInput {
+ public:
+  using DirectBufferedInput::DirectBufferedInput;
+
+  std::unique_ptr<SeekableInputStream> enqueue(
+      velox::common::Region region,
+      const StreamIdentifier* sid) override {
+    if (sid != nullptr && !enqueuedStreams_.insert(sid->getId()).second) {
+      ++numRepeatedEnqueues_;
+    }
+    auto stream = DirectBufferedInput::enqueue(region, sid);
+    if (sid == nullptr || stream == nullptr) {
+      return stream;
+    }
+    return std::make_unique<LiveCountedStream>(
+        std::move(stream), numLiveStreams_, numLiveStreams_->size() - 1);
+  }
+
+  void load(const LogType logType) override {
+    // The streams enqueued before the last load belong to earlier stripes.
+    int64_t numStaleStreams{0};
+    for (size_t load = 0; load + 1 < numLiveStreams_->size(); ++load) {
+      numStaleStreams += (*numLiveStreams_)[load];
+    }
+    maxStaleStreams_ = std::max(maxStaleStreams_, numStaleStreams);
+    numLiveStreams_->emplace_back(0);
+    enqueuedStreams_.clear();
+    DirectBufferedInput::load(logType);
+  }
+
+  int64_t numRepeatedEnqueues() const {
+    return numRepeatedEnqueues_;
+  }
+
+  // Returns the most streams of earlier stripes that were alive at a load.
+  int64_t maxStaleStreams() const {
+    return maxStaleStreams_;
+  }
+
+ private:
+  // The live streams, by the number of loads before they were enqueued. The
+  // last entry counts the streams enqueued since the last load.
+  const std::shared_ptr<std::vector<int64_t>> numLiveStreams_{
+      std::make_shared<std::vector<int64_t>>(1, 0)};
+  // The streams enqueued since the last load.
+  std::set<int32_t> enqueuedStreams_;
+  int64_t numRepeatedEnqueues_{0};
+  int64_t maxStaleStreams_{0};
+};
+
+} // namespace
+
+TEST_F(E2EIndexTestBase, indexLookupsReuseFlatMapKeyReaders) {
+  constexpr int32_t kNumStripes{5};
+  constexpr int32_t kRowsPerStripe{4};
+  auto rowType = ROW({
+      {"key", BIGINT()},
+      {"features", MAP(INTEGER(), ARRAY(BIGINT()))},
+      {"scores", MAP(INTEGER(), REAL())},
+      {"labels", MAP(INTEGER(), ARRAY(VARCHAR()))},
+  });
+
+  // Reads each map as a struct with one field per key.
+  auto structType = ROW({
+      {"key", BIGINT()},
+      {"features", ROW({"1", "2", "3"}, ARRAY(BIGINT()))},
+      {"scores", ROW({"1", "2"}, REAL())},
+      {"labels", ROW({"1", "2"}, ARRAY(VARCHAR()))},
+  });
+
+  // A map column of 'rowType'.
+  struct Column {
+    // The rows of each stripe that have each key, one string per key and one
+    // character per stripe: 'a' for every row, 'h' for rows 0 and 1, and '-'
+    // for none.
+    std::vector<std::string> presence;
+
+    // Returns the values of key 'key' in the rows of 'stripe' as if every row
+    // had the key.
+    std::function<VectorPtr(int32_t stripe, int32_t key)> makeValues;
+  };
+  const auto hasKey =
+      [](const std::string& presence, int32_t stripe, int32_t row) {
+        return presence[stripe] == 'a' || (presence[stripe] == 'h' && row < 2);
+      };
+
+  // A writer that skips constant in-map streams writes the in-map stream of a
+  // key only in its 'h' stripes, so the reader of a key that moves between 'a'
+  // and 'h' stripes is built anew.
+  const std::vector<Column> columns{
+      {{"a-aah", "aah-h", "-haha"},
+       [&](int32_t stripe, int32_t key) {
+         std::vector<std::optional<std::vector<std::optional<int64_t>>>> values;
+         for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+           // Key 3 has only empty arrays in stripe 3. That stripe has no
+           // elements stream for the key, so its reader is built anew there,
+           // with a NullColumnReader for the elements, which stripe 4 cannot
+           // rebind either.
+           if (key == 3 && (stripe == 3 || (stripe == 2 && row == 0))) {
+             values.emplace_back(std::vector<std::optional<int64_t>>{});
+           } else if (stripe == 1 && row == 2) {
+             values.emplace_back(
+                 std::vector<std::optional<int64_t>>{std::nullopt, key});
+           } else {
+             values.emplace_back(
+                 std::vector<std::optional<int64_t>>{
+                     stripe * 100 + row * 10 + key, key});
+           }
+         }
+         return vectorMaker_->arrayVectorNullable<int64_t>(values);
+       }},
+      {{"aa-aa", "-hhah"},
+       [&](int32_t stripe, int32_t key) {
+         std::vector<std::optional<float>> values;
+         for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+           if (stripe == 3 && row == 2 && key == 1) {
+             values.emplace_back(std::nullopt);
+           } else {
+             values.emplace_back(
+                 static_cast<float>(stripe * 100 + row * 10 + key) / 10.0f);
+           }
+         }
+         return vectorMaker_->flatVectorNullable<float>(values);
+       }},
+
+      // No reader of strings can be rebound, so the reader of every key is
+      // built anew in every stripe.
+      {{"aahaa", "h-ah-"},
+       [&](int32_t stripe, int32_t key) {
+         std::vector<std::optional<std::vector<std::optional<StringView>>>>
+             values;
+         for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+           // Short enough for StringView to inline.
+           const auto label = fmt::format("{}.{}.{}", stripe, row, key);
+           values.emplace_back(
+               std::vector<std::optional<StringView>>{StringView(label)});
+         }
+         return vectorMaker_->arrayVectorNullable<StringView>(
+             values, ARRAY(VARCHAR()));
+       }},
+  };
+
+  // The rows of each stripe as written, and as read with the maps as structs.
+  std::vector<RowVectorPtr> mapBatches;
+  std::vector<RowVectorPtr> structBatches;
+  for (int32_t stripe = 0; stripe < kNumStripes; ++stripe) {
+    std::vector<int64_t> keys;
+    keys.reserve(kRowsPerStripe);
+    for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+      keys.push_back(stripe * 10 + row);
+    }
+    std::vector<VectorPtr> maps{vectorMaker_->flatVector<int64_t>(keys)};
+    std::vector<VectorPtr> structs{maps[0]};
+    for (const auto& column : columns) {
+      const auto numKeys = static_cast<int32_t>(column.presence.size());
+
+      // A struct read returns null in the rows that lack the key.
+      std::vector<VectorPtr> fields;
+      for (int32_t key = 1; key <= numKeys; ++key) {
+        auto field = column.makeValues(stripe, key);
+        for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+          if (!hasKey(column.presence[key - 1], stripe, row)) {
+            field->setNull(row, /*isNull=*/true);
+          }
+        }
+        fields.push_back(std::move(field));
+      }
+      std::vector<vector_size_t> offsets;
+      std::vector<int32_t> mapKeys;
+      auto mapValues =
+          BaseVector::create(fields[0]->type(), /*size=*/0, leafPool_.get());
+      for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+        offsets.push_back(static_cast<vector_size_t>(mapKeys.size()));
+        for (int32_t key = 1; key <= numKeys; ++key) {
+          if (hasKey(column.presence[key - 1], stripe, row)) {
+            const auto entry = static_cast<vector_size_t>(mapKeys.size());
+            mapValues->resize(entry + 1);
+            mapValues->copy(fields[key - 1].get(), entry, row, /*count=*/1);
+            mapKeys.push_back(key);
+          }
+        }
+      }
+      maps.push_back(vectorMaker_->mapVector(
+          offsets, vectorMaker_->flatVector<int32_t>(mapKeys), mapValues));
+      const auto& fieldNames =
+          structType->childAt(static_cast<uint32_t>(structs.size()))
+              ->asRow()
+              .names();
+      structs.push_back(vectorMaker_->rowVector(fieldNames, fields));
+    }
+    mapBatches.push_back(vectorMaker_->rowVector(rowType->names(), maps));
+    structBatches.push_back(
+        vectorMaker_->rowVector(structType->names(), structs));
+  }
+
+  // Writes each batch as one stripe.
+  const auto writeFile = [&](bool skipConstantInMapStreams) {
+    sinkData_.clear();
+    WriterOptions options;
+    options.clusterIndexConfig =
+        ClusterIndexConfigBuilder{}
+            .withKeyColumns({"key"})
+            .withSortOrders({SortOrder{.ascending = true}})
+            .withEnforceKeyOrder(true)
+            .build();
+    for (const auto* name : {"features", "scores", "labels"}) {
+      options.flatMapColumns.emplace(name, std::set<std::string>{});
+    }
+    options.skipConstantFlatMapInMapStreams = skipConstantInMapStreams;
+    options.flushPolicyFactory = []() {
+      return std::make_unique<LambdaFlushPolicy>(
+          [](const StripeProgress&) { return true; },
+          [](const StripeProgress&) { return true; });
+    };
+    Writer writer(
+        rowType,
+        std::make_unique<InMemoryWriteFile>(&sinkData_),
+        *rootPool_,
+        std::move(options));
+    for (const auto& batch : mapBatches) {
+      writer.write(batch);
+    }
+    writer.close();
+  };
+
+  // Looks up rows 0 and 2 of every stripe in one batch, so one reader reads
+  // all the stripes and leaves rows of each stripe unread when it moves on.
+  const std::vector<int32_t> lookupRows{0, 2};
+  std::vector<int64_t> lookupKeys;
+  for (int32_t stripe = 0; stripe < kNumStripes; ++stripe) {
+    for (const auto row : lookupRows) {
+      lookupKeys.push_back(stripe * 10 + row);
+    }
+  }
+  auto bound = vectorMaker_->rowVector(
+      {"key"}, {vectorMaker_->flatVector<int64_t>(lookupKeys)});
+  serializer::IndexBounds bounds;
+  bounds.indexColumns = {"key"};
+  bounds.set(
+      serializer::IndexBound{bound, /*inclusive=*/true},
+      serializer::IndexBound{bound, /*inclusive=*/true});
+
+  struct TestParam {
+    bool skipConstantInMapStreams;
+    bool flatMapAsStruct;
+
+    // Key readers reused by a later stripe instead of built anew.
+    int64_t numReusedKeyNodes;
+
+    std::string debugString() const {
+      return fmt::format(
+          "skipConstantInMapStreams {}, flatMapAsStruct {}, numReusedKeyNodes {}",
+          skipConstantInMapStreams,
+          flatMapAsStruct,
+          numReusedKeyNodes);
+    }
+  };
+
+  // Without skipping, the feature readers are reused 7 times and the score
+  // readers 6 times. Skipping builds anew the readers of the keys that move
+  // between 'a' and 'h' stripes, which leaves 4 and 4.
+  const std::vector<TestParam> testSettings{
+      {false, false, 13},
+      {false, true, 13},
+      {true, false, 8},
+      {true, true, 8},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    writeFile(testData.skipConstantInMapStreams);
+    const auto& outputType = testData.flatMapAsStruct ? structType : rowType;
+    const auto& expectedBatches =
+        testData.flatMapAsStruct ? structBatches : mapBatches;
+    auto scanSpec = createScanSpec(outputType, {});
+    if (testData.flatMapAsStruct) {
+      for (const auto* name : {"features", "scores", "labels"}) {
+        scanSpec->childByName(name)->setFlatMapAsStruct(true);
+      }
+    }
+
+    // Reads like createReader(), through an input that counts the streams
+    // enqueued again and the streams of earlier stripes still alive. The
+    // reader would read a file this small in one piece through another input
+    // instead.
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setDataIoStats(dataIoStats_);
+    readerOptions.setMetadataIoStats(metadataIoStats_);
+    readerOptions.setIndexIoStats(indexIoStats_);
+    readerOptions.setFileFormat(FileFormat::NIMBLE);
+    readerOptions.setLoadClusterIndex(true);
+    readerOptions.setFilePreloadThreshold(0);
+    io::ReaderOptions ioReaderOptions(leafPool_.get());
+    ioReaderOptions.setDataIoStats(dataIoStats_);
+    ioReaderOptions.setMetadataIoStats(metadataIoStats_);
+    const auto readerId = readerIdCounter_++;
+    auto input = std::make_unique<StreamCountingInput>(
+        std::make_shared<InMemoryReadFile>(std::string_view(sinkData_)),
+        MetricsLog::voidLog(),
+        StringIdLease(fileIds(), fmt::format("testFile_{}", readerId)),
+        scanTracker_,
+        StringIdLease(fileIds(), fmt::format("testGroup_{}", readerId)),
+        dataIoStats_,
+        /*ioStats=*/nullptr,
+        ioExecutor_.get(),
+        ioReaderOptions,
+        FileIoContext{.pool = &ioReaderOptions.memoryPool()});
+    const auto* countingInput = input.get();
+    auto reader = getReaderFactory(FileFormat::NIMBLE)
+                      ->createReader(std::move(input), readerOptions);
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setRequestedType(outputType);
+    rowReaderOpts.setScanSpec(std::move(scanSpec));
+    auto indexReader = reader->createIndexReader(rowReaderOpts);
+    ASSERT_NE(indexReader, nullptr);
+    indexReader->startLookup(bounds, {});
+
+    vector_size_t numRows{0};
+    while (indexReader->hasNext()) {
+      auto result = indexReader->next(1'000);
+      ASSERT_NE(result, nullptr);
+      for (vector_size_t row = 0; row < result->output->size(); ++row) {
+        const auto lookup = numRows + row;
+        const auto& expected = expectedBatches[lookup / lookupRows.size()];
+        const auto expectedRow = lookupRows[lookup % lookupRows.size()];
+        ASSERT_TRUE(
+            result->output->equalValueAt(expected.get(), row, expectedRow))
+            << "lookup " << lookup << ": " << result->output->toString(row)
+            << " vs " << expected->toString(expectedRow);
+      }
+      numRows += result->output->size();
+    }
+    EXPECT_EQ(numRows, lookupKeys.size());
+
+    const auto stats = indexReader->stats();
+    const auto it = stats.find(
+        std::string(SelectiveNimbleIndexReader::kNumReusedFlatMapKeyNodes));
+    ASSERT_NE(it, stats.end());
+    EXPECT_EQ(it->second.sum, testData.numReusedKeyNodes);
+
+    // A rebind that fails enqueues no stream, so the reader built instead
+    // enqueues each stream once.
+    EXPECT_EQ(countingInput->numRepeatedEnqueues(), 0);
+
+    // A key reader kept for a later stripe drops the streams of the stripe it
+    // read, for example the reader of features key 1 while stripe 1, which
+    // lacks the key, loads.
+    EXPECT_EQ(countingInput->maxStaleStreams(), 0);
+  }
+}
+
+// Reads a FlatMap column of each value type, so that each kind of column reader
+// reads the values. The next stripe rebinds the key readers whose readers
+// can rebind, as SelectiveColumnReader::rebindable() tells, and builds the
+// others anew.
+TEST_F(E2EIndexTestBase, indexLookupsReuseFlatMapKeyReadersByValueType) {
+  constexpr int32_t kNumStripes{3};
+  constexpr int32_t kRowsPerStripe{4};
+  constexpr int32_t kNumKeys{2};
+  struct TestParam {
+    TypePtr valueType;
+
+    // True if a later stripe rebinds the reader of the values.
+    bool rebindable;
+
+    std::string debugString() const {
+      return fmt::format(
+          "valueType {}, rebindable {}", valueType->toString(), rebindable);
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {BOOLEAN(), false},
+      {TINYINT(), false},
+      {SMALLINT(), true},
+      {INTEGER(), true},
+      {BIGINT(), true},
+      {REAL(), true},
+      {DOUBLE(), true},
+      {VARCHAR(), false},
+      {TIMESTAMP(), false},
+      {ARRAY(BIGINT()), true},
+      {ARRAY(ARRAY(DOUBLE())), true},
+      {ARRAY(VARCHAR()), false},
+      {MAP(INTEGER(), BIGINT()), false},
+      {ROW({"a", "b"}, BIGINT()), false},
+  };
+
+  // Arrays and maps have 2 entries each, so no stripe lacks the stream of
+  // their elements.
+  VectorFuzzer::Options fuzzerOptions;
+  fuzzerOptions.containerLength = 2;
+  fuzzerOptions.containerVariableLength = false;
+  fuzzerOptions.timestampPrecision =
+      VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;
+  VectorFuzzer fuzzer(fuzzerOptions, leafPool_.get(), /*seed=*/0);
+
+  // Looks up rows 0 and 2 of every stripe in one batch.
+  const std::vector<int32_t> lookupRows{0, 2};
+  std::vector<int64_t> lookupKeys;
+  for (int32_t stripe = 0; stripe < kNumStripes; ++stripe) {
+    for (const auto row : lookupRows) {
+      lookupKeys.push_back(stripe * 10 + row);
+    }
+  }
+  auto bound = vectorMaker_->rowVector(
+      {"key"}, {vectorMaker_->flatVector<int64_t>(lookupKeys)});
+  serializer::IndexBounds bounds;
+  bounds.indexColumns = {"key"};
+  bounds.set(
+      serializer::IndexBound{bound, /*inclusive=*/true},
+      serializer::IndexBound{bound, /*inclusive=*/true});
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto rowType = ROW({
+        {"key", BIGINT()},
+        {"values", MAP(INTEGER(), testData.valueType)},
+    });
+
+    // Every map has keys 1 and 2, and the value of key 2 in row 2 is null.
+    std::vector<RowVectorPtr> batches;
+    for (int32_t stripe = 0; stripe < kNumStripes; ++stripe) {
+      std::vector<int64_t> keys;
+      std::vector<vector_size_t> offsets;
+      std::vector<int32_t> mapKeys;
+      for (int32_t row = 0; row < kRowsPerStripe; ++row) {
+        keys.push_back(stripe * 10 + row);
+        offsets.push_back(row * kNumKeys);
+        for (int32_t key = 1; key <= kNumKeys; ++key) {
+          mapKeys.push_back(key);
+        }
+      }
+      auto values =
+          fuzzer.fuzzFlat(testData.valueType, kRowsPerStripe * kNumKeys);
+      values->setNull(2 * kNumKeys + 1, /*isNull=*/true);
+      batches.push_back(vectorMaker_->rowVector(
+          {"key", "values"},
+          {vectorMaker_->flatVector<int64_t>(keys),
+           vectorMaker_->mapVector(
+               offsets, vectorMaker_->flatVector<int32_t>(mapKeys), values)}));
+    }
+
+    // Writes each batch as one stripe.
+    sinkData_.clear();
+    WriterOptions options;
+    options.clusterIndexConfig =
+        ClusterIndexConfigBuilder{}
+            .withKeyColumns({"key"})
+            .withSortOrders({SortOrder{.ascending = true}})
+            .withEnforceKeyOrder(true)
+            .build();
+    options.flatMapColumns.emplace("values", std::set<std::string>{});
+    options.flushPolicyFactory = []() {
+      return std::make_unique<LambdaFlushPolicy>(
+          [](const StripeProgress&) { return true; },
+          [](const StripeProgress&) { return true; });
+    };
+    Writer writer(
+        rowType,
+        std::make_unique<InMemoryWriteFile>(&sinkData_),
+        *rootPool_,
+        std::move(options));
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+
+    auto reader = createReader();
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setRequestedType(rowType);
+    rowReaderOpts.setScanSpec(createScanSpec(rowType, {}));
+    auto indexReader = reader->createIndexReader(rowReaderOpts);
+    ASSERT_NE(indexReader, nullptr);
+    indexReader->startLookup(bounds, {});
+
+    vector_size_t numRows{0};
+    while (indexReader->hasNext()) {
+      auto result = indexReader->next(1'000);
+      ASSERT_NE(result, nullptr);
+      for (vector_size_t row = 0; row < result->output->size(); ++row) {
+        const auto lookup = numRows + row;
+        const auto& expected = batches[lookup / lookupRows.size()];
+        const auto expectedRow = lookupRows[lookup % lookupRows.size()];
+        ASSERT_TRUE(
+            result->output->equalValueAt(expected.get(), row, expectedRow))
+            << "lookup " << lookup << ": " << result->output->toString(row)
+            << " vs " << expected->toString(expectedRow);
+      }
+      numRows += result->output->size();
+    }
+    EXPECT_EQ(numRows, lookupKeys.size());
+
+    // The reader reports the stat only when it reuses a key reader.
+    const auto stats = indexReader->stats();
+    const auto it = stats.find(
+        std::string(SelectiveNimbleIndexReader::kNumReusedFlatMapKeyNodes));
+    if (!testData.rebindable) {
+      EXPECT_EQ(it, stats.end());
+      continue;
+    }
+    ASSERT_NE(it, stats.end());
+    EXPECT_EQ(it->second.sum, kNumKeys * (kNumStripes - 1));
+  }
+}
+
+TEST_F(E2EIndexTestBase, indexLookupsReuseFlatMapKeyReadersAfterNullMaps) {
+  auto rowType = ROW({{"key", BIGINT()}, {"scores", MAP(INTEGER(), REAL())}});
+
+  // Reads the map as a struct with one field per key.
+  auto structType = ROW({{"key", BIGINT()}, {"scores", ROW({"1"}, REAL())}});
+
+  // Writes two stripes of 4 rows. Every map has key 1, and row 2 of stripe 0
+  // has a null map.
+  sinkData_.clear();
+  WriterOptions options;
+  options.clusterIndexConfig =
+      ClusterIndexConfigBuilder{}
+          .withKeyColumns({"key"})
+          .withSortOrders({SortOrder{.ascending = true}})
+          .withEnforceKeyOrder(true)
+          .build();
+  options.flatMapColumns.emplace("scores", std::set<std::string>{});
+  options.flushPolicyFactory = []() {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return true; },
+        [](const StripeProgress&) { return true; });
+  };
+  Writer writer(
+      rowType,
+      std::make_unique<InMemoryWriteFile>(&sinkData_),
+      *rootPool_,
+      std::move(options));
+  writer.write(vectorMaker_->rowVector(
+      {"key", "scores"},
+      {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3}),
+       vectorMaker_->mapVector(
+           {0, 1, 2, 2},
+           vectorMaker_->flatVector<int32_t>({1, 1, 1}),
+           vectorMaker_->flatVector<float>({1.0f, 1.5f, 2.5f}),
+           /*nulls=*/{2})}));
+  writer.write(vectorMaker_->rowVector(
+      {"key", "scores"},
+      {vectorMaker_->flatVector<int64_t>({10, 11, 12, 13}),
+       vectorMaker_->mapVector(
+           {0, 1, 2, 3},
+           vectorMaker_->flatVector<int32_t>({1, 1, 1, 1}),
+           vectorMaker_->flatVector<float>({2.0f, 2.5f, 3.0f, 3.5f}))}));
+  writer.close();
+
+  // Looks up rows 0 and 2 of both stripes with an IS NOT NULL filter on the
+  // map. The filter drops row 2 of stripe 0 before the reader of key 1 reads
+  // it, so the reader counts the row as a parent null and still holds it when
+  // stripe 1 rebinds the reader.
+  auto bound = vectorMaker_->rowVector(
+      {"key"}, {vectorMaker_->flatVector<int64_t>({0, 2, 10, 12})});
+  serializer::IndexBounds bounds;
+  bounds.indexColumns = {"key"};
+  bounds.set(
+      serializer::IndexBound{bound, /*inclusive=*/true},
+      serializer::IndexBound{bound, /*inclusive=*/true});
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters.emplace("scores", std::make_unique<IsNotNull>());
+
+  const auto expectedKeys = vectorMaker_->flatVector<int64_t>({0, 10, 12});
+  const auto expectedValues =
+      vectorMaker_->flatVector<float>({1.0f, 2.0f, 3.0f});
+  const auto expectedMaps = vectorMaker_->rowVector(
+      {"key", "scores"},
+      {expectedKeys,
+       vectorMaker_->mapVector(
+           {0, 1, 2},
+           vectorMaker_->flatVector<int32_t>({1, 1, 1}),
+           expectedValues)});
+  const auto expectedStructs = vectorMaker_->rowVector(
+      {"key", "scores"},
+      {expectedKeys, vectorMaker_->rowVector({"1"}, {expectedValues})});
+
+  struct TestParam {
+    bool flatMapAsStruct;
+
+    std::string debugString() const {
+      return fmt::format("flatMapAsStruct {}", flatMapAsStruct);
+    }
+  };
+  const std::vector<TestParam> testSettings{{false}, {true}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto& outputType = testData.flatMapAsStruct ? structType : rowType;
+    const auto& expected =
+        testData.flatMapAsStruct ? expectedStructs : expectedMaps;
+    auto scanSpec = createScanSpec(outputType, filters);
+    if (testData.flatMapAsStruct) {
+      scanSpec->childByName("scores")->setFlatMapAsStruct(true);
+    }
+    auto reader = createReader();
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setRequestedType(outputType);
+    rowReaderOpts.setScanSpec(std::move(scanSpec));
+    auto indexReader = reader->createIndexReader(rowReaderOpts);
+    ASSERT_NE(indexReader, nullptr);
+    indexReader->startLookup(bounds, {});
+
+    vector_size_t numRows{0};
+    while (indexReader->hasNext()) {
+      auto result = indexReader->next(1'000);
+      ASSERT_NE(result, nullptr);
+      for (vector_size_t row = 0; row < result->output->size(); ++row) {
+        const auto expectedRow = numRows + row;
+        ASSERT_LT(expectedRow, expected->size());
+        ASSERT_TRUE(
+            result->output->equalValueAt(expected.get(), row, expectedRow))
+            << result->output->toString(row) << " vs "
+            << expected->toString(expectedRow);
+      }
+      numRows += result->output->size();
+    }
+    EXPECT_EQ(numRows, expected->size());
+
+    // The reader of key 1 is rebound to stripe 1.
+    const auto stats = indexReader->stats();
+    const auto it = stats.find(
+        std::string(SelectiveNimbleIndexReader::kNumReusedFlatMapKeyNodes));
+    ASSERT_NE(it, stats.end());
+    EXPECT_EQ(it->second.sum, 1);
+  }
 }
 
 // TODO: add schema revolution tests like column renaming to make sure selective

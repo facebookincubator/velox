@@ -20,6 +20,8 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
+#include "velox/dwio/nimble/selective/ChunkedDecoder.h"
+#include "velox/dwio/nimble/selective/NimbleData.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <gtest/gtest.h>
@@ -83,6 +85,16 @@ class NimbleDataTest : public ::testing::Test,
       const std::shared_ptr<common::ScanSpec>& scanSpec) {
     return makeReaders(
         input, test::createNimbleFile(*rootPool(), input), scanSpec);
+  }
+
+  // Returns a ReaderBase over 'file', for the tests that move a NimbleData
+  // between stripes through StripeStreams.
+  std::shared_ptr<ReaderBase> makeReaderBase(const std::string& file) {
+    return ReaderBase::create(
+        std::make_unique<dwio::common::BufferedInput>(
+            std::make_shared<InMemoryReadFile>(file),
+            FileIoContext{.pool = pool()}),
+        dwio::common::ReaderOptions(pool()));
   }
 
   void validate(
@@ -207,6 +219,140 @@ TEST_F(NimbleDataTest, nestedNulls) {
   scanSpec->addAllChildFields(*input->type());
   auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 9);
+}
+
+// ----- NimbleData rebind tests -----
+
+// Reads the nulls of a row column through one NimbleData across stripes. A
+// stripe without null rows has no nulls stream, so rebindNullsDecoder()
+// rebinds, drops or makes the nulls decoder, as a NimbleData made for each
+// stripe would.
+TEST_F(NimbleDataTest, rebindNullsDecoder) {
+  constexpr vector_size_t kRowsPerStripe{10};
+
+  // Whether each stripe has null rows. From one stripe to the next, the nulls
+  // stream stays, goes, stays absent and comes back.
+  const std::vector<bool> stripeHasNulls{true, true, false, false, true};
+  std::vector<VectorPtr> batches;
+  for (const bool hasNulls : stripeHasNulls) {
+    auto column =
+        makeRowVector({makeFlatIdentityVector<int32_t>(kRowsPerStripe)});
+    if (hasNulls) {
+      for (vector_size_t row = 0; row < kRowsPerStripe; row += 3) {
+        column->setNull(row, /*isNull=*/true);
+      }
+    }
+    batches.emplace_back(makeRowVector({column}));
+  }
+  const auto file = test::createNimbleFile(*rootPool(), batches);
+
+  struct TestParam {
+    // True if the NimbleData is unbound before each move to the next stripe,
+    // as the readers kept for a later stripe are.
+    bool unbind;
+
+    std::string debugString() const {
+      return fmt::format("unbind {}", unbind);
+    }
+  };
+  const std::vector<TestParam> testSettings{{false}, {true}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const auto readerBase = makeReaderBase(file);
+    ASSERT_EQ(readerBase->tablet().stripeCount(), stripeHasNulls.size());
+    const auto& rowType = readerBase->nimbleSchema()->asRow().childAt(0);
+    const auto nullsStream =
+        static_cast<int>(rowType->asRow().nullsDescriptor().offset());
+    const EncodingFactory encodingFactory;
+    StripeStreams streams(readerBase);
+    streams.setStripe(0);
+    NimbleData nimbleData(
+        rowType, streams, *pool(), /*inMapDecoder=*/nullptr, encodingFactory);
+    EXPECT_EQ(&nimbleData.streams(), &streams);
+    const auto numStripes = static_cast<int32_t>(stripeHasNulls.size());
+    for (int32_t stripe = 0; stripe < numStripes; ++stripe) {
+      SCOPED_TRACE(fmt::format("stripe {}", stripe));
+      if (stripe > 0) {
+        if (testData.unbind) {
+          nimbleData.unbindNullsDecoder();
+        }
+        streams.setStripe(stripe);
+        nimbleData.rebindNullsDecoder();
+      }
+      ASSERT_EQ(streams.hasStream(nullsStream), stripeHasNulls[stripe]);
+      ASSERT_EQ(nimbleData.hasNulls(), stripeHasNulls[stripe]);
+      streams.load();
+      BufferPtr nulls;
+      nimbleData.readNulls(
+          kRowsPerStripe,
+          /*incomingNulls=*/nullptr,
+          nulls,
+          /*nullsOnly=*/false);
+      if (!stripeHasNulls[stripe]) {
+        EXPECT_EQ(nulls, nullptr);
+        continue;
+      }
+      ASSERT_NE(nulls, nullptr);
+      for (vector_size_t row = 0; row < kRowsPerStripe; ++row) {
+        EXPECT_EQ(bits::isBitNull(nulls->as<uint64_t>(), row), row % 3 == 0)
+            << "row " << row;
+      }
+    }
+  }
+}
+
+// Reads the elements of an array column through one scalar decoder across
+// stripes. A stripe whose arrays are all empty has no elements stream, so
+// rebindScalarDecoder() fails there, and the next stripe rebinds the decoder.
+TEST_F(NimbleDataTest, rebindScalarDecoder) {
+  constexpr vector_size_t kRowsPerStripe{4};
+  constexpr vector_size_t kArraySize{2};
+  constexpr int32_t kNumValues{kRowsPerStripe * kArraySize};
+  const std::vector<bool> stripeHasElements{true, false, true};
+  const auto numStripes = static_cast<int32_t>(stripeHasElements.size());
+  std::vector<VectorPtr> batches;
+  for (int32_t stripe = 0; stripe < numStripes; ++stripe) {
+    const vector_size_t arraySize = stripeHasElements[stripe] ? kArraySize : 0;
+    batches.emplace_back(makeRowVector({makeArrayVector<int32_t>(
+        kRowsPerStripe,
+        [&](auto /*row*/) { return arraySize; },
+        [&](auto index) { return stripe * 100 + index; })}));
+  }
+  const auto readerBase =
+      makeReaderBase(test::createNimbleFile(*rootPool(), batches));
+  ASSERT_EQ(readerBase->tablet().stripeCount(), stripeHasElements.size());
+  const auto& elementsType =
+      readerBase->nimbleSchema()->asRow().childAt(0)->asArray().elements();
+  const auto elementsStream =
+      static_cast<int>(elementsType->asScalar().scalarDescriptor().offset());
+  const EncodingFactory encodingFactory;
+  StripeStreams streams(readerBase);
+  streams.setStripe(0);
+  NimbleData nimbleData(
+      elementsType,
+      streams,
+      *pool(),
+      /*inMapDecoder=*/nullptr,
+      encodingFactory);
+  auto decoder = nimbleData.makeScalarDecoder();
+  for (int32_t stripe = 0; stripe < numStripes; ++stripe) {
+    SCOPED_TRACE(fmt::format("stripe {}", stripe));
+    if (stripe > 0) {
+      streams.setStripe(stripe);
+      ASSERT_EQ(
+          nimbleData.rebindScalarDecoder(decoder), stripeHasElements[stripe]);
+    }
+    ASSERT_EQ(streams.hasStream(elementsStream), stripeHasElements[stripe]);
+    if (!stripeHasElements[stripe]) {
+      continue;
+    }
+    streams.load();
+    std::vector<int32_t> values(kNumValues);
+    decoder.nextIndices(values.data(), kNumValues, /*incomingNulls=*/nullptr);
+    for (int32_t i = 0; i < kNumValues; ++i) {
+      EXPECT_EQ(values[i], stripe * 100 + i) << "value " << i;
+    }
+  }
 }
 
 // ----- TrackedColumnLoader tests (exercised through lazy-loaded struct

@@ -47,6 +47,14 @@ class ListColumnReader : public velox::dwio::common::SelectiveListColumnReader {
 
   bool estimateMaterializedSize(size_t& byteSize, size_t& rowCount)
       const override;
+
+  bool rebind(velox::dwio::common::FormatParams& params) override;
+
+  bool rebindable() const override {
+    return child_ == nullptr || child_->rebindable();
+  }
+
+  void unbind() override;
 };
 
 class MapColumnReader : public velox::dwio::common::SelectiveMapColumnReader {

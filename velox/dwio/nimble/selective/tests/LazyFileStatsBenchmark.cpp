@@ -199,7 +199,7 @@ class LazyFileStatsBenchmark : public velox::test::VectorTestBase {
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
                 std::make_unique<dwio::common::BufferedInput>(
-                    readFile, *pool()),
+                    readFile, FileIoContext{.pool = pool()}),
                 readerOptions);
 
     const auto filterNode = reader->typeWithId()->childByName("bigint_0")->id();
