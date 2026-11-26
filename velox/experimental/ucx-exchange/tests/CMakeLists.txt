@@ -24,6 +24,7 @@ add_executable(
   UcxExchangeTest.cpp
   UcxExchangeTaskTest.cpp
   UcxProtocolVersionTest.cpp
+  UcxStreamHoldTest.cpp
   UcxExchangeTestBase.cpp
   Main.cpp
   UcxTestHelpers.cpp

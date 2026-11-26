@@ -23,6 +23,7 @@
 #include <folly/Uri.h>
 #include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Future.h>
+#include <rmm/cuda_stream.hpp>
 #include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
@@ -33,6 +34,17 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::ucx_exchange {
 
 namespace {
+// Returns the stream all remote receives allocate on. Only the Communicator
+// thread uses it, and no operator ever gets it. It is non-blocking, like the
+// cuDF pool streams: a blocking stream would also wait for all work on the
+// legacy default stream. Leaked on purpose: destroying a stream at static
+// destruction can run after the CUDA context is gone.
+cuda::stream_ref receiveStream() {
+  static auto* stream =
+      new rmm::cuda_stream(rmm::cuda_stream::flags::non_blocking);
+  return *stream;
+}
+
 const folly::F14FastMap<UcxExchangeSource::ReceiverState, std::string_view>&
 receiverStateNames() {
   static const folly::F14FastMap<
@@ -642,10 +654,10 @@ void UcxExchangeSource::onMetadata(
     VLOG(3) << toString()
             << " Datasize bytes == " << ptr->metadata.dataSizeBytes;
 
-    // REMOTE EXCHANGE PATH: Allocate buffer and receive via UCXX
-    // Get a stream from the global stream pool
-    auto stream =
-        facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
+    // REMOTE EXCHANGE PATH: Allocate buffer and receive via UCXX.
+    // The receive stream is never handed downstream, so the sync below waits
+    // only for the exchange's own allocations, not for operator kernels.
+    auto stream = receiveStream();
     // Store the stream in the DataAndMetadata struct so it can be used later
     // in onData() when creating the PackedTableWithStream.
     ptr->stream = stream;
@@ -908,10 +920,9 @@ void UcxExchangeSource::onIntraNodeData(
   auto packedTable = std::make_unique<cudf::packed_table>(
       cudf::packed_table{tableView, std::move(packedCols)});
 
-  // Get a stream from the pool so downstream cuDF operations on this data
-  // run on a dedicated stream, not the default stream. The producer already
-  // synchronized before enqueuing, so the GPU data is ready. This matches
-  // the inter-node (UCX) receive path which also allocates a pool stream.
+  // The stream only tags the table: UcxExchange binds it to a stream of the
+  // consumer's driver thread before it goes downstream. The producer already
+  // synchronized before enqueuing, so the GPU data is ready.
   auto stream =
       facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
   auto tableWithStream = std::make_unique<PackedTableWithStream>(

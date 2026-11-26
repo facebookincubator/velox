@@ -31,8 +31,8 @@
 namespace facebook::velox::ucx_exchange {
 
 /// Struct that bundles a packed_table with the CUDA stream that was used
-/// to allocate its memory. This allows the receiver to reuse the same stream
-/// for subsequent operations on the data.
+/// to allocate its memory. UcxExchange hands the table downstream on a stream
+/// of its own, so that operator kernels never land on the receive stream.
 struct PackedTableWithStream {
   std::unique_ptr<cudf::packed_table> packedTable;
   cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
