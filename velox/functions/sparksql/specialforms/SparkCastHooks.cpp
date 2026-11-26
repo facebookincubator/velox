@@ -57,9 +57,7 @@ Expected<Timestamp> SparkCastHooks::castStringToTimestamp(
     const StringView& view,
     bool adjustTimezone) const {
   const auto* sessionTimezone =
-      adjustTimezone && !config_.sessionTimezone().empty()
-      ? tz::locateZone(config_.sessionTimezone())
-      : nullptr;
+      adjustTimezone ? timestampToStringOptions_.timeZone : nullptr;
   auto conversionResult =
       parseSparkTimestamp(view, sessionTimezone, adjustTimezone);
   if (conversionResult.hasError()) {

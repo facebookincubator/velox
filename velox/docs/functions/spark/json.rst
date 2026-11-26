@@ -46,6 +46,9 @@ JSON Functions
     use the current date in the explicit time zone, or in the session time zone
     when no time zone is specified. Numeric offsets follow the same rule:
     ``"10:20:30+01:00"`` uses the current date at UTC+01:00.
+    For time-only forms beginning with ``T``, ``T`` must be the first character:
+    ``" T10:20:30"`` is invalid. Leading whitespace remains accepted for
+    unprefixed time-only values such as ``" 10:20:30"``.
 
     TIMESTAMP_UTC strings require a date component and must not contain a time
     zone. Time-only strings and integer values are rejected for this type.
@@ -66,6 +69,7 @@ JSON Functions
         SELECT from_json('{"a":1625134830}', 'a TIMESTAMP'); -- {'a'=2021-07-01 10:20:30}
         SELECT from_json('{"a":"1970-01-01T01"}', 'a TIMESTAMP'); -- {'a'=1970-01-01 01:00:00}
         SELECT from_json('{"a":"10:20:30"}', 'a TIMESTAMP'); -- Current date at 10:20:30 in the session time zone.
+        SELECT from_json('{"a":" T10:20:30"}', 'a TIMESTAMP'); -- {'a'=NULL}
         SELECT from_json('{"a":"2016-12-31T23:59:60Z"}', 'a TIMESTAMP'); -- {'a'=NULL}
         SELECT from_json('{"a":"1970-01-01T00:00:00 utc"}', 'a TIMESTAMP'); -- {'a'=NULL}
         SELECT from_json('["name", "age", "id"]', 'ARRAY<STRING>'); -- ['name', 'age', 'id']

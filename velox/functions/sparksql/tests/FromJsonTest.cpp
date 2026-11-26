@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/json.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/JsonTestUtil.h"
-#include "velox/type/TimestampConversion.h"
+#include "velox/functions/sparksql/tests/TimestampTestUtil.h"
 
 using namespace facebook::velox::test;
 
@@ -1426,34 +1428,28 @@ TEST_F(FromJsonTest, timestampStringCompatibility) {
               TIMESTAMP_UTC())}));
 
   setQueryTimeZone("America/Los_Angeles");
-  const auto checkTimeOnly = [&](const std::string& json,
-                                 const std::string& effectiveZone,
-                                 int64_t secondsOfDay) {
-    const auto* zone = tz::locateZone(effectiveZone);
-    const auto before = util::toDate(Timestamp::now(), zone);
-    const auto result = evaluate(
-        createFromJson(ROW({"a"}, {TIMESTAMP()})),
-        makeRowVector({makeFlatVector<std::string>({json})}));
-    const auto after = util::toDate(Timestamp::now(), zone);
-    ASSERT_FALSE(result->isNullAt(0));
-    DecodedVector decoded(*result->as<RowVector>()->childAt(0));
-    ASSERT_FALSE(decoded.isNullAt(0));
-    const auto actual = decoded.valueAt<Timestamp>(0);
-    const auto expected = [&](int32_t day) {
-      Timestamp timestamp(int64_t{day} * 86'400 + secondsOfDay, 0);
-      timestamp.toGMT(*zone);
-      return timestamp;
-    };
-    // Permit evaluation to cross midnight in the effective timezone.
-    EXPECT_TRUE(actual == expected(before) || actual == expected(after))
-        << actual.toString();
-  };
-  checkTimeOnly(R"({"a":"10:20:30"})", "America/Los_Angeles", 37'230);
-  checkTimeOnly(R"({"a":"T01"})", "America/Los_Angeles", 3'600);
-  checkTimeOnly(R"({"a":"10:20"})", "America/Los_Angeles", 37'200);
-  checkTimeOnly(R"({"a":"10:20:30 Asia/Tokyo"})", "Asia/Tokyo", 37'230);
-  checkTimeOnly(R"({"a":"10:20:30+14:00"})", "+14:00", 37'230);
-  checkTimeOnly(R"({"a":"10:20:30-12:00"})", "-12:00", 37'230);
+  for (const auto& testCase : kTimeOnlyTimestampTestCases) {
+    assertTimeOnlyTimestamp(testCase, [&] {
+      const auto json = "{\"a\":" + folly::toJson(testCase.input) + "}";
+      const auto result = evaluate(
+          createFromJson(ROW({"a"}, {TIMESTAMP()})),
+          makeRowVector({makeFlatVector<std::string>({json})}));
+      EXPECT_FALSE(result->isNullAt(0));
+      return result->as<RowVector>()->childAt(0);
+    });
+  }
+}
+
+TEST_F(FromJsonTest, timestampTimeOnlyWhitespace) {
+  setQueryTimeZone("America/Los_Angeles");
+  std::vector<std::string> input;
+  for (const auto& value : kInvalidTimeOnlyTimestampInputs) {
+    input.push_back("{\"a\":" + folly::toJson(value) + "}");
+  }
+  testFromJson(
+      makeFlatVector<std::string>(input),
+      makeNamedRowVector(
+          "a", makeNullConstant(TypeKind::TIMESTAMP, input.size())));
 }
 
 TEST_F(FromJsonTest, timestampTimeZoneCaseSensitivity) {

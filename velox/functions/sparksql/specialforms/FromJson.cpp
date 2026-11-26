@@ -1500,15 +1500,9 @@ struct ExtractJsonTypeImpl {
       case simdjson::ondemand::json_type::string: {
         std::string_view s;
         SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
-        StringView trimmed;
-        stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
-            trimmed, StringView(s));
-        if (trimmed.size() == 0) {
-          return simdjson::INCORRECT_TYPE;
-        }
-        std::string_view str(trimmed.data(), trimmed.size());
-        auto parsed =
-            parseSparkTimestamp(trimmed, sessionTimeZone, !timestampUtc);
+        const auto str = s;
+        auto parsed = parseSparkTimestamp(
+            StringView(str), sessionTimeZone, !timestampUtc);
         if (!timestampUtc && parsed.hasError() &&
             stringImpl::stringPosition</*isAscii=*/true>(str, kGMT, 1) > 0) {
           // Try again after cleaning up the legacy timestamp string by

@@ -22,8 +22,8 @@
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
+#include "velox/functions/sparksql/tests/TimestampTestUtil.h"
 #include "velox/parse/TypeResolver.h"
-#include "velox/type/TimestampConversion.h"
 
 using namespace facebook::velox;
 using facebook::velox::functions::sparksql::SparkQueryConfig;
@@ -2140,31 +2140,31 @@ TEST_F(SparkCastExprTest, stringToTimestampParsingCompatibility) {
       Timestamp(28'800, 0),
       Timestamp(28'800, 0),
   });
-  const std::vector<std::string> invalid = {
-      "1970-01-01T01Z",
-      "1970-01-01T01+01:00",
-      "1970-01-01T10:20Z",
-      "1970-01-01T10:20 UTC",
-      "T01Z",
-      "10:20Z",
-      "10:20:300",
-      "2016-12-31T23:59:60Z",
-      "1970-01-01T00:00:000Z",
-      "1970-01-01T00:00:00 utc",
-      "1970-01-01T00:00:00 Utc",
-      "1970-01-01T00:00:00z",
-      "1970-01-01T00:00:00 gmt",
-      "1970-01-01T00:00:00 ut",
-      "1970-01-01T00:00:00 utc+01:00",
-      "1970-01-01T00:00:00 gmt+01:00",
-      "1970-01-01T00:00:00 GmT+01:00",
-      "1970-01-01T00:00:00 ut+01:00",
-      "1970-01-01T00:00:00 etc/gmt+1",
-      "1970-01-01T00:00:00 Etc/gmt+1",
-      "1970-01-01T00:00:00 etc/utc",
-      "1970-01-01T00:00:00 Etc/Utc",
-      "1970-01-01T00:00:00 america/los_angeles",
-      "1970-01-01T00:00:00 us/pacific",
+  const std::vector<std::pair<std::string, std::string>> invalid = {
+      {"1970-01-01T01Z", "01Z"},
+      {"1970-01-01T01+01:00", "01+01:00"},
+      {"1970-01-01T10:20Z", "10:20Z"},
+      {"1970-01-01T10:20 UTC", "10:20"},
+      {"T01Z", "01Z"},
+      {"10:20Z", "10:20Z"},
+      {"10:20:300", "10:20:300"},
+      {"2016-12-31T23:59:60Z", "23:59:60Z"},
+      {"1970-01-01T00:00:000Z", "00:00:000Z"},
+      {"1970-01-01T00:00:00 utc", "utc"},
+      {"1970-01-01T00:00:00 Utc", "Utc"},
+      {"1970-01-01T00:00:00z", "z"},
+      {"1970-01-01T00:00:00 gmt", "gmt"},
+      {"1970-01-01T00:00:00 ut", "ut"},
+      {"1970-01-01T00:00:00 utc+01:00", "utc+01:00"},
+      {"1970-01-01T00:00:00 gmt+01:00", "gmt+01:00"},
+      {"1970-01-01T00:00:00 GmT+01:00", "GmT+01:00"},
+      {"1970-01-01T00:00:00 ut+01:00", "ut+01:00"},
+      {"1970-01-01T00:00:00 etc/gmt+1", "etc/gmt+1"},
+      {"1970-01-01T00:00:00 Etc/gmt+1", "Etc/gmt+1"},
+      {"1970-01-01T00:00:00 etc/utc", "etc/utc"},
+      {"1970-01-01T00:00:00 Etc/Utc", "Etc/Utc"},
+      {"1970-01-01T00:00:00 america/los_angeles", "america/los_angeles"},
+      {"1970-01-01T00:00:00 us/pacific", "us/pacific"},
   };
   for (const auto ansiEnabled : {false, true}) {
     SCOPED_TRACE(ansiEnabled);
@@ -2178,13 +2178,15 @@ TEST_F(SparkCastExprTest, stringToTimestampParsingCompatibility) {
       assertEqualVectors(
           expected, evaluateCast(VARCHAR(), TIMESTAMP(), valid, isTryCast));
     }
-    for (const auto& value : invalid) {
+    for (const auto& [value, invalidTimeZone] : invalid) {
       SCOPED_TRACE(value);
       const auto input = makeRowVector({makeFlatVector<std::string>({value})});
       EXPECT_TRUE(
           evaluateCast(VARCHAR(), TIMESTAMP(), input, true)->isNullAt(0));
       if (ansiEnabled) {
-        VELOX_ASSERT_THROW(evaluateCast(VARCHAR(), TIMESTAMP(), input), "");
+        VELOX_ASSERT_THROW(
+            evaluateCast(VARCHAR(), TIMESTAMP(), input),
+            "Unknown timezone value: \"" + invalidTimeZone + "\"");
       } else {
         EXPECT_TRUE(evaluateCast(VARCHAR(), TIMESTAMP(), input)->isNullAt(0));
       }
@@ -2193,19 +2195,7 @@ TEST_F(SparkCastExprTest, stringToTimestampParsingCompatibility) {
 }
 
 TEST_F(SparkCastExprTest, stringToTimestampTimeOnly) {
-  struct TestCase {
-    std::string input;
-    std::string effectiveZone;
-    int64_t secondsOfDay;
-  };
-  const std::vector<TestCase> cases = {
-      {"10:20:30", "America/Los_Angeles", 37'230},
-      {"T01", "America/Los_Angeles", 3'600},
-      {"10:20", "America/Los_Angeles", 37'200},
-      {"10:20:30 Asia/Tokyo", "Asia/Tokyo", 37'230},
-      {"10:20:30+14:00", "+14:00", 37'230},
-      {"10:20:30-12:00", "-12:00", 37'230},
-  };
+  using namespace functions::sparksql::test;
   for (const auto ansiEnabled : {false, true}) {
     queryCtx_->testingOverrideConfigUnsafe({
         {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
@@ -2213,35 +2203,50 @@ TEST_F(SparkCastExprTest, stringToTimestampTimeOnly) {
         {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
         {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
     });
-    for (const auto& testCase : cases) {
+    for (const auto& testCase : kTimeOnlyTimestampTestCases) {
       SCOPED_TRACE(testCase.input);
       const auto input =
           makeRowVector({makeFlatVector<std::string>({testCase.input})});
-      const auto* zone = tz::locateZone(testCase.effectiveZone);
       for (const auto isTryCast : {false, true}) {
-        const auto before = util::toDate(Timestamp::now(), zone);
-        const auto result =
-            evaluateCast(VARCHAR(), TIMESTAMP(), input, isTryCast);
-        const auto after = util::toDate(Timestamp::now(), zone);
-        DecodedVector decoded(*result);
-        ASSERT_FALSE(decoded.isNullAt(0));
-        const auto actual = decoded.valueAt<Timestamp>(0);
-        const auto expected = [&](int32_t day) {
-          Timestamp timestamp(int64_t{day} * 86'400 + testCase.secondsOfDay, 0);
-          timestamp.toGMT(*zone);
-          return timestamp;
-        };
-        // Permit evaluation to cross midnight in the effective timezone.
-        EXPECT_TRUE(actual == expected(before) || actual == expected(after))
-            << actual.toString();
+        assertTimeOnlyTimestamp(testCase, [&] {
+          return evaluateCast(VARCHAR(), TIMESTAMP(), input, isTryCast);
+        });
       }
       EXPECT_TRUE(
           evaluateCast(VARCHAR(), TIMESTAMP_UTC(), input, true)->isNullAt(0));
       if (ansiEnabled) {
-        VELOX_ASSERT_THROW(evaluateCast(VARCHAR(), TIMESTAMP_UTC(), input), "");
+        VELOX_ASSERT_THROW(
+            evaluateCast(VARCHAR(), TIMESTAMP_UTC(), input),
+            "Unable to parse timestamp value");
       } else {
         EXPECT_TRUE(
             evaluateCast(VARCHAR(), TIMESTAMP_UTC(), input)->isNullAt(0));
+      }
+    }
+  }
+}
+
+TEST_F(SparkCastExprTest, stringToTimestampTimeOnlyWhitespace) {
+  using namespace functions::sparksql::test;
+  for (const auto ansiEnabled : {false, true}) {
+    SCOPED_TRACE(ansiEnabled);
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+         std::to_string(ansiEnabled)},
+        {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+        {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+    });
+    for (const auto& value : kInvalidTimeOnlyTimestampInputs) {
+      SCOPED_TRACE(value);
+      const auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      EXPECT_TRUE(
+          evaluateCast(VARCHAR(), TIMESTAMP(), input, true)->isNullAt(0));
+      if (ansiEnabled) {
+        VELOX_ASSERT_THROW(
+            evaluateCast(VARCHAR(), TIMESTAMP(), input),
+            "Unable to parse timestamp value");
+      } else {
+        EXPECT_TRUE(evaluateCast(VARCHAR(), TIMESTAMP(), input)->isNullAt(0));
       }
     }
   }

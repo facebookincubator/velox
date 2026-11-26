@@ -17,16 +17,24 @@
 
 #include <algorithm>
 
+#include "velox/functions/lib/string/StringImpl.h"
+
 namespace facebook::velox::functions::sparksql {
 
 Expected<util::ParsedTimestampWithTimeZone> parseSparkTimestamp(
     const StringView& input,
     const tz::TimeZone* sessionTimeZone,
     bool allowTimeOnly) {
-  std::string_view str(input.data(), input.size());
+  StringView trimmed;
+  stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
+      trimmed, input);
+  if (trimmed.empty()) {
+    return folly::makeUnexpected(Status::UserError("Empty string"));
+  }
+  std::string_view str(trimmed.data(), trimmed.size());
   const auto colon = str.find(':');
-  const bool timeOnly = allowTimeOnly && !str.empty() &&
-      (str.front() == 'T' ||
+  const bool timeOnly = allowTimeOnly &&
+      ((str.front() == 'T' && input.data()[0] == 'T') ||
        (colon >= 1 && colon <= 2 &&
         std::all_of(str.begin(), str.begin() + colon, [](char c) {
           return c >= '0' && c <= '9';

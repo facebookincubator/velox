@@ -71,8 +71,8 @@ class SparkCastHooks : public exec::CastHooks {
   Expected<double> castStringToDouble(const StringView& data) const override;
 
   /// When casting from string to integral, floating-point, decimal, date, and
-  /// timestamp types, Spark hook trims all leading and trailing UTF8
-  /// whitespaces before cast.
+  /// time types, Spark hook trims all leading and trailing UTF8 whitespaces
+  /// before cast. Timestamp parsing handles its own whitespace rules.
   StringView removeWhiteSpaces(const StringView& view) const override;
 
   // Supports Spark boolean to timestamp cast.

@@ -695,7 +695,7 @@ Casting from strings to timestamp uses Spark-compatible timestamp parsing.
 The parser accepts date-only values, both ``' '`` and ``'T'`` as date-time
 separators, fractional seconds, and leading or trailing spaces. Both ``' '``
 and ``'T'`` date-time separators must be followed immediately by a digit.
-Outer whitespace is trimmed before the parser runs, so a bare trailing
+For dated values, outer whitespace is trimmed, so a bare trailing
 separator such as ``"2015-03-18 "`` is handled as a date-only value.
 
 Hour-only values such as ``"1970-01-01T01"`` and minute-only values such as
@@ -714,6 +714,9 @@ Time-only strings such as ``"10:20:30"``, ``"T10:20:30"``, and ``"T01"``
 use the current date in the explicit timezone, or in the session timezone
 when no timezone is specified. This also applies to explicit numeric offsets:
 ``"10:20:30+01:00"`` uses the current date at UTC+01:00.
+For time-only forms beginning with ``T``, ``T`` must be the first character:
+``" T10:20:30"`` is invalid. Leading whitespace remains accepted for
+unprefixed time-only values such as ``" 10:20:30"``.
 The Spark ``from_json`` function uses the same timestamp parsing rules.
 
 Casting from invalid strings returns NULL when ANSI mode is disabled and throws
@@ -743,6 +746,7 @@ Invalid examples
   SELECT cast('2015-03-18 Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('1970-01-01T01Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('1970-01-01 10:20Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
+  SELECT cast(' T10:20:30' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('2016-12-31T23:59:60Z' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('1970-01-01 00:00:00 utc' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('1970-01-01 00:00:00 gmt+01:00' as timestamp); -- NULL (ANSI OFF) / ERROR (ANSI ON)

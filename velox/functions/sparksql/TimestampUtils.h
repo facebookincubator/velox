@@ -20,7 +20,9 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Parses a trimmed Spark timestamp string, retaining any explicit timezone.
+/// Parses a Spark timestamp string, retaining any explicit timezone.
+/// Trims whitespace, but requires a time-only 'T' prefix to be the first
+/// character of the original input.
 /// When allowed, time-only input uses today's date in the explicit timezone,
 /// or in the session timezone if none is specified.
 Expected<util::ParsedTimestampWithTimeZone> parseSparkTimestamp(
