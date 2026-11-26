@@ -198,11 +198,13 @@ inline MutatedDecodedLengths mutateDecodedLengths(
   NIMBLE_UNREACHABLE("Unknown decoded lengths mutation.");
 }
 
-// Rebuilds an FSST encoding with other decoded lengths, and keeps everything
-// else, including the bytes that precede the symbol table.
-inline std::string replaceDecodedLengths(
+// Rebuilds an FSST encoding with other compressed lengths or decoded lengths,
+// and keeps everything else, including the bytes that precede the symbol
+// table.
+inline std::string replaceLengths(
     std::string_view encoded,
-    std::string_view decodedLengths,
+    std::optional<std::string_view> compressedLengths,
+    std::optional<std::string_view> decodedLengths,
     bool useVarintRowCount) {
   const auto prefixSize =
       EncodingPrefix::prefixSize(encoded, useVarintRowCount);
@@ -218,8 +220,8 @@ inline std::string replaceDecodedLengths(
   // The prefix and the compression type, which holds the layout flag.
   std::string rebuilt{encoded.substr(0, prefixSize + 1)};
   appendSection(rebuilt, header.symbolTable);
-  appendSection(rebuilt, header.lengths);
-  appendSection(rebuilt, decodedLengths);
+  appendSection(rebuilt, compressedLengths.value_or(header.lengths));
+  appendSection(rebuilt, decodedLengths.value_or(header.decodedLengths));
   rebuilt.append(header.blob);
   return rebuilt;
 }
@@ -293,8 +295,11 @@ inline void fuzzFsstDecodedLengths(
           << " rows=" << numRows << " mutation=" << static_cast<int>(mutation));
       const auto mutated =
           detail::mutateDecodedLengths(pool, rng, mutation, lengths, options);
-      const auto corrupted = detail::replaceDecodedLengths(
-          encoded, mutated.encoded, options.useVarintRowCount);
+      const auto corrupted = detail::replaceLengths(
+          encoded,
+          /*compressedLengths=*/std::nullopt,
+          mutated.encoded,
+          options.useVarintRowCount);
       const auto actual = read(corrupted, numRows);
 
       bool mustReject = !mutated.wellFormed;
@@ -326,6 +331,89 @@ inline void fuzzFsstDecodedLengths(
         joined.append((*actual)[row]);
       }
       EXPECT_EQ(joined, originalBytes);
+    }
+  }
+}
+
+/// Fuzzes the compressed lengths of FSST encodings the way
+/// fuzzFsstDecodedLengths fuzzes the decoded lengths: each iteration replaces
+/// the compressed lengths of an encoding and reads every row with 'read'.
+///
+/// A read must throw a NimbleException when the replacement is not non-null
+/// Uint32 values for each row, and when the lengths do not add up to the size
+/// of the blob. A read that does not throw returns the original strings: the
+/// decoded lengths cut the same decoded bytes, whatever the compressed lengths
+/// split. Unchanged lengths must read the original strings.
+inline void fuzzFsstCompressedLengths(
+    velox::memory::MemoryPool& pool,
+    uint32_t seed,
+    uint32_t iterations,
+    uint32_t maxRows,
+    const Encoding::Options& options,
+    const FsstDecodedLengthsReader& read) {
+  using detail::DecodedLengthsMutation;
+  if (seed == 0) {
+    seed = folly::Random::rand32();
+  }
+  LOG(INFO) << "FSST compressed lengths fuzzer seed: " << seed
+            << " iterations: " << iterations << " maxRows: " << maxRows;
+  std::mt19937 rng(seed);
+  for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+    Buffer dataBuffer{pool};
+    const uint32_t numRows = 1 + rng() % maxRows;
+    const auto data = makeFsstData(pool, rng, numRows, &dataBuffer, rng() % 2);
+    Buffer encodeBuffer{pool};
+    const std::string encoded{Encoder<FsstEncoding>::encode(
+        encodeBuffer, data, CompressionType::Uncompressed, options)};
+    ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+
+    std::vector<std::string> original;
+    for (const auto value : data) {
+      original.emplace_back(value);
+    }
+    const auto header = FsstEncoding::parseHeader(
+        encoded,
+        EncodingPrefix::prefixSize(encoded, options.useVarintRowCount));
+    auto compressed = EncodingFactory().create(
+        pool,
+        header.lengths,
+        [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+        options);
+    std::vector<uint32_t> compressedLengths(numRows);
+    compressed->materialize(numRows, compressedLengths.data());
+    const uint64_t blobSize = std::accumulate(
+        compressedLengths.begin(), compressedLengths.end(), uint64_t{0});
+
+    for (const auto mutation : detail::kDecodedLengthsMutations) {
+      SCOPED_TRACE(
+          ::testing::Message()
+          << "seed=" << seed << " iteration=" << iteration
+          << " rows=" << numRows << " mutation=" << static_cast<int>(mutation));
+      const auto mutated = detail::mutateDecodedLengths(
+          pool, rng, mutation, compressedLengths, options);
+      const auto corrupted = detail::replaceLengths(
+          encoded,
+          mutated.encoded,
+          /*decodedLengths=*/std::nullopt,
+          options.useVarintRowCount);
+      const auto actual = read(corrupted, numRows);
+
+      const bool mustReject = !mutated.wellFormed ||
+          std::accumulate(
+              mutated.lengths.begin(), mutated.lengths.end(), uint64_t{0}) !=
+              blobSize;
+      if (mustReject) {
+        EXPECT_FALSE(actual.has_value());
+        continue;
+      }
+      if (mutation == DecodedLengthsMutation::kUnchanged) {
+        ASSERT_TRUE(actual.has_value());
+        EXPECT_EQ(*actual, original);
+        continue;
+      }
+      if (actual.has_value()) {
+        EXPECT_EQ(*actual, original);
+      }
     }
   }
 }
