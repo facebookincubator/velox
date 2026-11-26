@@ -159,7 +159,7 @@ void UcxExchangeServer::process() {
       // Use weak_ptr to prevent use-after-free if close() is called during
       // callback
       std::weak_ptr<UcxExchangeServer> weakQueue = weak_from_this();
-      entry_->getData(partitionKey_.destination, [weakQueue](ReaderStep step) {
+      auto onStep = [weakQueue](ReaderStep step) {
         auto self = weakQueue.lock();
         if (!self) {
           return; // Object was destroyed, safe to ignore
@@ -195,7 +195,9 @@ void UcxExchangeServer::process() {
             break;
         }
         self->communicator_->addToWorkQueue(self);
-      });
+      };
+      entry_->getData(
+          partitionKey_.destination, std::move(onStep), isIntraNodeTransfer_);
       this->communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ServerState::WaitingForDataFromQueue:
@@ -217,6 +219,9 @@ void UcxExchangeServer::process() {
         if (status == std::future_status::ready) {
           intraNodeRetrieveFuture_.get(); // Clear the future
           intraNodePollCount_ = 0;
+          if (!intraNodeAtEndPublished_) {
+            entry_->intraNodeChunkRetrieved(partitionKey_.destination);
+          }
           onIntraNodeRetrieveComplete();
         } else {
           // Not ready yet, re-queue to check later
@@ -282,6 +287,15 @@ void UcxExchangeServer::close() {
   metaContext_.reset();
   dataContext_.reset();
 
+  if (intraNodeRetrieveFuture_.valid()) {
+    // No source reads the published transfer any more. A chunk dropped here
+    // while its destination is not Released stays counted as in flight, so
+    // that a removal of the producer fails its consumer.
+    IntraNodeTransferRegistry::getInstance()->cancelTransfer(
+        {partitionKey_.taskId, partitionKey_.destination, sequenceNumber_});
+    intraNodeRetrieveFuture_ = {};
+  }
+
   queueMgr_->releaseReader(entry_, partitionKey_.destination);
 
   if (endpointRef_) {
@@ -333,7 +347,11 @@ void UcxExchangeServer::sendData() {
       // dataPtr_ is already a shared_ptr, pass directly to share ownership.
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, dataPtr_, dataNumRows_, /*atEnd=*/false);
+              key,
+              dataPtr_,
+              dataNumRows_,
+              /*atEnd=*/false,
+              ChannelOutcome::clean());
       dataPtr_.reset();
       dataNumRows_ = 0;
       intraNodeAtEndPublished_ = false;
@@ -352,15 +370,12 @@ void UcxExchangeServer::sendData() {
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, nullptr, /*numRows=*/0, /*atEnd=*/true);
+              key, nullptr, /*numRows=*/0, /*atEnd=*/true, endOutcome_);
       intraNodeAtEndPublished_ = true;
 
-      // Wait for source to acknowledge atEnd before finishing
+      // The output stays alive until the source read the end, as on the
+      // remote path until the end message is received.
       setState(ServerState::WaitingForIntraNodeRetrieve);
-      // deleteResults() may finish the producer task, which must not happen
-      // under 'dataMutex_'.
-      lock.unlock();
-      entry_->deleteResults(partitionKey_.destination);
       communicator_->addToWorkQueue(getSelfPtr());
     }
   } else {
@@ -605,6 +620,7 @@ void UcxExchangeServer::onIntraNodeRetrieveComplete() {
     // This was the final atEnd marker, we're done
     VLOG(3) << "@" << partitionKey_.taskId
             << " Intra-node transfer: atEnd acknowledged, finishing";
+    entry_->deleteResults(partitionKey_.destination);
     setState(ServerState::Done);
   } else {
     // More data may be coming, continue transfer loop

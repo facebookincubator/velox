@@ -226,10 +226,13 @@ class UcxExchangeSource
   /// @param data The packed_columns from registry (nullptr if atEnd or error)
   /// @param numRows Logical rows in 'data'
   /// @param atEnd True if this is end-of-stream
+  /// @param outcome How the producer ended the channel; meaningful only with
+  /// 'atEnd'
   void onIntraNodeData(
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
-      bool atEnd);
+      bool atEnd,
+      const ChannelOutcome& outcome);
 
   /// @brief Sets the new state of this exchange source using
   /// sequential consistency. Logs transitions at VLOG(2).
@@ -267,6 +270,11 @@ class UcxExchangeSource
   // end it is told, and moves to Done. Every end of the source goes through
   // here.
   void end(ChannelOutcome outcome);
+
+  // Ends the source with the outcome the producer gave the channel's end, in
+  // an end message or an intra-node end: the producer's error names this
+  // source's producer, and anything else is a clean end.
+  void endWithProducerOutcome(const ChannelOutcome& outcome);
 
   /// @brief Sets the state to "desired" if and only if the current
   /// state is "expected".

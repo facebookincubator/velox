@@ -99,8 +99,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @brief
   void deleteResults(std::string_view taskId, int destination);
 
-  /// @brief For tests: bindReader() followed by UcxOutputQueue::getData().
-  /// Never releases the reader it binds.
+  /// @brief For tests: bindReader() followed by UcxOutputQueue::getData() for
+  /// a remote reader. Never releases the reader it binds.
   /// @param taskId The unique taskId.
   /// @param destination The destination.
   /// @param notify The callback function.
@@ -143,7 +143,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @brief Makes the task's entry Removed, creating it if absent, so that a
   /// later reader finds the removal. Reads the task's final state and error
   /// and passes them to UcxOutputQueue::remove(), which decides every
-  /// destination's end. Erases the other Removed entries whose Task is gone and
+  /// destination's end, and then cancels the task in IntraNodeTransferRegistry
+  /// with that outcome. Erases the other Removed entries whose Task is gone and
   /// that have no bound reader.
   void removeTask(const std::string& taskId) override;
 

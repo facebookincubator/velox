@@ -15,6 +15,7 @@
 add_executable(
   ucx_exchange_test
   CommunicatorStallTest.cpp
+  IntraNodeTransferRegistryTest.cpp
   UcxChannelStateTest.cpp
   UcxExchangeProtocolTest.cpp
   UcxOutputQueueManagerTest.cpp

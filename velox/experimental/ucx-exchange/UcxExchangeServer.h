@@ -70,7 +70,8 @@ class UcxExchangeServer
   /// on the Communicator thread.
   void onEndpointClosed(std::string_view reason) override;
 
-  /// Cancels the outstanding requests, unbinds from the producer task's entry
+  /// Cancels the outstanding requests and the intra-node transfer that no
+  /// source read, unbinds from the producer task's entry
   /// and unregisters from the Communicator and the endpoint. Decides nothing
   /// about the destination. Called on the Communicator thread. A second call
   /// does nothing.
@@ -161,7 +162,9 @@ class UcxExchangeServer
   std::shared_ptr<MetaSendContext> metaContext_;
   std::shared_ptr<DataSendContext> dataContext_;
 
-  /// Future for intra-node transfer - signaled when source retrieves data.
+  /// Future for intra-node transfer - signaled when source retrieves data, or
+  /// when the transfer or the producer task is cancelled. Valid while the
+  /// transfer is published and not processed.
   std::future<void> intraNodeRetrieveFuture_;
 
   /// For intra-node transfer: true if the last published entry was atEnd.

@@ -124,7 +124,7 @@ void UcxOutputQueueManager::getData(
     int destination,
     ReaderCallback notify) {
   bindReader(taskId, destination, /*onReleased=*/nullptr)
-      ->getData(destination, std::move(notify));
+      ->getData(destination, std::move(notify), /*intraNode=*/false);
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::bindReader(
@@ -255,10 +255,12 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
     facts.state = task->state();
     facts.error = taskErrorMessage(*task);
   }
-  entry->remove(facts);
-  // Notify the intra-node registry so that any sources polling for this
-  // task get an atEnd result instead of spinning forever.
-  IntraNodeTransferRegistry::getInstance()->cancelTask(taskId);
+  auto outcome = entry->remove(facts);
+  // Without the entry's lock, which is never held together with the
+  // registry's. Sources polling for this task then end with the removal's
+  // outcome instead of spinning forever.
+  IntraNodeTransferRegistry::getInstance()->cancelTask(
+      taskId, std::move(outcome));
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(

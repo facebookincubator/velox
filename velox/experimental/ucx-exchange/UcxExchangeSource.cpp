@@ -484,6 +484,22 @@ void UcxExchangeSource::end(ChannelOutcome outcome) {
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
+void UcxExchangeSource::endWithProducerOutcome(const ChannelOutcome& outcome) {
+  if (outcome.kind == OutcomeKind::kProducerError) {
+    // The producer ended early and its output is lost: fail the query rather
+    // than end the stream as complete.
+    end(ChannelOutcome::producerError(
+        fmt::format(
+            "Producer failed before sending all its data, host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            outcome.error)));
+  } else {
+    end(ChannelOutcome::clean());
+  }
+}
+
 void UcxExchangeSource::setEndpoint(std::shared_ptr<EndpointRef> endpointRef) {
   endpointRef_ = std::move(endpointRef);
 }
@@ -634,20 +650,7 @@ void UcxExchangeSource::onMetadata(
     }
 
     if (std::holds_alternative<ChannelOutcome>(message)) {
-      const auto& outcome = std::get<ChannelOutcome>(message);
-      if (outcome.kind == OutcomeKind::kProducerError) {
-        // The producer ended early and its output is lost: fail the query
-        // rather than end the stream as complete.
-        end(ChannelOutcome::producerError(
-            fmt::format(
-                "Producer failed before sending all its data, host {}:{}, task {}: {}",
-                host_,
-                port_,
-                partitionKey_.toString(),
-                outcome.error)));
-      } else {
-        end(ChannelOutcome::clean());
-      }
+      endWithProducerOutcome(std::get<ChannelOutcome>(message));
       return;
     }
 
@@ -887,13 +890,15 @@ void UcxExchangeSource::waitForIntraNodeData() {
   }
 
   intraNodePollCount_ = 0;
-  onIntraNodeData(std::move(result->data), result->numRows, result->atEnd);
+  onIntraNodeData(
+      std::move(result->data), result->numRows, result->atEnd, result->outcome);
 }
 
 void UcxExchangeSource::onIntraNodeData(
     std::shared_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    bool atEnd) {
+    bool atEnd,
+    const ChannelOutcome& outcome) {
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onIntraNodeData called after close, ignoring";
@@ -902,7 +907,7 @@ void UcxExchangeSource::onIntraNodeData(
 
   if (atEnd) {
     VLOG(3) << toString() << " Intra-node transfer: end of stream";
-    end(ChannelOutcome::clean());
+    endWithProducerOutcome(outcome);
     return;
   }
 

@@ -55,6 +55,7 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
+#include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/UcxChannelState.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeClient.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
@@ -198,7 +199,9 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
  protected:
   // A server for destination 0 of a producer task, sending to this worker's
   // own listener. Nothing receives what it sends until
-  // postTerminalMetadataReceive() posts the receive of its end message.
+  // postTerminalMetadataReceive() posts the receive of its end message. An
+  // intra-node server publishes to IntraNodeTransferRegistry instead, and
+  // nothing reads what it publishes until a poll.
   struct TerminalMetadataSession {
     std::string taskId;
     std::shared_ptr<exec::Task> task;
@@ -237,10 +240,12 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
   // Starts a producer task 'taskId' with one destination and one driver, which
   // enqueues one chunk of 'numChunkRows' rows if that is not zero and then
   // calls noMoreData(). Then starts a server for destination 0 and advances it
-  // until it posts its first send.
+  // until it posts its first send, or with 'intraNode' publishes its first
+  // chunk or its end.
   std::shared_ptr<TerminalMetadataSession> startTerminalMetadataSend(
       const std::string& taskId,
-      vector_size_t numChunkRows) {
+      vector_size_t numChunkRows,
+      bool intraNode) {
     auto session = std::make_shared<TerminalMetadataSession>();
     session->taskId = taskId;
     session->task = makeProducerTask(taskId, pool_.get());
@@ -258,7 +263,7 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
       queueManager()->enqueue(taskId, 0, std::move(data), numChunkRows);
     }
     queueManager()->noMoreData(taskId);
-    startServer(session);
+    startServer(session, intraNode);
     EXPECT_FALSE(queueManager()->isFinished(taskId))
         << "An unmatched send must keep its output alive";
     return session;
@@ -271,16 +276,18 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
     auto session = std::make_shared<TerminalMetadataSession>();
     session->taskId = taskId;
     session->task = makeProducerTask(taskId, pool_.get());
-    startServer(session);
+    startServer(session, /*intraNode=*/false);
     return session;
   }
 
   // Starts a server for destination 0 of 'session's task, sending to this
   // worker's own listener, and advances it until it posts its first send or,
-  // for a Pending entry, waits for data.
+  // for a Pending entry, waits for data. With 'intraNode', the server hands its
+  // chunks over through IntraNodeTransferRegistry.
   static void startServer(
-      const std::shared_ptr<TerminalMetadataSession>& session) {
-    EXPECT_TRUE(runOnCommunicator([session] {
+      const std::shared_ptr<TerminalMetadataSession>& session,
+      bool intraNode) {
+    EXPECT_TRUE(runOnCommunicator([session, intraNode] {
       auto communicator = Communicator::getInstance();
       session->owner = std::make_shared<TestEndpointOwner>(communicator);
       session->endpoint = communicator->assocEndpointRef(
@@ -293,7 +300,7 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
           communicator,
           session->endpoint,
           PartitionKey{session->taskId, 0},
-          /*isIntraNodeTransfer=*/false);
+          intraNode);
       session->endpoint->addCommElem(server);
       communicator->registerCommElement(server);
       // From Created through ReadyToTransfer and DataReady to the send.
@@ -1939,6 +1946,244 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
           testing::HasSubstr("Producer failed before sending all its data")));
 }
 
+namespace {
+
+// Starts an intra-node consumer of destination 0 of 'srcTaskId', for sink task
+// 'sinkTaskId'. Sets 'sinkTask' and 'driverCtx', which 'exchange' needs.
+std::shared_ptr<UcxExchangeClient> startIntraNodeConsumer(
+    const std::string& sinkTaskId,
+    const exec::Split& split,
+    std::shared_ptr<Task>& sinkTask,
+    std::shared_ptr<DriverCtx>& driverCtx) {
+  core::PlanNodeId exchangeNodeId;
+  sinkTask = createExchangeTask(
+      sinkTaskId, UcxTestData::kTestRowType, /*partitionId=*/0, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+  driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  return exchangeClient;
+}
+
+} // namespace
+
+// An intra-node consumer reads a chunk from IntraNodeTransferRegistry some
+// time after its server took the chunk from the producer's queue. A producer
+// removed in between drops that chunk, so its consumer must fail rather than
+// end cleanly. The consumer here stops reading: past UcxExchangeSource's
+// backpressure high water mark it stops polling the registry, and the server
+// waits with the producer's last chunk published but unread.
+TEST_F(UcxExchangeFocusedTest, intraNodeProducerRemovedBeforePageReadFails) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = previousIntraNode;
+  };
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "intraNodeSrc";
+  // One chunk more than the consumer queues before it stops polling, so that
+  // the last one stays in the registry.
+  const int32_t numChunks = UcxExchangeSource::kBackpressureHighWaterMark + 2;
+  const vector_size_t numRowsPerChunk = 100;
+
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  for (int32_t chunk = 0; chunk < numChunks; ++chunk) {
+    queueManager()->enqueue(
+        srcTaskId, 0, makePackedColumns(numRowsPerChunk), numRowsPerChunk);
+  }
+  queueManager()->noMoreData(srcTaskId);
+
+  std::shared_ptr<Task> sinkTask;
+  std::shared_ptr<DriverCtx> driverCtx;
+  auto exchangeClient = startIntraNodeConsumer(
+      taskPrefix + "intraNodeSink",
+      remoteSplit(srcTaskId, 0),
+      sinkTask,
+      driverCtx);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  // The server took every chunk: the producer's queue is empty while the
+  // consumer has not read the last one.
+  ASSERT_TRUE(waitUntil(
+      [&]() {
+        return exchangeClient->queue()->size() >=
+            UcxExchangeSource::kBackpressureHighWaterMark + 1 &&
+            queueManager()->stats(srcTaskId)->bufferedPages == 0;
+      },
+      std::chrono::milliseconds(30'000)))
+      << "Consumer queued " << exchangeClient->queue()->size() << " chunks";
+
+  srcTask->requestAbort().wait();
+  queueManager()->removeTask(srcTaskId);
+  removeProducer.dismiss();
+
+  uint64_t numRows{0};
+  std::optional<std::string> error;
+  try {
+    numRows = drainToEnd(
+        exchange,
+        /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+        std::chrono::seconds(30));
+  } catch (const VeloxException& e) {
+    error = e.message();
+  }
+  exchange.close();
+
+  // The last chunk is dropped, so receiving every row means this ran remote.
+  EXPECT_LT(numRows, static_cast<uint64_t>(numChunks) * numRowsPerChunk);
+  EXPECT_THAT(
+      error,
+      testing::Optional(
+          testing::AllOf(
+              testing::HasSubstr(
+                  "Producer failed before sending all its data, host 127.0.0.1:"),
+              testing::HasSubstr(
+                  "Producer task ended before its consumers received all its output"),
+              testing::HasSubstr("undelivered packed tables: 1"))));
+}
+
+// An intra-node server hands each chunk over through IntraNodeTransferRegistry
+// and waits until its source reads it. A consumer that stops reading and
+// closes Releases the destination, so that the producer can finish.
+TEST_F(UcxExchangeFocusedTest, closedIntraNodeExchangeReleasesProducer) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  SCOPE_EXIT {
+    config.intraNodeExchange = previousIntraNode;
+  };
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "closedIntraNodeSrc";
+  // One chunk more than the consumer queues before it stops polling, so that
+  // the server waits with the last one published but unread.
+  const int32_t numChunks = UcxExchangeSource::kBackpressureHighWaterMark + 2;
+  const vector_size_t numRowsPerChunk = 100;
+
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  for (int32_t chunk = 0; chunk < numChunks; ++chunk) {
+    queueManager()->enqueue(
+        srcTaskId, 0, makePackedColumns(numRowsPerChunk), numRowsPerChunk);
+  }
+
+  std::shared_ptr<Task> sinkTask;
+  std::shared_ptr<DriverCtx> driverCtx;
+  auto exchangeClient = startIntraNodeConsumer(
+      taskPrefix + "closedIntraNodeSink",
+      remoteSplit(srcTaskId, 0),
+      sinkTask,
+      driverCtx);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  // The server took every chunk; the consumer has not read the last one.
+  ASSERT_TRUE(waitUntil(
+      [&]() {
+        return exchangeClient->queue()->size() >=
+            UcxExchangeSource::kBackpressureHighWaterMark + 1 &&
+            queueManager()->stats(srcTaskId)->bufferedPages == 0;
+      },
+      std::chrono::milliseconds(30'000)))
+      << "Consumer queued " << exchangeClient->queue()->size() << " chunks";
+
+  // The consumer's Task closes the shared client when it terminates, which
+  // closes the sources.
+  exchange.close();
+  exchangeClient->close();
+  queueManager()->noMoreData(srcTaskId);
+
+  EXPECT_TRUE(waitForOutputFinished(srcTaskId))
+      << "The producer still waits for the closed consumer";
+  EXPECT_EQ(destinationState(srcTaskId), DestinationState::kReleased);
+}
+
+// An intra-node server publishes the end and keeps the output alive until its
+// source reads that end, as a remote server does until its end message is
+// received. The end carries the outcome its entry decided.
+TEST_F(UcxExchangeFocusedTest, intraNodeEndKeepsOutputUntilRetrieved) {
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "intraNodeEndRetrieved",
+      /*numChunkRows=*/0,
+      /*intraNode=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  EXPECT_EQ(session->task->state(), TaskState::kRunning);
+  const auto end =
+      IntraNodeTransferRegistry::getInstance()->poll({session->taskId, 0, 0});
+  ASSERT_TRUE(end.has_value());
+  EXPECT_TRUE(end->atEnd);
+  EXPECT_EQ(end->data, nullptr);
+  EXPECT_EQ(end->outcome, ChannelOutcome::clean());
+
+  EXPECT_TRUE(waitForServerDestroyed(session->server));
+  EXPECT_TRUE(waitForOutputFinished(session->taskId));
+  EXPECT_EQ(destinationState(session->taskId), DestinationState::kReleased);
+  EXPECT_TRUE(
+      exec::test::TaskMonitor::waitForStateChange(
+          *session->task, TaskState::kFinished, 3'000'000));
+}
+
+// The close message of an intra-node consumer reaches the producer's entry,
+// which Releases the destination. The server then drops the chunk it published
+// and stops, and the producer finishes rather than fails.
+TEST_F(
+    UcxExchangeFocusedTest,
+    terminalMetadataCancellationAfterIntraNodePublish) {
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "cancelPublishedData",
+      /*numChunkRows=*/100,
+      /*intraNode=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  ASSERT_FALSE(session->server.expired());
+  sendCloseMessage(session);
+  EXPECT_TRUE(waitForServerDestroyed(session->server));
+  EXPECT_EQ(destinationState(session->taskId), DestinationState::kReleased);
+  // The chunk that nobody reads is no longer published.
+  EXPECT_FALSE(
+      IntraNodeTransferRegistry::getInstance()
+          ->poll({session->taskId, 0, 0})
+          .has_value());
+  EXPECT_TRUE(waitForOutputFinished(session->taskId));
+  EXPECT_TRUE(
+      exec::test::TaskMonitor::waitForStateChange(
+          *session->task, TaskState::kFinished, 3'000'000));
+}
+
 // Regression test for broadcast + intra-node SIGSEGV.
 // Before the fix in Acceptor.cpp, broadcast tasks using intra-node transfer
 // would crash because the intra-node source destructively moves gpu_data from
@@ -2492,7 +2737,9 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataWaitsForRemoteReceive) {
   }
 
   auto session = startTerminalMetadataSend(
-      getUniqueTaskPrefix() + "terminalMetadataSuccess", /*numChunkRows=*/0);
+      getUniqueTaskPrefix() + "terminalMetadataSuccess",
+      /*numChunkRows=*/0,
+      /*intraNode=*/false);
   SCOPE_EXIT {
     cleanUpTerminalMetadataSession(session);
   };
@@ -2520,7 +2767,8 @@ TEST_F(
 
   auto session = startTerminalMetadataSend(
       getUniqueTaskPrefix() + "terminalMetadataLocalClose",
-      /*numChunkRows=*/0);
+      /*numChunkRows=*/0,
+      /*intraNode=*/false);
   SCOPE_EXIT {
     cleanUpTerminalMetadataSession(session);
   };
@@ -2549,7 +2797,8 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataPeerFailureReleasesDestination) {
 
   auto session = startTerminalMetadataSend(
       getUniqueTaskPrefix() + "terminalMetadataPeerFailure",
-      /*numChunkRows=*/0);
+      /*numChunkRows=*/0,
+      /*intraNode=*/false);
   SCOPE_EXIT {
     cleanUpTerminalMetadataSession(session);
   };
@@ -2572,7 +2821,9 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCloseLeavesOutputPending) {
   }
 
   auto session = startTerminalMetadataSend(
-      getUniqueTaskPrefix() + "terminalMetadataClose", /*numChunkRows=*/0);
+      getUniqueTaskPrefix() + "terminalMetadataClose",
+      /*numChunkRows=*/0,
+      /*intraNode=*/false);
   SCOPE_EXIT {
     cleanUpTerminalMetadataSession(session);
   };
@@ -2661,7 +2912,9 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCallbackStaysWithOriginalTask) {
   }
 
   auto session = startTerminalMetadataSend(
-      getUniqueTaskPrefix() + "terminalMetadataTaskReuse", /*numChunkRows=*/0);
+      getUniqueTaskPrefix() + "terminalMetadataTaskReuse",
+      /*numChunkRows=*/0,
+      /*intraNode=*/false);
   SCOPE_EXIT {
     cleanUpTerminalMetadataSession(session);
   };
@@ -2702,7 +2955,9 @@ TEST_F(
   }
 
   auto session = startTerminalMetadataSend(
-      getUniqueTaskPrefix() + "terminalMetadataReleased", /*numChunkRows=*/0);
+      getUniqueTaskPrefix() + "terminalMetadataReleased",
+      /*numChunkRows=*/0,
+      /*intraNode=*/false);
   SCOPE_EXIT {
     cleanUpTerminalMetadataSession(session);
   };
@@ -2771,7 +3026,8 @@ TEST_F(
 TEST_F(UcxExchangeFocusedTest, serverEndpointClosedReleasesDestination) {
   auto session = startTerminalMetadataSend(
       getUniqueTaskPrefix() + "serverEndpointClosed",
-      /*numChunkRows=*/1'000'000);
+      /*numChunkRows=*/1'000'000,
+      /*intraNode=*/false);
   SCOPE_EXIT {
     cleanUpTerminalMetadataSession(session);
   };
@@ -3001,37 +3257,43 @@ TEST_F(
 }
 
 // A client that closed before it was given its producer still connects to the
-// producer to send the close message, so that the producer finishes.
+// producer to send the close message, so that the producer finishes. On the
+// intra-node path, the server waits for its source to read the end it
+// published until the close message Releases the destination.
 TEST_F(UcxExchangeFocusedTest, terminalMetadataCloseBeforeRemoteTaskAdded) {
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool previousIntraNode = config.intraNodeExchange;
   SCOPE_EXIT {
     config.intraNodeExchange = previousIntraNode;
   };
-  config.intraNodeExchange = false;
+  const auto taskPrefix = getUniqueTaskPrefix();
+  for (const bool intraNode : {false, true}) {
+    SCOPED_TRACE(intraNode ? "intra-node" : "remote");
+    config.intraNodeExchange = intraNode;
 
-  const auto taskId = getUniqueTaskPrefix() + "closeBeforeRemoteTaskAdded";
-  auto task = makeProducerTask(taskId, pool_.get());
-  queueManager()->initializeTask(
-      task,
-      core::PartitionedOutputNode::Kind::kPartitioned,
-      /*numDestinations=*/1,
-      /*numDrivers=*/1);
-  SCOPE_EXIT {
-    queueManager()->removeTask(taskId);
-  };
-  queueManager()->noMoreData(taskId);
+    const auto taskId = taskPrefix + "closeBeforeRemoteTaskAdded" +
+        (intraNode ? "IntraNode" : "Remote");
+    auto task = makeProducerTask(taskId, pool_.get());
+    queueManager()->initializeTask(
+        task,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        /*numDestinations=*/1,
+        /*numDrivers=*/1);
+    auto removeProducer =
+        folly::makeGuard([&]() { queueManager()->removeTask(taskId); });
+    queueManager()->noMoreData(taskId);
 
-  auto client = std::make_shared<UcxExchangeClient>(
-      "closedConsumer", /*destination=*/0, /*numberOfConsumers=*/1);
-  client->close();
-  client->addRemoteTaskId(remoteTaskUrl(taskId));
-  client->noMoreRemoteTasks();
+    auto client = std::make_shared<UcxExchangeClient>(
+        "closedConsumer", /*destination=*/0, /*numberOfConsumers=*/1);
+    client->close();
+    client->addRemoteTaskId(remoteTaskUrl(taskId));
+    client->noMoreRemoteTasks();
 
-  EXPECT_TRUE(waitForOutputFinished(taskId));
-  EXPECT_TRUE(
-      exec::test::TaskMonitor::waitForStateChange(
-          *task, TaskState::kFinished, 3'000'000));
+    EXPECT_TRUE(waitForOutputFinished(taskId));
+    EXPECT_TRUE(
+        exec::test::TaskMonitor::waitForStateChange(
+            *task, TaskState::kFinished, 3'000'000));
+  }
 }
 
 // A close message that arrives before the producer initializes its output

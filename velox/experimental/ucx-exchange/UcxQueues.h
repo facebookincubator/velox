@@ -259,11 +259,14 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   /// Makes the entry Removed and decides every destination at once: clean if
   /// every driver called noMoreData() and no chunk is undelivered, a producer
-  /// error otherwise. Frees the chunks, wakes blocked producers, and keeps only
-  /// a weak pointer to the task and the outcome, which later readers get. The
-  /// caller reads 'facts' before taking any entry lock. A second call does
-  /// nothing.
-  void remove(const RemovalFacts& facts);
+  /// error otherwise. A chunk is undelivered while it is queued, kept for a
+  /// broadcast destination not added yet, or in flight on the intra-node path
+  /// to a destination that is not Released. Frees the chunks, wakes blocked
+  /// producers, and keeps only a weak pointer to the task and the outcome,
+  /// which later readers get. The caller reads 'facts' before taking any entry
+  /// lock. A second call decides nothing.
+  /// @return The outcome of the removal, also for a second call.
+  ChannelOutcome remove(const RemovalFacts& facts);
 
   /// Releases 'destination' because its consumer sent the close message or its
   /// endpoint closed, and frees its chunks. A destination that is not published
@@ -341,7 +344,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// reader, and for negative destinations. A destination that has ended or
   /// was released gets its decided outcome, and a destination of a Removed
   /// entry that was never published gets the removal's outcome.
-  void getData(int destination, ReaderCallback notify);
+  /// @param intraNode True if the reader hands the chunk over through
+  /// IntraNodeTransferRegistry. The chunk it takes is then in flight until the
+  /// reader calls intraNodeChunkRetrieved(): a removal meanwhile counts it as
+  /// undelivered.
+  void getData(int destination, ReaderCallback notify, bool intraNode);
+
+  /// Reports that the source of 'destination' read the chunk that an
+  /// intra-node reader took with getData(), or that the chunk's transfer was
+  /// cancelled.
+  void intraNodeChunkRetrieved(int destination);
 
   /// @brief Indicates that a driver is done and won't enqueue any more data.
   void noMoreData();
@@ -429,6 +441,11 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
     // The decided outcome, if any. Shared, since a removal decides one outcome
     // for every destination.
     std::shared_ptr<const ChannelOutcome> outcome;
+    // True if the last reader that asked for a chunk hands chunks over through
+    // IntraNodeTransferRegistry.
+    bool intraNodeReader{false};
+    // Chunks an intra-node reader took and its source has not read yet.
+    int64_t numIntraNodeChunksInFlight{0};
   };
 
   // The work that decisions leave for after mutex_ is released. Declare it

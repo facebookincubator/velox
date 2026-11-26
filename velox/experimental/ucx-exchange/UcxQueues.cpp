@@ -365,6 +365,10 @@ void UcxOutputQueue::notifyReadyReaderLocked(
   if (ready.callback == nullptr) {
     return;
   }
+  if (ready.step->kind == ReaderStep::Kind::kChunk &&
+      destination.intraNodeReader) {
+    ++destination.numIntraNodeChunksInFlight;
+  }
   const bool endMarkerTaken = ready.step->kind == ReaderStep::Kind::kEnd;
   deferred.notifications.push_back(std::move(ready));
   if (endMarkerTaken) {
@@ -413,12 +417,18 @@ ChannelOutcome UcxOutputQueue::removalOutcomeLocked(
             facts.state,
             facts.error)));
   }
-  // A chunk counts as delivered once a server took it from its queue: the
-  // send keeps it alive until it completes.
+  // A chunk counts as delivered once a remote server took it from its queue:
+  // the send keeps it alive until it completes. An intra-node chunk counts
+  // once its source read it, since the registry drops it with the task. The
+  // count of a source that has not reported its read yet can only turn a
+  // clean end into an error. A Released destination has no consumer waiting.
   int64_t numUndelivered{0};
   for (const auto& destination : queues_) {
     if (destination.queue != nullptr) {
       numUndelivered += destination.queue->stats().packedColumnsQueued;
+    }
+    if (destination.state != DestinationState::kReleased) {
+      numUndelivered += destination.numIntraNodeChunksInFlight;
     }
   }
   if (kind_ == core::PartitionedOutputNode::Kind::kBroadcast &&
@@ -437,15 +447,16 @@ ChannelOutcome UcxOutputQueue::removalOutcomeLocked(
           facts.error)));
 }
 
-void UcxOutputQueue::remove(const RemovalFacts& facts) {
+ChannelOutcome UcxOutputQueue::remove(const RemovalFacts& facts) {
   // Released after the deferred work, outside the lock, so that ~Task never
   // runs under mutex_.
   std::shared_ptr<exec::Task> task;
   Deferred deferred;
+  std::shared_ptr<const ChannelOutcome> outcome;
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (state_ == TaskEntryState::kRemoved) {
-      return;
+      return *removedOutcome_;
     }
     removedOutcome_ =
         std::make_shared<const ChannelOutcome>(removalOutcomeLocked(facts));
@@ -480,8 +491,10 @@ void UcxOutputQueue::remove(const RemovalFacts& facts) {
     }
     task = std::move(task_);
     state_.store(TaskEntryState::kRemoved, std::memory_order_release);
+    outcome = removedOutcome_;
   }
   deferred.run();
+  return *outcome;
 }
 
 void UcxOutputQueue::consumerGone(int destination) {
@@ -649,13 +662,24 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
   return false;
 }
 
+void UcxOutputQueue::intraNodeChunkRetrieved(int destination) {
+  std::lock_guard<std::mutex> l(mutex_);
+  auto* slot = findDestinationLocked(destination);
+  if (slot != nullptr && slot->numIntraNodeChunksInFlight > 0) {
+    --slot->numIntraNodeChunksInFlight;
+  }
+}
+
 bool UcxOutputQueue::isDestinationCountFinalLocked() const {
   return state_ == TaskEntryState::kRemoved || noMoreQueues_ ||
       (state_ == TaskEntryState::kActive &&
        kind_ == core::PartitionedOutputNode::Kind::kPartitioned);
 }
 
-void UcxOutputQueue::getData(int destination, ReaderCallback notify) {
+void UcxOutputQueue::getData(
+    int destination,
+    ReaderCallback notify,
+    bool intraNode) {
   std::optional<ReaderStep> step;
   Deferred deferred;
   {
@@ -690,6 +714,7 @@ void UcxOutputQueue::getData(int destination, ReaderCallback notify) {
       if (hasEnded(slot->state)) {
         step = endedStep(*slot);
       } else {
+        slot->intraNodeReader = intraNode;
         // Capture weak_ptr instead of raw `this` to prevent use-after-free.
         // The callback fires outside the lock, and the last reference to the
         // UcxOutputQueue can go while the callback is still executing.
@@ -721,6 +746,9 @@ void UcxOutputQueue::getData(int destination, ReaderCallback notify) {
           // No notify upcall will be done. Need to update the stats here.
           updateStatsWithFreedLocked(
               step->data->gpu_data->size(), 1L, deferred.promises);
+          if (intraNode) {
+            ++slot->numIntraNodeChunksInFlight;
+          }
         } else {
           applyLocked(
               *slot,

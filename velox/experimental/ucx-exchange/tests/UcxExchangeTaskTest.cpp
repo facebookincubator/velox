@@ -69,6 +69,16 @@ class UcxExchangeTaskTest : public UcxExchangeTestBase {
     exec::test::TaskMonitor::waitForAllTasksDeleted();
     UcxExchangeTestBase::TearDown();
   }
+
+  // Fails a producer task after its consumer received a batch, and checks that
+  // the consumer fails with the producer's reason. 'intraNode' selects
+  // intra-node or remote transfer.
+  void checkProducerFailureMidStreamFailsConsumer(bool intraNode);
+
+  // Checks that a consumer that stops reading after a LIMIT succeeds, and that
+  // a later exchange still gets all its rows. 'intraNode' selects intra-node or
+  // remote transfer.
+  void checkLimitBeforeProducerFinishesStillSucceeds(bool intraNode);
 };
 
 namespace {
@@ -643,17 +653,14 @@ TEST_F(UcxExchangeTaskTest, taskShuffleOverUcx) {
   EXPECT_EQ(boundaries[0], core::PlanNode::Boundary::kBoth);
 }
 
-// A producer task that fails after it started sending must fail its consumer
-// with the producer's reason. Ending the consumer's stream as complete would
-// return a result with the rest of the producer's rows missing.
-TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumer) {
+void UcxExchangeTaskTest::checkProducerFailureMidStreamFailsConsumer(
+    bool intraNode) {
   registerSerdes();
   exec::ExchangeTransportRegistry::unregisterAll();
   exec::OutputTransportRegistry::unregisterAll();
   CudfRegistration cudfRegistration;
 
-  // Remote transfer, whose end message carries the producer's error.
-  ScopedIntraNodeExchange intraNodeExchange(/*intraNode=*/false);
+  ScopedIntraNodeExchange intraNodeExchange(intraNode);
   const auto taskPrefix = getUniqueTaskPrefix();
   TaskShuffleResults results;
   StartedTasks startedTasks(&results);
@@ -685,6 +692,20 @@ TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumer) {
       testing::AllOf(
           testing::HasSubstr("Producer failed before sending all its data"),
           testing::HasSubstr("Injected producer failure")));
+}
+
+// A producer task that fails after it started sending must fail its consumer
+// with the producer's reason. Ending the consumer's stream as complete would
+// return a result with the rest of the producer's rows missing. The remote end
+// message carries the producer's error.
+TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumer) {
+  checkProducerFailureMidStreamFailsConsumer(/*intraNode=*/false);
+}
+
+// As producerFailureMidStreamFailsConsumer, with the chunks handed over through
+// IntraNodeTransferRegistry, whose cancelled task carries the producer's error.
+TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumerIntraNode) {
+  checkProducerFailureMidStreamFailsConsumer(/*intraNode=*/true);
 }
 
 // A producer's error can be far larger than the end-of-stream message that
@@ -775,17 +796,13 @@ TEST_F(UcxExchangeTaskTest, lateConsumerOfFailedProducerFails) {
           testing::HasSubstr("Injected producer failure")));
 }
 
-// A consumer that stops reading early, here after a LIMIT, has all it needs. It
-// must finish successfully, and cancelling its producer afterwards, as the
-// coordinator does, must leave the Communicator able to serve later cases. The
-// consumer closes before its stream ends, which sends the close message and
-// releases its server.
-TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceeds) {
+void UcxExchangeTaskTest::checkLimitBeforeProducerFinishesStillSucceeds(
+    bool intraNode) {
   registerSerdes();
   exec::ExchangeTransportRegistry::unregisterAll();
   exec::OutputTransportRegistry::unregisterAll();
   CudfRegistration cudfRegistration;
-  ScopedIntraNodeExchange intraNodeExchange(/*intraNode=*/false);
+  ScopedIntraNodeExchange intraNodeExchange(intraNode);
   const auto taskPrefix = getUniqueTaskPrefix();
   {
     TaskShuffleResults results;
@@ -836,6 +853,22 @@ TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceeds) {
       /*numConsumerDrivers=*/1,
       /*consumerStats=*/nullptr);
   EXPECT_TRUE(exec::test::assertEqualResults(allBatchesOf(producers), actual));
+}
+
+// A consumer that stops reading early, here after a LIMIT, has all it needs. It
+// must finish successfully, and cancelling its producer afterwards, as the
+// coordinator does, must leave the Communicator able to serve later cases. The
+// consumer closes before its stream ends, which sends the close message and
+// releases its server.
+TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceeds) {
+  checkLimitBeforeProducerFinishesStillSucceeds(/*intraNode=*/false);
+}
+
+// As limitBeforeProducerFinishesStillSucceeds, with the chunks handed over
+// through IntraNodeTransferRegistry. The closed consumer's server drops the
+// chunk it published, and the later exchange runs intra-node as well.
+TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceedsIntraNode) {
+  checkLimitBeforeProducerFinishesStillSucceeds(/*intraNode=*/true);
 }
 
 // A fragment whose output layout is empty ships rows that carry no columns --
