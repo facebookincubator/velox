@@ -95,14 +95,14 @@ class UcxExchangeServer
       const PartitionKey& key,
       bool isIntraNodeTransfer);
 
-  /// @return A shared pointer to itself.
+  // @return A shared pointer to itself.
   std::shared_ptr<UcxExchangeServer> getSelfPtr();
 
   // Holds a send's buffer until the send completes, and its status.
   struct MetaSendContext;
   struct DataSendContext;
 
-  /// @brief Sends metadata and data to the connected receiver.
+  // @brief Sends metadata and data to the connected receiver.
   void sendData();
 
   // Acts on the statuses that the completions of the current sends recorded.
@@ -119,16 +119,16 @@ class UcxExchangeServer
   // 'reason' if the entry decides one. Called with no lock held.
   void failProducer(std::string_view reason);
 
-  /// @brief Completion handler for intra-node transfer after source retrieves
-  /// data.
+  // @brief Completion handler for intra-node transfer after source retrieves
+  // data.
   void onIntraNodeRetrieveComplete();
 
-  /// @brief Sets the new state of this exchange server using
-  /// sequential consistency. Logs transitions at VLOG(2).
-  /// @param newState the new state of the UcxExchangeServer.
+  // @brief Sets the new state of this exchange server using
+  // sequential consistency. Logs transitions at VLOG(2).
+  // @param newState the new state of the UcxExchangeServer.
   void setState(ServerState newState);
 
-  /// @brief Returns the state.
+  // @brief Returns the state.
   ServerState getState() {
     return state_.load(std::memory_order_seq_cst);
   }
@@ -137,18 +137,18 @@ class UcxExchangeServer
   const uint32_t
       partitionKeyHash_; // A hash of above, used to create unique tags.
 
-  /// True if server and source are on the same node (determined by checking
-  /// if peer's actual IP is in the local IP set). When true, data is passed
-  /// via IntraNodeTransferRegistry instead of UCXX transfer.
+  // True if server and source are on the same node (determined by checking
+  // if peer's actual IP is in the local IP set). When true, data is passed
+  // via IntraNodeTransferRegistry instead of UCXX transfer.
   bool isIntraNodeTransfer_{false};
 
   std::atomic<ServerState> state_;
   std::shared_ptr<cudf::packed_columns> dataPtr_{nullptr};
-  /// Logical rows in 'dataPtr_', taken from the output queue rather than from
-  /// the packed table, which reports zero rows when it has no columns.
+  // Logical rows in 'dataPtr_', taken from the output queue rather than from
+  // the packed table, which reports zero rows when it has no columns.
   vector_size_t dataNumRows_{0};
-  /// How the output queue ended the channel. Sent in the end message once
-  /// 'dataPtr_' is null. Protected by dataMutex_.
+  // How the output queue ended the channel. Sent in the end message once
+  // 'dataPtr_' is null. Protected by dataMutex_.
   ChannelOutcome endOutcome_;
   // Protects dataPtr_, which the getData() callback sets on another thread.
   // UCX can complete a send inline, inside the tagSend() that sendData()
@@ -167,12 +167,12 @@ class UcxExchangeServer
   std::shared_ptr<MetaSendContext> metaContext_;
   std::shared_ptr<DataSendContext> dataContext_;
 
-  /// Future for intra-node transfer - signaled when source retrieves data, or
-  /// when the transfer or the producer task is cancelled. Valid while the
-  /// transfer is published and not processed.
+  // Future for intra-node transfer - signaled when source retrieves data, or
+  // when the transfer or the producer task is cancelled. Valid while the
+  // transfer is published and not processed.
   std::future<void> intraNodeRetrieveFuture_;
 
-  /// For intra-node transfer: true if the last published entry was atEnd.
+  // For intra-node transfer: true if the last published entry was atEnd.
   bool intraNodeAtEndPublished_{false};
 
   uint32_t sequenceNumber_{0};

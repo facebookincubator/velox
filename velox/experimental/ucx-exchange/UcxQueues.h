@@ -286,7 +286,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   void setOnReleased(int destination, std::function<void()> onReleased);
 
   /// Returns the state of 'destination'. A destination the entry has not seen
-  /// is Unpublished. For tests and the server.
+  /// is Unpublished. For tests.
   DestinationState destinationState(int destination);
 
   /// True once Removed, its Task is gone (the weak pointer expired), and no
@@ -550,8 +550,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   std::vector<std::pair<std::shared_ptr<cudf::packed_columns>, vector_size_t>>
       dataToBroadcast_;
 
-  /// If 'queuedBytes_' > 'maxSize_', each producer is blocked after adding
-  /// data.
+  // If 'queuedBytes_' > 'maxSize_', each producer is blocked after adding
+  // data.
   uint64_t maxSize_{0};
   // When 'queuedBytes_' goes below 'continueSize_', blocked producers are
   // resumed.

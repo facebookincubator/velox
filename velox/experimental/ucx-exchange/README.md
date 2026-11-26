@@ -66,7 +66,7 @@ cmake --build _build/release -j --target=exchange_tests
 
 ## Protocol version
 
-The workers of a UCX exchange speak a versioned wire protocol. The handshake that a consumer sends carries the version, and the producer's response carries it back. `kProtocolVersion` in `UcxExchangeProtocol.h` is 1. Upstream code that sent no version is version 0.
+The workers of a UCX exchange speak a versioned wire protocol. The handshake that a consumer sends carries the version, and the producer's response carries it back. `kProtocolVersion` in `UcxExchangeProtocol.h` is 1. Code before protocol version 1 sent no version and counts as version 0.
 
 All workers of a cluster must run the same version. Peers of different versions do not exchange data and do not try to understand each other. A rolling upgrade fails every query that spans two versions, until all workers run the same one. Neither worker crashes.
 

@@ -124,7 +124,9 @@ class IntraNodeTransferRegistry {
   /// @brief Cancel all pending transfers for a task.
   /// Called when a producing task is removed. Drops the published transfers,
   /// completes their retrieval promises, and makes subsequent poll() calls for
-  /// this taskId return an atEnd result with 'outcome' instead of nullopt.
+  /// this taskId return an atEnd result with 'outcome' instead of nullopt,
+  /// until clearCancelledTask() drops the record with the task's Removed
+  /// entry.
   /// @param taskId The task to cancel
   /// @param outcome The outcome the removal decided. The first outcome recorded
   /// for a task wins, so that a later call cannot turn an error into a clean

@@ -99,9 +99,9 @@ class SinkDriverMock {
   // Drives a single hybrid exchange operator until all data has been received.
   void receiveAllData(UcxExchange* hybridExchange);
 
-  /// @brief checks if the received table corresponds to that sent, sets
-  /// dataValidFlag_=false if not
-  /// @param tab
+  // @brief checks if the received table corresponds to that sent, sets
+  // dataValidFlag_=false if not
+  // @param tab
   void updateDataValidity(const cudf::table_view& tab);
 
   std::atomic<bool> dataValidFlag_{true};

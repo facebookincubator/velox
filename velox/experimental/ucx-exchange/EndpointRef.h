@@ -75,8 +75,8 @@ class EndpointRef : public std::enable_shared_from_this<EndpointRef> {
   const std::shared_ptr<ucxx::Endpoint> endpoint_;
 
  private:
-  /// The peer's actual IP address extracted from the connection request.
-  /// Used for server-side intra-node detection instead of client-reported IPs.
+  // The peer's actual IP address extracted from the connection request.
+  // Used for server-side intra-node detection instead of client-reported IPs.
   std::string peerIp_;
   void cleanup(); // cleans up expired communication elements.
 

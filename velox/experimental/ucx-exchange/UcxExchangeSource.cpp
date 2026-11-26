@@ -54,12 +54,29 @@ receiverStateNames() {
       };
   return kNames;
 }
+
+// A failed receive of the HandshakeResponse, both when the post fails and when
+// the receive completes with an error.
+constexpr std::string_view kHandshakeResponseFailure{
+    "Failed to receive HandshakeResponse from"};
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(
     UcxExchangeSource,
     ReceiverState,
     receiverStateNames)
+
+std::string UcxExchangeSource::formatError(
+    std::string_view prefix,
+    std::string_view detail) const {
+  return fmt::format(
+      "{} host {}:{}, task {}: {}",
+      prefix,
+      host_,
+      port_,
+      partitionKey_.toString(),
+      detail);
+}
 
 void UcxExchangeSource::setState(ReceiverState newState) {
   auto oldState = state_.exchange(newState, std::memory_order_seq_cst);
@@ -138,12 +155,7 @@ void UcxExchangeSource::process() {
       }
       if (connectError.has_value()) {
         end(ChannelOutcome::transportError(
-            fmt::format(
-                "Failed to connect to producer, host {}:{}, task {}: {}",
-                host_,
-                port_,
-                partitionKey_.toString(),
-                *connectError)));
+            formatError("Failed to connect to producer,", *connectError)));
         break;
       }
       setEndpoint(epRef);
@@ -274,13 +286,8 @@ ucxx::RequestCallbackUserFunction UcxExchangeSource::completionCallback(
 
 void UcxExchangeSource::failCompletion(std::string_view error) noexcept {
   try {
-    end(ChannelOutcome::transportError(
-        fmt::format(
-            "Failed to handle a UCX completion from producer, host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            error)));
+    end(ChannelOutcome::transportError(formatError(
+        "Failed to handle a UCX completion from producer,", error)));
   } catch (const std::exception& e) {
     LOG(ERROR) << toString()
                << " cannot end after a failed UCX completion: " << e.what();
@@ -396,13 +403,8 @@ void UcxExchangeSource::close() {
 }
 
 void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
-  end(ChannelOutcome::transportError(
-      fmt::format(
-          "Connection to producer closed before it sent all its data, host {}:{}, task {}: {}",
-          host_,
-          port_,
-          partitionKey_.toString(),
-          reason)));
+  end(ChannelOutcome::transportError(formatError(
+      "Connection to producer closed before it sent all its data,", reason)));
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {
@@ -488,13 +490,8 @@ void UcxExchangeSource::endWithProducerOutcome(const ChannelOutcome& outcome) {
   if (outcome.kind == OutcomeKind::kProducerError) {
     // The producer ended early and its output is lost: fail the query rather
     // than end the stream as complete.
-    end(ChannelOutcome::producerError(
-        fmt::format(
-            "Producer failed before sending all its data, host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            outcome.error)));
+    end(ChannelOutcome::producerError(formatError(
+        "Producer failed before sending all its data,", outcome.error)));
   } else {
     end(ChannelOutcome::clean());
   }
@@ -554,12 +551,7 @@ void UcxExchangeSource::onHandshake(
   }
   if (status != UCS_OK) {
     end(ChannelOutcome::transportError(
-        fmt::format(
-            "Failed to send handshake to host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            ucs_status_string(status))));
+        formatError("Failed to send handshake to", ucs_status_string(status))));
   } else {
     VLOG(3) << toString() << "+ onHandshake " << ucs_status_string(status);
     // process() posts the receive of the HandshakeResponse, outside the UCX
@@ -613,13 +605,8 @@ void UcxExchangeSource::onMetadata(
   VLOG(3) << toString() << " + onMetadata " << ucs_status_string(status);
 
   if (status != UCS_OK) {
-    end(ChannelOutcome::transportError(
-        fmt::format(
-            "Failed to receive metadata from host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            ucs_status_string(status))));
+    end(ChannelOutcome::transportError(formatError(
+        "Failed to receive metadata from", ucs_status_string(status))));
   } else {
     VELOX_CHECK_NOT_NULL(arg, "Didn't get metadata");
 
@@ -640,12 +627,7 @@ void UcxExchangeSource::onMetadata(
     }
     if (decodeError.has_value()) {
       end(ChannelOutcome::transportError(
-          fmt::format(
-              "Cannot decode message from producer, host {}:{}, task {}: {}",
-              host_,
-              port_,
-              partitionKey_.toString(),
-              *decodeError)));
+          formatError("Cannot decode message from producer,", *decodeError)));
       return;
     }
 
@@ -674,7 +656,9 @@ void UcxExchangeSource::onMetadata(
           cudf::get_current_device_resource_ref());
     } catch (const rmm::bad_alloc& e) {
       VLOG(0) << toString() << " *** RMM  failed to allocate: " << e.what();
-      end(ChannelOutcome::transportError("Failed to alloc GPU memory"));
+      end(ChannelOutcome::transportError(formatError(
+          "Failed to allocate GPU memory for a chunk from producer,",
+          fmt::format("{} bytes", ptr->metadata.dataSizeBytes))));
       return;
     }
 
@@ -726,12 +710,7 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
 
   if (status != UCS_OK) {
     end(ChannelOutcome::transportError(
-        fmt::format(
-            "Failed to receive data from host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            ucs_status_string(status))));
+        formatError("Failed to receive data from", ucs_status_string(status))));
     return;
   }
 
@@ -802,12 +781,7 @@ void UcxExchangeSource::receiveHandshakeResponse() {
   }
   if (error.has_value()) {
     end(ChannelOutcome::transportError(
-        fmt::format(
-            "Failed to receive HandshakeResponse from host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            *error)));
+        formatError(kHandshakeResponseFailure, *error)));
   }
 }
 
@@ -825,12 +799,7 @@ void UcxExchangeSource::onHandshakeResponse(
 
   if (status != UCS_OK) {
     end(ChannelOutcome::transportError(
-        fmt::format(
-            "Failed to receive HandshakeResponse from host {}:{}, task {}: {}",
-            host_,
-            port_,
-            partitionKey_.toString(),
-            ucs_status_string(status))));
+        formatError(kHandshakeResponseFailure, ucs_status_string(status))));
     return;
   }
 

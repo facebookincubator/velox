@@ -38,7 +38,7 @@ std::shared_ptr<uint8_t> allocateMessage(uint32_t totalSize) {
       new uint8_t[totalSize], [](uint8_t* p) { delete[] p; });
 }
 
-/// Writes the header of a message and returns the position after it.
+// Writes the header of a message and returns the position after it.
 uint8_t*
 writeHeader(uint8_t* ptr, uint32_t totalSize, ProducerMessageKind kind) {
   std::memcpy(ptr, &kMagicNumber, sizeof(kMagicNumber));
@@ -51,8 +51,8 @@ writeHeader(uint8_t* ptr, uint32_t totalSize, ProducerMessageKind kind) {
   return ptr + sizeof(uint8_t);
 }
 
-/// Reads the fields of a message from a byte range, checking each length
-/// against the bytes that remain.
+// Reads the fields of a message from a byte range, checking each length
+// against the bytes that remain.
 class MessageReader {
  public:
   MessageReader(const uint8_t* begin, const uint8_t* end)
@@ -72,7 +72,7 @@ class MessageReader {
     return true;
   }
 
-  /// Copies 'size' bytes to 'out', if that many remain.
+  // Copies 'size' bytes to 'out', if that many remain.
   bool readBytes(void* out, size_t size) {
     if (remaining() < size) {
       return false;
@@ -148,10 +148,8 @@ ChannelOutcome decodeEnd(MessageReader& reader) {
       errorSize,
       reader.remaining());
 
-  VELOX_CHECK(
-      outcome <= 1,
-      "Invalid end message outcome: {}",
-      static_cast<int>(outcome));
+  VELOX_CHECK_LE(
+      outcome, 1, "Invalid end message outcome: {}", static_cast<int>(outcome));
   VELOX_CHECK_LE(
       errorSize,
       kMaxProducerErrorSize,

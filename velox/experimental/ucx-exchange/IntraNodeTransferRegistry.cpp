@@ -47,8 +47,9 @@ std::future<void> IntraNodeTransferRegistry::publish(
     std::lock_guard<std::mutex> lock(mutex_);
 
     // If the task was already cancelled (removeTask was called), don't create
-    // a registry entry. Return an already-fulfilled future so the server
-    // doesn't block waiting for a source that will never come.
+    // a registry entry. A source polling for it reads the cancellation's
+    // outcome instead of this transfer, so return an already-fulfilled future
+    // for the server not to wait for a read that never happens.
     if (cancelledTasks_.count(key.taskId)) {
       cancelled = true;
     } else {

@@ -220,6 +220,12 @@ void UcxExchangeServer::process() {
         if (status == std::future_status::ready) {
           intraNodeRetrieveFuture_.get(); // Clear the future
           intraNodePollCount_ = 0;
+          // The future is also ready when cancelTask() dropped the chunk, or
+          // when the task was cancelled before the publish. Reporting the chunk
+          // retrieved then is harmless: a task is cancelled only after its
+          // removal decided the outcome, counting this chunk, and nothing reads
+          // the count again. cancelTransfer() runs only in close(), which drops
+          // the future without a report.
           if (!intraNodeAtEndPublished_) {
             entry_->intraNodeChunkRetrieved(partitionKey_.destination);
           }

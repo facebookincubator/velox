@@ -158,16 +158,16 @@ class UcxExchangeSource
         cudaStream_t{cudaStreamDefault}}; // The stream used to allocate dataBuf
   };
 
-  /// @brief The constructor is private in order to ensure that exchange sources
-  /// are always generated through a shared pointer. This ensures that
-  /// shared_from_this works properly.
-  /// @param taskId The local task identifier
-  /// @param host The hostname of the upstream UcxExchangeServer
-  /// @param port The portnumber of the upstream UcxExchangeServer
-  /// @param partitionKey the partition identifier that the remote task is
-  /// writing to
-  /// @param queue the queue of packed tables that we write to when data is
-  /// available
+  // @brief The constructor is private in order to ensure that exchange sources
+  // are always generated through a shared pointer. This ensures that
+  // shared_from_this works properly.
+  // @param taskId The local task identifier
+  // @param host The hostname of the upstream UcxExchangeServer
+  // @param port The portnumber of the upstream UcxExchangeServer
+  // @param partitionKey the partition identifier that the remote task is
+  // writing to
+  // @param queue the queue of packed tables that we write to when data is
+  // available
   explicit UcxExchangeSource(
       const std::shared_ptr<Communicator> communicator,
       std::string_view taskId,
@@ -180,66 +180,66 @@ class UcxExchangeSource
   // Extracts taskId and destinationId from the path part of the task URL
   static PartitionKey extractTaskAndDestinationId(std::string_view path);
 
-  /// @return A shared pointer to itself.
+  // @return A shared pointer to itself.
   std::shared_ptr<UcxExchangeSource> getSelfPtr();
 
   // Put the received data into the exchange queue.
   void enqueue(PackedTableWithStreamPtr data);
 
-  /// @brief Sets the endpoint for this receiver.
+  // @brief Sets the endpoint for this receiver.
   void setEndpoint(std::shared_ptr<EndpointRef> endpointRef);
 
-  /// @brief Sends a handshake request to the server. The endpoint must exist.
+  // @brief Sends a handshake request to the server. The endpoint must exist.
   void sendHandshake();
 
-  /// @brief Called by the transport layer when handshake is completed
-  /// @param status indication by transport layer of transfer status
-  /// @param arg NOT USED at the moment
+  // @brief Called by the transport layer when handshake is completed
+  // @param status indication by transport layer of transfer status
+  // @param arg NOT USED at the moment
   void onHandshake(ucs_status_t status, std::shared_ptr<void> arg);
 
-  /// @brief Waits for metadata and installs the onMetadata callback.
+  // @brief Waits for metadata and installs the onMetadata callback.
   void getMetadata();
 
-  /// @brief Called by the transport layer when data is available
-  /// @param status indication by transport layer of transfer status
-  /// @param arg the serialized form of the metadata
+  // @brief Called by the transport layer when data is available
+  // @param status indication by transport layer of transfer status
+  // @param arg the serialized form of the metadata
   void onMetadata(ucs_status_t status, std::shared_ptr<void> arg);
 
-  /// @brief Called by the transport layer when data is available
-  /// @param status indication by transport layer of transfer status
-  /// @param arg
+  // @brief Called by the transport layer when data is available
+  // @param status indication by transport layer of transfer status
+  // @param arg
   void onData(ucs_status_t status, std::shared_ptr<void> arg);
 
-  /// @brief Initiates receiving the HandshakeResponse from server. Posts the
-  /// receive once, from process(); a post that fails ends the source.
+  // @brief Initiates receiving the HandshakeResponse from server. Posts the
+  // receive once, from process(); a post that fails ends the source.
   void receiveHandshakeResponse();
 
-  /// @brief Called when HandshakeResponse is received from server.
-  /// @param status indication by transport layer of transfer status
-  /// @param arg The HandshakeResponse data
+  // @brief Called when HandshakeResponse is received from server.
+  // @param status indication by transport layer of transfer status
+  // @param arg The HandshakeResponse data
   void onHandshakeResponse(ucs_status_t status, std::shared_ptr<void> arg);
 
-  /// @brief For intra-node transfer: initiates waiting for data from registry.
+  // @brief For intra-node transfer: initiates waiting for data from registry.
   void waitForIntraNodeData();
 
-  /// @brief For intra-node transfer: handles data retrieved from registry.
-  /// @param data The packed_columns from registry (nullptr if atEnd or error)
-  /// @param numRows Logical rows in 'data'
-  /// @param atEnd True if this is end-of-stream
-  /// @param outcome How the producer ended the channel; meaningful only with
-  /// 'atEnd'
+  // @brief For intra-node transfer: handles data retrieved from registry.
+  // @param data The packed_columns from registry (nullptr if atEnd or error)
+  // @param numRows Logical rows in 'data'
+  // @param atEnd True if this is end-of-stream
+  // @param outcome How the producer ended the channel; meaningful only with
+  // 'atEnd'
   void onIntraNodeData(
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
       bool atEnd,
       const ChannelOutcome& outcome);
 
-  /// @brief Sets the new state of this exchange source using
-  /// sequential consistency. Logs transitions at VLOG(2).
-  /// @param newState the new state of the UcxExchangeSource.
+  // @brief Sets the new state of this exchange source using
+  // sequential consistency. Logs transitions at VLOG(2).
+  // @param newState the new state of the UcxExchangeSource.
   void setState(ReceiverState newState);
 
-  /// @brief Returns the state.
+  // @brief Returns the state.
   ReceiverState getState() {
     return state_.load(std::memory_order_seq_cst);
   }
@@ -271,16 +271,21 @@ class UcxExchangeSource
   // here.
   void end(ChannelOutcome outcome);
 
+  // Returns '<prefix> host <host>:<port>, task <partition key>: <detail>', the
+  // form of every error that names this source's producer.
+  std::string formatError(std::string_view prefix, std::string_view detail)
+      const;
+
   // Ends the source with the outcome the producer gave the channel's end, in
   // an end message or an intra-node end: the producer's error names this
   // source's producer, and anything else is a clean end.
   void endWithProducerOutcome(const ChannelOutcome& outcome);
 
-  /// @brief Sets the state to "desired" if and only if the current
-  /// state is "expected".
-  /// @param expected The expected state
-  /// @param desired The desired state
-  /// @return Returns true if state was changed, false otherwise.
+  // @brief Sets the state to "desired" if and only if the current
+  // state is "expected".
+  // @param expected The expected state
+  // @param desired The desired state
+  // @return Returns true if state was changed, false otherwise.
   bool setStateIf(ReceiverState expected, ReceiverState desired);
 
   // The connection parameters
@@ -306,11 +311,11 @@ class UcxExchangeSource
   // response then ends without the close message.
   std::atomic<bool> closeDeadlineExpired_{false};
 
-  /// True if the server detected that this source is on the same node.
-  /// Set from the isIntraNodeTransfer flag in HandshakeResponse, which the
-  /// server determines by comparing this source's listener address (sent in
-  /// HandshakeMsg) with its own Communicator's listener address.
-  /// When true, intra-node transfer optimizations bypass UCXX transfers.
+  // True if the server detected that this source is on the same node.
+  // Set from the isIntraNodeTransfer flag in HandshakeResponse, which the
+  // server determines by comparing this source's listener address (sent in
+  // HandshakeMsg) with its own Communicator's listener address.
+  // When true, intra-node transfer optimizations bypass UCXX transfers.
   bool isIntraNodeTransfer_{false};
 
   // Backpressure: when queue exceeds kBackpressureHighWaterMark, the source
@@ -321,9 +326,9 @@ class UcxExchangeSource
   // Some metrics/counters:
   UcxExchangeMetrics metrics_;
 
-  // The handshake send. Kept apart from 'request_' because UCX may complete
-  // the send inside the call that posts it, and the completion posts the
-  // response receive in 'request_'.
+  // The handshake send. Kept apart from 'request_', which holds the response
+  // receive that process() posts once the send completed: UCX may complete
+  // the send inside the call that posts it.
   std::shared_ptr<ucxx::Request> handshakeRequest_;
 
   // True once receiveHandshakeResponse() posted the receive of the

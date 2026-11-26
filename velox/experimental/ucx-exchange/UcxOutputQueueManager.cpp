@@ -233,7 +233,11 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
     }
     auto removedEntry = slot;
     for (auto it = entries.begin(); it != entries.end();) {
-      if (it->second != removedEntry && it->second->isDroppable()) {
+      // The lock-free state check first, so that live entries are never
+      // locked here.
+      if (it->second != removedEntry &&
+          it->second->state() == TaskEntryState::kRemoved &&
+          it->second->isDroppable()) {
         droppedEntries.push_back(std::move(it->second));
         it = entries.erase(it);
       } else {
@@ -262,7 +266,9 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   registry->cancelTask(taskId, std::move(outcome));
   // A dropped entry had no bound reader and its Task is gone, so no server
   // publishes for it any more. Its cancellation goes with it, so that the
-  // registry keeps no record per removed task for the life of the worker.
+  // registry keeps no record per removed task for the life of the worker. A
+  // source that has not yet read the cancellation is closed by its consumer's
+  // abort.
   for (const auto& droppedEntry : droppedEntries) {
     registry->clearCancelledTask(droppedEntry->taskId());
   }
