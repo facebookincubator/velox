@@ -994,12 +994,26 @@ void makeSymbolRich(
     tokens.push_back(std::move(value));
   }
 
+  // The lengths of the strings decide how FSST encodes its decoded lengths, and
+  // how many strings one decoder call covers, so each column draws one regime:
+  // strings of varying lengths, strings of one length, strings with some empty
+  // ones, or strings with a few that are far longer than the rest.
+  const auto regime = folly::Random::rand32(4, rng);
+  constexpr uint32_t kMinLongTokens = 17 * 1'024;
+  constexpr uint32_t kLongTokenRange = 59 * 1'024;
   for (velox::vector_size_t i = 0; i < vector->size(); ++i) {
     if (vector->isNullAt(i)) {
       continue;
     }
     std::string value;
-    const auto numTokens = 3 + folly::Random::rand32(6, rng);
+    auto numTokens = 3 + folly::Random::rand32(6, rng);
+    if (regime == 1) {
+      numTokens = 4;
+    } else if (regime == 2 && folly::Random::oneIn(8, rng)) {
+      numTokens = 0;
+    } else if (regime == 3 && folly::Random::oneIn(256, rng)) {
+      numTokens = kMinLongTokens + folly::Random::rand32(kLongTokenRange, rng);
+    }
     for (uint32_t token = 0; token < numTokens; ++token) {
       value += tokens[folly::Random::rand32(kNumTokens, rng)];
     }
