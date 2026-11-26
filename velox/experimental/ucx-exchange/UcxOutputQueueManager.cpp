@@ -65,8 +65,7 @@ void UcxOutputQueueManager::initializeTask(
           "Registering a cudf output queue for pre-existing taskId {}", taskId);
     }
   });
-  // Clear any stale "cancelled" state in the intra-node registry so
-  // that the cancelledTasks_ set doesn't grow unboundedly across queries.
+  // A reused task ID must not inherit the cancellation of its earlier task.
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
   if (kind == core::PartitionedOutputNode::Kind::kPartitioned &&
       !notifications.empty()) {
@@ -259,8 +258,14 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   // Without the entry's lock, which is never held together with the
   // registry's. Sources polling for this task then end with the removal's
   // outcome instead of spinning forever.
-  IntraNodeTransferRegistry::getInstance()->cancelTask(
-      taskId, std::move(outcome));
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  registry->cancelTask(taskId, std::move(outcome));
+  // A dropped entry had no bound reader and its Task is gone, so no server
+  // publishes for it any more. Its cancellation goes with it, so that the
+  // registry keeps no record per removed task for the life of the worker.
+  for (const auto& droppedEntry : droppedEntries) {
+    registry->clearCancelledTask(droppedEntry->taskId());
+  }
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(

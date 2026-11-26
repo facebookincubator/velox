@@ -665,7 +665,17 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
 void UcxOutputQueue::intraNodeChunkRetrieved(int destination) {
   std::lock_guard<std::mutex> l(mutex_);
   auto* slot = findDestinationLocked(destination);
-  if (slot != nullptr && slot->numIntraNodeChunksInFlight > 0) {
+  VELOX_DCHECK_NOT_NULL(slot, "No destination for an intra-node read");
+  if (slot == nullptr) {
+    return;
+  }
+  VELOX_DCHECK_GT(
+      slot->numIntraNodeChunksInFlight,
+      0,
+      "Intra-node read reported without a chunk in flight");
+  // A floor in release builds, so that a count that went wrong cannot hide a
+  // later lost chunk.
+  if (slot->numIntraNodeChunksInFlight > 0) {
     --slot->numIntraNodeChunksInFlight;
   }
 }

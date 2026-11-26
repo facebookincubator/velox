@@ -138,10 +138,11 @@ class IntraNodeTransferRegistry {
   /// cancelled.
   void cancelTransfer(const IntraNodeTransferKey& key);
 
-  /// @brief Remove a task from the cancelled set.
-  /// Called when a task ID is (re)initialized, so that the cancelledTasks_
-  /// set does not grow unboundedly across queries.
-  /// @param taskId The task to clear from the cancelled set
+  /// @brief Remove a task from the cancelled tasks.
+  /// UcxOutputQueueManager calls it when it drops the Removed entry of a task,
+  /// once the host destroyed that Task and no server is bound to it, and when
+  /// a task ID is initialized again.
+  /// @param taskId The task to clear from the cancelled tasks
   void clearCancelledTask(std::string_view taskId);
 
  private:

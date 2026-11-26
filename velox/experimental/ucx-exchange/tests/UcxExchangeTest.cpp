@@ -2155,6 +2155,39 @@ TEST_F(UcxExchangeFocusedTest, intraNodeEndKeepsOutputUntilRetrieved) {
           *session->task, TaskState::kFinished, 3'000'000));
 }
 
+// An intra-node server reports each chunk its source read. A producer removed
+// after its consumer read every chunk, while the end is still unread, has
+// delivered all its output, so the consumer ends cleanly.
+TEST_F(UcxExchangeFocusedTest, intraNodeRemovalAfterLastChunkReadEndsCleanly) {
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "intraNodeAllChunksRead",
+      /*numChunkRows=*/100,
+      /*intraNode=*/true);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const auto chunk = registry->poll(
+      {session->taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  ASSERT_TRUE(chunk.has_value());
+  ASSERT_FALSE(chunk->atEnd);
+  EXPECT_EQ(chunk->numRows, 100);
+  // The server, which requeues itself while it waits, processes the read
+  // between two posted actions.
+  for (int32_t i = 0; i < 2; ++i) {
+    ASSERT_TRUE(runOnCommunicator([] {}));
+  }
+
+  queueManager()->removeTask(session->taskId);
+  const auto end = registry->poll(
+      {session->taskId, /*destination=*/0, /*sequenceNumber=*/1});
+  ASSERT_TRUE(end.has_value());
+  EXPECT_TRUE(end->atEnd);
+  EXPECT_EQ(end->data, nullptr);
+  EXPECT_TRUE(end->outcome.isClean()) << end->outcome.error;
+}
+
 // The close message of an intra-node consumer reaches the producer's entry,
 // which Releases the destination. The server then drops the chunk it published
 // and stops, and the producer finishes rather than fails.

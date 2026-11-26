@@ -806,6 +806,44 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
   }
 }
 
+// The cancellation of a removed task in IntraNodeTransferRegistry lives as long
+// as its Removed entry, so that the registry keeps no record per removed task
+// for the life of the worker.
+TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLeavesIntraNodeRegistry) {
+  const std::string taskId = "removedIntraNodeRecord";
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const IntraNodeTransferKey key{
+      taskId, /*destination=*/0, /*sequenceNumber=*/0};
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  // Other removals keep the record while the Task is alive.
+  queueManager_->removeTask("otherRemovedIntraNodeTask");
+  const auto cancelled = registry->poll(key);
+  ASSERT_TRUE(cancelled.has_value());
+  EXPECT_TRUE(cancelled->atEnd);
+  EXPECT_EQ(cancelled->outcome.kind, OutcomeKind::kProducerError);
+  EXPECT_THAT(
+      cancelled->outcome.error,
+      testing::HasSubstr("Producer task ended before sending all its output"));
+
+  std::weak_ptr<Task> weakTask = task;
+  task.reset();
+  ASSERT_TRUE(weakTask.expired());
+  queueManager_->removeTask("removalAfterIntraNodeTaskDestroyed");
+
+  EXPECT_FALSE(registry->poll(key).has_value());
+  EXPECT_FALSE(registry
+                   ->poll(
+                       {"otherRemovedIntraNodeTask",
+                        /*destination=*/0,
+                        /*sequenceNumber=*/0})
+                   .has_value());
+  registry->clearCancelledTask("removalAfterIntraNodeTaskDestroyed");
+}
+
 // A server bound to a Removed entry keeps it, even after its Task is destroyed.
 TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedEntry) {
   const std::string taskId = "removedEntryWithBoundReader";
@@ -1421,7 +1459,8 @@ TEST_F(
   ASSERT_EQ(chunk->kind, ReaderStep::Kind::kChunk);
 
   auto registry = IntraNodeTransferRegistry::getInstance();
-  const IntraNodeTransferKey chunkKey{taskId, /*destination=*/0, 0};
+  const IntraNodeTransferKey chunkKey{
+      taskId, /*destination=*/0, /*sequenceNumber=*/0};
   auto retrieved = registry->publish(
       chunkKey,
       std::move(chunk->data),

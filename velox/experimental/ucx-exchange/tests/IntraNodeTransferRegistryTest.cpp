@@ -94,7 +94,8 @@ TEST(IntraNodeTransferRegistryTest, publishedEndCarriesOutcome) {
 TEST(IntraNodeTransferRegistryTest, firstCancellationWins) {
   auto registry = IntraNodeTransferRegistry::getInstance();
   const std::string taskId{"registryCancelledTwice"};
-  const IntraNodeTransferKey key{taskId, /*destination=*/0, 0};
+  const IntraNodeTransferKey key{
+      taskId, /*destination=*/0, /*sequenceNumber=*/0};
   auto chunk = std::make_shared<cudf::packed_columns>();
   std::weak_ptr<cudf::packed_columns> weakChunk = chunk;
   auto retrieved = registry->publish(
@@ -120,7 +121,7 @@ TEST(IntraNodeTransferRegistryTest, firstCancellationWins) {
 
   // A server that publishes after the cancellation does not wait.
   auto late = registry->publish(
-      {taskId, /*destination=*/0, 1},
+      {taskId, /*destination=*/0, /*sequenceNumber=*/1},
       std::make_shared<cudf::packed_columns>(),
       /*numRows=*/10,
       /*atEnd=*/false,
@@ -135,8 +136,10 @@ TEST(IntraNodeTransferRegistryTest, firstCancellationWins) {
 TEST(IntraNodeTransferRegistryTest, cancelTransferFulfilsPromise) {
   auto registry = IntraNodeTransferRegistry::getInstance();
   const std::string taskId{"registryCancelledTransfer"};
-  const IntraNodeTransferKey key{taskId, /*destination=*/0, 0};
-  const IntraNodeTransferKey otherKey{taskId, /*destination=*/1, 0};
+  const IntraNodeTransferKey key{
+      taskId, /*destination=*/0, /*sequenceNumber=*/0};
+  const IntraNodeTransferKey otherKey{
+      taskId, /*destination=*/1, /*sequenceNumber=*/0};
   auto chunk = std::make_shared<cudf::packed_columns>();
   std::weak_ptr<cudf::packed_columns> weakChunk = chunk;
   auto retrieved = registry->publish(
