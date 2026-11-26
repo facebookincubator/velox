@@ -714,7 +714,8 @@ TEST_F(GroupedExecutionTest, mixedGroupedNoProbeGroups) {
   task->noMoreSplits(mixedPlan.probeScanId);
   ASSERT_EQ(task->state(), TaskState::kRunning);
   task->start(kNumDrivers, 1);
-  EXPECT_TRUE(waitForTaskCompletion(task.get(), 2'000'000)) << task->toString();
+  EXPECT_TRUE(TaskMonitor::waitForCompletion(*task, 2'000'000))
+      << task->toString();
   EXPECT_EQ(numRows.load(), 0);
   EXPECT_EQ(task->numFinishedDrivers(), kNumDrivers);
   EXPECT_THAT(getCompletedSplitGroups(task), testing::IsEmpty());
@@ -762,7 +763,7 @@ TEST_F(GroupedExecutionTest, mixedGroupedDelayedNoMoreSplits) {
 
     // Deliver the final source notification after all groups have finished.
     task->noMoreSplits(mixedPlan.probeScanId);
-    EXPECT_TRUE(waitForTaskCompletion(task.get(), 2'000'000))
+    EXPECT_TRUE(TaskMonitor::waitForCompletion(*task, 2'000'000))
         << task->toString();
     const auto planStats = exec::toPlanStats(task->taskStats());
     EXPECT_EQ(
