@@ -59,32 +59,25 @@ class CachedRegion {
   std::vector<folly::Range<const char*>> ranges_;
 };
 
+namespace detail {
+// Returns 'fileIoContext' with 'ioStats' as its stats. 'fileIoContext' must not
+// set ioStats.
+FileIoContext withIoStats(FileIoContext fileIoContext, velox::IoStats* ioStats);
+} // namespace detail
+
 class BufferedInput {
  public:
   constexpr static uint64_t kMaxMergeDistance = 1024 * 1024 * 1.25;
 
+  /// Reads 'readFile' with 'fileIoContext', whose 'pool' must be set. The pool
+  /// also holds the buffers of this input.
   BufferedInput(
       std::shared_ptr<ReadFile> readFile,
-      memory::MemoryPool& pool,
+      FileIoContext fileIoContext,
       const MetricsLogPtr& metricsLog = MetricsLog::voidLog(),
       IoStatistics* stats = nullptr,
-      velox::IoStats* ioStats = nullptr,
       uint64_t maxMergeDistance = kMaxMergeDistance,
-      std::optional<bool> wsVRLoad = std::nullopt,
-      folly::F14FastMap<std::string, std::string> fileReadOps = {},
-      bool cacheable = false)
-      : BufferedInput(
-            std::make_shared<ReadFileInputStream>(
-                std::move(readFile),
-                metricsLog,
-                stats,
-                ioStats,
-                std::move(fileReadOps),
-                cacheable,
-                &pool),
-            pool,
-            maxMergeDistance,
-            wsVRLoad) {}
+      std::optional<bool> wsVRLoad = std::nullopt);
 
   BufferedInput(
       std::shared_ptr<ReadFileInputStream> input,

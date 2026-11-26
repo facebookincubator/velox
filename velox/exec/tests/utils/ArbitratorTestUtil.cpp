@@ -72,13 +72,11 @@ core::PlanNodePtr hashJoinPlan(
       .values(vectors, true)
       .project({"c0", "c1", "c2"})
       .hashJoin(
-          {"c0"},
-          {"u1"},
+          "c0 = u1",
           builder.newPlan()
               .values(vectors, true)
               .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
               .planNode(),
-          "",
           {"c0", "c1", "c2"},
           core::JoinType::kInner)
       .capturePlanNodeId(joinNodeId)

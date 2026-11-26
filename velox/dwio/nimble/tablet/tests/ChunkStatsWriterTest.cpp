@@ -19,6 +19,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <array>
 #include <atomic>
 #include <latch>

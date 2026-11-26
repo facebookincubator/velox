@@ -33,7 +33,6 @@ velox_add_library(
   ExtractionUtils.cpp
   FileColumnHandle.cpp
   FileConnector.cpp
-  FileConnectorUtil.cpp
   FileDataSource.cpp
   FileSplitReader.cpp
   FileTableHandle.cpp
@@ -45,7 +44,6 @@ velox_add_library(
   FileColumnHandle.h
   FileConnector.h
   FileConnectorSplit.h
-  FileConnectorUtil.h
   FileDataSource.h
   FileScanState.h
   FileSplitReader.h

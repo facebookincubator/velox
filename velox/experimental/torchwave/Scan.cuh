@@ -680,6 +680,108 @@ __device__ void min_rows(
   }
 }
 
+// Whether key 'a' sorts before 'b': ascending puts NaN last, descending
+// first, as aten's sort.
+template <bool kDescending, typename T>
+__device__ inline bool sortKeyBefore(T a, T b) {
+  if constexpr (kDescending) {
+    return a > b;
+  } else {
+    return a < b;
+  }
+}
+
+template <bool kDescending>
+__device__ inline bool sortKeyBefore(float a, float b) {
+  return kDescending ? (isnan(a) && !isnan(b)) || a > b
+                     : (!isnan(a) && isnan(b)) || a < b;
+}
+
+template <bool kDescending>
+__device__ inline bool sortKeyBefore(double a, double b) {
+  return kDescending ? (isnan(a) && !isnan(b)) || a > b
+                     : (!isnan(a) && isnan(b)) || a < b;
+}
+
+// sort(input, dim=-1) of an input of rank 2 or more: each row's values in
+// order and their indices in the row. A block takes whole rows, rows striding
+// over the op's blocks, and bitonic-sorts a row's (key, index) pairs in the
+// kernel's dynamic shared memory, padded to a power of two with entries that
+// sort last. Ordering equal keys by index makes the sort stable, as aten's
+// radix sort of rows is. The launch provides room for 'kMaxRow' pairs.
+template <int32_t kBlockSize, typename T, int32_t kDescending, int32_t kMaxRow>
+__device__ void
+sort_rows(Tensor* input, Tensor* values, Tensor* indices, BlockInfo& block) {
+  extern __shared__ int64_t sortShared[];
+  const int32_t lastDim = input->rank - 1;
+  const int32_t size = input->dims[lastDim];
+  int64_t numRows = 1;
+  for (int32_t d = 0; d < lastDim; ++d) {
+    numRows *= input->dims[d];
+  }
+  int32_t padded = 1;
+  while (padded < size) {
+    padded <<= 1;
+  }
+  T* keys = reinterpret_cast<T*>(sortShared);
+  int32_t* positions = reinterpret_cast<int32_t*>(
+      reinterpret_cast<char*>(sortShared) + kMaxRow * sizeof(int64_t));
+  const T* in = storage<T>(input);
+  // Another op of the block may have used the same memory before.
+  __syncthreads();
+  for (int64_t row = block.blockInOp; row < numRows;
+       row += block.numBlocksInOp) {
+    for (uint32_t i = threadIdx.x; i < static_cast<uint32_t>(padded);
+         i += blockDim.x) {
+      if (i < static_cast<uint32_t>(size)) {
+        keys[i] = in[rowOffset(input, lastDim, row, i)];
+      }
+      positions[i] = static_cast<int32_t>(i);
+    }
+    __syncthreads();
+    for (int32_t k = 2; k <= padded; k <<= 1) {
+      for (int32_t j = k >> 1; j > 0; j >>= 1) {
+        for (uint32_t i = threadIdx.x; i < static_cast<uint32_t>(padded);
+             i += blockDim.x) {
+          const uint32_t other = i ^ static_cast<uint32_t>(j);
+          if (other <= i) {
+            continue;
+          }
+          const int32_t pi = positions[i];
+          const int32_t po = positions[other];
+          // Whether the pair at 'other' sorts before the one at 'i'.
+          bool otherFirst;
+          if (pi >= size || po >= size) {
+            otherFirst = po < pi;
+          } else if (sortKeyBefore<kDescending != 0>(keys[other], keys[i])) {
+            otherFirst = true;
+          } else if (sortKeyBefore<kDescending != 0>(keys[i], keys[other])) {
+            otherFirst = false;
+          } else {
+            otherFirst = po < pi;
+          }
+          if (otherFirst == ((i & k) == 0)) {
+            // A padding entry's key is never read.
+            const T key = keys[i];
+            keys[i] = keys[other];
+            keys[other] = key;
+            positions[i] = po;
+            positions[other] = pi;
+          }
+        }
+        __syncthreads();
+      }
+    }
+    for (uint32_t i = threadIdx.x; i < static_cast<uint32_t>(size);
+         i += blockDim.x) {
+      storage<T>(values)[rowOffset(values, lastDim, row, i)] = keys[i];
+      storage<int64_t>(indices)[rowOffset(indices, lastDim, row, i)] =
+          positions[i];
+    }
+    __syncthreads();
+  }
+}
+
 // Three-stage cumsum, stage 1: compute per-block sums.
 // TIn is the input element type, TOut is the accumulation type.
 template <int32_t kBlockSize, typename TIn, typename TOut>
@@ -1061,7 +1163,7 @@ __device__ void repeat_interleave_bcast_head(
   // repeatInterleaveFinalReserve refuses a 'total' at INT32_MAX on the host.
   const int64_t totalSum = static_cast<int64_t>(segments) * repeatCount;
   if (totalSum > INT32_MAX && block.blockInOp == 0 && threadIdx.x == 0 &&
-      block.debugInfo) {
+      kernelError(block, __LINE__)) {
     block.debugInfo->line = __LINE__;
     block.debugInfo->extra[0] = segments;
     block.debugInfo->extra[1] = repeatCount;

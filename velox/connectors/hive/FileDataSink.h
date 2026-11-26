@@ -259,6 +259,10 @@ class FileDataSink : public DataSink {
 
   Stats stats() const override;
 
+  uint64_t numDuplicateRows() const override {
+    return numDuplicateRows_;
+  }
+
   std::unordered_map<std::string, RuntimeCounter> runtimeStats() const override;
 
   std::vector<std::string> close() override;
@@ -416,6 +420,8 @@ class FileDataSink : public DataSink {
   std::vector<std::shared_ptr<WriterInfo>> writerInfo_;
   std::vector<std::unique_ptr<dwio::common::Writer>> writers_;
   folly::F14FastMap<std::string, RuntimeMetric> closedWriterStats_;
+  // Rows the writers dropped instead of writing, summed when they close.
+  uint64_t numDuplicateRows_{0};
 
   // Below are structures updated when processing current input. partitionIds_
   // are indexed by the row of input_. partitionRows_, rawPartitionRows_ and

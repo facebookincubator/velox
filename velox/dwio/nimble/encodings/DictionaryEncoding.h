@@ -65,6 +65,7 @@ class DictionaryEncoding
       const Encoding::Options& options = {});
 
   ~DictionaryEncoding() override {
+    this->releaseVectorBuffer(alphabet_);
     this->releaseBuffer(indicesBuffer_);
   }
 
@@ -153,6 +154,11 @@ class DictionaryEncoding
   const Encoding* indicesEncoding() const {
     return indicesEncoding_.get();
   }
+
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
 
  private:
   // Uses unique-value statistics so repeated input values do not skew sampling.
@@ -289,7 +295,7 @@ DictionaryEncoding<T>::DictionaryEncoding(
     std::function<void*(uint32_t)> stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
-      alphabet_{this->pool_} {
+      alphabet_{this->template getVectorBuffer<T>()} {
   const auto* pos = data.data() + this->dataOffset();
   const uint32_t alphabetSize = encoding::readUint32(pos);
   alphabetEncoding_ = EncodingFactory().create(
@@ -309,6 +315,26 @@ DictionaryEncoding<T>::DictionaryEncoding(
 template <typename T>
 void DictionaryEncoding<T>::reset() {
   indicesEncoding_->reset();
+}
+
+template <typename T>
+bool DictionaryEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const auto* pos = data.data() + this->dataOffset();
+  const uint32_t alphabetSize = encoding::readUint32(pos);
+  alphabetEncoding_ = this->rebindChild(
+      {pos, alphabetSize}, stringBufferFactory, std::move(alphabetEncoding_));
+  const uint32_t alphabetCount = alphabetEncoding_->rowCount();
+  alphabet_.resize(alphabetCount);
+  alphabetEncoding_->materialize(alphabetCount, alphabet_.data());
+  pos += alphabetSize;
+  indicesEncoding_ = this->rebindChild(
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+      stringBufferFactory,
+      std::move(indicesEncoding_));
+  filterCacheInitialized_ = false;
+  return true;
 }
 
 template <typename T>

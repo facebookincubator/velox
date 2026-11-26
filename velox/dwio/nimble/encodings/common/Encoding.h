@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "velox/buffer/Buffer.h"
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
@@ -74,6 +75,7 @@ struct DecodingStats;
 
 namespace facebook::nimble {
 
+class DecodedStringBuffers;
 class EncodingBufferPool;
 class SharedDictionaryAlphabet;
 
@@ -258,6 +260,31 @@ class Encoding {
     /// reads and costs more per read. Both settings return the same values, and
     /// reads stay thread safe. Other encodings ignore it.
     bool cacheEncodingView{false};
+
+    /// Gives the cached views created with these options buffers that they
+    /// share to decode strings into, such as the views of the chunks of one
+    /// stream. Their strings then lie in a few buffers instead of at least
+    /// one for each view, so that a caller that keeps the strings it reads by
+    /// holding their buffers, instead of copying them, holds and frees fewer
+    /// buffers. The views do not own it: the caller keeps it alive while the
+    /// views exist. It is not thread-safe, so the caller must not read the
+    /// views that share it at once. The buffers it gives out stay valid while
+    /// a caller holds them. When null, each view decodes into buffers of its
+    /// own. Cached FSST views decode into them the chunks of rows that they
+    /// cache, and the rows of a read given an addStringBuffer that they decode
+    /// for that read alone. Other encodings ignore it.
+    DecodedStringBuffers* decodedStringBuffers{nullptr};
+
+    /// Points to the buffer that holds the bytes that the views created with
+    /// these options read, such as the stream or the decompressed chunk that
+    /// an encoding lies in. A view whose string values point into those bytes
+    /// passes the buffer to the addStringBuffer of its reads, so that a caller
+    /// that holds it keeps the values valid. The views do not own it: the
+    /// caller keeps it alive while the views exist. When null, such a view
+    /// copies its values for those reads instead. A view creates the views of
+    /// its nested encodings, which lie in the same bytes, with the same
+    /// buffer. Other encodings ignore it.
+    velox::Buffer* inputStringBuffer{nullptr};
   };
 
   static constexpr int kEncodingTypeOffset =
@@ -298,6 +325,16 @@ class Encoding {
 
   /// Resets the internal state (e.g. row pointer) to newly constructed form.
   virtual void reset() = 0;
+
+  /// Rebinds this encoding to `data`, another serialized encoding read with
+  /// the construction options, and rewinds it as reset() does, reusing the
+  /// decoder objects and buffers it can. Nested encodings that do not match
+  /// are rebuilt. Returns false, leaving the encoding bound to its segment,
+  /// when `data` has another encoding or data type or the encoding does not
+  /// support rebinding. On success `data` must outlive the reads.
+  bool rebind(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory);
 
   /// Advances the row pointer N rows. Note that we don't provide a 'backwards'
   /// iterator; if you need to move your row pointer back, reset() and skip().
@@ -407,6 +444,22 @@ class Encoding {
   virtual std::string debugString(int offset = 0) const;
 
  protected:
+  // Re-reads the encoding-specific part of `data` for rebind(), which has
+  // already checked and read its prefix; returns false, before reading `data`,
+  // when the encoding does not support rebinding.
+  virtual bool rebindImpl(
+      std::string_view /*data*/,
+      const std::function<void*(uint32_t)>& /*stringBufferFactory*/) {
+    return false;
+  }
+
+  // `child` rebound to `data`, or a new encoding of `data` when it does not
+  // rebind.
+  std::unique_ptr<Encoding> rebindChild(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory,
+      std::unique_ptr<Encoding> child);
+
   static void serializePrefix(
       EncodingType encodingType,
       DataType dataType,
@@ -471,12 +524,14 @@ class Encoding {
   }
 
   velox::memory::MemoryPool* const pool_;
-  const std::string_view data_;
   const EncodingType encodingType_;
   const Options options_;
   const DataType dataType_;
-  const uint32_t rowCount_;
-  const uint32_t prefixSize_;
+  // data_, rowCount_ and prefixSize_ are not const: rebind() points them at
+  // the next segment.
+  std::string_view data_;
+  uint32_t rowCount_;
+  uint32_t prefixSize_;
 };
 
 // The TypedEncoding<physicalType> class exposes the same interface as the base

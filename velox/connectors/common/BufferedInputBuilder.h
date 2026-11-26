@@ -24,8 +24,9 @@
 
 namespace facebook::velox::connector {
 
-/// Registering a different implementation of BufferedInput is allowed using
-/// 'registerBuilder' API.
+/// Creates the BufferedInput for reading a file. A single builder is registered
+/// for the process. The builder registered by default creates the input with
+/// 'createDefault'. 'registerBuilder' replaces it.
 class BufferedInputBuilder {
  public:
   virtual ~BufferedInputBuilder() = default;
@@ -48,6 +49,34 @@ class BufferedInputBuilder {
       std::shared_ptr<IoStats> ioStats,
       folly::Executor* executor,
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {}) = 0;
+
+  /// Creates:
+  /// - a CachedBufferedInput when the query has a data cache;
+  /// - a BufferedInput for Nimble files without direct buffered input;
+  /// - a DirectBufferedInput otherwise.
+  ///
+  /// @param fileHandle The file to read.
+  /// @param readerOpts Reader options. The file format and the Nimble direct
+  /// buffered input flag choose the input. CachedBufferedInput and
+  /// DirectBufferedInput get all the options; BufferedInput gets only the
+  /// memory pool.
+  /// @param connectorQueryCtx Supplies the data cache and the scan ID that
+  /// keys the access tracker.
+  /// @param ioStatistics Typed counters the input updates: bytes read, cache
+  /// hits and I/O latencies.
+  /// @param ioStats Free-form counters passed to each file read, for the file
+  /// system to record its own metrics.
+  /// @param executor Runs asynchronous loads. Not used for Nimble files
+  /// without direct buffered input.
+  /// @param fileReadOps File-system-specific options passed to each file read.
+  static std::unique_ptr<dwio::common::BufferedInput> createDefault(
+      const FileHandle& fileHandle,
+      const dwio::common::ReaderOptions& readerOpts,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      std::shared_ptr<io::IoStatistics> ioStatistics,
+      std::shared_ptr<IoStats> ioStats,
+      folly::Executor* executor,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps);
 
  private:
   static std::shared_ptr<BufferedInputBuilder> builder_;

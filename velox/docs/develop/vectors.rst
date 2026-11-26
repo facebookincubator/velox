@@ -291,6 +291,12 @@ Constant vectors are represented using ConstantVector<T> template which contains
 a value and a boolean indicating whether the value is null or not. It may
 contain a string buffer if T = StringView and the string is longer than 12
 characters.
+When the constant is built from another vector, the string buffer can be the
+source vector's string buffer rather than a copy, if the buffer belongs to the
+constant's memory pool. A constant built from another constant shares its
+buffer at any size. One built from a flat vector shares only strings longer
+than about 1 MB that fill at least half of their buffer, since a flat vector
+reuses its string buffers and packs many strings into one.
 
 .. code-block:: c++
 

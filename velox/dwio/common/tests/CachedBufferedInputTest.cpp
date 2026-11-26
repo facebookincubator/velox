@@ -179,7 +179,8 @@ class CachedBufferedInputTest : public testing::Test {
         dataIoStats_,
         nullptr,
         nullptr,
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     auto stream1 = input.enqueue(common::Region{kOffset, kRegionSize}, nullptr);
     auto stream2 = input.enqueue(common::Region{kOffset, kRegionSize}, nullptr);
@@ -318,7 +319,8 @@ TEST_F(CachedBufferedInputTest, reset) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   // First round: enqueue and load streams.
   constexpr int32_t kRegionSize = 8 << 10; // 8KB
@@ -465,7 +467,8 @@ TEST_F(CachedBufferedInputTest, readAfterReset) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr int32_t kRegionSize = 8 << 10; // 8KB
 
@@ -534,7 +537,8 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithBeforeLoading) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr int32_t kRegionSize = 8 << 10; // 8KB
 
@@ -632,7 +636,8 @@ DEBUG_ONLY_TEST_F(CachedBufferedInputTest, resetInputWithAfterLoading) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr int32_t kRegionSize = 8 << 10; // 8KB
 
@@ -728,7 +733,8 @@ TEST_F(CachedBufferedInputTest, hasCache) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   // CachedBufferedInput always has cache.
   EXPECT_TRUE(input.hasCache());
@@ -761,7 +767,8 @@ TEST_P(CacheRegionTest, cacheAndFind) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   // Initially no regions are cached.
   EXPECT_FALSE(input.findCachedRegion(0).has_value());
@@ -830,7 +837,8 @@ TEST_P(CacheRegionTest, smallEntry) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr uint64_t kOffset = 0;
   constexpr uint64_t kSize = 100;
@@ -901,7 +909,8 @@ TEST_P(CacheRegionTest, largeEntry) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr uint64_t kOffset = 0;
   constexpr uint64_t kSize = 64 * 1024; // 64KB
@@ -966,7 +975,8 @@ TEST_P(CacheRegionTest, miss) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   EXPECT_FALSE(input.findCachedRegion(0).has_value());
   EXPECT_FALSE(input.findCachedRegion(12345).has_value());
@@ -999,7 +1009,8 @@ TEST_P(CacheRegionTest, pinKeepsDataAlive) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr uint64_t kSize = 100;
   cacheRegionWithApi(input, 0, kSize, content.data());
@@ -1069,7 +1080,8 @@ TEST_F(CachedBufferedInputTest, findCachedRegionExclusiveWithWait) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr uint64_t kOffset = 0;
   constexpr uint64_t kSize = 100;
@@ -1153,7 +1165,8 @@ TEST_F(CachedBufferedInputTest, cacheRegionSkipsOngoingInsert) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   constexpr uint64_t kOffset = 0;
   constexpr uint64_t kSize = 100;
@@ -1218,7 +1231,8 @@ TEST_F(CachedBufferedInputTest, preloadCalledTwice) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   input.preload();
   ASSERT_TRUE(input.preloaded());
@@ -1246,7 +1260,8 @@ TEST_F(CachedBufferedInputTest, isBufferedWithPreload) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   // Before preload, isBuffered should return false.
   EXPECT_FALSE(input.isBuffered(0, 100));
@@ -1280,7 +1295,8 @@ TEST_F(CachedBufferedInputTest, enqueueSkipsRequestsWhenPreloaded) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   ASSERT_EQ(readFile->numReads(), 0);
 
@@ -1334,7 +1350,8 @@ TEST_F(CachedBufferedInputTest, readSetsPreloadedPinWhenPreloaded) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   ASSERT_EQ(readFile->numReads(), 0);
 
@@ -1376,7 +1393,8 @@ TEST_F(CachedBufferedInputTest, preloadAfterEnqueue) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   input.enqueue({0, 100}, nullptr);
   VELOX_ASSERT_THROW(
@@ -1416,7 +1434,8 @@ TEST_F(CachedBufferedInputTest, preloadedStreamSkipsEviction) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   ASSERT_EQ(readFile->numReads(), 0);
 
@@ -1483,7 +1502,8 @@ TEST_F(CachedBufferedInputTest, preloadRespectsNotCacheable) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     input.preload();
     ASSERT_TRUE(input.preloaded());
@@ -1531,7 +1551,8 @@ TEST_F(CachedBufferedInputTest, preloadRespectsCacheable) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     input.preload();
     ASSERT_TRUE(input.preloaded());
@@ -1589,7 +1610,8 @@ TEST_F(CachedBufferedInputTest, preload) {
         dataIoStats_,
         nullptr,
         executor_.get(),
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     ASSERT_EQ(readFile->numReads(), 0);
     EXPECT_FALSE(input.preloaded());
@@ -1672,7 +1694,8 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   ASSERT_EQ(readFile->numReads(), 0);
 
@@ -1698,7 +1721,8 @@ TEST_F(CachedBufferedInputTest, preloadCacheSharing) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   input2.preload();
   EXPECT_TRUE(input2.preloaded());
@@ -1755,7 +1779,8 @@ TEST_F(CachedBufferedInputTest, prefetchScope) {
       dataIoStats_,
       nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   // Enqueue non-prefetch requests (with stream IDs).
   constexpr int32_t kNumRequests = 3;
@@ -1821,7 +1846,8 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
       dataIoStats_,
       /*ioStats=*/nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   ASSERT_TRUE(input.hasCache());
 
@@ -1872,7 +1898,8 @@ TEST_F(CachedBufferedInputTest, cloneNonCacheable) {
       dataIoStats_,
       /*ioStats=*/nullptr,
       executor_.get(),
-      readerOptions);
+      readerOptions,
+      FileIoContext{.pool = &readerOptions.memoryPool()});
 
   auto stream2 = cacheableInput.enqueue({kOffset, kLength}, &sid);
   cacheableInput.load(LogType::FILE);
@@ -1942,7 +1969,8 @@ TEST_F(CachedBufferedInputTest, readGapTracking) {
         // Gaps are recorded synchronously in load(). An executor would run
         // prefetches that outlive 'input' and its file id lease.
         nullptr,
-        readerOptions);
+        readerOptions,
+        FileIoContext{.pool = &readerOptions.memoryPool()});
 
     for (const auto& region : testCase.regions) {
       input.enqueue(region, nullptr);

@@ -604,6 +604,9 @@ TEST_F(PartitionedEliasFanoEncodingTest, estimateRejectsShortPartitions) {
   EXPECT_TRUE(estimate({32, 32}).has_value());
   EXPECT_TRUE(estimate({60, 4}).has_value());
   EXPECT_FALSE(estimate({59, 4}).has_value());
+  // Short leading runs still meet the average when a longer run follows.
+  EXPECT_TRUE(estimate({4, 60}).has_value());
+  EXPECT_TRUE(estimate({2, 2, 92}).has_value());
 }
 
 TEST_F(PartitionedEliasFanoEncodingTest, selectionWeighsPartitionsBySize) {

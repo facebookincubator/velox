@@ -360,13 +360,11 @@ class OperatorReplacementTest : public OperatorTestBase {
     auto plan = builder.newPlan()
                     .values({leftBatch}, false)
                     .hashJoin(
-                        {"c0"},
-                        {"u1"},
+                        "c0 = u1",
                         builder.newPlan()
                             .values(rightBatch, false)
                             .project({"c0 AS u1"})
                             .planNode(),
-                        "",
                         {"c0"})
                     .project({"c0"})
                     .planNode();

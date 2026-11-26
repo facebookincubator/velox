@@ -194,6 +194,16 @@ TEST(NimbleWriterFuzzerTest, pointLookupsMatchInput) {
     }
   }
 
+  uint64_t numModeLookups{0};
+  for (const auto& [mode, counts] : coverage.byFileStatsMode) {
+    EXPECT_LE(counts.numLookupsPrunedByFileStats, counts.numLookups) << mode;
+    numModeLookups += counts.numLookups;
+  }
+  EXPECT_EQ(numModeLookups, numLookups);
+  EXPECT_EQ(coverage.byFileStatsMode.size(), 2U);
+  EXPECT_TRUE(coverage.byFileStatsMode.contains("eager"));
+  EXPECT_TRUE(coverage.byFileStatsMode.contains("lazy"));
+
   uint64_t numBucketedLookups{0};
   for (const auto& [anchoring, buckets] : coverage.lookupsByMatchedRows) {
     for (const auto& [bucket, count] : buckets) {
@@ -209,9 +219,9 @@ TEST(NimbleWriterFuzzerTest, pointLookupsMatchInput) {
 }
 
 // Checks that point lookups run the connector's check for skipping a file by
-// its statistics: some lookups filter above a column's largest value, so the
-// connector skips their file. A lookup fails if the connector skips a file
-// holding a row that passes every filter.
+// its statistics, read eagerly and lazily: some lookups filter above a
+// column's largest value, so the connector skips their file. A lookup fails if
+// the connector skips a file holding a row that passes every filter.
 TEST(NimbleWriterFuzzerTest, pointLookupsPruneFilesByStats) {
   auto rootPool = velox::memory::memoryManager()->addRootPool(
       "pointLookupsPruneFilesByStats", velox::memory::kMaxMemory);
@@ -230,14 +240,25 @@ TEST(NimbleWriterFuzzerTest, pointLookupsPruneFilesByStats) {
     }
     return numPrunes;
   };
-  // Runs until statistics rule out the file of an above-max lookup. About one
-  // lookup in 40 gets there, and an iteration runs 10 lookups.
-  for (int iteration = 0; iteration < 30 && numAboveMaxPrunes() == 0;
+  const auto numPrunes = [&](const std::string& fileStatsMode) -> uint64_t {
+    const auto& byMode = fuzzer.pointLookupCoverage().byFileStatsMode;
+    const auto counts = byMode.find(fileStatsMode);
+    return counts == byMode.end() ? 0
+                                  : counts->second.numLookupsPrunedByFileStats;
+  };
+  // Runs until statistics rule out the file of an above-max lookup, and of a
+  // lookup in each file stats mode. About one lookup in 40 gets there, half of
+  // the lookups read the statistics lazily, and an iteration runs 10 lookups.
+  for (int iteration = 0; iteration < 30 &&
+       (numAboveMaxPrunes() == 0 || numPrunes("eager") == 0 ||
+        numPrunes("lazy") == 0);
        ++iteration) {
     fuzzer.run();
     fuzzer.reSeed();
   }
   EXPECT_GT(numAboveMaxPrunes(), 0U);
+  EXPECT_GT(numPrunes("eager"), 0U);
+  EXPECT_GT(numPrunes("lazy"), 0U);
 }
 
 TEST(NimbleWriterFuzzerTest, run) {

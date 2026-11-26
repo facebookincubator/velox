@@ -668,6 +668,39 @@ TEST_F(FieldReaderTest, mapGrowthAllocatesOnlyOwnedBuffers) {
       testing::Each(17));
 }
 
+TEST_F(FieldReaderTest, arrayRebuildsEmptyReusedOutput) {
+  SchemaBuilder builder;
+  const auto array = builder.createArrayTypeBuilder();
+  const auto elements = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  array->setChildren(elements);
+  decoders_[array->lengthsDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<uint32_t>>(2);
+  decoders_[elements->scalarDescriptor().offset()] =
+      std::make_unique<RepeatingDecoder<int64_t>>(17);
+  createReader(builder);
+  output_ = velox::BaseVector::create(
+      velox::ARRAY(velox::BIGINT()), /*size=*/0, pool_.get());
+  const auto* emptyElements =
+      output_->as<velox::ArrayVector>()->elements().get();
+
+  next(16);
+
+  const auto* arrayOutput = output_->as<velox::ArrayVector>();
+  ASSERT_NE(arrayOutput, nullptr);
+  EXPECT_EQ(arrayOutput->elements().get(), emptyElements);
+  ASSERT_EQ(arrayOutput->size(), 16);
+  for (velox::vector_size_t i = 0; i < 16; ++i) {
+    EXPECT_EQ(arrayOutput->offsetAt(i), 2 * i);
+    EXPECT_EQ(arrayOutput->sizeAt(i), 2);
+  }
+  const auto* elementOutput = arrayOutput->elements()->asFlatVector<int64_t>();
+  ASSERT_EQ(elementOutput->size(), 32);
+  EXPECT_THAT(
+      std::vector<int64_t>(
+          elementOutput->rawValues(), elementOutput->rawValues() + 32),
+      testing::Each(17));
+}
+
 TEST_F(FieldReaderTest, rebuildsArrayWhenMetadataBuffersAreShared) {
   SchemaBuilder builder;
   const auto array = builder.createArrayTypeBuilder();

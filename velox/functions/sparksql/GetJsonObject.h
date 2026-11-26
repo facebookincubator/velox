@@ -267,8 +267,8 @@ struct GetJsonObjectFunction {
         ? jsonPath_.value()
         : pathNormalizer_.normalize(jsonPath);
     simdjson::ondemand::document jsonDoc;
-    simdjson::padded_string paddedJson(input.data(), input.size());
-    if (simdjsonParseIncomplete(paddedJson).get(jsonDoc)) {
+    if (simdjsonParseIncomplete(toPaddedStringView(input, paddedJson_))
+            .get(jsonDoc)) {
       return false;
     }
     try {
@@ -500,6 +500,7 @@ struct GetJsonObjectFunction {
   std::string minified_;
   std::string escapedJson_;
   std::string normalizedJson_;
+  std::string paddedJson_;
   size_t unconsumedSize_{0};
 };
 

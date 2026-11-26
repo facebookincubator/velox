@@ -95,10 +95,8 @@ TEST_P(HashJoinTest, memory) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, true)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, true).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .project({"t_k1 % 1000 AS k1", "u_k1 % 1000 AS k2"})
                   .singleAggregation({}, {"sum(k1)", "sum(k2)"})
@@ -115,7 +113,7 @@ TEST_P(HashJoinTest, lazyVectors) {
   // rows in scope at different times.
   auto probeVectors = makeBatches(3, [&](int32_t /*unused*/) {
     return makeRowVector(
-        {makeFlatVector<int32_t>(3'000, [](auto row) { return row; }),
+        {makeFlatIdentityVector<int32_t>(3'000),
          makeFlatVector<int64_t>(30'000, [](auto row) { return row % 23; }),
          makeFlatVector<int32_t>(30'000, [](auto row) { return row % 31; }),
          makeFlatVector<StringView>(30'000, [](auto row) {
@@ -171,13 +169,11 @@ TEST_P(HashJoinTest, lazyVectors) {
     auto op = builder.tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"c0"},
-                      {"c0"},
+                      "c0 = c0",
                       builder.newPlan()
                           .tableScan(ROW({"c0"}, {INTEGER()}))
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
-                      "",
                       {"c1"})
                   .project({"c1 + 1"})
                   .planNode();
@@ -200,14 +196,12 @@ TEST_P(HashJoinTest, lazyVectors) {
                   .capturePlanNodeId(probeScanId)
                   .filter("c2 < 29")
                   .hashJoin(
-                      {"c0"},
-                      {"bc0"},
+                      "c0 = bc0 AND (c1 + bc1) % 33 < 27",
                       builder.newPlan()
                           .tableScan(ROW({"c0", "c1"}, {INTEGER(), BIGINT()}))
                           .capturePlanNodeId(buildScanId)
                           .project({"c0 as bc0", "c1 as bc1"})
                           .planNode(),
-                      "(c1 + bc1) % 33 < 27",
                       {"c1", "bc1", "c3"})
                   .project({"c1 + 1", "bc1", "length(c3)"})
                   .planNode();
@@ -342,7 +336,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeEnsureLazyInputLoaded) {
     if (testData.useDeterministicData) {
       auto probe = makeRowVector(
           {"t_k1", "t_k2", "t_v1"},
-          {makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+          {makeFlatIdentityVector<int32_t>(1'000),
            makeFlatVector<StringView>(
                1'000,
                [](auto /*row*/) { return StringView::makeInline("probe"); }),
@@ -445,10 +439,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeEnsureLazyInputLoaded) {
       auto plan =
           builder.values(probeVectors, false)
               .hashJoin(
-                  {"t_k1"},
-                  {"u_k1"},
+                  "t_k1 = u_k1",
                   builder.newPlan().values(buildInput, false).planNode(),
-                  "",
                   concat(probeType_->names(), buildType_->names()))
               .planNode();
 
@@ -475,14 +467,14 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeEnsureLazyInputLoaded) {
 DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillWhileLoadingLazyInput) {
   const auto probe = makeRowVector(
       {"t_k", "t_v"},
-      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
-       makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+      {makeFlatIdentityVector<int64_t>(1'000),
+       makeFlatIdentityVector<int64_t>(1'000)});
   // The build rows share one key, so only the probe rows in its spill partition
   // are spilled.
   const auto build = makeRowVector(
       {"u_k", "u_v"},
       {makeFlatVector<int64_t>(2'000, [](auto /*row*/) { return 1; }),
-       makeFlatVector<int64_t>(2'000, [](auto row) { return row; })});
+       makeFlatIdentityVector<int64_t>(2'000)});
   createDuckDbTable("t", {probe});
   createDuckDbTable("u", {build});
 
@@ -523,12 +515,10 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeSpillWhileLoadingLazyInput) {
     // Anti and left semi project joins load lazy probe input only with a
     // filter.
     PlanBuilder plan;
-    plan.values({VectorFuzzer::fuzzRowChildrenToLazy(probe, {1})})
+    plan.values(VectorFuzzer::fuzzRowChildrenToLazy(probe, {1}))
         .hashJoin(
-            {"t_k"},
-            {"u_k"},
-            plan.newPlan().values({build}).planNode(),
-            "t_v <> u_v",
+            "t_k = u_k AND t_v <> u_v",
+            plan.newPlan().values(build).planNode(),
             testData.outputLayout,
             testData.joinType);
 
@@ -559,7 +549,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
     auto rowVector = makeRowVector({
         makeFlatVector<int32_t>(
             numRowsProbe, [&](auto row) { return row - i * 10; }),
-        makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numRowsProbe),
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(writeToFile(rowVector));
@@ -586,7 +576,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
         makeFlatVector<int32_t>(
             numRowsBuild / 5,
             [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
-        makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numRowsBuild / 5),
     }));
   }
   std::vector<RowVectorPtr> keyOnlyBuildVectors;
@@ -622,10 +612,8 @@ TEST_P(HashJoinTest, dynamicFilters) {
                   .tableScan(probeType)
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"c0"},
-                      {"u_c0"},
+                      "c0 = u_c0",
                       buildSide,
-                      "",
                       {"c0", "c1", "u_c1"},
                       core::JoinType::kInner)
                   .capturePlanNodeId(joinId)
@@ -669,13 +657,11 @@ TEST_P(HashJoinTest, dynamicFilters) {
       plan.tableScan(probeType)
           .capturePlanNodeId(probeScanId)
           .hashJoin(
-              {"c0", "c0"},
-              {"u_c0", "u_k"},
+              "c0 = u_c0 AND c0 = u_k",
               plan.newPlan()
                   .values(buildVectors)
                   .project({"c0 AS u_c0", "(c0 + 1000)::integer AS u_k"})
                   .planNode(),
-              "",
               {"c0", "c1"},
               core::JoinType::kInner);
       HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -697,10 +683,8 @@ TEST_P(HashJoinTest, dynamicFilters) {
              .tableScan(probeType)
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
+                 "c0 = u_c0",
                  buildSide,
-                 "",
                  {"c0", "c1"},
                  core::JoinType::kLeftSemiFilter)
              .capturePlanNodeId(joinId)
@@ -742,10 +726,8 @@ TEST_P(HashJoinTest, dynamicFilters) {
              .tableScan(probeType)
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
+                 "c0 = u_c0",
                  buildSide,
-                 "",
                  {"u_c0", "u_c1"},
                  core::JoinType::kRightSemiFilter)
              .capturePlanNodeId(joinId)
@@ -787,10 +769,8 @@ TEST_P(HashJoinTest, dynamicFilters) {
              .tableScan(probeType)
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
+                 "c0 = u_c0",
                  buildSide,
-                 "",
                  {"c0", "c1", "u_c1"},
                  core::JoinType::kRight)
              .capturePlanNodeId(joinId)
@@ -830,10 +810,8 @@ TEST_P(HashJoinTest, dynamicFilters) {
              .tableScan(probeType)
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
+                 "c0 = u_c0",
                  buildSide,
-                 "",
                  {"u_c0", "u_c1"},
                  core::JoinType::kRightAnti)
              .capturePlanNodeId(joinId)
@@ -887,7 +865,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
                   .assignments(assignments)
                   .endTableScan()
                   .capturePlanNodeId(probeScanId)
-                  .hashJoin({"a"}, {"u_c0"}, buildSide, "", {"a", "b", "u_c1"})
+                  .hashJoin("a = u_c0", buildSide, {"a", "b", "u_c1"})
                   .capturePlanNodeId(joinId)
                   .project({"a", "b + 1", "b + u_c1"})
                   .planNode();
@@ -929,7 +907,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
     auto op = builder.newPlan()
                   .tableScan(probeType, {"c0 < 500::INTEGER"})
                   .capturePlanNodeId(probeScanId)
-                  .hashJoin({"c0"}, {"u_c0"}, buildSide, "", {"c1", "u_c1"})
+                  .hashJoin("c0 = u_c0", buildSide, {"c1", "u_c1"})
                   .capturePlanNodeId(joinId)
                   .project({"c1 + u_c1"})
                   .planNode();
@@ -968,14 +946,13 @@ TEST_P(HashJoinTest, dynamicFilters) {
     SCOPED_TRACE("canReplaceWithDynamicFilter");
     core::PlanNodeId probeScanId;
     core::PlanNodeId joinId;
-    auto op =
-        builder.newPlan()
-            .tableScan(probeType)
-            .capturePlanNodeId(probeScanId)
-            .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0", "c1"})
-            .capturePlanNodeId(joinId)
-            .project({"c0", "c1 + 1"})
-            .planNode();
+    auto op = builder.newPlan()
+                  .tableScan(probeType)
+                  .capturePlanNodeId(probeScanId)
+                  .hashJoin("c0 = u_c0", keyOnlyBuildSide, {"c0", "c1"})
+                  .capturePlanNodeId(joinId)
+                  .project({"c0", "c1 + 1"})
+                  .planNode();
 
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
         .planNode(std::move(op))
@@ -1016,7 +993,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
     auto op = builder.newPlan()
                   .tableScan(probeType)
                   .capturePlanNodeId(probeScanId)
-                  .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c0"})
+                  .hashJoin("c0 = u_c0", keyOnlyBuildSide, {"c0"})
                   .capturePlanNodeId(joinId)
                   .planNode();
 
@@ -1058,7 +1035,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
     auto op = builder.newPlan()
                   .tableScan(probeType, {"c0 < 500::INTEGER"})
                   .capturePlanNodeId(probeScanId)
-                  .hashJoin({"c0"}, {"u_c0"}, keyOnlyBuildSide, "", {"c1"})
+                  .hashJoin("c0 = u_c0", keyOnlyBuildSide, {"c1"})
                   .capturePlanNodeId(joinId)
                   .project({"c1 + 1"})
                   .planNode();
@@ -1102,8 +1079,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
         builder.newPlan()
             .tableScan(probeType, {"c0 < 200::INTEGER"})
             .capturePlanNodeId(probeScanId)
-            .hashJoin(
-                {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kInner)
+            .hashJoin("c0 = u_c0", buildSide, {"c1"}, core::JoinType::kInner)
             .capturePlanNodeId(joinId)
             .project({"c1 + 1"})
             .planNode();
@@ -1140,19 +1116,15 @@ TEST_P(HashJoinTest, dynamicFilters) {
     }
 
     // Left semi join.
-    op = builder.newPlan()
-             .tableScan(probeType, {"c0 < 200::INTEGER"})
-             .capturePlanNodeId(probeScanId)
-             .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
-                 buildSide,
-                 "",
-                 {"c1"},
-                 core::JoinType::kLeftSemiFilter)
-             .capturePlanNodeId(joinId)
-             .project({"c1 + 1"})
-             .planNode();
+    op =
+        builder.newPlan()
+            .tableScan(probeType, {"c0 < 200::INTEGER"})
+            .capturePlanNodeId(probeScanId)
+            .hashJoin(
+                "c0 = u_c0", buildSide, {"c1"}, core::JoinType::kLeftSemiFilter)
+            .capturePlanNodeId(joinId)
+            .project({"c1 + 1"})
+            .planNode();
 
     {
       SCOPED_TRACE("Left semi join");
@@ -1190,10 +1162,8 @@ TEST_P(HashJoinTest, dynamicFilters) {
              .tableScan(probeType, {"c0 < 200::INTEGER"})
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
+                 "c0 = u_c0",
                  buildSide,
-                 "",
                  {"u_c1"},
                  core::JoinType::kRightSemiFilter)
              .capturePlanNodeId(joinId)
@@ -1232,15 +1202,13 @@ TEST_P(HashJoinTest, dynamicFilters) {
     }
 
     // Right join.
-    op =
-        builder.newPlan()
-            .tableScan(probeType, {"c0 < 200::INTEGER"})
-            .capturePlanNodeId(probeScanId)
-            .hashJoin(
-                {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kRight)
-            .capturePlanNodeId(joinId)
-            .project({"c1 + 1"})
-            .planNode();
+    op = builder.newPlan()
+             .tableScan(probeType, {"c0 < 200::INTEGER"})
+             .capturePlanNodeId(probeScanId)
+             .hashJoin("c0 = u_c0", buildSide, {"c1"}, core::JoinType::kRight)
+             .capturePlanNodeId(joinId)
+             .project({"c1 + 1"})
+             .planNode();
 
     {
       SCOPED_TRACE("Right join");
@@ -1280,7 +1248,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
     core::PlanNodeId joinId;
     auto op = builder.newPlan()
                   .values(probeVectors)
-                  .hashJoin({"c0"}, {"u_c0"}, buildSide, "", {"c1"})
+                  .hashJoin("c0 = u_c0", buildSide, {"c1"})
                   .capturePlanNodeId(joinId)
                   .project({"c1 + 1"})
                   .planNode();
@@ -1306,7 +1274,7 @@ TEST_P(HashJoinTest, dynamicFilters) {
                   .tableScan(probeType)
                   .capturePlanNodeId(probeScanId)
                   .project({"cast(c0 + 1 as integer) AS t_key", "c1"})
-                  .hashJoin({"t_key"}, {"u_c0"}, buildSide, "", {"c1"})
+                  .hashJoin("t_key = u_c0", buildSide, {"c1"})
                   .capturePlanNodeId(joinId)
                   .project({"c1 + 1"})
                   .planNode();
@@ -1339,7 +1307,7 @@ TEST_P(HashJoinTest, dynamicFiltersStatsWithChainedJoins) {
     auto rowVector = makeRowVector({
         makeFlatVector<int32_t>(
             numProbeRows, [&](auto row) { return row - i * 10; }),
-        makeFlatVector<int64_t>(numProbeRows, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numProbeRows),
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(writeToFile(rowVector));
@@ -1364,7 +1332,7 @@ TEST_P(HashJoinTest, dynamicFiltersStatsWithChainedJoins) {
         makeFlatVector<int32_t>(
             numBuildRows / 5,
             [i](auto row) { return 35 + 2 * (row + i * numBuildRows / 5); }),
-        makeFlatVector<int64_t>(numBuildRows / 5, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numBuildRows / 5),
     }));
   }
 
@@ -1386,27 +1354,21 @@ TEST_P(HashJoinTest, dynamicFiltersStatsWithChainedJoins) {
   core::PlanNodeId probeScanId;
   core::PlanNodeId joinId1;
   core::PlanNodeId joinId2;
-  auto op = builder.newPlan()
-                .tableScan(probeType)
-                .capturePlanNodeId(probeScanId)
-                .hashJoin(
-                    {"c0"},
-                    {"u_c0"},
-                    buildSide1,
-                    "",
-                    {"c0", "c1"},
-                    core::JoinType::kInner)
-                .capturePlanNodeId(joinId1)
-                .hashJoin(
-                    {"c0"},
-                    {"u_c0"},
-                    buildSide2,
-                    "",
-                    {"c0", "c1", "u_c1"},
-                    core::JoinType::kInner)
-                .capturePlanNodeId(joinId2)
-                .project({"c0", "c1 + 1", "c1 + u_c1"})
-                .planNode();
+  auto op =
+      builder.newPlan()
+          .tableScan(probeType)
+          .capturePlanNodeId(probeScanId)
+          .hashJoin(
+              "c0 = u_c0", buildSide1, {"c0", "c1"}, core::JoinType::kInner)
+          .capturePlanNodeId(joinId1)
+          .hashJoin(
+              "c0 = u_c0",
+              buildSide2,
+              {"c0", "c1", "u_c1"},
+              core::JoinType::kInner)
+          .capturePlanNodeId(joinId2)
+          .project({"c0", "c1 + 1", "c1 + u_c1"})
+          .planNode();
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .planNode(std::move(op))
       .makeInputSplits(makeInputSplits(probeScanId))
@@ -1443,7 +1405,7 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
     auto rowVector = makeRowVector({
         makeFlatVector<int32_t>(
             numRowsProbe, [&](auto row) { return row - i * 10; }),
-        makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numRowsProbe),
         makeFlatVector<int64_t>(
             numRowsProbe, [&](auto /*row*/) { return i % 2 == 0 ? 0 : i; }),
     });
@@ -1485,7 +1447,7 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
         makeFlatVector<int32_t>(
             numRowsBuild / 5,
             [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
-        makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numRowsBuild / 5),
     }));
   }
   std::vector<RowVectorPtr> keyOnlyBuildVectors;
@@ -1519,10 +1481,8 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
                   .tableScan(probeType, {"c2 > 0"})
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"c0"},
-                      {"u_c0"},
+                      "c0 = u_c0",
                       buildSide,
-                      "",
                       {"c0", "c1", "u_c1"},
                       core::JoinType::kInner)
                   .project({"c0", "c1 + 1", "c1 + u_c1"})
@@ -1560,10 +1520,8 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
              .tableScan(probeType, {"c2 > 0"})
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
+                 "c0 = u_c0",
                  buildSide,
-                 "",
                  {"c0", "c1"},
                  core::JoinType::kLeftSemiFilter)
              .project({"c0", "c1 + 1"})
@@ -1603,10 +1561,8 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
              .tableScan(probeType, {"c2 > 0"})
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"c0"},
-                 {"u_c0"},
+                 "c0 = u_c0",
                  buildSide,
-                 "",
                  {"u_c0", "u_c1"},
                  core::JoinType::kRightSemiFilter)
              .project({"u_c0", "u_c1 + 1"})
@@ -1656,7 +1612,7 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
                 return StringView::makeInline(
                     fmt::format("key_{}", row - i * 10));
               }),
-          makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+          makeFlatIdentityVector<int64_t>(numRowsProbe),
           makeFlatVector<int64_t>(
               numRowsProbe, [&](auto /*row*/) { return i % 2 == 0 ? 0 : i; }),
       });
@@ -1702,8 +1658,7 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
                     fmt::format(
                         "key_{}", 35 + 2 * (row + i * numRowsBuild / 5)));
               }),
-          makeFlatVector<int64_t>(
-              numRowsBuild / 5, [](auto row) { return row; }),
+          makeFlatIdentityVector<int64_t>(numRowsBuild / 5),
       }));
     }
 
@@ -1726,10 +1681,8 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
                     .tableScan(stringProbeType, {"c2 > 0"})
                     .capturePlanNodeId(probeScanId)
                     .hashJoin(
-                        {"c0"},
-                        {"u_c0"},
+                        "c0 = u_c0",
                         stringBuildSide,
-                        "",
                         {"c0", "c1", "u_c1"},
                         core::JoinType::kInner)
                     .project({"c0", "c1 + 1", "c1 + u_c1"})
@@ -1774,10 +1727,8 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
                     .tableScan(stringProbeType, {"c2 > 0"})
                     .capturePlanNodeId(probeScanId)
                     .hashJoin(
-                        {"c0"},
-                        {"u_c0"},
+                        "c0 = u_c0",
                         stringBuildSide,
-                        "",
                         {"c0", "c1"},
                         core::JoinType::kLeftSemiFilter)
                     .project({"c0", "c1 + 1"})
@@ -1823,10 +1774,8 @@ TEST_P(HashJoinTest, dynamicFiltersWithSkippedSplits) {
                     .tableScan(stringProbeType, {"c2 > 0"})
                     .capturePlanNodeId(probeScanId)
                     .hashJoin(
-                        {"c0"},
-                        {"u_c0"},
+                        "c0 = u_c0",
                         stringBuildSide,
-                        "",
                         {"u_c0", "u_c1"},
                         core::JoinType::kRightSemiFilter)
                     .project({"u_c0", "u_c1 + 1"})
@@ -1948,7 +1897,7 @@ TEST_P(HashJoinTest, customTypeStringDynamicFilterNotPushedDown) {
   auto probeVector = makeRowVector(
       {"c0", "c1"},
       {makeFlatVector<StringView>(kNumRows, keyAt, nullptr, VARBINARY()),
-       makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; })});
+       makeFlatIdentityVector<int64_t>(kNumRows)});
   auto probeFile = writeToFile(probeVector);
 
   // Only three build keys, so a pushed-down filter would be highly selective
@@ -1969,20 +1918,19 @@ TEST_P(HashJoinTest, customTypeStringDynamicFilterNotPushedDown) {
     // custom type is only equivalent to itself.
     auto buildSide =
         builder
-            .values({makeNamedRowVector(
+            .values(makeNamedRowVector(
                 "u_c0",
                 makeFlatVector<StringView>(
                     buildRows.size(),
                     [&](auto row) { return keyAt(buildRows[row]); },
                     nullptr,
-                    keyType))})
+                    keyType)))
             .planNode();
     auto plan =
         builder.newPlan()
             .tableScan(ROW({"c0", "c1"}, {keyType, BIGINT()}))
             .capturePlanNodeId(probeScanId)
-            .hashJoin(
-                {"c0"}, {"u_c0"}, buildSide, "", {"c1"}, core::JoinType::kInner)
+            .hashJoin("c0 = u_c0", buildSide, {"c1"}, core::JoinType::kInner)
             .planNode();
 
     TaskPtr task;
@@ -2094,10 +2042,8 @@ TEST_P(HashJoinTest, dynamicFiltersAppliedToPreloadedSplits) {
                 .endTableScan()
                 .capturePlanNodeId(probeScanId)
                 .hashJoin(
-                    {"p1"},
-                    {"b0"},
+                    "p1 = b0",
                     builder.newPlan().values(buildVectors).planNode(),
-                    "",
                     {"p0"},
                     core::JoinType::kInner)
                 .capturePlanNodeId(joinNodeId)
@@ -2151,19 +2097,14 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughAgg) {
   core::PlanNodeId scanNodeId;
   core::PlanNodeId joinNodeId;
   core::PlanNodeId aggNodeId;
-  auto op = builder.tableScan(probeType)
-                .capturePlanNodeId(scanNodeId)
-                .partialAggregation({"c0"}, {"sum(c1)"})
-                .capturePlanNodeId(aggNodeId)
-                .hashJoin(
-                    {"c0"},
-                    {"u0"},
-                    buildSide,
-                    "",
-                    {"c0", "a0"},
-                    core::JoinType::kInner)
-                .capturePlanNodeId(joinNodeId)
-                .planNode();
+  auto op =
+      builder.tableScan(probeType)
+          .capturePlanNodeId(scanNodeId)
+          .partialAggregation({"c0"}, {"sum(c1)"})
+          .capturePlanNodeId(aggNodeId)
+          .hashJoin("c0 = u0", buildSide, {"c0", "a0"}, core::JoinType::kInner)
+          .capturePlanNodeId(joinNodeId)
+          .planNode();
 
   SplitPath splitPaths = {{scanNodeId, {probeFile->getPath()}}};
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -2226,19 +2167,15 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
     core::PlanNodeId scanNodeId;
     core::PlanNodeId joinNodeId;
     core::PlanNodeId aggNodeId;
-    auto op = builder.tableScan(probeType)
-                  .capturePlanNodeId(scanNodeId)
-                  .streamingAggregation({"c0"}, {"sum(c1)"}, {}, step, false)
-                  .capturePlanNodeId(aggNodeId)
-                  .hashJoin(
-                      {"c0"},
-                      {"u0"},
-                      buildSide,
-                      "",
-                      {"c0", "a0"},
-                      core::JoinType::kInner)
-                  .capturePlanNodeId(joinNodeId)
-                  .planNode();
+    auto op =
+        builder.tableScan(probeType)
+            .capturePlanNodeId(scanNodeId)
+            .streamingAggregation({"c0"}, {"sum(c1)"}, {}, step, false)
+            .capturePlanNodeId(aggNodeId)
+            .hashJoin(
+                "c0 = u0", buildSide, {"c0", "a0"}, core::JoinType::kInner)
+            .capturePlanNodeId(joinNodeId)
+            .planNode();
 
     SplitPath splitPaths = {{scanNodeId, {probeFile->getPath()}}};
     HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
@@ -2268,16 +2205,10 @@ TEST_P(HashJoinTest, dynamicFiltersPushDownThroughStreamingAgg) {
 }
 
 TEST_P(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
-  std::vector<RowVectorPtr> innerBuild = {makeRowVector(
-      {"a"},
-      {
-          makeFlatVector<int64_t>(5, [](auto i) { return 2 * i; }),
-      })};
-  std::vector<RowVectorPtr> rightBuild = {makeRowVector(
-      {"b"},
-      {
-          makeFlatVector<int64_t>(5, [](auto i) { return 1 + 2 * i; }),
-      })};
+  std::vector<RowVectorPtr> innerBuild = {makeNamedRowVector(
+      "a", makeFlatVector<int64_t>(5, [](auto i) { return 2 * i; }))};
+  std::vector<RowVectorPtr> rightBuild = {makeNamedRowVector(
+      "b", makeFlatVector<int64_t>(5, [](auto i) { return 1 + 2 * i; }))};
   std::vector<RowVectorPtr> rightProbe = {makeRowVector(
       {"aa", "bb"},
       {
@@ -2287,22 +2218,17 @@ TEST_P(HashJoinTest, noDynamicFiltersPushDownThroughRightJoin) {
   auto file = writeToFile(rightProbe);
   PlanBuilder builder;
   core::PlanNodeId scanNodeId;
-  auto plan = builder.tableScan(rightProbe[0]->rowType())
-                  .capturePlanNodeId(scanNodeId)
-                  .hashJoin(
-                      {"bb"},
-                      {"b"},
-                      builder.newPlan().values(rightBuild).planNode(),
-                      "",
-                      {"aa", "b"},
-                      core::JoinType::kRight)
-                  .hashJoin(
-                      {"aa"},
-                      {"a"},
-                      builder.newPlan().values(innerBuild).planNode(),
-                      "",
-                      {"aa"})
-                  .planNode();
+  auto plan =
+      builder.tableScan(rightProbe[0]->rowType())
+          .capturePlanNodeId(scanNodeId)
+          .hashJoin(
+              "bb = b",
+              builder.newPlan().values(rightBuild).planNode(),
+              {"aa", "b"},
+              core::JoinType::kRight)
+          .hashJoin(
+              "aa = a", builder.newPlan().values(innerBuild).planNode(), {"aa"})
+          .planNode();
   AssertQueryBuilder(plan)
       .split(scanNodeId, Split(makeHiveConnectorSplit(file->getPath())))
       .assertResults(
@@ -2333,10 +2259,8 @@ TEST_P(HashJoinTest, memoryUsage) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors)
                   .hashJoin(
-                      {"c0"},
-                      {"u_c0"},
-                      builder.newPlan().values({buildVectors}).planNode(),
-                      "",
+                      "c0 = u_c0",
+                      builder.newPlan().values(buildVectors).planNode(),
                       {"c0", "u_c1"})
                   .capturePlanNodeId(joinNodeId)
                   .singleAggregation({}, {"count(1)"})
@@ -2388,12 +2312,10 @@ TEST_P(HashJoinTest, smallOutputBatchSize) {
 
   // Plan hash inner join with a filter.
   PlanBuilder builder;
-  auto plan = builder.values({probeVectors})
+  auto plan = builder.values(probeVectors)
                   .hashJoin(
-                      {"c0"},
-                      {"u_c0"},
-                      builder.newPlan().values({buildVectors}).planNode(),
-                      "c1 < u_c1",
+                      "c0 = u_c0 AND c1 < u_c1",
+                      builder.newPlan().values(buildVectors).planNode(),
                       {"c0", "u_c1"})
                   .planNode();
 
@@ -2483,10 +2405,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, buildReservationReleaseCheck) {
   params.planNode =
       builder.values(probeVectors, true)
           .hashJoin(
-              {"t_k1"},
-              {"u_k1"},
+              "t_k1 = u_k1",
               builder.newPlan().values(buildVectors, true).planNode(),
-              "",
               concat(probeType_->names(), buildType_->names()))
           .planNode();
   params.queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -2520,8 +2440,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, buildReservationReleaseCheck) {
 TEST_P(HashJoinTest, dynamicFilterOnPartitionKey) {
   vector_size_t size = 10;
   auto filePaths = makeFilePaths(1);
-  auto rowVector = makeRowVector(
-      {makeFlatVector<int64_t>(size, [&](auto row) { return row; })});
+  auto rowVector = makeRowVector({makeFlatIdentityVector<int64_t>(size)});
   createDuckDbTable("u", {rowVector});
   writeToFile(filePaths[0]->getPath(), rowVector);
   std::vector<RowVectorPtr> buildVectors{
@@ -2540,10 +2459,8 @@ TEST_P(HashJoinTest, dynamicFilterOnPartitionKey) {
                 .endTableScan()
                 .capturePlanNodeId(probeScanId)
                 .hashJoin(
-                    {"n1_1"},
-                    {"c0"},
+                    "n1_1 = c0",
                     builder.newPlan().values(buildVectors).planNode(),
-                    "",
                     {"c0"},
                     core::JoinType::kInner)
                 .project({"c0"})
@@ -2580,8 +2497,7 @@ TEST_P(HashJoinTest, probeMemoryLimitOnBuildProjection) {
       makeBatches(1, [&](int32_t /*unused*/) {
         return makeRowVector(
             {"u_c0", "u_c1", "u_c2", "u_c3", "u_c4"},
-            {makeFlatVector<int32_t>(
-                 numBuildRows, [](auto row) { return row; }),
+            {makeFlatIdentityVector<int32_t>(numBuildRows),
              makeFlatVector<std::string>(
                  numBuildRows,
                  [](auto /* row */) { return std::string(4096, 'a'); }),
@@ -2648,10 +2564,8 @@ TEST_P(HashJoinTest, probeMemoryLimitOnBuildProjection) {
     PlanBuilder builder;
     auto plan = builder.values(probeVectors)
                     .hashJoin(
-                        {"c0"},
-                        {"u_c0"},
-                        builder.newPlan().values({buildVectors}).planNode(),
-                        "",
+                        "c0 = u_c0",
+                        builder.newPlan().values(buildVectors).planNode(),
                         outputLayout)
                     .capturePlanNodeId(joinNodeId)
                     .planNode();
@@ -2716,10 +2630,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringInputProcessing) {
     auto plan =
         builder.values(probeVectors, false)
             .hashJoin(
-                {"t_k1"},
-                {"u_k1"},
+                "t_k1 = u_k1",
                 builder.newPlan().values(buildVectors, false).planNode(),
-                "",
                 concat(probeType_->names(), buildType_->names()))
             .planNode();
 
@@ -2863,10 +2775,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringReserve) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, false)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, false).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .planNode();
 
@@ -2998,10 +2908,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringAllocation) {
     auto plan =
         builder.values(probeVectors, false)
             .hashJoin(
-                {"t_k1"},
-                {"u_k1"},
+                "t_k1 = u_k1",
                 builder.newPlan().values(buildVectors, false).planNode(),
-                "",
                 concat(probeType_->names(), buildType_->names()))
             .planNode();
 
@@ -3128,10 +3036,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringOutputProcessing) {
     auto plan =
         builder.values(probeVectors, false)
             .hashJoin(
-                {"t_k1"},
-                {"u_k1"},
+                "t_k1 = u_k1",
                 builder.newPlan().values(buildVectors, false).planNode(),
-                "",
                 concat(probeType_->names(), buildType_->names()))
             .planNode();
 
@@ -3256,10 +3162,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringWaitForProbe) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, false)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, false).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .planNode();
 
@@ -3392,10 +3296,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringOutputProcessing) {
     PlanBuilder builder;
     auto plan = builder.values(probeVectors, true)
                     .hashJoin(
-                        {"t_k1"},
-                        {"u_k1"},
+                        "t_k1 = u_k1",
                         builder.newPlan().values(buildVectors, true).planNode(),
-                        "",
                         concat(probeType_->names(), buildType_->names()))
                     .planNode();
 
@@ -3466,10 +3368,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringInputProcessing) {
     PlanBuilder builder;
     auto plan = builder.values(probeVectors, true)
                     .hashJoin(
-                        {"t_k1"},
-                        {"u_k1"},
+                        "t_k1 = u_k1",
                         builder.newPlan().values(buildVectors, true).planNode(),
-                        "",
                         concat(probeType_->names(), buildType_->names()))
                     .planNode();
 
@@ -3541,10 +3441,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashBuildAbortDuringAllocation) {
     PlanBuilder builder;
     auto plan = builder.values(probeVectors, true)
                     .hashJoin(
-                        {"t_k1"},
-                        {"u_k1"},
+                        "t_k1 = u_k1",
                         builder.newPlan().values(buildVectors, true).planNode(),
-                        "",
                         concat(probeType_->names(), buildType_->names()))
                     .planNode();
 
@@ -3617,10 +3515,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashProbeAbortDuringInputProcessing) {
     PlanBuilder builder;
     auto plan = builder.values(probeVectors, true)
                     .hashJoin(
-                        {"t_k1"},
-                        {"u_k1"},
+                        "t_k1 = u_k1",
                         builder.newPlan().values(buildVectors, true).planNode(),
-                        "",
                         concat(probeType_->names(), buildType_->names()))
                     .planNode();
 
@@ -3668,7 +3564,7 @@ TEST_P(HashJoinTest, leftJoinWithMissAtEndOfBatch) {
   auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
       {"t_k1", "t_k2"},
       {makeFlatVector<int32_t>(20, [](auto row) { return 1 + row % 2; }),
-       makeFlatVector<int32_t>(20, [](auto row) { return row; })})};
+       makeFlatIdentityVector<int32_t>(20)})};
   auto buildVectors = std::vector<RowVectorPtr>{
       makeNamedRowVector("u_k1", makeFlatVector<int32_t>({1, 2}))};
   createDuckDbTable("t", probeVectors);
@@ -3718,7 +3614,7 @@ TEST_P(HashJoinTest, leftJoinWithMissAtEndOfBatchMultipleBuildMatches) {
   auto probeVectors = std::vector<RowVectorPtr>{makeRowVector(
       {"t_k1", "t_k2"},
       {makeFlatVector<int32_t>(10, [](auto row) { return 1 + row % 2; }),
-       makeFlatVector<int32_t>(10, [](auto row) { return row; })})};
+       makeFlatIdentityVector<int32_t>(10)})};
   auto buildVectors = std::vector<RowVectorPtr>{
       makeNamedRowVector("u_k1", makeFlatVector<int32_t>({1, 2, 1, 2}))};
   createDuckDbTable("t", probeVectors);
@@ -3780,10 +3676,8 @@ TEST_P(HashJoinTest, leftJoinPreserveProbeOrder) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors)
                   .hashJoin(
-                      {"k1"},
-                      {"k2"},
+                      "k1 = k2 AND v1 % 2 = v2 % 2",
                       builder.newPlan().values(buildVectors).planNode(),
-                      "v1 % 2 = v2 % 2",
                       {"v1"},
                       core::JoinType::kLeft)
                   .planNode();
@@ -3820,10 +3714,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, minSpillableMemoryReservation) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, false)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, false).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .planNode();
 
@@ -3884,10 +3776,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
   core::PlanNodeId joinNodeId;
   auto plan = builder.values(probeVectors, false)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, false).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .capturePlanNodeId(joinNodeId)
                   .planNode();
@@ -3961,13 +3851,11 @@ TEST_P(HashJoinTest, maxSpillBytes) {
   auto plan = builder.values(probeVectors, true)
                   .project({"c0", "c1", "c2"})
                   .hashJoin(
-                      {"c0"},
-                      {"u1"},
+                      "c0 = u1",
                       builder.newPlan()
                           .values(buildVectors, true)
                           .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                           .planNode(),
-                      "",
                       {"c0", "c1", "c2"},
                       core::JoinType::kInner)
                   .planNode();
@@ -4016,13 +3904,11 @@ TEST_P(HashJoinTest, onlyHashBuildMaxSpillBytes) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, true)
                   .hashJoin(
-                      {"c0"},
-                      {"u1"},
+                      "c0 = u1",
                       builder.newPlan()
                           .values(buildVectors, true)
                           .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                           .planNode(),
-                      "",
                       {"c0", "c1", "c2"},
                       core::JoinType::kInner)
                   .planNode();
@@ -4133,13 +4019,11 @@ TEST_P(HashJoinTest, semiJoinAbandonBuildNoDupHashEarly) {
   auto plan = builder.values(probeVectors)
                   .project({"c0 AS t0", "c1 AS t1"})
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .values(buildVectors)
                           .project({"c0 AS u0", "c1 AS u1"})
                           .planNode(),
-                      "",
                       {"t0", "t1", "match"},
                       core::JoinType::kLeftSemiProject)
                   .planNode();
@@ -4208,13 +4092,11 @@ TEST_P(HashJoinTest, semiJoinDeduplicateResetCapacity) {
   auto plan = builder.values(probeVectors)
                   .project({"c0 AS t0", "c1 AS t1"})
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .values(buildVectors)
                           .project({"c0 AS u0", "c1 AS u1"})
                           .planNode(),
-                      "",
                       {"t0", "t1", "match"},
                       core::JoinType::kLeftSemiProject)
                   .planNode();
@@ -4228,6 +4110,160 @@ TEST_P(HashJoinTest, semiJoinDeduplicateResetCapacity) {
       .referenceQuery(
           "SELECT t.c0, t.c1, EXISTS (SELECT * FROM u WHERE t.c0 = u.c0) FROM t")
       .run();
+}
+
+TEST_P(HashJoinTest, dropDuplicateBuildRowsWithProbeOnlyFilter) {
+  // The build side has 1,000 rows and 10 distinct keys.
+  const auto buildVectors = makeBatches(5, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0", "u1"},
+        {
+            makeFlatVector<int32_t>(200, [](auto row) { return row % 10; }),
+            makeFlatIdentityVector<int32_t>(200),
+        });
+  });
+  const auto probeVectors = makeBatches(5, [&](int32_t batch) {
+    return makeRowVector(
+        {"t0", "t1"},
+        {
+            makeFlatVector<int32_t>(
+                100, [](auto row) { return row % 20; }, nullEvery(11)),
+            makeFlatVector<int32_t>(
+                100, [batch](auto row) { return batch * 100 + row; }),
+        });
+  });
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  struct {
+    core::JoinType joinType;
+    bool nullAware{false};
+    std::string filter;
+    bool dropDuplicates;
+    std::string referenceQuery;
+
+    std::string debugString() const {
+      return fmt::format(
+          "joinType: {}, nullAware: {}, filter: '{}'",
+          core::JoinTypeName::toName(joinType),
+          nullAware,
+          filter);
+    }
+  } testSettings[] = {
+      {.joinType = core::JoinType::kAnti,
+       .filter = "t1 % 3 <> 0",
+       .dropDuplicates = true,
+       .referenceQuery =
+           "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 % 3 <> 0)"},
+      {.joinType = core::JoinType::kLeftSemiFilter,
+       .filter = "t1 % 3 <> 0",
+       .dropDuplicates = true,
+       .referenceQuery =
+           "SELECT t.* FROM t WHERE EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 % 3 <> 0)"},
+      {.joinType = core::JoinType::kLeftSemiProject,
+       .filter = "t1 % 3 <> 0",
+       .dropDuplicates = true,
+       .referenceQuery =
+           "SELECT t.*, EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 % 3 <> 0) FROM t"},
+      // A lambda that captures a probe column.
+      {.joinType = core::JoinType::kAnti,
+       .filter = "any_match(array[1, 2], x -> x = t1 % 3)",
+       .dropDuplicates = true,
+       .referenceQuery =
+           "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 % 3 <> 0)"},
+      // The filter reads a build column.
+      {.joinType = core::JoinType::kLeftSemiProject,
+       .filter = "t1 % 3 <> u1 % 3",
+       .dropDuplicates = false,
+       .referenceQuery =
+           "SELECT t.*, EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 % 3 <> u1 % 3) FROM t"},
+      // A lambda that captures a build column.
+      {.joinType = core::JoinType::kAnti,
+       .filter = "any_match(array[1, 2], x -> x = u1 % 3)",
+       .dropDuplicates = false,
+       .referenceQuery =
+           "SELECT t.* FROM t WHERE NOT EXISTS (SELECT * FROM u WHERE t0 = u0 AND u1 % 3 <> 0)"},
+      // The filter is not deterministic.
+      {.joinType = core::JoinType::kLeftSemiFilter,
+       .filter = "t1 % 3 <> 0 AND rand() < 2.0",
+       .dropDuplicates = false,
+       .referenceQuery =
+           "SELECT t.* FROM t WHERE EXISTS (SELECT * FROM u WHERE t0 = u0 AND t1 % 3 <> 0)"},
+      {.joinType = core::JoinType::kAnti,
+       .nullAware = true,
+       .filter = "t1 % 3 <> 0",
+       .dropDuplicates = false,
+       .referenceQuery =
+           "SELECT t.* FROM t WHERE t0 NOT IN (SELECT u0 FROM u WHERE t1 % 3 <> 0)"},
+      {.joinType = core::JoinType::kInner,
+       .filter = "t1 % 3 <> 0",
+       .dropDuplicates = false,
+       .referenceQuery =
+           "SELECT t0, t1 FROM t, u WHERE t0 = u0 AND t1 % 3 <> 0"},
+  };
+
+  for (const auto& testData : testSettings) {
+    // HashBuild drops duplicate keys while adding input only if
+    // 'kAbandonDedupHashMapMinPct' is not 0. Otherwise, it drops them when it
+    // builds the hash table.
+    for (const std::string minPct : {"0", "50"}) {
+      SCOPED_TRACE(
+          fmt::format("{}, minPct: {}", testData.debugString(), minPct));
+      std::vector<std::string> outputLayout{"t0", "t1"};
+      if (testData.joinType == core::JoinType::kLeftSemiProject) {
+        outputLayout.emplace_back("match");
+      }
+      core::PlanNodeId joinId;
+      PlanBuilder plan(pool());
+      plan.values(probeVectors)
+          .hashJoin(
+              {"t0"},
+              {"u0"},
+              plan.newPlan().values(buildVectors).planNode(),
+              testData.filter,
+              outputLayout,
+              testData.joinType,
+              testData.nullAware)
+          .capturePlanNodeId(joinId);
+
+      HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+          .config(core::QueryConfig::kAbandonDedupHashMapMinPct, minPct)
+          .numDrivers(1)
+          .planNode(plan.planNode())
+          .referenceQuery(testData.referenceQuery)
+          // A null-aware anti join with a filter does not spill.
+          .checkSpillStats(!testData.nullAware)
+          .verifier([&](const std::shared_ptr<Task>& task, bool hasSpill) {
+            if (hasSpill || minPct == "0") {
+              return;
+            }
+            // 'kNumDistinct' is the number of rows HashBuild kept.
+            const auto numRows =
+                PlanNodeStats::extract(task->taskStats(), joinId)
+                    .customStat(BaseHashTable::kNumDistinct)
+                    .sum;
+            ASSERT_EQ(numRows, testData.dropDuplicates ? 10 : 1'000);
+          })
+          .run();
+
+      if (testData.nullAware) {
+        continue;
+      }
+      // HashProbe spills the hash table while it still has input.
+      const auto spillDirectory = TempDirectoryPath::create();
+      TestScopedSpillInjection scopedSpillInjection(100, ".*HashProbe.*");
+      const auto task =
+          AssertQueryBuilder(plan.planNode(), duckDbQueryRunner_)
+              .spillDirectory(spillDirectory->getPath())
+              .config(core::QueryConfig::kSpillEnabled, true)
+              .config(core::QueryConfig::kJoinSpillEnabled, true)
+              .config(core::QueryConfig::kAbandonDedupHashMapMinPct, minPct)
+              .assertResults(testData.referenceQuery);
+      const auto [buildStats, probeStats] = taskSpilledStats(*task);
+      ASSERT_EQ(buildStats.spilledBytes, 0);
+      ASSERT_GT(probeStats.spilledBytes, 0);
+    }
+  }
 }
 
 DEBUG_ONLY_TEST_P(
@@ -4344,10 +4380,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringTableBuild) {
   core::PlanNodeId joinNodeId;
   auto plan = builder.values(probeVectors, false)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, false).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .capturePlanNodeId(joinNodeId)
                   .planNode();
@@ -4447,10 +4481,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceptionDuringFinishJoinBuild) {
           .maxDrivers(numDrivers)
           .plan(builder.values(probeInput, true)
                     .hashJoin(
-                        {"p0"},
-                        {"b0"},
+                        "p0 = b0",
                         builder.newPlan().values(buildInput, true).planNode(),
-                        "",
                         {"p0", "p1", "b0", "b1"},
                         core::JoinType::kInner)
                     .planNode())
@@ -4558,10 +4590,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, arbitrationTriggeredDuringParallelJoinBuild) {
       .queryCtx(joinQueryCtx)
       .plan(builder.values(probeInput, true)
                 .hashJoin(
-                    {"p0", "p1", "p2"},
-                    {"b0", "b1", "b2"},
+                    "p0 = b0 AND p1 = b1 AND p2 = b2",
                     builder.newPlan().values(buildInput, true).planNode(),
-                    "",
                     {"p0", "p1", "b0", "b1"},
                     core::JoinType::kInner)
                 .planNode())
@@ -4641,13 +4671,11 @@ DEBUG_ONLY_TEST_P(HashJoinTest, joinBuildSpillError) {
   auto plan = builder.values(vectors)
                   .project({"c0 AS t0", "c1 AS t1", "c2 AS t2"})
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .values(vectors)
                           .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                           .planNode(),
-                      "",
                       {"t1"},
                       core::JoinType::kAnti)
                   .planNode();
@@ -4744,13 +4772,11 @@ DEBUG_ONLY_TEST_P(HashJoinTest, probeSpillOnWaitForPeers) {
   auto plan = builder.values(vectors, true)
                   .project({"c0 AS t0", "c1 AS t1"})
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .values(vectors, true)
                           .project({"c0 AS u0", "c1 AS u1"})
                           .planNode(),
-                      "",
                       {"t1"},
                       core::JoinType::kInner)
                   .capturePlanNodeId(joinNodeId)
@@ -5352,7 +5378,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
     auto rowVector = makeRowVector({
         makeFlatVector<int32_t>(
             numRowsProbe, [&](auto row) { return row - i * 10; }),
-        makeFlatVector<int64_t>(numRowsProbe, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numRowsProbe),
     });
     probeVectors.push_back(rowVector);
     tempFiles.push_back(writeToFile(rowVector));
@@ -5377,7 +5403,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
         makeFlatVector<int32_t>(
             numRowsBuild / 5,
             [i](auto row) { return 35 + 2 * (row + i * numRowsBuild / 5); }),
-        makeFlatVector<int64_t>(numRowsBuild / 5, [](auto row) { return row; }),
+        makeFlatIdentityVector<int64_t>(numRowsBuild / 5),
     }));
   }
   std::vector<RowVectorPtr> keyOnlyBuildVectors;
@@ -5406,10 +5432,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillCheckOnLeftSemiFilterWithDynamicFilters) {
                       .tableScan(probeType)
                       .capturePlanNodeId(probeScanId)
                       .hashJoin(
-                          {"c0"},
-                          {"u_c0"},
+                          "c0 = u_c0",
                           buildSide,
-                          "",
                           {"c0", "c1"},
                           core::JoinType::kLeftSemiFilter)
                       .capturePlanNodeId(joinNodeId)
@@ -5509,16 +5533,14 @@ TEST_P(HashJoinTest, nanKeys) {
   auto buildInput = makeRowVector({makeFlatVector<double>({kNan, 1})});
 
   PlanBuilder builder;
-  auto plan = builder.values({probeInput})
+  auto plan = builder.values(probeInput)
                   .project({"c0 AS t0", "c1 AS t1"})
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
-                          .values({buildInput})
+                          .values(buildInput)
                           .project({"c0 AS u0"})
                           .planNode(),
-                      "",
                       {"t0", "u0", "t1"},
                       core::JoinType::kLeft)
                   .planNode();
@@ -5575,13 +5597,11 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillOnBlockedProbe) {
   auto plan = builder.values(vectors)
                   .project({"c0 AS t0", "c1 AS t1"})
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .values(vectors)
                           .project({"c0 AS u0", "c1 AS u1"})
                           .planNode(),
-                      "",
                       {"t1"},
                       core::JoinType::kInner)
                   .addNode([&](std::string id, core::PlanNodePtr input) {
@@ -5597,7 +5617,6 @@ DEBUG_ONLY_TEST_P(HashJoinTest, spillOnBlockedProbe) {
                 memory::memoryManager(), executor_.get(), kMemoryCapacity))
             .spillDirectory(spillDirectory->getPath())
             .config(core::QueryConfig::kSpillEnabled, true)
-            .maxDrivers(1)
             .assertResults("SELECT a.c1 from tmp a join tmp b on a.c0 = b.c0");
     auto joinSpillStats = taskSpilledStats(*task);
     auto buildSpillStats = joinSpillStats.first;
@@ -5644,10 +5663,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, buildReclaimedMemoryReport) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, true)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, true).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .planNode();
 
@@ -5758,10 +5775,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, probeReclaimedMemoryReport) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, true)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, true).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .planNode();
 
@@ -5862,10 +5877,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashTableCleanupAfterProbeFinish) {
   PlanBuilder builder;
   auto plan = builder.values(probeVectors, true)
                   .hashJoin(
-                      {"t_k1"},
-                      {"u_k1"},
+                      "t_k1 = u_k1",
                       builder.newPlan().values(buildVectors, true).planNode(),
-                      "",
                       concat(probeType_->names(), buildType_->names()))
                   .project({"t_k1", "t_k2", "t_v1", "u_k1", "u_k2", "u_v1"})
                   .planNode();
@@ -5910,7 +5923,7 @@ TEST_P(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
 
   PlanBuilder builder;
 
-  auto rightPlan = builder.values({rightVectors})
+  auto rightPlan = builder.values(rightVectors)
                        .project(
                            {"c0 AS ip_addr_right",
                             "CAST(c0 AS IPADDRESS) AS ip_addr_cast_right"})
@@ -5918,13 +5931,11 @@ TEST_P(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
 
   auto plan =
       builder.newPlan()
-          .values({leftVectors})
+          .values(leftVectors)
           .project({"c0 AS ip_addr", "CAST(c0 AS IPADDRESS) AS ip_addr_cast"})
           .hashJoin(
-              {"ip_addr_cast"},
-              {"ip_addr_cast_right"},
+              "ip_addr_cast = ip_addr_cast_right",
               rightPlan,
-              "",
               {"ip_addr", "ip_addr_cast"},
               core::JoinType::kInner)
           .limit(0, 1000, false)
@@ -5953,68 +5964,44 @@ TEST_P(HashJoinTest, innerJoinForTypeWithCustomComparisonAndSmallVector) {
 
   builder = PlanBuilder();
 
-  rightPlan = builder.values({rightVectors})
+  rightPlan = builder.values(rightVectors)
                   .project(
                       {"c0 AS ip_addr_right",
                        "CAST(c0 AS IPADDRESS) AS ip_addr_cast_right"})
                   .planNode();
 
   plan = builder.newPlan()
-             .values({leftVectors})
+             .values(leftVectors)
              .project(
                  {"c0 AS ip_left",
                   "CAST(c0 AS IPADDRESS) AS ip_left_cast",
                   "CAST(c0 AS VARCHAR) AS ip_left_string"})
              .hashJoin(
-                 {"ip_left_cast"},
-                 {"ip_addr_cast_right"},
+                 "ip_left_cast = ip_addr_cast_right",
                  rightPlan,
-                 "",
                  {"ip_left_cast", "ip_addr_cast_right", "ip_addr_right"},
                  core::JoinType::kInner)
              .planNode();
 
-  // Result should be empty since the IP addresses are different
-  result = AssertQueryBuilder(plan).copyResults(pool());
-  ASSERT_EQ(result->size(), 0)
-      << "Expected no matches between different IP addresses, but got "
-      << result->size() << " rows";
+  AssertQueryBuilder(plan).assertEmptyResults();
 }
 
 /// Test hash join where build-side keys have a type that supports custom
 /// comparison and come from a small range which would allow for array-based
 /// lookup instead of a hash table for other types.
 TEST_P(HashJoinTest, arrayBasedLookupCustomComparisonType) {
-  std::vector<RowVectorPtr> probeVectors = {
-      makeRowVector({makeFlatVector<int64_t>(
-          1'024,
-          [](auto row) { return row; },
-          nullptr,
-          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
-
-  std::vector<RowVectorPtr> buildVectors = {
-      makeRowVector({makeFlatVector<int64_t>(
-          256,
-          [](auto row) { return row; },
-          nullptr,
-          velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON())})};
+  const auto type = velox::test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
+  auto probe =
+      makeNamedRowVector("t0", makeFlatIdentityVector<int64_t>(1'024, type));
+  auto build =
+      makeNamedRowVector("u0", makeFlatIdentityVector<int64_t>(256, type));
 
   PlanBuilder builder;
-
-  auto rightPlan =
-      builder.values({buildVectors}).project({"c0 as right"}).planNode();
-
-  auto plan = builder.newPlan()
-                  .values({probeVectors})
-                  .project({"c0 as left"})
-                  .hashJoin(
-                      {"left"},
-                      {"right"},
-                      rightPlan,
-                      "",
-                      {"left"},
-                      core::JoinType::kInner)
-                  .planNode();
+  auto plan =
+      builder.values(probe)
+          .hashJoin(
+              "t0 = u0", builder.newPlan().values(build).planNode(), {"t0"})
+          .planNode();
 
   // The probe side consists of the values 0-1023, the build side consists of
   // the values 0-255. If custom comparison is not respected, the join will
@@ -6045,33 +6032,28 @@ DEBUG_ONLY_TEST_P(
   const auto probeData = makeRowVector(
       {"t_k1", "t_filter"},
       {
-          makeFlatVector<int32_t>(kProbeSize, [](auto row) { return row; }),
+          makeFlatIdentityVector<int32_t>(kProbeSize),
           makeFlatVector<int32_t>(
               kProbeSize,
               [](/*row=*/auto) { return 1; }), // All rows have value 1
       });
 
-  const auto buildData = makeRowVector(
-      {"u_k1"},
-      {
-          makeFlatVector<int32_t>(kBuildSize, [](auto row) { return row; }),
-      });
+  const auto buildData =
+      makeNamedRowVector("u_k1", makeFlatIdentityVector<int32_t>(kBuildSize));
 
   createDuckDbTable("t", {probeData});
   createDuckDbTable("u", {buildData});
 
   PlanBuilder builder;
   auto planNode =
-      builder.values({probeData})
+      builder.values(probeData)
           .hashJoin(
-              {"t_k1"},
-              {"u_k1"},
-              builder.newPlan().values({buildData}).planNode(),
-              // Filter that DOES find join matches but then rejects all of them
-              // This ensures numOut > 0 after listJoinResults, but == 0 after
-              // evalFilter All probe rows have t_filter=1, so the condition
+              // The filter finds join matches, then rejects all of them. This
+              // ensures numOut > 0 after listJoinResults, but == 0 after
+              // evalFilter. All probe rows have t_filter=1, so the condition
               // t_filter > 100000 rejects all
-              "t_filter > 100000",
+              "t_k1 = u_k1 AND t_filter > 100000",
+              builder.newPlan().values(buildData).planNode(),
               {"t_k1", "u_k1"},
               core::JoinType::kInner)
           .planNode();
@@ -6107,7 +6089,6 @@ DEBUG_ONLY_TEST_P(
 
     AssertQueryBuilder(planNode, duckDbQueryRunner_)
         .queryCtx(queryCtx)
-        .maxDrivers(1)
         .assertResults(
             "SELECT t_k1, u_k1 FROM t, u WHERE t_k1 = u_k1 AND t_filter > 100000");
     testData.numGetOutputCalls = hashProbeGetOutputCalls.load();
@@ -6132,33 +6113,28 @@ DEBUG_ONLY_TEST_P(
   const auto probeData = makeRowVector(
       {"t_k1", "t_filter"},
       {
-          makeFlatVector<int32_t>(kProbeSize, [](auto row) { return row; }),
+          makeFlatIdentityVector<int32_t>(kProbeSize),
           makeFlatVector<int32_t>(
               kProbeSize,
               [](/*row=*/auto) { return 1; }), // All rows have value 1
       });
 
-  const auto buildData = makeRowVector(
-      {"u_k1"},
-      {
-          makeFlatVector<int32_t>(kBuildSize, [](auto row) { return row; }),
-      });
+  const auto buildData =
+      makeNamedRowVector("u_k1", makeFlatIdentityVector<int32_t>(kBuildSize));
 
   createDuckDbTable("t", {probeData});
   createDuckDbTable("u", {buildData});
 
   PlanBuilder builder;
   auto planNode =
-      builder.values({probeData})
+      builder.values(probeData)
           .hashJoin(
-              {"t_k1"},
-              {"u_k1"},
-              builder.newPlan().values({buildData}).planNode(),
-              // Filter that DOES find join matches but then rejects all of them
-              // This ensures numOut > 0 after listJoinResults, but == 0 after
+              // The filter finds join matches, then rejects all of them. This
+              // ensures numOut > 0 after listJoinResults, but == 0 after
               // evalFilter. All probe rows have t_filter=1, so the condition
               // t_filter > 100000 rejects all
-              "t_filter > 100000",
+              "t_k1 = u_k1 AND t_filter > 100000",
+              builder.newPlan().values(buildData).planNode(),
               {"t_k1", "u_k1"},
               core::JoinType::kInner)
           .planNode();
@@ -6193,7 +6169,6 @@ DEBUG_ONLY_TEST_P(
   const auto spillDirectory = TempDirectoryPath::create();
   AssertQueryBuilder(planNode, duckDbQueryRunner_)
       .queryCtx(core::QueryCtx::create(driverExecutor_.get()))
-      .maxDrivers(1)
       .spillDirectory(spillDirectory->getPath())
       .config(core::QueryConfig::kSpillEnabled, true)
       .config(core::QueryConfig::kJoinSpillEnabled, true)
@@ -6384,8 +6359,8 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
                 {
                     makeFlatVector<int32_t>(
                         77, [](auto row) { return row % 21; }, nullEvery(13)),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(77),
+                    makeFlatIdentityVector<int32_t>(77),
                 });
           }),
       makeBatches(
@@ -6398,7 +6373,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoin) {
                         97,
                         [](auto row) { return (row + 3) % 21; },
                         nullEvery(13)),
-                    makeFlatVector<int32_t>(97, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(97),
                     makeFlatVector<int32_t>(
                         97, [](auto row) { return 97 + row; }),
                 });
@@ -6455,8 +6430,8 @@ TEST_P(MultiThreadedHashJoinTest, nullStatsWithEmptyBuild) {
             {
                 makeFlatVector<int32_t>(
                     77, [](auto row) { return row % 21; }, nullEvery(13)),
-                makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-                makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(77),
+                makeFlatIdentityVector<int32_t>(77),
             });
       });
 
@@ -6523,8 +6498,8 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithEmptyBuild) {
                   {
                       makeFlatVector<int32_t>(
                           77, [](auto row) { return row % 11; }, nullEvery(13)),
-                      makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-                      makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+                      makeFlatIdentityVector<int32_t>(77),
+                      makeFlatIdentityVector<int32_t>(77),
                   });
             }),
         makeBatches(
@@ -6537,7 +6512,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithEmptyBuild) {
                           97,
                           [](auto row) { return (row + 3) % 11; },
                           nullEvery(13)),
-                      makeFlatVector<int32_t>(97, [](auto row) { return row; }),
+                      makeFlatIdentityVector<int32_t>(97),
                       makeFlatVector<int32_t>(
                           97, [](auto row) { return 97 + row; }),
                   });
@@ -6586,8 +6561,8 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithNoJoin) {
                 {
                     makeFlatVector<int32_t>(
                         77, [](auto row) { return row % 11; }, nullEvery(13)),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(77),
+                    makeFlatIdentityVector<int32_t>(77),
                 });
           }),
       makeBatches(
@@ -6600,7 +6575,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithNoJoin) {
                         97,
                         [](auto row) { return (row + 3) % 11; },
                         nullEvery(13)),
-                    makeFlatVector<int32_t>(97, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(97),
                     makeFlatVector<int32_t>(
                         97, [](auto row) { return 97 + row; }),
                 });
@@ -6645,8 +6620,8 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithAllMatch) {
                 {
                     makeFlatVector<int32_t>(
                         77, [](auto row) { return row % 11; }, nullEvery(13)),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(77),
+                    makeFlatIdentityVector<int32_t>(77),
                 });
           }),
       makeBatches(
@@ -6659,7 +6634,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithAllMatch) {
                         97,
                         [](auto row) { return (row + 3) % 11; },
                         nullEvery(13)),
-                    makeFlatVector<int32_t>(97, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(97),
                     makeFlatVector<int32_t>(
                         97, [](auto row) { return 97 + row; }),
                 });
@@ -6705,8 +6680,8 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithFilter) {
                 {
                     makeFlatVector<int32_t>(
                         77, [](auto row) { return row % 11; }, nullEvery(13)),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
-                    makeFlatVector<int32_t>(77, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(77),
+                    makeFlatIdentityVector<int32_t>(77),
                 });
           }),
       makeBatches(
@@ -6719,7 +6694,7 @@ TEST_P(MultiThreadedHashJoinTest, leftJoinWithFilter) {
                         97,
                         [](auto row) { return (row + 3) % 11; },
                         nullEvery(13)),
-                    makeFlatVector<int32_t>(97, [](auto row) { return row; }),
+                    makeFlatIdentityVector<int32_t>(97),
                     makeFlatVector<int32_t>(
                         97, [](auto row) { return 97 + row; }),
                 });
@@ -6838,7 +6813,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoin) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     137, [](auto row) { return row % 21; }, nullEvery(13)),
-                makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(137),
             });
           }),
       makeBatches(
@@ -6849,7 +6824,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoin) {
                     234,
                     [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
-                makeFlatVector<int32_t>(234, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(234),
             });
           }),
       true);
@@ -6893,7 +6868,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithEmptyBuild) {
               return makeRowVector({
                   makeFlatVector<int32_t>(
                       137, [](auto row) { return row % 11; }, nullEvery(13)),
-                  makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                  makeFlatIdentityVector<int32_t>(137),
               });
             }),
         makeBatches(
@@ -6904,7 +6879,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithEmptyBuild) {
                       234,
                       [](auto row) { return (row + 3) % 11; },
                       nullEvery(13)),
-                  makeFlatVector<int32_t>(234, [](auto row) { return row; }),
+                  makeFlatIdentityVector<int32_t>(234),
               });
             }),
         true);
@@ -6947,7 +6922,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithAllMatch) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     137, [](auto row) { return row % 21; }, nullEvery(13)),
-                makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(137),
             });
           }),
       makeBatches(
@@ -6958,7 +6933,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithAllMatch) {
                     234,
                     [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
-                makeFlatVector<int32_t>(234, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(234),
             });
           }),
       true);
@@ -6999,7 +6974,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithFilter) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     137, [](auto row) { return row % 21; }, nullEvery(13)),
-                makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(137),
             });
           }),
       makeBatches(
@@ -7010,7 +6985,7 @@ TEST_P(MultiThreadedHashJoinTest, rightJoinWithFilter) {
                     234,
                     [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
-                makeFlatVector<int32_t>(234, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(234),
             });
           }),
       true);
@@ -7076,7 +7051,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoin) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     213, [](auto row) { return row % 21; }, nullEvery(13)),
-                makeFlatVector<int32_t>(213, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(213),
             });
           }),
       makeBatches(
@@ -7087,7 +7062,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoin) {
                     137,
                     [](auto row) { return (row + 3) % 21; },
                     nullEvery(13)),
-                makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(137),
             });
           }),
       true);
@@ -7132,7 +7107,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithEmptyBuild) {
               return makeRowVector({
                   makeFlatVector<int32_t>(
                       213, [](auto row) { return row % 11; }, nullEvery(13)),
-                  makeFlatVector<int32_t>(213, [](auto row) { return row; }),
+                  makeFlatIdentityVector<int32_t>(213),
               });
             }),
         makeBatches(
@@ -7143,7 +7118,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithEmptyBuild) {
                       137,
                       [](auto row) { return (row + 3) % 11; },
                       nullEvery(13)),
-                  makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                  makeFlatIdentityVector<int32_t>(137),
               });
             }),
         true);
@@ -7187,7 +7162,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithNoMatch) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     213, [](auto row) { return row % 11; }, nullEvery(13)),
-                makeFlatVector<int32_t>(213, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(213),
             });
           }),
       makeBatches(
@@ -7198,7 +7173,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithNoMatch) {
                     137,
                     [](auto row) { return (row + 3) % 11; },
                     nullEvery(13)),
-                makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(137),
             });
           }),
       true);
@@ -7239,7 +7214,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithFilters) {
             return makeRowVector({
                 makeFlatVector<int32_t>(
                     213, [](auto row) { return row % 11; }, nullEvery(13)),
-                makeFlatVector<int32_t>(213, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(213),
             });
           }),
       makeBatches(
@@ -7250,7 +7225,7 @@ TEST_P(MultiThreadedHashJoinTest, fullJoinWithFilters) {
                     137,
                     [](auto row) { return (row + 3) % 11; },
                     nullEvery(13)),
-                makeFlatVector<int32_t>(137, [](auto row) { return row; }),
+                makeFlatIdentityVector<int32_t>(137),
             });
           }),
       true);
@@ -7335,28 +7310,15 @@ TEST_P(HashJoinTest, nullAwareRightSemiProjectOverScan) {
   std::vector<RowVectorPtr> probes;
   std::vector<RowVectorPtr> builds;
   // Matches present:
-  probes.push_back(makeRowVector(
-      {"t0"},
-      {
-          makeNullableFlatVector<int32_t>({1, std::nullopt, 2}),
-      }));
-  builds.push_back(makeRowVector(
-      {"u0"},
-      {
-          makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt}),
-      }));
+  probes.push_back(makeNamedRowVector(
+      "t0", makeNullableFlatVector<int32_t>({1, std::nullopt, 2})));
+  builds.push_back(makeNamedRowVector(
+      "u0", makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt})));
 
   // No matches present:
-  probes.push_back(makeRowVector(
-      {"t0"},
-      {
-          makeFlatVector<int32_t>({5, 6}),
-      }));
-  builds.push_back(makeRowVector(
-      {"u0"},
-      {
-          makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt}),
-      }));
+  probes.push_back(makeNamedRowVector("t0", makeFlatVector<int32_t>({5, 6})));
+  builds.push_back(makeNamedRowVector(
+      "u0", makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt})));
 
   for (int i = 0; i < probes.size(); i++) {
     RowVectorPtr& probe = probes[i];
@@ -7374,13 +7336,11 @@ TEST_P(HashJoinTest, nullAwareRightSemiProjectOverScan) {
     auto plan = builder.tableScan(probe->rowType())
                     .capturePlanNodeId(probeScanId)
                     .hashJoin(
-                        {"t0"},
-                        {"u0"},
+                        "t0 = u0",
                         builder.newPlan()
                             .tableScan(build->rowType())
                             .capturePlanNodeId(buildScanId)
                             .planNode(),
-                        "",
                         {"u0", "match"},
                         core::JoinType::kRightSemiProject,
                         true /*nullAware*/)
@@ -7508,13 +7468,11 @@ TEST_P(HashJoinTest, semiProject) {
   auto plan = builder.values(probeVectors)
                   .project({"c0 AS t0", "c1 AS t1"})
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .values(buildVectors)
                           .project({"c0 AS u0", "c1 AS u1"})
                           .planNode(),
-                      "",
                       {"t0", "t1", "match"},
                       core::JoinType::kLeftSemiProject)
                   .planNode();
@@ -7536,13 +7494,11 @@ TEST_P(HashJoinTest, semiProject) {
   plan = builder.values(probeVectors)
              .project({"c0 AS t0", "c1 AS t1"})
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0 AND t1 * 10 <> u1",
                  builder.newPlan()
                      .values(buildVectors)
                      .project({"c0 AS u0", "c1 AS u1"})
                      .planNode(),
-                 "t1 * 10 <> u1",
                  {"t0", "t1", "match"},
                  core::JoinType::kLeftSemiProject)
              .planNode();
@@ -7564,14 +7520,12 @@ TEST_P(HashJoinTest, semiProject) {
   plan = builder.values(probeVectors)
              .project({"c0 AS t0", "c1 AS t1"})
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0",
                  builder.newPlan()
                      .values(buildVectors)
                      .project({"c0 AS u0", "c1 AS u1"})
                      .filter("u0 < 0")
                      .planNode(),
-                 "",
                  {"t0", "t1", "match"},
                  core::JoinType::kLeftSemiProject)
              .planNode();
@@ -7632,13 +7586,11 @@ TEST_P(HashJoinTest, semiProjectWithNullKeys) {
     return builder.values(probeVectors)
         .optionalFilter(probeFilter)
         .hashJoin(
-            {"t0"},
-            {"u0"},
+            "t0 = u0",
             builder.newPlan()
                 .values(buildVectors)
                 .optionalFilter(buildFilter)
                 .planNode(),
-            "",
             {"t0", "t1", "match"},
             core::JoinType::kLeftSemiProject,
             nullAware)
@@ -7873,11 +7825,9 @@ TEST_P(HashJoinTest, nullAwareRightSemiProjectWithFilterNotAllowed) {
 
   PlanBuilder builder;
   VELOX_ASSERT_THROW(
-      builder.values({probe}).hashJoin(
-          {"t0"},
-          {"u0"},
-          builder.newPlan().values({build}).planNode(),
-          "t1 > u1",
+      builder.values(probe).hashJoin(
+          "t0 = u0 AND t1 > u1",
+          builder.newPlan().values(build).planNode(),
           {"u0", "u1", "match"},
           core::JoinType::kRightSemiProject,
           true /* nullAware */),
@@ -7965,11 +7915,9 @@ TEST_P(HashJoinTest, nullAwareMultiKeyNotAllowed) {
   // Null-aware left semi project join.
   PlanBuilder builder;
   VELOX_ASSERT_THROW(
-      builder.values({probe}).hashJoin(
-          {"t0", "t1"},
-          {"u0", "u1"},
-          builder.newPlan().values({build}).planNode(),
-          "",
+      builder.values(probe).hashJoin(
+          "t0 = u0 AND t1 = u1",
+          builder.newPlan().values(build).planNode(),
           {"t0", "t1", "match"},
           core::JoinType::kLeftSemiProject,
           true /* nullAware */),
@@ -7977,11 +7925,9 @@ TEST_P(HashJoinTest, nullAwareMultiKeyNotAllowed) {
 
   // Null-aware right semi project join.
   VELOX_ASSERT_THROW(
-      builder.newPlan().values({probe}).hashJoin(
-          {"t0", "t1"},
-          {"u0", "u1"},
-          builder.newPlan().values({build}).planNode(),
-          "",
+      builder.newPlan().values(probe).hashJoin(
+          "t0 = u0 AND t1 = u1",
+          builder.newPlan().values(build).planNode(),
           {"u0", "u1", "match"},
           core::JoinType::kRightSemiProject,
           true /* nullAware */),
@@ -7989,11 +7935,9 @@ TEST_P(HashJoinTest, nullAwareMultiKeyNotAllowed) {
 
   // Null-aware anti join.
   VELOX_ASSERT_THROW(
-      builder.newPlan().values({probe}).hashJoin(
-          {"t0", "t1"},
-          {"u0", "u1"},
-          builder.newPlan().values({build}).planNode(),
-          "",
+      builder.newPlan().values(probe).hashJoin(
+          "t0 = u0 AND t1 = u1",
+          builder.newPlan().values(build).planNode(),
           {"t0", "t1"},
           core::JoinType::kAnti,
           true /* nullAware */),
@@ -8005,7 +7949,7 @@ TEST_P(HashJoinTest, semiProjectOverLazyVectors) {
     return makeRowVector(
         {"t0", "t1"},
         {
-            makeFlatVector<int32_t>(1'000, [](auto row) { return row; }),
+            makeFlatIdentityVector<int32_t>(1'000),
             makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
         });
   });
@@ -8034,13 +7978,11 @@ TEST_P(HashJoinTest, semiProjectOverLazyVectors) {
   auto plan = builder.tableScan(probeVectors[0]->rowType())
                   .capturePlanNodeId(probeScanId)
                   .hashJoin(
-                      {"t0"},
-                      {"u0"},
+                      "t0 = u0",
                       builder.newPlan()
                           .tableScan(buildVectors[0]->rowType())
                           .capturePlanNodeId(buildScanId)
                           .planNode(),
-                      "",
                       {"t0", "t1", "match"},
                       core::JoinType::kLeftSemiProject)
                   .planNode();
@@ -8069,13 +8011,11 @@ TEST_P(HashJoinTest, semiProjectOverLazyVectors) {
   plan = builder.tableScan(probeVectors[0]->rowType())
              .capturePlanNodeId(probeScanId)
              .hashJoin(
-                 {"t0"},
-                 {"u0"},
+                 "t0 = u0 AND (t1 + u1) % 3 = 0",
                  builder.newPlan()
                      .tableScan(buildVectors[0]->rowType())
                      .capturePlanNodeId(buildScanId)
                      .planNode(),
-                 "(t1 + u1) % 3 = 0",
                  {"t0", "t1", "match"},
                  core::JoinType::kLeftSemiProject)
              .planNode();
@@ -8205,13 +8145,11 @@ DEBUG_ONLY_TEST_P(HashJoinTest, hashJoinSpillFileCreateConfig) {
   // spill_file_create_config.
   auto plan = builder.values(probeVectors, true)
                   .hashJoin(
-                      {"c0"},
-                      {"u0"},
+                      "c0 = u0",
                       builder.newPlan()
                           .values(buildVectors, true)
                           .project({"c0 AS u0", "c1 AS u1", "c2 AS u2"})
                           .planNode(),
-                      "",
                       {"c0", "c1", "c2"},
                       core::JoinType::kInner)
                   .orderBy({"c0 ASC NULLS LAST"}, false)

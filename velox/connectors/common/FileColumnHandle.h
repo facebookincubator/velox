@@ -263,6 +263,10 @@ class FileColumnHandle : public ColumnHandle {
 
   folly::dynamic serialize() const override = 0;
 
+  /// Throws if 'other', a handle for the same table column, has a different
+  /// column type or data type.
+  void checkConsistentWith(const FileColumnHandle& other) const;
+
   static std::string columnTypeName(ColumnType columnType);
 
   static ColumnType columnTypeFromName(const std::string& name);

@@ -312,6 +312,9 @@ class RPCOperator : public exec::Operator {
     // True when 'limiter' is the controller for this operator's policy rather
     // than the backend's shared one.
     bool policyScoped{false};
+    // The bounds the function declares, or 0 when it declares none.
+    int64_t functionCeiling{0};
+    double functionFloor{0};
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 

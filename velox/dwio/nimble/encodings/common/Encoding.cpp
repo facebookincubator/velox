@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 
 #include <algorithm>
 
@@ -26,13 +27,50 @@ Encoding::Encoding(
     std::string_view data,
     const Options& options)
     : pool_{&pool},
-      data_{data},
       encodingType_{EncodingPrefix::encodingType(data)},
       options_{options},
       dataType_{EncodingPrefix::readDataType(data)},
+      data_{data},
       rowCount_{EncodingPrefix::readRowCount(data, options_.useVarintRowCount)},
       prefixSize_{
           EncodingPrefix::prefixSize(data, options_.useVarintRowCount)} {}
+
+bool Encoding::rebind(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  auto body = data;
+  const auto prefix = EncodingPrefix::consume(body, options_.useVarintRowCount);
+  if (EncodingPrefix::encodingType(prefix) != encodingType_ ||
+      EncodingPrefix::dataType(prefix) != dataType_) {
+    return false;
+  }
+  const auto previousData = data_;
+  const auto previousRowCount = rowCount_;
+  const auto previousPrefixSize = prefixSize_;
+  data_ = data;
+  rowCount_ = EncodingPrefix::readRowCount(prefix, options_.useVarintRowCount);
+  prefixSize_ = static_cast<uint32_t>(prefix.size());
+  if (rebindImpl(data, stringBufferFactory)) {
+    return true;
+  }
+  // rebindImpl() returns false only for an encoding that does not support
+  // rebinding, before it reads `data`, so restoring the prefix fields leaves
+  // the encoding bound to its segment.
+  data_ = previousData;
+  rowCount_ = previousRowCount;
+  prefixSize_ = previousPrefixSize;
+  return false;
+}
+
+std::unique_ptr<Encoding> Encoding::rebindChild(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory,
+    std::unique_ptr<Encoding> child) {
+  if (child != nullptr && child->rebind(data, stringBufferFactory)) {
+    return child;
+  }
+  return EncodingFactory().create(*pool_, data, stringBufferFactory, options_);
+}
 
 /* static */ void Encoding::copyIOBuf(char* pos, const folly::IOBuf& buf) {
   NIMBLE_CHECK_NOT_NULL(pos);

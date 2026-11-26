@@ -15,8 +15,10 @@
  */
 
 #include <fmt/format.h>
+#include <fmt/ranges.h> // IWYU pragma: keep
 #include <gtest/gtest.h>
 
+#include <folly/ScopeGuard.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
@@ -34,11 +36,17 @@
 #include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/E2EFilterTestBase.h"
+#include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/tablet/Constants.h"
+#include "velox/dwio/nimble/tablet/TabletReader.h"
+#include "velox/dwio/nimble/tablet/TabletReaderCache.h"
+#include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/type/Filter.h"
 #include "velox/vector/FlatVector.h"
@@ -367,7 +375,8 @@ class E2EIndexTestBase : public ::testing::Test {
           dataIoStats_,
           nullptr,
           ioExecutor_.get(),
-          ioReaderOpts);
+          ioReaderOpts,
+          FileIoContext{.pool = &ioReaderOpts.memoryPool()});
     } else {
       input = std::make_unique<DirectBufferedInput>(
           readFile,
@@ -378,7 +387,8 @@ class E2EIndexTestBase : public ::testing::Test {
           dataIoStats_,
           nullptr,
           ioExecutor_.get(),
-          ioReaderOpts);
+          ioReaderOpts,
+          FileIoContext{.pool = &ioReaderOpts.memoryPool()});
     }
     auto factory = getReaderFactory(FileFormat::NIMBLE);
     return factory->createReader(std::move(input), readerOptions);
@@ -448,7 +458,8 @@ class E2EIndexTestBase : public ::testing::Test {
       uint64_t minStreamChunkRawSize = 0,
       uint32_t batchesPerStripe = 0,
       ChunkStatsVersion chunkStatsVersion = ChunkStatsVersion::kV2,
-      const std::vector<std::string>& indexColumns = {}) {
+      const std::vector<std::string>& indexColumns = {},
+      bool enableStreamDeduplication = false) {
     sinkData_.clear();
     auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
     auto batchesInStripe = std::make_shared<uint32_t>(0);
@@ -487,7 +498,7 @@ class E2EIndexTestBase : public ::testing::Test {
                       [](const StripeProgress&) { return true; });
                 },
             .enableChunking = true,
-            .enableStreamDeduplication = false,
+            .enableStreamDeduplication = enableStreamDeduplication,
         });
     for (const auto& batch : batches) {
       writer.write(batch);
@@ -1636,6 +1647,89 @@ TEST_F(E2EIndexTestBase, splitRowRangeWithIndexCountsFromSplitStart) {
         EXPECT_EQ(result.numStripeLoads, testCase.expectedStripeLoads);
       }
     }
+  }
+}
+
+// An all-null struct's null stream and an all-false BOOLEAN column have the
+// same bytes, so stream deduplication stores them once. The null stream counts
+// each false as a null, while the BOOLEAN column has none. Each stream must
+// keep its own chunk null counts, or 'b = false' skips every row when the
+// struct comes first.
+TEST_F(E2EIndexTestBase, v2ChunkStatsDeduplicatedStreamsKeepOwnNullCounts) {
+  constexpr vector_size_t kNumRows{100};
+  for (const bool structFirst : {true, false}) {
+    SCOPED_TRACE(fmt::format("structFirst: {}", structFirst));
+    auto structs = vectorMaker_->rowVector(
+        {"x"}, {vectorMaker_->flatVector<int64_t>(kNumRows, [](auto row) {
+          return row;
+        })});
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      structs->setNull(row, true);
+    }
+    auto booleans =
+        vectorMaker_->flatVector<bool>(kNumRows, [](auto) { return false; });
+    const auto batch = structFirst
+        ? vectorMaker_->rowVector({"s", "b"}, {structs, booleans})
+        : vectorMaker_->rowVector({"b", "s"}, {booleans, structs});
+    writeChunkStatsData(
+        {batch},
+        /*enableChunkStats=*/true,
+        ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+        /*minStreamChunkRawSize=*/0,
+        /*batchesPerStripe=*/0,
+        ChunkStatsVersion::kV2,
+        /*indexColumns=*/{},
+        /*enableStreamDeduplication=*/true);
+
+    auto readFile = std::make_shared<InMemoryReadFile>(sinkData_);
+    auto tablet = TabletReader::create(
+        readFile,
+        leafPool_.get(),
+        test::makeTestTabletOptions(leafPool_.get()));
+    const auto section =
+        tablet->loadOptionalSection(std::string(kSchemaSection));
+    ASSERT_TRUE(section.has_value());
+    const auto schema =
+        SchemaDeserializer::deserialize(section->content().data());
+    const auto& root = schema->asRow();
+    const uint32_t structColumn = structFirst ? 0 : 1;
+    const auto structNulls =
+        root.childAt(structColumn)->asRow().nullsDescriptor().offset();
+    const auto booleanValues =
+        root.childAt(1 - structColumn)->asScalar().scalarDescriptor().offset();
+
+    // Both streams point at the same bytes.
+    ASSERT_EQ(tablet->stripeCount(), 1);
+    const auto stripe = tablet->stripeIdentifier(0);
+    EXPECT_EQ(
+        tablet->streamOffset(stripe, structNulls),
+        tablet->streamOffset(stripe, booleanValues));
+
+    // Each stream reports its own null counts.
+    ASSERT_NE(stripe.chunkStats(), nullptr);
+    const auto streamNullCount = [&](uint32_t streamId) {
+      const auto streamIndex = stripe.chunkStats()->createStreamIndex(
+          0, streamId, tablet->streamSize(stripe, streamId));
+      NIMBLE_CHECK_NOT_NULL(streamIndex);
+      uint32_t nullCount{0};
+      const auto [startChunk, endChunk] = streamIndex->chunkRange();
+      for (auto chunk = startChunk; chunk < endChunk; ++chunk) {
+        const auto chunkNullCount = streamIndex->chunkNullCount(chunk);
+        NIMBLE_CHECK(chunkNullCount.has_value());
+        nullCount += *chunkNullCount;
+      }
+      return nullCount;
+    };
+    EXPECT_EQ(streamNullCount(structNulls), kNumRows);
+    EXPECT_EQ(streamNullCount(booleanValues), 0);
+
+    // 'b = false' matches every row.
+    std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+    filters["b"] = std::make_unique<BoolValue>(false, /*nullAllowed=*/false);
+    const auto result = readChunkStatsData(asRowType(batch->type()), filters);
+    EXPECT_EQ(countRows(result.rows), kNumRows);
+    verifyResultsEqual(result.rows, {batch});
+    EXPECT_EQ(result.stats.chunkSkippedRows, 0);
   }
 }
 
@@ -5000,6 +5094,104 @@ TEST_F(E2EIndexTestBase, createIndexReaderRejectsHiddenKeyReadAccess) {
     NIMBLE_ASSERT_THROW(
         reader->createIndexReader(rowReaderOpts), scenario.expectedMessage);
   }
+}
+
+TEST_F(E2EIndexTestBase, indexReadersShareCachedTablet) {
+  auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  auto batch = vectorMaker_->rowVector(
+      {"key", "value"},
+      {vectorMaker_->flatVector<int64_t>({1, 2, 3}),
+       vectorMaker_->flatVector<int32_t>({10, 20, 30})});
+
+  sinkData_.clear();
+  WriterOptions options;
+  options.clusterIndexConfig =
+      ClusterIndexConfigBuilder{}
+          .withKeyColumns({"key"})
+          .withSortOrders({SortOrder{.ascending = true}})
+          .withEnforceKeyOrder(true)
+          .build();
+  Writer writer(
+      rowType,
+      std::make_unique<InMemoryWriteFile>(&sinkData_),
+      *rootPool_,
+      std::move(options));
+  writer.write(batch);
+  writer.close();
+
+  const CachedTabletReader* tablet{nullptr};
+  int32_t numTablets{0};
+  TabletReaderCache::Options cacheOptions;
+  cacheOptions.numShards = 1;
+  cacheOptions.maxEntries = 1;
+  cacheOptions.executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
+  cacheOptions.onCreate = [&](const CachedTabletReader& created) {
+    tablet = &created;
+    ++numTablets;
+  };
+  cacheOptions.onRelease = [](const CachedTabletReader& /*released*/) {};
+  TabletReaderCache tabletReaderCache(cacheOptions);
+  unregisterSelectiveNimbleReaderFactory();
+  registerSelectiveNimbleReaderFactory(&tabletReaderCache);
+  SCOPE_EXIT {
+    unregisterSelectiveNimbleReaderFactory();
+    registerSelectiveNimbleReaderFactory();
+  };
+
+  // Looks up 'key' through a new reader.
+  const auto expectLookup = [&](int64_t key, int32_t expectedValue) {
+    SCOPED_TRACE(fmt::format("key {}", key));
+    auto reader = createReader();
+    RowReaderOptions rowReaderOpts;
+    rowReaderOpts.setRequestedType(rowType);
+    rowReaderOpts.setScanSpec(createScanSpec(rowType, {}));
+    auto indexReader = reader->createIndexReader(rowReaderOpts);
+    ASSERT_NE(indexReader, nullptr);
+
+    auto bound = vectorMaker_->rowVector(
+        {"key"}, {vectorMaker_->flatVector<int64_t>({key})});
+    serializer::IndexBounds bounds;
+    bounds.indexColumns = {"key"};
+    bounds.set(
+        serializer::IndexBound{bound, /*inclusive=*/true},
+        serializer::IndexBound{bound, /*inclusive=*/true});
+    indexReader->startLookup(bounds, {});
+    ASSERT_TRUE(indexReader->hasNext());
+    auto result = indexReader->next(10);
+    ASSERT_NE(result, nullptr);
+    ASSERT_EQ(result->output->size(), 1);
+    EXPECT_EQ(
+        result->output->childAt(1)->asFlatVector<int32_t>()->valueAt(0),
+        expectedValue);
+    EXPECT_FALSE(indexReader->hasNext());
+  };
+
+  expectLookup(/*key=*/2, /*expectedValue=*/20);
+  ASSERT_EQ(numTablets, 1);
+  const auto metadataBytes = tablet->metadataIoStats().rawBytesRead();
+  const auto indexBytes = tablet->indexIoStats().rawBytesRead();
+  EXPECT_GT(metadataBytes, 0);
+
+  // A second reader shares the tablet, so its lookup reads neither metadata
+  // nor the index.
+  expectLookup(/*key=*/3, /*expectedValue=*/30);
+  EXPECT_EQ(numTablets, 1);
+  EXPECT_EQ(tablet->metadataIoStats().rawBytesRead(), metadataBytes);
+  EXPECT_EQ(tablet->indexIoStats().rawBytesRead(), indexBytes);
+
+  // A reader that does not load the cluster index builds its own tablet.
+  const auto numLookups = tabletReaderCache.stats().numLookups;
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setFileFormat(FileFormat::NIMBLE);
+  auto reader = getReaderFactory(FileFormat::NIMBLE)
+                    ->createReader(
+                        std::make_unique<BufferedInput>(
+                            std::make_shared<InMemoryReadFile>(
+                                std::string_view(sinkData_)),
+                            velox::FileIoContext{.pool = leafPool_.get()}),
+                        readerOptions);
+  EXPECT_EQ(reader->numberOfRows().value(), 3);
+  EXPECT_EQ(tabletReaderCache.stats().numLookups, numLookups);
 }
 
 // TODO: add schema revolution tests like column renaming to make sure selective

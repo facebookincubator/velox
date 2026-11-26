@@ -1967,15 +1967,40 @@ PlanBuilder& PlanBuilder::hashJoin(
     bool nullAware,
     bool nullAsValue) {
   VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
+  core::TypedExprPtr filterExpr;
+  if (!filter.empty()) {
+    filterExpr = parseExpr(
+        filter,
+        concat(planNode_->outputType(), build->outputType()),
+        options_,
+        pool_);
+  }
+  return addHashJoin(
+      leftKeys,
+      rightKeys,
+      build,
+      filterExpr,
+      outputLayout,
+      joinType,
+      nullAware,
+      nullAsValue);
+}
+
+PlanBuilder& PlanBuilder::addHashJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& build,
+    const core::TypedExprPtr& filter,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType,
+    bool nullAware,
+    bool nullAsValue) {
+  VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
   VELOX_CHECK_EQ(leftKeys.size(), rightKeys.size());
 
   auto leftType = planNode_->outputType();
   auto rightType = build->outputType();
   auto resultType = concat(leftType, rightType);
-  core::TypedExprPtr filterExpr;
-  if (!filter.empty()) {
-    filterExpr = parseExpr(filter, resultType, options_, pool_);
-  }
 
   RowTypePtr outputType;
   if (isLeftSemiProjectJoin(joinType) || isRightSemiProjectJoin(joinType)) {
@@ -2003,7 +2028,7 @@ PlanBuilder& PlanBuilder::hashJoin(
       nullAware,
       leftKeyFields,
       rightKeyFields,
-      std::move(filterExpr),
+      filter,
       std::move(planNode_),
       build,
       outputType,
@@ -2011,6 +2036,109 @@ PlanBuilder& PlanBuilder::hashJoin(
       nullAsValue);
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
+}
+
+namespace {
+
+// Adds the conjuncts of 'expr' to 'conjuncts'.
+void splitConjuncts(
+    const core::ExprPtr& expr,
+    std::vector<core::ExprPtr>& conjuncts) {
+  const auto* call = expr->as<core::CallExpr>();
+  if (call != nullptr && call->name() == "and") {
+    for (const auto& input : call->inputs()) {
+      splitConjuncts(input, conjuncts);
+    }
+    return;
+  }
+  conjuncts.push_back(expr);
+}
+
+std::optional<std::string> columnName(const core::ExprPtr& expr) {
+  const auto* field = expr->as<core::FieldAccessExpr>();
+  if (field != nullptr && field->isRootColumn()) {
+    return field->name();
+  }
+  return std::nullopt;
+}
+
+// Returns the left and right columns 'conjunct' equates, if it equates a left
+// column with a right column.
+std::optional<std::pair<std::string, std::string>> joinKey(
+    const core::ExprPtr& conjunct,
+    const std::string& equalsName,
+    const RowTypePtr& leftType,
+    const RowTypePtr& rightType) {
+  const auto* call = conjunct->as<core::CallExpr>();
+  if (call == nullptr || call->name() != equalsName) {
+    return std::nullopt;
+  }
+  auto first = columnName(call->inputAt(0));
+  auto second = columnName(call->inputAt(1));
+  if (!first.has_value() || !second.has_value()) {
+    return std::nullopt;
+  }
+  if (leftType->containsChild(*first) && rightType->containsChild(*second)) {
+    return std::make_pair(*first, *second);
+  }
+  if (leftType->containsChild(*second) && rightType->containsChild(*first)) {
+    return std::make_pair(*second, *first);
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+PlanBuilder& PlanBuilder::hashJoin(
+    const std::string& condition,
+    const core::PlanNodePtr& build,
+    const std::vector<std::string>& outputLayout,
+    core::JoinType joinType,
+    bool nullAware,
+    bool nullAsValue) {
+  VELOX_CHECK_NOT_NULL(planNode_, "HashJoin cannot be the source node");
+  const auto& leftType = planNode_->outputType();
+  const auto& rightType = build->outputType();
+
+  std::vector<core::ExprPtr> conjuncts;
+  splitConjuncts(
+      parse::DuckSqlExpressionsParser(options_).parseExpr(condition),
+      conjuncts);
+
+  const auto equalsName = options_.functionPrefix + "eq";
+  std::vector<std::string> leftKeys;
+  std::vector<std::string> rightKeys;
+  core::ExprPtr filter;
+  for (const auto& conjunct : conjuncts) {
+    if (auto key = joinKey(conjunct, equalsName, leftType, rightType)) {
+      leftKeys.push_back(std::move(key->first));
+      rightKeys.push_back(std::move(key->second));
+    } else if (filter == nullptr) {
+      filter = conjunct;
+    } else {
+      filter = std::make_shared<core::CallExpr>(
+          "and", std::vector<core::ExprPtr>{filter, conjunct}, std::nullopt);
+    }
+  }
+  VELOX_USER_CHECK(
+      !leftKeys.empty(),
+      "Hash join condition must equate a probe column with a build column: {}",
+      condition);
+
+  core::TypedExprPtr typedFilter;
+  if (filter != nullptr) {
+    typedFilter = core::Expressions::inferTypes(
+        filter, concat(leftType, rightType), pool_);
+  }
+  return addHashJoin(
+      leftKeys,
+      rightKeys,
+      build,
+      typedFilter,
+      outputLayout,
+      joinType,
+      nullAware,
+      nullAsValue);
 }
 
 PlanBuilder& PlanBuilder::mergeJoin(

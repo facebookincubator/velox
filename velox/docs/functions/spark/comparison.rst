@@ -7,6 +7,12 @@ Comparison Functions
     Returns true if x is within the specified [min, max] range
     inclusive. The types of all arguments must be the same.
     Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, DOUBLE, REAL, DECIMAL.
+    Equivalent to ``x >= min AND x <= max``, so it returns false if x < min or
+    x > max, even if the other bound is NULL. ::
+
+        SELECT between(0, 1, NULL); -- false
+        SELECT between(1, 1, NULL); -- NULL
+        SELECT between(NULL, 1, 2); -- NULL
 
 .. spark:function:: equalnullsafe(x, y) -> boolean
 

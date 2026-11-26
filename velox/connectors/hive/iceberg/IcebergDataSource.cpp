@@ -85,11 +85,10 @@ IcebergDataSource::IcebergDataSource(
 
   // Changelog metadata filters (operation/ordinal/snapshotid) must NOT be
   // forwarded — those names don't exist in the base-table schema.
-  auto dataScanSpec = connector::makeScanSpec(
+  auto dataScanSpec = makeScanSpec(
       dataReaderOutputType,
       /*outputSubfields=*/{},
       common::SubfieldFilters{},
-      /*indexColumns=*/{},
       tableHandle_->dataColumns(),
       partitionKeys_,
       infoColumns_,

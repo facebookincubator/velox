@@ -206,7 +206,6 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteReaderDependsOnBuildFlag) {
       std::make_unique<FileHandleGenerator>(sessionProperties));
   auto ioStatistics = std::make_shared<io::IoStatistics>();
   auto ioStats = std::make_shared<IoStats>();
-  dwio::common::RuntimeStats runtimeStats;
 
   auto makeReader = [&]() {
     return std::make_unique<EqualityDeleteFileReader>(
@@ -220,7 +219,6 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteReaderDependsOnBuildFlag) {
         hiveConfig,
         ioStatistics,
         ioStats,
-        runtimeStats,
         test::kIcebergConnectorId,
         /*fileReadOps=*/folly::F14FastMap<std::string, std::string>{});
   };

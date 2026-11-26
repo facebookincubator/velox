@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
                     ->createReader(
                         std::make_unique<BufferedInput>(
                             std::make_shared<LocalReadFile>(filePath),
-                            readerOpts.memoryPool()),
+                            FileIoContext{.pool = &readerOpts.memoryPool()}),
                         readerOpts);
 
   VectorPtr batch;

@@ -83,11 +83,14 @@ class FaultyFileSystem : public FileSystem {
     executor_ = executor;
   }
 
-  /// Sets the hook for filesystem fault injection.
+  /// Sets the hook for filesystem fault injection. The hook sees the operations
+  /// listed in FaultFileSystemOperation::Type; check 'op->type' before casting
+  /// 'op'.
   void setFilesystemInjectionHook(FileSystemFaultInjectionHook hook);
 
   /// Setups to inject 'error' for a particular set of filesystem operation
-  /// types. Only operations inside 'opTypes' will be injected with 'error'.
+  /// types. If 'opTypes' is empty, it injects 'error' for all filesystem
+  /// operation types.
   void setFileSystemInjectionError(
       std::exception_ptr error,
       std::unordered_set<FaultFileSystemOperation::Type> opTypes = {});

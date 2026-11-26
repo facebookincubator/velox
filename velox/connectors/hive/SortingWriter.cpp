@@ -18,10 +18,14 @@
 
 #include <folly/stop_watch.h>
 
+#include "velox/common/time/Timer.h"
+#include "velox/exec/OperatorUtils.h"
+
 namespace facebook::velox::connector::hive {
 SortingWriter::SortingWriter(
     std::unique_ptr<dwio::common::Writer> writer,
     std::unique_ptr<exec::SortBuffer> sortBuffer,
+    std::vector<column_index_t> dedupeKeyChannels,
     vector_size_t maxOutputRowsConfig,
     uint64_t maxOutputBytesConfig,
     uint64_t outputTimeSliceLimitMs)
@@ -31,6 +35,7 @@ SortingWriter::SortingWriter(
       finishTimeSliceLimitMs_(outputTimeSliceLimitMs),
       sortPool_(sortBuffer->pool()),
       canReclaim_(sortBuffer->canSpill()),
+      dedupeKeyChannels_(std::move(dedupeKeyChannels)),
       sortBuffer_(std::move(sortBuffer)) {
   VELOX_CHECK_GT(maxOutputRowsConfig_, 0);
   VELOX_CHECK_GT(maxOutputBytesConfig_, 0);
@@ -79,13 +84,87 @@ bool SortingWriter::finish() {
     }
     output = sortBuffer_->getOutput(maxOutputBatchRows);
     if (output != nullptr) {
-      outputWriter_->write(output);
+      output = dedupe(output);
+      if (output->size() > 0) {
+        outputWriter_->write(output);
+      }
     }
   } while (output != nullptr);
 
+  lastKeys_.clear();
   sortBuffer_.reset();
   sortPool_->release();
   return true;
+}
+
+folly::F14FastMap<std::string, RuntimeMetric> SortingWriter::runtimeStats()
+    const {
+  auto stats = outputWriter_->runtimeStats();
+  if (!dedupeKeyChannels_.empty()) {
+    stats[kSortingWriterDedupedRows] = RuntimeMetric(
+        static_cast<int64_t>(dedupedRows_), RuntimeCounter::Unit::kNone);
+    stats[kSortingWriterDedupeNanos] = RuntimeMetric(
+        static_cast<int64_t>(dedupeNs_), RuntimeCounter::Unit::kNanos);
+  }
+  return stats;
+}
+
+RowVectorPtr SortingWriter::dedupe(const RowVectorPtr& batch) {
+  const vector_size_t size = batch->size();
+  if (dedupeKeyChannels_.empty() || size == 0) {
+    return batch;
+  }
+  NanosecondTimer timer(&dedupeNs_);
+
+  std::vector<VectorPtr> keys;
+  keys.reserve(dedupeKeyChannels_.size());
+  for (const auto channel : dedupeKeyChannels_) {
+    keys.push_back(BaseVector::loadedVectorShared(batch->childAt(channel)));
+  }
+
+  const auto duplicateKey = [&](vector_size_t row) {
+    for (size_t i = 0; i < keys.size(); ++i) {
+      const bool equal = row > 0
+          ? keys[i]->equalValueAt(keys[i].get(), row, row - 1)
+          : !lastKeys_.empty() &&
+              keys[i]->equalValueAt(lastKeys_[i].get(), 0, 0);
+      if (!equal) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  BufferPtr indices = allocateIndices(size, batch->pool());
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  vector_size_t numDedupRows{0};
+  for (vector_size_t row = 0; row < size; ++row) {
+    if (!duplicateKey(row)) {
+      rawIndices[numDedupRows++] = row;
+    }
+  }
+
+  // A batch without a kept row repeats the last key, so there is nothing to
+  // update.
+  if (numDedupRows > 0) {
+    lastKeys_.resize(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+      if (lastKeys_[i] == nullptr) {
+        lastKeys_[i] = BaseVector::create(keys[i]->type(), 1, batch->pool());
+      } else {
+        // Drops the string buffers of the previous batch held by the old key.
+        BaseVector::prepareForReuse(lastKeys_[i], 1);
+      }
+      lastKeys_[i]->copy(keys[i].get(), 0, size - 1, 1);
+    }
+  }
+
+  if (numDedupRows == size) {
+    return batch;
+  }
+  dedupedRows_ += size - numDedupRows;
+  indices->setSize(numDedupRows * sizeof(vector_size_t));
+  return exec::wrap(numDedupRows, std::move(indices), batch);
 }
 
 std::unique_ptr<dwio::common::FileMetadata> SortingWriter::close() {
@@ -98,6 +177,7 @@ std::unique_ptr<dwio::common::FileMetadata> SortingWriter::close() {
 void SortingWriter::abort() {
   setState(State::kAborted);
 
+  lastKeys_.clear();
   sortBuffer_.reset();
   sortPool_->release();
   outputWriter_->abort();

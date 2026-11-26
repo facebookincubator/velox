@@ -41,11 +41,6 @@ class TestFormatData : public wave::FormatData {
     return totalRows_;
   }
 
-  void newBatch(int32_t startRow) override {
-    currentRow_ = startRow;
-    queued_ = false;
-  }
-
   void griddize(
       ColumnOp& op,
       int32_t blockSize,
@@ -56,14 +51,18 @@ class TestFormatData : public wave::FormatData {
       DecodePrograms& programs,
       ReadStream& stream) override;
 
-  void startOp(
+ protected:
+  void stage(ResultStaging& deviceStaging, SplitStaging& staging) override;
+
+  WaveTypeKind stepKind() const override {
+    return static_cast<WaveTypeKind>(column_->kind);
+  }
+
+  void setDecode(
+      GpuDecode& step,
       ColumnOp& op,
-      const ColumnOp* previousFilter,
-      ResultStaging& deviceStaging,
-      ResultStaging& resultStaging,
-      SplitStaging& staging,
-      DecodePrograms& program,
-      ReadStream& stream) override;
+      int32_t blockIdx,
+      SplitStaging& staging) override;
 
  private:
   // Stages movement of nulls to device if any. Returns the id of the buffer or
@@ -84,12 +83,9 @@ class TestFormatData : public wave::FormatData {
   int32_t totalRows_{0};
 
   const test::Column* column_;
-  bool staged_{false};
   bool nullsStaged_{false};
-  bool queued_{false};
-  int32_t numStaged_{0};
-  // The device side data area start, set after the staged transfer is done.
-  void* deviceBuffer_{nullptr};
+  // The values of the column.
+  StagedBuffers values_;
 
   // Device side encoded alphabet for dictionary encoding.
   void* rawAlphabet_{nullptr};

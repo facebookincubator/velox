@@ -259,7 +259,12 @@ void RPCOperator::initializeRateLimiter() {
       policy.ceiling = functionLimit;
     }
     if (legacySessionLimit > 0) {
-      policy.ceiling = legacySessionLimit;
+      // max_limit replaces the function's ceiling, or with
+      // rpc.ratelimiter.tighten_limit can only lower it.
+      policy.ceiling =
+          queryConfig.rpcRateLimiterTightenLimit() && functionLimit > 0
+          ? std::min(functionLimit, legacySessionLimit)
+          : legacySessionLimit;
     }
   } else if (functionLimit > 0 && sessionHardLimit > 0) {
     policy.ceiling = std::min(functionLimit, sessionHardLimit);
@@ -295,6 +300,8 @@ void RPCOperator::initializeRateLimiter() {
   auto sources = liveStatsSources_.wlock();
   sources->limiter = limiter_;
   sources->policyScoped = lookup.policyScoped;
+  sources->functionCeiling = functionLimit;
+  sources->functionFloor = functionFloor;
 }
 
 std::vector<RPCRateLimiter::Token> RPCOperator::tryAcquireAdmission(
@@ -1546,6 +1553,20 @@ void RPCOperator::addLiveProgressStats(
     stats.runtimeStats
         [RPCOperatorStatNames::kRpcRateLimiterServiceHorizonNanos] =
         RuntimeMetric(limiterStats.serviceHorizonNanos);
+    if (limiterStats.floorMilli > 0) {
+      stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterFloorMilli] =
+          RuntimeMetric(limiterStats.floorMilli);
+    }
+    if (sources->functionCeiling > 0) {
+      stats.runtimeStats[RPCOperatorStatNames::kRpcFunctionCeiling] =
+          RuntimeMetric(sources->functionCeiling);
+    }
+    if (sources->functionFloor > 0) {
+      stats.runtimeStats[RPCOperatorStatNames::kRpcFunctionFloorMilli] =
+          RuntimeMetric(
+              static_cast<int64_t>(
+                  std::llround(sources->functionFloor * 1'000)));
+    }
     if (sources->policyScoped) {
       stats.runtimeStats[RPCOperatorStatNames::kRpcRateLimiterPolicyScoped] =
           RuntimeMetric(1);

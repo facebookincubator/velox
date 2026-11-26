@@ -107,7 +107,8 @@ class StringColumnReaderTest : public ::testing::Test,
     options.setScanSpec(scanSpec);
     Readers readers;
     readers.reader = factory->createReader(
-        std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+        std::make_unique<dwio::common::BufferedInput>(
+            readFile, FileIoContext{.pool = pool()}),
         options);
     auto type = asRowType(expected->type());
     dwio::common::RowReaderOptions rowOptions;
@@ -1239,7 +1240,8 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
                 std::make_unique<dwio::common::BufferedInput>(
-                    std::make_shared<InMemoryReadFile>(nimbleFile), *pool()),
+                    std::make_shared<InMemoryReadFile>(nimbleFile),
+                    FileIoContext{.pool = pool()}),
                 options);
     dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
@@ -2626,7 +2628,8 @@ TEST_P(StringColumnReaderTest, flatMapStringDictionaryPath) {
   options.setMetadataIoStats(metadataIoStats_);
   options.setScanSpec(scanSpec);
   auto reader = factory->createReader(
-      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      std::make_unique<dwio::common::BufferedInput>(
+          readFile, FileIoContext{.pool = pool()}),
       options);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);
@@ -2762,7 +2765,8 @@ TEST_P(
   options.setMetadataIoStats(metadataIoStats_);
   options.setScanSpec(scanSpec);
   auto reader = factory->createReader(
-      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      std::make_unique<dwio::common::BufferedInput>(
+          readFile, FileIoContext{.pool = pool()}),
       options);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);
@@ -2888,7 +2892,8 @@ TEST_P(StringColumnReaderTest, flatMapStringDictionaryPathMultiChunk) {
   options.setMetadataIoStats(metadataIoStats_);
   options.setScanSpec(scanSpec);
   auto reader = factory->createReader(
-      std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+      std::make_unique<dwio::common::BufferedInput>(
+          readFile, FileIoContext{.pool = pool()}),
       options);
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);

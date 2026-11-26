@@ -36,13 +36,11 @@ class CountingJoinTest : public OperatorTestBase {
     auto plan = builder.newPlan()
                     .values(makeRowVector({makeFlatVector<int32_t>(probe)}))
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan()
                             .values(makeRowVector(
                                 {"u0"}, {makeFlatVector<int32_t>(build)}))
                             .planNode(),
-                        "",
                         {"c0"},
                         joinType,
                         /*nullAware=*/false,
@@ -123,10 +121,8 @@ TEST_F(CountingJoinTest, multipleProbeBatches) {
     auto plan = builder.newPlan()
                     .values(probeVectors)
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         {"c0"},
                         joinType,
                         /*nullAware=*/false,
@@ -159,10 +155,8 @@ TEST_F(CountingJoinTest, multipleKeys) {
   auto plan = builder.newPlan()
                   .values(probeVector)
                   .hashJoin(
-                      {"c0", "c1"},
-                      {"u0", "u1"},
+                      "c0 = u0 AND c1 = u1",
                       builder.newPlan().values(buildVector).planNode(),
-                      "",
                       {"c0", "c1"},
                       core::JoinType::kCountingAnti,
                       /*nullAware=*/false,
@@ -192,10 +186,8 @@ TEST_F(CountingJoinTest, nullKeys) {
     auto plan = builder.newPlan()
                     .values(probeVector)
                     .hashJoin(
-                        {"c0"},
-                        {"u0"},
+                        "c0 = u0",
                         builder.newPlan().values(buildVector).planNode(),
-                        "",
                         {"c0"},
                         joinType,
                         /*nullAware=*/false,
@@ -230,10 +222,8 @@ TEST_F(CountingJoinTest, buildSideDedup) {
           .values(makeRowVector(
               {makeFlatVector<int32_t>(15, [](auto row) { return row; })}))
           .hashJoin(
-              {"c0"},
-              {"u0"},
+              "c0 = u0",
               builder.newPlan().values({buildVector}, false, 1'000).planNode(),
-              "",
               {"c0"},
               core::JoinType::kCountingAnti,
               /*nullAware=*/false,

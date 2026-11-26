@@ -40,6 +40,7 @@ add_executable(
   BlockBitPackingV2EncodingViewTest.cpp
   ConstantEncodingViewTest.cpp
   ConstantEncodingTest.cpp
+  DecodedStringBuffersTest.cpp
   DictionaryEncodingTest.cpp
   DictionaryEncodingViewTest.cpp
   EliasFanoEncodingTest.cpp
@@ -48,6 +49,7 @@ add_executable(
   PartitionedEliasFanoEncodingViewTest.cpp
   ReversedEncodingTest.cpp
   EncodingLayoutTest.cpp
+  EncodingRebindTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
   EncodingViewFactoryTest.cpp

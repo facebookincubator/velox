@@ -18,6 +18,7 @@
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/SymShape.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
@@ -402,6 +403,50 @@ bool isLastDimOfRows(NodeCP node, const ValueTypes& types) {
     }
   }
   return dim == rank - 1 || dim == -1;
+}
+
+// The longest row tw.sort_rows sorts in shared memory.
+constexpr int64_t kMaxSortRow = 2048;
+
+// sort along the last dim of an input of rank 2 or more with rows of a static
+// length of at most kMaxSortRow runs as tw.sort_rows.
+std::vector<std::pair<ValueCP, ValueCP>>
+replaceSortOfRows(NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/) {
+  auto* self = inputAt(node, 0);
+  const auto* dimAttr = node->tryGetAttribute("dim");
+  if (dimAttr == nullptr || !isLastDimOfRows(node, types)) {
+    return {};
+  }
+  const auto dims = staticDimsOf(types, self);
+  if (!dims.has_value() || dims->empty() || dims->back() < 1 ||
+      dims->back() > kMaxSortRow ||
+      static_cast<size_t>(self->id()) >= types.types.size() ||
+      types.types[self->id()] == nullptr) {
+    return {};
+  }
+  const auto dtype = types.types[self->id()]->dtype();
+  if (dtype != c10::ScalarType::Long && dtype != c10::ScalarType::Int &&
+      dtype != c10::ScalarType::Short && dtype != c10::ScalarType::Char &&
+      dtype != c10::ScalarType::Byte && dtype != c10::ScalarType::Float &&
+      dtype != c10::ScalarType::Double) {
+    return {};
+  }
+  int64_t maxRow = 1;
+  while (maxRow < dims->back()) {
+    maxRow <<= 1;
+  }
+  bool descending = false;
+  if (const auto* attr = node->tryGetAttribute("descending")) {
+    if (const auto* flag = std::get_if<bool>(&attr->value)) {
+      descending = *flag;
+    }
+  }
+  auto* mutableNode = const_cast<nativert::Node*>(node);
+  mutableNode->addAttribute(
+      {"sort_descending", static_cast<int64_t>(descending ? 1 : 0)});
+  mutableNode->addAttribute({"max_row", maxRow});
+  mutableNode->setTarget("tw.sort_rows");
+  return {};
 }
 
 // new_ones(x, [sym_numel(y)]) with a 1-D y is ones_like(y): the size list is
@@ -2361,6 +2406,50 @@ void registerRowBuiltins(const std::string& scanHeader) {
       .hasBlockSizeTemplateParam()
       .multiBlockReturnBarrier()
       .outputConstraints(rowReduceConstraint(2))
+      .registerOp();
+  // sort(dim=-1) of an input of rank 2 or more whose rows have a static
+  // length of at most kMaxSortRow: one block per row, the row sorted in the
+  // kernel's dynamic shared memory. 'max_row' is the row length rounded up to
+  // a power of two, 'sort_descending' 0 or 1.
+  auto rowShapeReturn = ArgumentMeta{
+      .isRegister = false,
+      .reserve = maxShapeReserve,
+      .reserveInputs = {.elementwiseLeaves = 0},
+      .shapeFromInput = 0};
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.sort_rows",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("values", c10::TensorType::get()),
+              c10::Argument("indices", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta({{.isRegister = false, .randomAccess = true}})
+      .returnMeta({rowShapeReturn, rowShapeReturn})
+      .ignoreAttrs({"dim", "descending", "stable"})
+      .headerFile(scanHeader)
+      .deviceFunc("sort_rows")
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .templateAttrs({"sort_descending", "max_row"})
+      .dynamicSharedMemory([](NodeCP node, int32_t /*blockSize*/) -> int64_t {
+        const auto* maxRow = node->tryGetAttribute("max_row");
+        const auto* rows =
+            maxRow != nullptr ? std::get_if<int64_t>(&maxRow->value) : nullptr;
+        // An 8-byte key and a 4-byte position per element.
+        return rows != nullptr ? *rows * 12 : 0;
+      })
+      .multiBlockReturnBarrier()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            ValueConstraint c{
+                .rank = types.rank(inputAt(node, 0)),
+                .contiguity = Contiguity::kContiguous};
+            return {c, c};
+          })
       .registerOp();
 }
 
@@ -7187,6 +7276,7 @@ void registerBuiltins() {
                 .contiguity = Contiguity::kContiguous};
             return {c, c};
           })
+      .maybeReplace(replaceSortOfRows)
       .registerOp();
   // sort.stable: same (values, indices) shapes as sort.default.
   MetadataBuilder("torch.ops.aten.sort.stable")
@@ -7200,6 +7290,7 @@ void registerBuiltins() {
                 .contiguity = Contiguity::kContiguous};
             return {c, c};
           })
+      .maybeReplace(replaceSortOfRows)
       .registerOp();
   // bincount: output length is data-dependent (max(input) + 1, at least
   // minlength), so it splits into a max head -- whose result sizes the output

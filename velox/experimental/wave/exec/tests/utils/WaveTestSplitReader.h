@@ -17,13 +17,14 @@
 #pragma once
 
 #include "velox/experimental/wave/dwio/ColumnReader.h"
-#include "velox/experimental/wave/exec/WaveSplitReader.h"
+#include "velox/experimental/wave/dwio/StripedSplitReader.h"
 #include "velox/experimental/wave/exec/tests/utils/FileFormat.h"
 
 namespace facebook::velox::wave::test {
 
-/// A WaveSplitReader that decodes mock Wave tables.
-class WaveTestSplitReader : public WaveSplitReader {
+/// A WaveSplitReader that decodes mock Wave tables. A table file is one
+/// stripe.
+class WaveTestSplitReader : public StripedSplitReader {
  public:
   WaveTestSplitReader(
       const std::shared_ptr<connector::ConnectorSplit>& split,
@@ -31,49 +32,24 @@ class WaveTestSplitReader : public WaveSplitReader {
       const DefinesMap* defines);
 
   bool emptySplit() override {
-    return !stripe_ || stripe_->columns[0]->numValues == 0 || emptySplit_;
-  }
-
-  int32_t canAdvance(WaveStream& stream) override;
-
-  void schedule(WaveStream& stream, int32_t maxRows = 0) override;
-
-  vector_size_t outputSize(WaveStream& stream) const;
-
-  bool isFinished() const override;
-
-  uint64_t getCompletedBytes() override {
-    return params_.ioStatistics->rawBytesRead();
-  }
-
-  uint64_t getCompletedRows() override {
-    return nextRow_;
-  }
-
-  std::unordered_map<std::string, RuntimeCounter> runtimeStats() override {
-    return {};
+    return numStripes() == 0 || stripe_->columns[0]->numValues == 0;
   }
 
   static void registerTestSplitReader();
 
- private:
-  int32_t available() const {
-    return stripe_->columns[0]->numValues - nextRow_;
+ protected:
+  int32_t numStripes() const override {
+    return stripe_ && !emptySplit_ ? 1 : 0;
   }
 
-  std::shared_ptr<connector::ConnectorSplit> split_;
-  SplitReaderParams params_;
-  FileHandleCachedPtr fileHandleCachePtr;
-  cache::AsyncDataCache* cache_{nullptr};
+  std::unique_ptr<ColumnReader> startStripe(int32_t index, int32_t& numRows)
+      override;
+
+ private:
+  const DefinesMap* const defines_;
   test::Stripe* stripe_{nullptr};
-  std::unique_ptr<ColumnReader> columnReader_;
-  // First unscheduled row.
-  int32_t nextRow_{0};
-  int32_t scheduledRows_{0};
   dwio::common::ColumnRuntimeStats readerStats_{TypeKind::ROW};
-  raw_vector<int32_t> rows_;
   FileHandleCachedPtr fileHandle_;
-  FileInfo fileInfo_;
   bool emptySplit_{false};
 };
 
