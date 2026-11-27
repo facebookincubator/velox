@@ -2155,6 +2155,90 @@ TEST_F(StreamReaderTest, keepsStringsOfStreamChunksInOneBuffer) {
   }
 }
 
+TEST_F(StreamReaderTest, keepsDecodedStringBuffersAcrossStripes) {
+  // Three FSST chunks, whose strings fit twice in the first buffer, of 32 KB.
+  constexpr uint32_t kChunkRows{100};
+  constexpr uint32_t kNumRows{3 * kChunkRows};
+  std::vector<std::string> storage;
+  storage.reserve(kNumRows);
+  for (uint32_t row{0}; row < kNumRows; ++row) {
+    storage.push_back(
+        fmt::format("https://www.example.com/experiments/{}", row % 97));
+  }
+  std::string stream;
+  for (uint32_t chunk{0}; chunk < 3; ++chunk) {
+    const std::vector<std::string_view> values(
+        storage.begin() + chunk * kChunkRows,
+        storage.begin() + (chunk + 1) * kChunkRows);
+    stream += encodeChunk<std::string_view>(
+        values,
+        EncodingType::Fsst,
+        {.type = CompressionType::Uncompressed},
+        {.fsstCompressionTargetRatio = 10.0});
+  }
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::String});
+  const std::array<std::string_view, 1> streams{stream};
+  const std::array<RowRange, 1> ranges{{{0, kNumRows}}};
+
+  struct TestParam {
+    std::string debugString() const {
+      return fmt::format(
+          "cacheEncodingView {}, keepDecodedStringBuffersAcrossStripes {}",
+          cacheEncodingView,
+          keepDecodedStringBuffersAcrossStripes);
+    }
+
+    bool cacheEncodingView;
+    bool keepDecodedStringBuffersAcrossStripes;
+  };
+
+  // Reads every row of the stream in two stripes, with cached views and
+  // without, each into an output of its own, which holds one buffer: the views
+  // decode their strings into the buffers that the reader gives the stream. A
+  // reader that keeps the buffers across stripes decodes the strings of the
+  // second stripe after those of the first in the same buffer. Otherwise the
+  // second stripe takes a new buffer. The strings of the first stripe stay
+  // intact either way.
+  const std::vector<TestParam> testSettings{
+      {true, true}, {true, false}, {false, true}, {false, false}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    StreamReader reader{
+        type,
+        pool_.get(),
+        {.keepDecodedStringBuffersAcrossStripes =
+             testData.keepDecodedStringBuffersAcrossStripes}};
+    std::array<velox::VectorPtr, 2> outputs;
+    for (auto& output : outputs) {
+      output =
+          velox::BaseVector::create(velox::VARCHAR(), kNumRows, pool_.get());
+      reader.setStreams(
+          streams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          {.cacheEncodingView = testData.cacheEncodingView});
+      runRead(reader, ranges, /*outputOffset=*/0, output);
+      reader.reset();
+    }
+
+    std::array<const velox::Buffer*, 2> buffers{};
+    for (size_t stripe{0}; stripe < outputs.size(); ++stripe) {
+      const auto* flat = outputs[stripe]->asFlatVector<velox::StringView>();
+      ASSERT_NE(flat, nullptr);
+      for (velox::vector_size_t row{0}; row < flat->size(); ++row) {
+        ASSERT_EQ(flat->valueAt(row).str(), storage[row])
+            << "stripe " << stripe << ", row " << row;
+      }
+      ASSERT_EQ(flat->stringBuffers().size(), 1);
+      buffers[stripe] = flat->stringBuffers()[0].get();
+    }
+    EXPECT_EQ(
+        buffers[0] == buffers[1],
+        testData.keepDecodedStringBuffersAcrossStripes);
+  }
+}
+
 TEST_F(StreamReaderTest, rejectsDecodedStringBuffersInOptions) {
   const auto stream = encodeChunk<std::string_view>(
       std::vector<std::string_view>{"first long string"},
