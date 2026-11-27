@@ -3495,108 +3495,135 @@ TEST_F(UcxExchangeFocusedTest, closeDuringHandshakeWaitsForResponse) {
 TEST_F(
     UcxExchangeFocusedTest,
     terminalMetadataCloseDuringStalledHandshakeSend) {
+  // A slow process can take most of kCloseTimeout to deliver the handshake. The
+  // source then gives up before its handshake send completes and sends no
+  // close, so such an attempt is retried.
+  constexpr int32_t kMaxAttempts{3};
+  constexpr auto kLatestHandshake =
+      UcxExchangeSource::kCloseTimeout - std::chrono::milliseconds(200);
   for (const bool errorHandling : {false, true}) {
     SCOPED_TRACE(errorHandling);
-    auto context =
-        ucxx::contextBuilder(UCP_FEATURE_TAG | UCP_FEATURE_AM).build();
-    auto worker = context->workerBuilder().build();
-    ucp_conn_request_h connectionRequest = nullptr;
-    const auto port = exec::test::Ports::findFreePort();
-    auto listener = worker
-                        ->listenerBuilder(
-                            port,
-                            [](ucp_conn_request_h request, void* argument) {
-                              *static_cast<ucp_conn_request_h*>(argument) =
-                                  request;
-                            },
-                            &connectionRequest)
-                        .build();
-    const auto taskId = getUniqueTaskPrefix() + "stalledHandshake";
-    const PartitionKey key{taskId, 0};
-    auto queue = std::make_shared<UcxExchangeQueue>(1);
-    const auto sourceId = addSource(*queue);
-    queue->noMoreSources();
-    const auto url = fmt::format(
-        "http://127.0.0.1:{}/v1/task/{}/results/0",
-        port - kSplitUrlPortOffset,
-        taskId);
-    std::weak_ptr<UcxExchangeSource> source;
-    // Connects on the Communicator thread, so that the endpoint takes this
-    // case's error handling.
-    ASSERT_TRUE(
-        runOnCommunicator([&source, queue, sourceId, url, errorHandling] {
-          auto& config = cudf_velox::CudfConfig::getInstance();
-          const bool previous = config.ucxxErrorHandling;
-          SCOPE_EXIT {
-            config.ucxxErrorHandling = previous;
-          };
-          config.ucxxErrorHandling = errorHandling;
-          auto created =
-              UcxExchangeSource::create("closedConsumer", url, queue, sourceId);
-          created->process();
-          source = created;
-        }));
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (connectionRequest == nullptr &&
-           std::chrono::steady_clock::now() < deadline) {
-      worker->progress();
-    }
-    ASSERT_NE(connectionRequest, nullptr);
-    EXPECT_EQ(queue->sourceState(sourceId), SourceState::kRegistered);
-    // As UcxExchangeClient::close() does.
-    ASSERT_THAT(queue->close(), testing::ElementsAre(sourceId));
-    if (auto active = source.lock()) {
-      active->close();
-    }
+    bool handshakeInTime{false};
+    for (int32_t attempt = 0; attempt < kMaxAttempts && !handshakeInTime;
+         ++attempt) {
+      SCOPED_TRACE(attempt);
+      auto context =
+          ucxx::contextBuilder(UCP_FEATURE_TAG | UCP_FEATURE_AM).build();
+      auto worker = context->workerBuilder().build();
+      ucp_conn_request_h connectionRequest = nullptr;
+      const auto port = exec::test::Ports::findFreePort();
+      auto listener = worker
+                          ->listenerBuilder(
+                              port,
+                              [](ucp_conn_request_h request, void* argument) {
+                                *static_cast<ucp_conn_request_h*>(argument) =
+                                    request;
+                              },
+                              &connectionRequest)
+                          .build();
+      const auto taskId = getUniqueTaskPrefix() + "stalledHandshake";
+      const PartitionKey key{taskId, 0};
+      auto queue = std::make_shared<UcxExchangeQueue>(1);
+      const auto sourceId = addSource(*queue);
+      queue->noMoreSources();
+      const auto url = fmt::format(
+          "http://127.0.0.1:{}/v1/task/{}/results/0",
+          port - kSplitUrlPortOffset,
+          taskId);
+      std::weak_ptr<UcxExchangeSource> source;
+      // Connects on the Communicator thread, so that the endpoint takes this
+      // case's error handling.
+      ASSERT_TRUE(
+          runOnCommunicator([&source, queue, sourceId, url, errorHandling] {
+            auto& config = cudf_velox::CudfConfig::getInstance();
+            const bool previous = config.ucxxErrorHandling;
+            SCOPE_EXIT {
+              config.ucxxErrorHandling = previous;
+            };
+            config.ucxxErrorHandling = errorHandling;
+            auto created = UcxExchangeSource::create(
+                "closedConsumer", url, queue, sourceId);
+            created->process();
+            source = created;
+          }));
+      auto deadline =
+          std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      while (connectionRequest == nullptr &&
+             std::chrono::steady_clock::now() < deadline) {
+        worker->progress();
+      }
+      ASSERT_NE(connectionRequest, nullptr);
+      EXPECT_EQ(queue->sourceState(sourceId), SourceState::kRegistered);
+      // As UcxExchangeClient::close() does.
+      ASSERT_THAT(queue->close(), testing::ElementsAre(sourceId));
+      const auto closeStart = std::chrono::steady_clock::now();
+      if (auto active = source.lock()) {
+        active->close();
+      }
 
-    // The handshake stays stalled for a while, but less than kCloseTimeout.
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    bool handshakeReceived{false};
-    worker->registerAmReceiverCallback(
-        ucxx::AmReceiverCallbackInfo{
-            Communicator::getInstance()->kAmCallbackOwner,
-            Communicator::getInstance()->kAmCallbackId},
-        [&](std::shared_ptr<ucxx::Request> /*request*/, ucp_ep_h /*endpoint*/) {
-          handshakeReceived = true;
-        });
-    auto peer = listener->endpointBuilder(connectionRequest)
-                    .endpointErrorHandling(errorHandling)
-                    .build();
-    deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!handshakeReceived && std::chrono::steady_clock::now() < deadline) {
-      worker->progress();
-    }
-    ASSERT_TRUE(handshakeReceived);
+      // The handshake stays stalled for a while.
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      bool handshakeReceived{false};
+      worker->registerAmReceiverCallback(
+          ucxx::AmReceiverCallbackInfo{
+              Communicator::getInstance()->kAmCallbackOwner,
+              Communicator::getInstance()->kAmCallbackId},
+          [&](std::shared_ptr<ucxx::Request> /*request*/,
+              ucp_ep_h /*endpoint*/) { handshakeReceived = true; });
+      auto peer = listener->endpointBuilder(connectionRequest)
+                      .endpointErrorHandling(errorHandling)
+                      .build();
+      deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      while (!handshakeReceived &&
+             std::chrono::steady_clock::now() < deadline) {
+        worker->progress();
+      }
+      ASSERT_TRUE(handshakeReceived);
+      if (std::chrono::steady_clock::now() - closeStart > kLatestHandshake) {
+        LOG(WARNING) << "Handshake arrived too close to the close deadline, "
+                     << "retrying, attempt " << attempt;
+        EXPECT_TRUE(waitUntil(
+            [&]() { return source.expired(); },
+            std::chrono::milliseconds(3'000)));
+        closeConnection(port, *peer);
+        continue;
+      }
+      handshakeInTime = true;
 
-    auto response = std::make_shared<HandshakeResponse>();
-    auto responseRequest =
-        peer->tagSendBuilder(
-                response.get(),
-                sizeof(*response),
-                ucxx::Tag{getHandshakeResponseTag(fnv1a_32(key.toString()))})
-            .callbackData(response)
-            .build();
-    auto message = std::make_shared<CloseMsg>();
-    auto closeReceive =
-        peer->tagRecvBuilder(
-                message.get(),
-                sizeof(*message),
-                ucxx::Tag{getCloseTag(fnv1a_32(key.toString()))},
-                ucxx::TagMaskFull)
-            .callbackData(message)
-            .build();
-    deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!closeReceive->isCompleted() &&
-           std::chrono::steady_clock::now() < deadline) {
-      worker->progress();
+      auto response = std::make_shared<HandshakeResponse>();
+      auto responseRequest =
+          peer->tagSendBuilder(
+                  response.get(),
+                  sizeof(*response),
+                  ucxx::Tag{getHandshakeResponseTag(fnv1a_32(key.toString()))})
+              .callbackData(response)
+              .build();
+      auto message = std::make_shared<CloseMsg>();
+      auto closeReceive =
+          peer->tagRecvBuilder(
+                  message.get(),
+                  sizeof(*message),
+                  ucxx::Tag{getCloseTag(fnv1a_32(key.toString()))},
+                  ucxx::TagMaskFull)
+              .callbackData(message)
+              .build();
+      deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      while (!closeReceive->isCompleted() &&
+             std::chrono::steady_clock::now() < deadline) {
+        worker->progress();
+      }
+      ASSERT_TRUE(closeReceive->isCompleted());
+      EXPECT_EQ(closeReceive->getStatus(), UCS_OK);
+      EXPECT_EQ(decodeCloseMsg(*message), key);
+      EXPECT_TRUE(responseRequest->isCompleted());
+      EXPECT_TRUE(waitUntil(
+          [&]() { return source.expired(); },
+          std::chrono::milliseconds(3'000)));
+      closeConnection(port, *peer);
     }
-    ASSERT_TRUE(closeReceive->isCompleted());
-    EXPECT_EQ(closeReceive->getStatus(), UCS_OK);
-    EXPECT_EQ(decodeCloseMsg(*message), key);
-    EXPECT_TRUE(responseRequest->isCompleted());
-    EXPECT_TRUE(waitUntil(
-        [&]() { return source.expired(); }, std::chrono::milliseconds(3'000)));
-    closeConnection(port, *peer);
+    EXPECT_TRUE(handshakeInTime)
+        << "No handshake arrived within " << kLatestHandshake.count()
+        << " ms of the close in " << kMaxAttempts << " attempts";
   }
 }
 
@@ -3723,6 +3750,14 @@ TEST_F(UcxExchangeFocusedTest, closeBeforeHandshakeStopsServer) {
   EXPECT_EQ(
       decodeHandshakeResponse(responseBytes).status,
       HandshakeStatus::kAccepted);
+
+  queueManager()->noMoreData(taskId);
+  EXPECT_TRUE(waitForOutputFinished(taskId));
+  EXPECT_TRUE(
+      exec::test::TaskMonitor::waitForStateChange(
+          *task, TaskState::kFinished, 3'000'000));
+  // A server that got its destination's end, rather than kStop, would send it
+  // now.
   EXPECT_EQ(
       peer->receiveTag(
               getMetadataTag(keyHash, 0),
@@ -3730,12 +3765,6 @@ TEST_F(UcxExchangeFocusedTest, closeBeforeHandshakeStopsServer) {
               std::chrono::milliseconds(500))
           .first,
       UCS_ERR_TIMED_OUT);
-
-  queueManager()->noMoreData(taskId);
-  EXPECT_TRUE(waitForOutputFinished(taskId));
-  EXPECT_TRUE(
-      exec::test::TaskMonitor::waitForStateChange(
-          *task, TaskState::kFinished, 3'000'000));
   // A removed output queue whose Task is gone is droppable only once no server
   // is bound to it.
   queueManager()->removeTask(taskId);
