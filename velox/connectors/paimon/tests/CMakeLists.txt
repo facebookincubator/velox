@@ -23,6 +23,16 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  add_executable(velox_paimon_merge_engine_test PaimonMergeEngineTest.cpp)
+  add_test(velox_paimon_merge_engine_test velox_paimon_merge_engine_test)
+  target_link_libraries(
+    velox_paimon_merge_engine_test
+    velox_paimon_table_handle
+    GTest::gtest
+    GTest::gtest_main
+    fmt::fmt
+  )
+
   add_executable(velox_paimon_table_handle_test PaimonTableHandleTest.cpp)
   add_test(velox_paimon_table_handle_test velox_paimon_table_handle_test)
   target_link_libraries(

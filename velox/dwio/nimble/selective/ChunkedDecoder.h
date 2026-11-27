@@ -65,21 +65,35 @@ class ChunkedDecoder {
       DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr,
       bool dictionaryAwareReads = false,
       bool scanFastPath = false)
-      : input_{std::move(input)},
-        pool_{pool},
+      : pool_{pool},
         decodeValuesWithNulls_{decodeValuesWithNulls},
         encodingFactory_(encodingFactory),
         dictionaryAwareReads_{dictionaryAwareReads},
         scanFastPath_{scanFastPath},
+        decodingStats_{decodingStats},
+        input_{std::move(input)},
         streamIndex_{std::move(streamIndex)},
         streamRowCount_{
             streamIndex_ ? std::optional<uint32_t>(streamIndex_->rowCount())
                          : std::nullopt},
-        decodingStats_{decodingStats},
         dictionaryAlphabetLoader_{std::move(dictionaryAlphabetLoader)} {
     NIMBLE_CHECK_NOT_NULL(input_);
     NIMBLE_CHECK_NOT_NULL(encodingFactory_);
   }
+
+  /// Points this decoder at another stream, such as the same column's stream
+  /// in the next stripe, and drops all state of the current stream. Keeps the
+  /// buffers it allocated, so decoding the new stream can reuse them.
+  void rebindStream(
+      std::unique_ptr<velox::dwio::common::SeekableInputStream> input,
+      std::shared_ptr<index::StreamIndex> streamIndex,
+      DictionaryAlphabetLoader dictionaryAlphabetLoader);
+
+  /// Drops the stream this decoder reads and all its state, and keeps the
+  /// buffers it allocated, so that a decoder kept for a later rebindStream()
+  /// keeps none of the stream's data alive. The decoder cannot decode until
+  /// rebindStream() gives it another stream.
+  void unbindStream();
 
   /// Skips non-null values. The optional onChunkBoundary callback is invoked
   /// whenever the skip crosses into a new chunk. This allows callers (e.g.,
@@ -952,7 +966,6 @@ class ChunkedDecoder {
         dictionaryAlphabetLoader_ != nullptr;
   }
 
-  const std::unique_ptr<velox::dwio::common::SeekableInputStream> input_;
   velox::memory::MemoryPool* const pool_;
   // When true, decode nullable values (for array/map length streams that
   // encode nulls alongside values). When false, decode values without nulls
@@ -961,10 +974,17 @@ class ChunkedDecoder {
   const EncodingFactory* const encodingFactory_;
   const bool dictionaryAwareReads_{false};
   const bool scanFastPath_{false};
+
+  // Per-column decoding statistics. Owned by SplitStats; valid for
+  // the lifetime of this decoder.
+  velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
+
+  // --- Stream state (dropped by unbindStream()) ---
+  std::unique_ptr<velox::dwio::common::SeekableInputStream> input_;
   // Optional stream index for accelerating skip operations
-  const std::shared_ptr<index::StreamIndex> streamIndex_;
+  std::shared_ptr<index::StreamIndex> streamIndex_;
   // Total row count in the stream, set from stream index if available.
-  const std::optional<uint32_t> streamRowCount_;
+  std::optional<uint32_t> streamRowCount_;
 
   // Pointer to the current position in the input buffer.
   // Points to the next byte to be read from the stream.
@@ -986,9 +1006,6 @@ class ChunkedDecoder {
   // Set when a skip lands in a chunk but hasn't loaded it yet.
   bool hasLazyChunkSeek_{false};
 
-  // Per-column decoding statistics. Owned by SplitStats; valid for
-  // the lifetime of this decoder.
-  velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
   // Lazily resolves the alphabet bound to this stream. Reset after
   // dictionaryAlphabet_ is loaded.
   DictionaryAlphabetLoader dictionaryAlphabetLoader_;

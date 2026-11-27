@@ -81,6 +81,25 @@ class FloatingPointColumnReader
     return true;
   }
 
+  bool rebind(velox::dwio::common::FormatParams& /*params*/) final {
+    // A scalar column decodes its nulls with its values, so 'decoder_' is its
+    // only decoder.
+    if (!this->formatData().template as<NimbleData>().rebindScalarDecoder(
+            decoder_)) {
+      return false;
+    }
+    this->resetReadState();
+    return true;
+  }
+
+  bool rebindable() const final {
+    return true;
+  }
+
+  void unbind() final {
+    decoder_.unbindStream();
+  }
+
  private:
   bool readsNullsOnly() const final {
     return this->formatData().template as<NimbleData>().readsNullsOnly(

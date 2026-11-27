@@ -1225,18 +1225,10 @@ SelectiveNimbleReaderFactory::createReader(
     return std::make_unique<SelectiveNimbleReader>(std::move(input), options);
   }
 
-  // The shared tablet outlives this reader, so it must not keep the reader's
-  // file handle. It pins its metadata and index instead of caching them in the
-  // data cache, whose entries the file handle keys.
-  auto tabletOptions = TabletReader::configureOptions(options);
-  tabletOptions.fileHandle = nullptr;
-  tabletOptions.blockCache = nullptr;
-  tabletOptions.cacheMetadata = false;
-  tabletOptions.cacheIndex = false;
-  tabletOptions.pinMetadata = true;
-  tabletOptions.pinIndex = true;
-  const auto cachedTablet =
-      tabletReaderCache_->get(input->getReadFile(), tabletOptions);
+  // The tablet outlives this reader. That is safe for the reader's file handle,
+  // which the tablet reads only while it is built.
+  const auto cachedTablet = tabletReaderCache_->get(
+      input->getReadFile(), TabletReader::configureOptions(options));
   return std::make_unique<SelectiveNimbleReader>(
       ReaderBase::create(std::move(input), cachedTablet, options), options);
 }

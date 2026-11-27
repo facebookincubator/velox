@@ -49,6 +49,14 @@ class IntegerColumnReader
   bool estimateMaterializedSize(size_t& byteSize, size_t& rowCount)
       const override;
 
+  bool rebind(velox::dwio::common::FormatParams& params) override;
+
+  bool rebindable() const override {
+    return true;
+  }
+
+  void unbind() override;
+
  private:
   bool readsNullsOnly() const final {
     return formatData().as<NimbleData>().readsNullsOnly(*scanSpec_);

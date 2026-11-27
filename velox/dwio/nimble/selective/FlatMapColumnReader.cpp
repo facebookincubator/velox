@@ -16,11 +16,14 @@
 
 #include "velox/dwio/nimble/selective/FlatMapColumnReader.h"
 
+#include <utility>
+
 #include "velox/dwio/common/FlatMapHelper.h"
 #include "velox/dwio/common/SelectiveFlatMapColumnReader.h"
 #include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/selective/ChunkedDecoder.h"
 #include "velox/dwio/nimble/selective/ColumnReader.h"
+#include "velox/dwio/nimble/selective/FlatMapKeyNode.h"
 #include "velox/dwio/nimble/selective/StructColumnReader.h"
 
 namespace facebook::nimble {
@@ -29,15 +32,75 @@ using namespace facebook::velox;
 
 namespace {
 
+// Readers of one key of a FlatMap column in the current stripe.
 template <typename T>
-struct KeyNode {
-  dwio::common::flatmap::KeyValue<T> key;
-  std::unique_ptr<ChunkedDecoder> inMap;
-  std::unique_ptr<dwio::common::SelectiveColumnReader> reader;
+struct KeyNode : FlatMapKeyNodeBase {
+  KeyNode(dwio::common::flatmap::KeyValue<T> key, uint32_t inMapStream)
+      : inMapStream(inMapStream), key(std::move(key)) {}
 
-  explicit KeyNode(dwio::common::flatmap::KeyValue<T> key)
-      : key(std::move(key)) {}
+  KeyNode(KeyNode&& other) noexcept
+      : FlatMapKeyNodeBase(std::move(other)),
+        inMapStream(other.inMapStream),
+        key(std::move(other.key)),
+        pool(std::exchange(other.pool, nullptr)) {}
+
+  KeyNode& operator=(KeyNode&& other) = delete;
+
+  ~KeyNode() {
+    if (pool == nullptr) {
+      return;
+    }
+
+    // A node gets a pool only once it has a reader that can rebind, and the
+    // move constructor clears the pool of the moved-from node.
+    NIMBLE_CHECK_NOT_NULL(reader);
+    pool->put(inMapStream, *this);
+  }
+
+  // The key's in-map stream, by which 'pool' keeps its readers.
+  const uint32_t inMapStream;
+  dwio::common::flatmap::KeyValue<T> key;
+
+  // Takes the readers of this node when it is destroyed, so that a later
+  // stripe can rebind them. Null if they are not kept.
+  FlatMapKeyNodePool* pool{nullptr};
 };
+
+// Rebinds the in-map decoder and the reader of 'node', which an earlier stripe
+// built for child 'childIndex' of the FlatMap column of 'params', to the
+// stripe that 'params' reads. 'hasInMap' tells whether that stripe has the
+// key's in-map stream. Returns false, having enqueued no stream, if they
+// cannot read that stripe.
+bool rebindKeyNode(
+    FlatMapKeyNodeBase& node,
+    int childIndex,
+    bool hasInMap,
+    NimbleParams& params) {
+  // The reader of the key's values decodes the in-map stream through the
+  // decoder it was built with, or treats every row as present without one.
+  if (hasInMap != (node.inMap != nullptr)) {
+    return false;
+  }
+  const auto& flatMapType = params.nimbleType()->asFlatMap();
+  auto childParams = params.makeChildParams(flatMapType.childAt(childIndex));
+  childParams.setInMapDecoder(node.inMap.get());
+
+  // Rebinds the reader before the in-map decoder, since a reader that fails to
+  // rebind enqueues no stream.
+  if (!rebindColumnReader(*node.reader, childParams)) {
+    return false;
+  }
+  if (hasInMap) {
+    node.inMap->rebindStream(
+        params.streams().enqueue(
+            static_cast<int>(
+                flatMapType.inMapDescriptorAt(childIndex).offset()),
+            params.lazyColumnIo()),
+        /*streamIndex=*/nullptr,
+        /*dictionaryAlphabetLoader=*/nullptr);
+  }
+  return true;
+}
 
 template <typename T>
 std::vector<KeyNode<T>> makeKeyNodes(
@@ -96,9 +159,13 @@ std::vector<KeyNode<T>> makeKeyNodes(
     }
   }
 
+  auto* keyNodePool = params.flatMapKeyNodePool();
+
   // Create column readers for each stream and populate the keyNodes vector.
   for (int i = 0; i < childrenCount; ++i) {
-    KeyNode<T> node(parseKeyValue<T>(nimbleType.nameAt(i)));
+    KeyNode<T> node(
+        parseKeyValue<T>(nimbleType.nameAt(i)),
+        nimbleType.inMapDescriptorAt(i).offset());
     common::ScanSpec* childSpec;
     if (auto it = childSpecs.find(node.key);
         it != childSpecs.end() && !it->second->isConstant()) {
@@ -113,31 +180,48 @@ std::vector<KeyNode<T>> makeKeyNodes(
       }
       childSpecs[node.key] = childSpec = valuesSpec;
     }
-    auto inMapInput = params.streams().enqueue(
-        nimbleType.inMapDescriptorAt(i).offset(), params.lazyColumnIo());
-    if (inMapInput != nullptr) {
+    const auto inMapStream = static_cast<int>(node.inMapStream);
+    const bool hasInMap = params.streams().hasStream(inMapStream);
+
+    // Missing in-map stream: either the writer skipped it because all rows
+    // are in-map (value streams exist), or the key has no data in this
+    // stripe (value streams also absent). Check value streams to distinguish.
+    if (!hasInMap &&
+        !visitValueStreamLeaves(
+            *nimbleType.childAt(i),
+            [&streams = params.streams()](offset_size offset) {
+              return streams.hasStream(static_cast<int>(offset));
+            })) {
+      continue;
+    }
+    if (keyNodePool != nullptr && keyNodePool->take(node.inMapStream, node)) {
+      if (rebindKeyNode(node, i, hasInMap, params)) {
+        node.pool = keyNodePool;
+        keyNodePool->addReusedKeyNodes();
+        keyNodes.push_back(std::move(node));
+        continue;
+      }
+
+      // Drops the readers that failed to rebind.
+      static_cast<FlatMapKeyNodeBase&>(node) = FlatMapKeyNodeBase{};
+    }
+    if (hasInMap) {
       node.inMap = std::make_unique<ChunkedDecoder>(
-          std::move(inMapInput),
+          params.streams().enqueue(inMapStream, params.lazyColumnIo()),
           /*streamIndex=*/nullptr,
           /*decodeValuesWithNulls=*/false,
           &params.encodingFactory(),
           &memoryPool);
-    } else {
-      // Missing in-map stream: either the writer skipped it because all rows
-      // are in-map (value streams exist), or the key has no data in this
-      // stripe (value streams also absent). Check value streams to distinguish.
-      if (!visitValueStreamLeaves(
-              *nimbleType.childAt(i),
-              [&streams = params.streams()](offset_size offset) {
-                return streams.hasStream(offset);
-              })) {
-        continue;
-      }
     }
     auto childParams = params.makeChildParams(nimbleType.childAt(i));
     childParams.setInMapDecoder(node.inMap.get());
     node.reader = buildColumnReader(
         requestedValueType, fileValueType, childParams, *childSpec, false);
+
+    // Keeps only the readers that a later stripe can rebind.
+    if (keyNodePool != nullptr && node.reader->rebindable()) {
+      node.pool = keyNodePool;
+    }
     keyNodes.push_back(std::move(node));
   }
   return keyNodes;

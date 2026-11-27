@@ -28,4 +28,19 @@ std::unique_ptr<velox::dwio::common::SelectiveColumnReader> buildColumnReader(
     velox::common::ScanSpec& scanSpec,
     bool isRoot);
 
+/// Rebinds 'reader', which buildColumnReader() built for an earlier stripe, to
+/// the stripe that 'params' reads, through SelectiveColumnReader::rebind().
+/// 'params' describes the column 'reader' was built for. The caller first
+/// moves the StripeStreams that 'params' and 'reader' share to that stripe with
+/// StripeStreams::setStripe(), and loads the streams that the rebind enqueues
+/// with StripeStreams::load() after it. Only the decoders of the integer,
+/// floating-point and list readers then still point at an earlier stripe, or
+/// at no stream after SelectiveColumnReader::unbind(), so rebinding gives each
+/// decoder the same stream of the new stripe. Returns false, having enqueued no
+/// stream, if 'reader' cannot read that stripe, for example because a stream it
+/// reads is absent there, in which case the caller builds a new reader for it.
+bool rebindColumnReader(
+    velox::dwio::common::SelectiveColumnReader& reader,
+    NimbleParams& params);
+
 } // namespace facebook::nimble
