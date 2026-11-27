@@ -328,6 +328,7 @@ if(${VELOX_ENABLE_BENCHMARKS})
 endif()
 
 add_subdirectory(prefixsort)
+add_subdirectory(python)
 add_subdirectory(rpc)
 add_subdirectory(trace)
 add_subdirectory(window)
