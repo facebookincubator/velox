@@ -3670,12 +3670,13 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCancellationBeforeTaskInit) {
           *session->task, TaskState::kFinished, 3'000'000));
 }
 
-// A close message that follows the handshake at once Releases the destination
-// of an Active output queue, whether it arrives before or after the server
-// binds to the destination. The server stops without sending anything, and the
-// producer finishes once its drivers do.
-TEST_F(UcxExchangeFocusedTest, closeRightAfterHandshakeStopsServer) {
-  const auto taskId = getUniqueTaskPrefix() + "closeAfterHandshake";
+// A close message handled before the handshake, while the output queue is
+// Active and no server exists yet, Releases the destination: a close goes to
+// the output queue, not to a server. The server that the handshake then creates
+// binds to the Released destination and stops without sending anything, and
+// the producer finishes once its drivers do.
+TEST_F(UcxExchangeFocusedTest, closeBeforeHandshakeStopsServer) {
+  const auto taskId = getUniqueTaskPrefix() + "closeBeforeHandshake";
   const PartitionKey key{taskId, 0};
   const auto keyHash = fnv1a_32(key.toString());
   auto task = makeProducerTask(taskId, pool_.get());
@@ -3687,16 +3688,12 @@ TEST_F(UcxExchangeFocusedTest, closeRightAfterHandshakeStopsServer) {
   SCOPE_EXIT {
     queueManager()->removeTask(taskId);
   };
+  // Held to see whether a server is still bound once the task is removed.
+  auto outputQueue = queueManager()->bindReader(taskId, 0, nullptr);
+  queueManager()->releaseReader(outputQueue, 0);
 
   auto peer = FakeUcxPeer::connect(
       "127.0.0.1", Communicator::getInstance()->getListenerPort());
-  HandshakeMsg handshake{};
-  std::memcpy(
-      handshake.taskId,
-      taskId.data(),
-      std::min(taskId.size(), sizeof(handshake.taskId) - 1));
-  handshake.destination = 0;
-  peer->sendAm(&handshake, sizeof(handshake));
   const auto message = makeCloseMsg(key);
   ASSERT_EQ(
       peer->sendTag(
@@ -3705,6 +3702,17 @@ TEST_F(UcxExchangeFocusedTest, closeRightAfterHandshakeStopsServer) {
           sizeof(message),
           std::chrono::seconds(3)),
       UCS_OK);
+  ASSERT_TRUE(waitUntil(
+      [&]() { return destinationState(taskId) == DestinationState::kReleased; },
+      std::chrono::milliseconds(3'000)));
+
+  HandshakeMsg handshake{};
+  std::memcpy(
+      handshake.taskId,
+      taskId.data(),
+      std::min(taskId.size(), sizeof(handshake.taskId) - 1));
+  handshake.destination = 0;
+  peer->sendAm(&handshake, sizeof(handshake));
   const auto [status, bytes] = peer->receiveTag(
       getHandshakeResponseTag(keyHash),
       sizeof(HandshakeResponse),
@@ -3715,14 +3723,6 @@ TEST_F(UcxExchangeFocusedTest, closeRightAfterHandshakeStopsServer) {
   EXPECT_EQ(
       decodeHandshakeResponse(responseBytes).status,
       HandshakeStatus::kAccepted);
-
-  EXPECT_TRUE(waitForOutputFinished(taskId));
-  queueManager()->noMoreData(taskId);
-  EXPECT_TRUE(
-      exec::test::TaskMonitor::waitForStateChange(
-          *task, TaskState::kFinished, 3'000'000));
-  // A server that got its destination's end, rather than kStop, would send it
-  // now.
   EXPECT_EQ(
       peer->receiveTag(
               getMetadataTag(keyHash, 0),
@@ -3730,6 +3730,19 @@ TEST_F(UcxExchangeFocusedTest, closeRightAfterHandshakeStopsServer) {
               std::chrono::milliseconds(500))
           .first,
       UCS_ERR_TIMED_OUT);
+
+  queueManager()->noMoreData(taskId);
+  EXPECT_TRUE(waitForOutputFinished(taskId));
+  EXPECT_TRUE(
+      exec::test::TaskMonitor::waitForStateChange(
+          *task, TaskState::kFinished, 3'000'000));
+  // A removed output queue whose Task is gone is droppable only once no server
+  // is bound to it.
+  queueManager()->removeTask(taskId);
+  task.reset();
+  EXPECT_TRUE(waitUntil(
+      [&]() { return outputQueue->isDroppable(); },
+      std::chrono::milliseconds(3'000)));
 }
 
 // The Communicator receives every close message on its worker, also one for a
