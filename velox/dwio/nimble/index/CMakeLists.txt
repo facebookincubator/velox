@@ -91,6 +91,8 @@ add_library(
 target_link_libraries(
   nimble_index
   nimble_block_cache
+  nimble_buffer_growth_policy
+  nimble_chunked_stream_writer
   nimble_common
   nimble_compression
   nimble_data_input
