@@ -407,7 +407,7 @@ Special forms support flat-no-nulls fast path in some cases, but not all.
 * COALESCE supports flat-no-nulls fast path if all sub-expressions support
   flat-no-nulls fast path.
 * CAST doesn't support flat-no-nulls fast path.
-* TRY doesnt't support flat-no-nulls fast path.
+* TRY doesn't support flat-no-nulls fast path.
 
 It is possible for some sub-expressions to take the fast path while others
 go through the regular path.

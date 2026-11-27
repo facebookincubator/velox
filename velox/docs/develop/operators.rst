@@ -670,7 +670,7 @@ identified sort fields as well as a sorting order.
    * - sortingKeys
      - List of one of more input columns to sort by. Sorting keys must be unique.
    * - sortingOrders
-     - Sorting order for each of the soring keys. The supported orders are: ascending nulls first, ascending nulls last, descending nulls first, descending nulls last.
+     - Sorting order for each of the sorting keys. The supported orders are: ascending nulls first, ascending nulls last, descending nulls first, descending nulls last.
    * - isPartial
      - Boolean indicating whether the sort operation processes only a portion of the dataset.
 
@@ -693,7 +693,7 @@ operations.
    * - sortingKeys
      - List of one of more input columns to sort by. Must not be empty and must not contain duplicates.
    * - sortingOrders
-     - Sorting order for each of the soring keys. See OrderBy for the list of supported orders.
+     - Sorting order for each of the sorting keys. See OrderBy for the list of supported orders.
    * - count
      - Maximum number of rows to return.
    * - isPartial
@@ -875,7 +875,7 @@ orderedness. Input streams are coming from remote exchange or shuffle.
    * - sortingKeys
      - List of one of more input columns to sort by.
    * - sortingOrders
-     - Sorting order for each of the soring keys. See OrderBy for the list of supported orders.
+     - Sorting order for each of the sorting keys. See OrderBy for the list of supported orders.
 
 LocalMergeNode
 ~~~~~~~~~~~~~~
@@ -893,7 +893,7 @@ streams are coming from local exchange.
    * - sortingKeys
      - List of one of more input columns to sort by.
    * - sortingOrders
-     - Sorting order for each of the soring keys. See OrderBy for the list of supported orders.
+     - Sorting order for each of the sorting keys. See OrderBy for the list of supported orders.
 
 LocalPartitionNode
 ~~~~~~~~~~~~~~~~~~

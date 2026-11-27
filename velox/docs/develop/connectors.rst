@@ -114,7 +114,7 @@ This is the behavior when the proxy settings are enabled:
 
 1. http_proxy/HTTP_PROXY, https_proxy/HTTPS_PROXY and no_proxy/NO_PROXY
    environment variables are read. If lower case and upper case variables are set
-   lower case variables take precendence.
+   lower case variables take precedence.
 2. The no_proxy/NO_PROXY content is scanned for exact and suffix matches.
 3. IP addresses, domains, subdomains, or IP ranges (CIDR) can be specified in no_proxy/NO_PROXY.
 4. The no_proxy/NO_PROXY list is comma separated.
