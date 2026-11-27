@@ -1196,9 +1196,6 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionaryStringColumn) {
         options.minStreamChunkRawSize = 1;
         test::configureSharedDictionarySelectionPolicy(options);
         SharedDictionaryConfig dictionary{.scope = scope};
-        if (scope != SharedDictionaryScope::Stripe) {
-          dictionary.dictionaryId = 17;
-        }
         options.experimentalSharedDictionaryEncoding =
             SharedDictionaryEncodingConfig::builder()
                 .addColumnDictionary("c0", std::move(dictionary))

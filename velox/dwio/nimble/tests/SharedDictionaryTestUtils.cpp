@@ -201,9 +201,9 @@ WriterOptions sharedDictionaryWriterOptions(
         source.dictionaryKey,
         SharedDictionaryConfig{
             .scope = source.scope,
-            .dictionaryId = source.scope == SharedDictionaryScope::Stripe
-                ? 0
-                : source.dictionaryId});
+            .dictionaryId = source.scope == SharedDictionaryScope::External
+                ? source.dictionaryId
+                : 0});
   }
   options.experimentalSharedDictionaryEncoding = builder.build();
   return options;
