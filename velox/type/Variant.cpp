@@ -641,6 +641,7 @@ std::string Variant::toJsonUnsafe(const TypePtr& type) const {
       }
       return folly::to<std::string>(value<TypeKind::HUGEINT>());
     }
+    case TypeKind::TINYINT:
       [[fallthrough]];
     case TypeKind::SMALLINT:
       [[fallthrough]];

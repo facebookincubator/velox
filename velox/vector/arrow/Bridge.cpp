@@ -450,7 +450,7 @@ const char* exportArrowFormatStr(
       if (isCalendarIntervalType(type)) {
         return "tin"; // Arrow month-day-nano interval
       }
-      SAFE_VELOX_NYI(
+      VELOX_NYI(
           "Unable to map HUGEINT type '{}' to ArrowSchema.", type->kind());
     case TypeKind::TIMESTAMP:
       return exportArrowFormatTimestampStr(type, options, formatBuffer);
