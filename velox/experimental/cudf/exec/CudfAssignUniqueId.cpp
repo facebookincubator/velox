@@ -136,7 +136,7 @@ std::unique_ptr<cudf::column> CudfAssignUniqueId::generateIdColumn(
       0);
 
   auto list_sequence = cudf::lists::sequences(
-      d_starts_column_view, d_sizes_column_view, stream, mr);
+      d_starts_column_view, d_sizes_column_view, stream, withTempMr(mr));
   // Discard offsets.
   return std::move(list_sequence->release().children[1]);
 }

@@ -184,8 +184,10 @@ std::unique_ptr<cudf::column> makeConstantOnesColumn(
     cudf::size_type numRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-  return cudf::make_column_from_scalar(oneScalar, numRows, stream, mr);
+  auto oneScalar =
+      cudf::numeric_scalar<int64_t>(1, true, stream, withTempMr(mr));
+  return cudf::make_column_from_scalar(
+      oneScalar, numRows, stream, withTempMr(mr));
 }
 
 cudf::column_view makeCountStarInputColumn(
@@ -202,9 +204,10 @@ cudf::column_view makeCountStarInputColumn(
   // column_views already captured by earlier calls (e.g. deferred requests
   // held in PendingRangeRolling::inputCol).
   if (!std::holds_alternative<std::unique_ptr<cudf::column>>(owner)) {
-    auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-    owner =
-        cudf::make_column_from_scalar(oneScalar, logicalRowCount, stream, mr);
+    auto oneScalar =
+        cudf::numeric_scalar<int64_t>(1, true, stream, withTempMr(mr));
+    owner = cudf::make_column_from_scalar(
+        oneScalar, logicalRowCount, stream, withTempMr(mr));
   }
   return asView(owner);
 }
@@ -220,26 +223,38 @@ std::unique_ptr<cudf::column> computeGlobalAggregate(
   std::unique_ptr<cudf::scalar> resultScalar;
   if (baseName == "sum") {
     auto agg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-    resultScalar = cudf::reduce(inputCol, *agg, resultType, stream, mr);
+    resultScalar =
+        cudf::reduce(inputCol, *agg, resultType, stream, withTempMr(mr));
   } else if (baseName == "min") {
     auto agg = cudf::make_min_aggregation<cudf::reduce_aggregation>();
-    resultScalar = cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
+    resultScalar =
+        cudf::reduce(inputCol, *agg, inputCol.type(), stream, withTempMr(mr));
   } else if (baseName == "max") {
     auto agg = cudf::make_max_aggregation<cudf::reduce_aggregation>();
-    resultScalar = cudf::reduce(inputCol, *agg, inputCol.type(), stream, mr);
+    resultScalar =
+        cudf::reduce(inputCol, *agg, inputCol.type(), stream, withTempMr(mr));
   } else if (baseName == "count") {
     auto agg = cudf::make_count_aggregation<cudf::reduce_aggregation>(
         isCountStar ? cudf::null_policy::INCLUDE : cudf::null_policy::EXCLUDE);
     resultScalar = cudf::reduce(
-        inputCol, *agg, cudf::data_type(cudf::type_id::INT64), stream, mr);
+        inputCol,
+        *agg,
+        cudf::data_type(cudf::type_id::INT64),
+        stream,
+        withTempMr(mr));
   } else if (baseName == "avg") {
     auto agg = cudf::make_mean_aggregation<cudf::reduce_aggregation>();
     resultScalar = cudf::reduce(
-        inputCol, *agg, cudf::data_type(cudf::type_id::FLOAT64), stream, mr);
+        inputCol,
+        *agg,
+        cudf::data_type(cudf::type_id::FLOAT64),
+        stream,
+        withTempMr(mr));
   } else {
     VELOX_FAIL("Unsupported global aggregate window function: {}", baseName);
   }
-  return cudf::make_column_from_scalar(*resultScalar, numRows, stream, mr);
+  return cudf::make_column_from_scalar(
+      *resultScalar, numRows, stream, withTempMr(mr));
 }
 
 // Compute each partition's average once, then copy it back to every row.
@@ -263,7 +278,7 @@ std::unique_ptr<cudf::column> computeFullPartitionAverage(
   requests[0].aggregations.push_back(
       cudf::make_count_aggregation<cudf::groupby_aggregation>(
           cudf::null_policy::INCLUDE));
-  auto [keys, results] = grouper.aggregate(requests, stream, get_temp_mr());
+  auto [keys, results] = grouper.aggregate(requests, stream, tempMrs());
 
   // The presorted groupby returns groups in partition order. Repeat each mean
   // for every row in its partition, including rows whose AVG input is null.
@@ -271,7 +286,7 @@ std::unique_ptr<cudf::column> computeFullPartitionAverage(
       cudf::table_view{{results[0].results[0]->view()}},
       results[0].results[1]->view(),
       stream,
-      mr);
+      withTempMr(mr));
   // RMM deallocates results' buffers on this stream after repeat() finishes
   // reading the mean and count columns.
   return std::move(result->release()[0]);
@@ -884,9 +899,10 @@ void CudfWindow::computeRankColumnsBatch(
         continue;
       }
       if (baseName == "row_number") {
-        auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream, mr);
-        windowResultCols[funcIndex] =
-            cudf::sequence(numRows, oneScalar, oneScalar, stream, mr);
+        auto oneScalar =
+            cudf::numeric_scalar<int64_t>(1, true, stream, withTempMr(mr));
+        windowResultCols[funcIndex] = cudf::sequence(
+            numRows, oneScalar, oneScalar, stream, withTempMr(mr));
         continue;
       }
       auto method = toRankMethod(baseName);
@@ -898,7 +914,7 @@ void CudfWindow::computeRankColumnsBatch(
           cudf::scan_type::INCLUSIVE,
           cudf::null_policy::INCLUDE,
           stream,
-          mr);
+          withTempMr(mr));
     }
     return;
   }
@@ -937,7 +953,7 @@ void CudfWindow::computeRankColumnsBatch(
   }
 
   VELOX_CHECK_NOT_NULL(rankGrouper);
-  auto scanResult = rankGrouper->scan(scanRequests, stream, mr);
+  auto scanResult = rankGrouper->scan(scanRequests, stream, withTempMr(mr));
   auto& aggResults = scanResult.second;
   VELOX_CHECK_EQ(aggResults.size(), scanRequests.size());
   for (size_t i = 0; i < scanRequests.size(); ++i) {
@@ -990,11 +1006,25 @@ std::unique_ptr<cudf::column> CudfWindow::computeLeadLagColumn(
   if (baseName == "lag") {
     auto agg = cudf::make_lag_aggregation<cudf::rolling_aggregation>(offset);
     return cudf::grouped_rolling_window(
-        partKeys, inputCol, offset + 1, 0, offset + 1, *agg, stream, mr);
+        partKeys,
+        inputCol,
+        offset + 1,
+        0,
+        offset + 1,
+        *agg,
+        stream,
+        withTempMr(mr));
   }
   auto agg = cudf::make_lead_aggregation<cudf::rolling_aggregation>(offset);
   return cudf::grouped_rolling_window(
-      partKeys, inputCol, 0, offset + 1, offset + 1, *agg, stream, mr);
+      partKeys,
+      inputCol,
+      0,
+      offset + 1,
+      offset + 1,
+      *agg,
+      stream,
+      withTempMr(mr));
 }
 
 std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
@@ -1021,7 +1051,7 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
         1,
         *agg,
         stream,
-        mr);
+        withTempMr(mr));
   }
 
   auto preceding =
@@ -1029,7 +1059,14 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
   auto following =
       toRowsFollowingBound(func.frame.endType, func.frame.endValue);
   return cudf::grouped_rolling_window(
-      partKeys, inputCol, preceding, following, 1, *agg, stream, mr);
+      partKeys,
+      inputCol,
+      preceding,
+      following,
+      1,
+      *agg,
+      stream,
+      withTempMr(mr));
 }
 
 std::unique_ptr<cudf::column> CudfWindow::computeNthValueColumn(
@@ -1127,7 +1164,7 @@ void CudfWindow::doNoMoreInput() {
       auto allView = allData->view();
       auto keyTable = allView.select(allSortKeys);
       sortedData_ = cudf::stable_sort_by_key(
-          allView, keyTable, allOrders, allNullOrders, stream_, mr);
+          allView, keyTable, allOrders, allNullOrders, stream_, withTempMr(mr));
     }
   } else {
     sortedData_ = std::move(allData);
@@ -1300,9 +1337,10 @@ RowVectorPtr CudfWindow::doGetOutput() {
     auto orders = sortOrders_;
     auto nullOrders = nullOrders_;
     if (sortKeyIndices_.empty()) {
-      auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream_, mr);
-      orderbyColHolder =
-          cudf::sequence(logicalRowCount_, oneScalar, oneScalar, stream_, mr);
+      auto oneScalar =
+          cudf::numeric_scalar<int64_t>(1, true, stream_, withTempMr(mr));
+      orderbyColHolder = cudf::sequence(
+          logicalRowCount_, oneScalar, oneScalar, stream_, withTempMr(mr));
       orderbyCol = cudf::table_view{{asView(orderbyColHolder)}};
       orders = {cudf::order::ASCENDING};
       nullOrders = {cudf::null_order::BEFORE};
@@ -1326,7 +1364,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
           cudf::host_span<cudf::rolling_request const>(
               rollingRequests.data(), rollingRequests.size()),
           stream_,
-          mr);
+          withTempMr(mr));
       auto resultCols = batchResult->release();
       VELOX_CHECK_EQ(resultCols.size(), pendingRequests.size());
       for (size_t i = 0; i < pendingRequests.size(); ++i) {
@@ -1347,16 +1385,16 @@ RowVectorPtr CudfWindow::doGetOutput() {
     auto expectedType =
         veloxToCudfDataType(outputType_->childAt(numInputCols + i));
     if (resultColumn->type() != expectedType) {
-      resultColumn =
-          cudf::cast(resultColumn->view(), expectedType, stream_, mr);
+      resultColumn = cudf::cast(
+          resultColumn->view(), expectedType, stream_, withTempMr(mr));
     }
 
     const auto baseName = stripFunctionPrefix(
         windowNode_->windowFunctions()[i].functionCall->name(), prefix);
     if (baseName == "count" && resultColumn->null_count() > 0) {
-      cudf::numeric_scalar<int64_t> zero(0, true, stream_, mr);
-      resultColumn =
-          cudf::replace_nulls(resultColumn->view(), zero, stream_, mr);
+      cudf::numeric_scalar<int64_t> zero(0, true, stream_, withTempMr(mr));
+      resultColumn = cudf::replace_nulls(
+          resultColumn->view(), zero, stream_, withTempMr(mr));
     }
 
     sortedCols.push_back(std::move(resultColumn));

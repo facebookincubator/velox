@@ -91,9 +91,10 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
   auto batchKeys = tableView.select(distinctKeyIndices_);
 
   // Create marker column (all false initially).
-  cudf::numeric_scalar<bool> falseScalar(false, true, stream, tempMr);
-  auto markerCol =
-      cudf::make_column_from_scalar(falseScalar, numRows, stream, outputMr);
+  cudf::numeric_scalar<bool> falseScalar(
+      false, true, stream, cudf::memory_resources{tempMr, tempMr});
+  auto markerCol = cudf::make_column_from_scalar(
+      falseScalar, numRows, stream, cudf::memory_resources{outputMr, tempMr});
 
   // Find first occurrences within this batch (returns a column of indices).
   auto batchDistinctIdxCol = cudf::distinct_indices(
@@ -102,7 +103,7 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
       cudf::null_equality::EQUAL,
       cudf::nan_equality::ALL_EQUAL,
       stream,
-      tempMr);
+      cudf::memory_resources{tempMr, tempMr});
 
   // column_view used to pass indices to gather/scatter.
   std::unique_ptr<cudf::column> newRowIndicesCol;
@@ -140,8 +141,10 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
         cudf::memory_resources{tempMr, tempMr});
 
     // Anti-join against the persistent seenFilter_ to find new keys.
-    auto newKeyLocalIndices =
-        seenFilter_->anti_join(uniqueBatchKeys->view(), stream, tempMr);
+    auto newKeyLocalIndices = seenFilter_->anti_join(
+        uniqueBatchKeys->view(),
+        stream,
+        cudf::memory_resources{tempMr, tempMr});
     auto [updatedSeenKeys, remappedCol] = std::invoke(
         [&]() -> std::pair<
                   std::unique_ptr<cudf::table>,
@@ -183,7 +186,8 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
           std::vector<cudf::table_view> seenPlusNew = {
               seenKeys_->view(), newKeys->view()};
           return {
-              cudf::concatenate(seenPlusNew, stream, tempMr),
+              cudf::concatenate(
+                  seenPlusNew, stream, cudf::memory_resources{tempMr, tempMr}),
               std::move(remappedCol)};
         });
 
@@ -206,12 +210,17 @@ RowVectorPtr CudfMarkDistinct::doGetOutput() {
 
   // Scatter TRUE at new row positions.
   if (newRowIndicesCol && newRowIndicesCol->size() > 0) {
-    cudf::numeric_scalar<bool> trueScalar(true, true, stream, tempMr);
+    cudf::numeric_scalar<bool> trueScalar(
+        true, true, stream, cudf::memory_resources{tempMr, tempMr});
     std::vector<std::reference_wrapper<const cudf::scalar>> sources = {
         trueScalar};
     cudf::table_view markerTableView({markerCol->view()});
     auto scatteredTable = cudf::scatter(
-        sources, newRowIndicesCol->view(), markerTableView, stream, outputMr);
+        sources,
+        newRowIndicesCol->view(),
+        markerTableView,
+        stream,
+        cudf::memory_resources{outputMr, tempMr});
     markerCol = std::move(scatteredTable->release()[0]);
   }
 

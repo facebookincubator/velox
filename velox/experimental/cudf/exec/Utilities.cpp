@@ -75,7 +75,7 @@ std::unique_ptr<cudf::table> concatenateTables(
       tables.end(),
       std::back_inserter(tableViews),
       [&](const auto& tbl) { return tbl->view(); });
-  return cudf::concatenate(tableViews, stream, mr);
+  return cudf::concatenate(tableViews, stream, withTempMr(mr));
 }
 
 namespace {
@@ -121,7 +121,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
   // Concatenate even a single input so the output is allocated from 'mr'.
   // Releasing the input in place would return buffers from the producer's
   // memory resource.
-  auto output = cudf::concatenate(tableViews, stream, mr);
+  auto output = cudf::concatenate(tableViews, stream, withTempMr(mr));
 
   orderCudfVectorDeallocationsAfterStream(tables, stream);
   // Input tables are deallocated here when 'tables' goes out of scope.
@@ -170,7 +170,8 @@ std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
     }
 
     cudf::detail::join_streams(inputStreams, stream);
-    outputTables.push_back(cudf::concatenate(tableViews, stream, mr));
+    outputTables.push_back(
+        cudf::concatenate(tableViews, stream, withTempMr(mr)));
 
     // Rebind deallocation to the output stream, then release this group's
     // inputs. Each completed output replaces its source inputs, so peak memory
@@ -308,15 +309,12 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
   switch (type->kind()) {
     case TypeKind::ARRAY: {
       // LIST: zeroed offsets (numRows + 1 zeros) + empty child + ALL_NULL mask.
-      cudf::numeric_scalar<int32_t> zeroScalar{0, true, stream, get_temp_mr()};
-      auto offsets =
-          cudf::make_column_from_scalar(zeroScalar, numRows + 1, stream, mr);
+      cudf::numeric_scalar<int32_t> zeroScalar{0, true, stream, tempMrs()};
+      auto offsets = cudf::make_column_from_scalar(
+          zeroScalar, numRows + 1, stream, withTempMr(mr));
       auto child = makeAllNullColumn(type->childAt(0), 0, stream, mr);
       auto nullMask = cudf::create_null_mask(
-          numRows,
-          cudf::mask_state::ALL_NULL,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          numRows, cudf::mask_state::ALL_NULL, stream, withTempMr(mr));
       return cudf::make_lists_column(
           numRows,
           std::move(offsets),
@@ -333,17 +331,14 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
             makeAllNullColumn(type->childAt(i), numRows, stream, mr));
       }
       auto nullMask = cudf::create_null_mask(
-          numRows,
-          cudf::mask_state::ALL_NULL,
-          stream,
-          cudf::memory_resources{mr, get_temp_mr()});
+          numRows, cudf::mask_state::ALL_NULL, stream, withTempMr(mr));
       return cudf::make_structs_column(
           numRows,
           std::move(children),
           numRows,
           std::move(nullMask),
           stream,
-          mr);
+          withTempMr(mr));
     }
     default: {
       // Flat types (including STRING): use the scalar approach.
@@ -352,9 +347,10 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
           cudfType,
           "All-null column creation is not implemented for type {}",
           type->toString());
-      auto nullScalar = cudf::make_default_constructed_scalar(
-          *cudfType, stream, get_temp_mr());
-      return cudf::make_column_from_scalar(*nullScalar, numRows, stream, mr);
+      auto nullScalar =
+          cudf::make_default_constructed_scalar(*cudfType, stream, tempMrs());
+      return cudf::make_column_from_scalar(
+          *nullScalar, numRows, stream, withTempMr(mr));
     }
   }
 }
