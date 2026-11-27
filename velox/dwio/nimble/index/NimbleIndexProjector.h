@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
 #include <folly/coro/Task.h>
 #include <folly/io/IOBuf.h>
 #include <memory>
@@ -136,12 +137,21 @@ class NimbleIndexProjector {
   /// derived lookup requests use the index lookup before loading stripes, so
   /// their constraints are applied before stripe planning.
   ///
+  /// co_projectRows() returns each top-level FlatMap column of the projection
+  /// that `readFlatMapFieldAsStruct` names as a struct instead of a map. A
+  /// struct has one field per key that the projection selects, in the
+  /// projection's key order, which buildProjectedNimbleType() sorts by name. A
+  /// field is null in a row that lacks its key, and in every row when the file
+  /// lacks the key. projectStreams() ignores `readFlatMapFieldAsStruct`. See
+  /// StreamReader::Options::readFlatMapFieldAsStruct.
+  ///
   // TODO: projectedSubfields currently must match file schema column names.
   // Add table-to-file column name mapping for schema evolution support.
   static std::unique_ptr<NimbleIndexProjector> create(
       TabletReaderCache& tabletReaderCache,
       const velox::FileHandle& fileHandle,
       const std::vector<Subfield>& projectedSubfields,
+      folly::F14FastSet<std::string> readFlatMapFieldAsStruct,
       BlockCache* blockCache,
       const velox::dwio::common::ReaderOptions& options);
 
@@ -150,12 +160,14 @@ class NimbleIndexProjector {
   /// When `blockCache` is non-null, stripe data reads route through
   /// `CachedDataInput` against the caller-owned cache; otherwise reads use
   /// `DirectDataInput` with no caching. The cache must outlive the projector.
-  /// ReaderOptions::coLoadKeyStreams() selects the co-load as create() above
+  /// ReaderOptions::coLoadKeyStreams() selects the co-load, and
+  /// `readFlatMapFieldAsStruct` the struct output, as create() above
   /// describes.
   static std::unique_ptr<NimbleIndexProjector> create(
       std::shared_ptr<TabletReader> tablet,
       const velox::FileHandle& fileHandle,
       std::shared_ptr<const NimbleTypeProjection> projection,
+      folly::F14FastSet<std::string> readFlatMapFieldAsStruct,
       BlockCache* blockCache,
       const velox::dwio::common::ReaderOptions& options);
 
@@ -286,7 +298,8 @@ class NimbleIndexProjector {
   /// random-access EncodingView reads when supported. Nested projections use
   /// the general FieldReader path without serializing an intermediate kTablet
   /// payload. 'request' must be a range scan. The request and options must
-  /// remain alive until the returned task completes.
+  /// remain alive until the returned task completes. Returns the FlatMap
+  /// columns that create() names in `readFlatMapFieldAsStruct` as structs.
   folly::coro::Task<RowProjectionResult> co_projectRows(
       const index::IndexLookup::LookupRequest& request,
       const Options& options);
@@ -437,6 +450,7 @@ class NimbleIndexProjector {
       std::shared_ptr<velox::ReadFile> file,
       std::unique_ptr<DataInput> dataInput,
       std::shared_ptr<const NimbleTypeProjection> projection,
+      folly::F14FastSet<std::string> readFlatMapFieldAsStruct,
       velox::memory::MemoryPool* pool,
       std::shared_ptr<velox::io::IoStatistics> ioStats,
       bool verifyStreamChecksums,
@@ -852,6 +866,9 @@ class NimbleIndexProjector {
   // then the key stream of the cluster index, which holds the key chunk of the
   // stripe. Empty unless the cluster index keeps its key chunks in stripes.
   const std::vector<uint32_t> coLoadStreamIds_;
+  // FlatMap columns of the projection that co_projectRows() returns as
+  // structs. See create().
+  const folly::F14FastSet<std::string> readFlatMapFieldAsStruct_;
 
   std::unique_ptr<DataInput> dataInput_;
   // Verifies a stream read from storage against the checksum in its stream
