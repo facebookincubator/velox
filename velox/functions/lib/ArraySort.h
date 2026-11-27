@@ -70,6 +70,6 @@ std::vector<std::shared_ptr<exec::FunctionSignature>> arraySortSignatures(
 core::TypedExprPtr rewriteArraySortCall(
     const std::string& prefix,
     const core::TypedExprPtr& expr,
-    const std::shared_ptr<SimpleComparisonChecker> checker);
+    const std::shared_ptr<SimpleComparisonChecker>& checker);
 
 } // namespace facebook::velox::functions
