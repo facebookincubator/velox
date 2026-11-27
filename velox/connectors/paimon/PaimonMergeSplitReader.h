@@ -71,10 +71,6 @@ class PaimonMergeSplitReader : public PaimonSplitReader {
   const std::shared_ptr<const PaimonConnectorSplit> paimonSplit_;
   // Primary keys and merge options of the table.
   const std::shared_ptr<const PaimonTableHandle> paimonTableHandle_;
-  // True to read _SEQUENCE_NUMBER and _VALUE_KIND under lowercase names. DWRF,
-  // ORC and Parquet readers read file column names as lowercase when the
-  // session asks for it, while Nimble readers keep the names as written.
-  const bool lowerCaseSystemColumns_;
 
   // Row selection of each data file, as rowSelection() returns it. Empty until
   // the keys are merged.
