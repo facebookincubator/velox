@@ -389,8 +389,8 @@ Mathematical Functions
 .. spark:function:: pmod(n, m) -> [same as n] (ANSI compliant)
 
     Returns the modulo after adjusting a negative remainder by the divisor.
-    Results are nonnegative when the divisor is positive; negative divisors can
-    produce negative results.
+    Non-NaN results are nonnegative when the divisor is positive; negative
+    divisors can produce negative results.
     Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
     Both operands must have the same type.
 

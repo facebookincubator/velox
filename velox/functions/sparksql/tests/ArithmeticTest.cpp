@@ -78,6 +78,7 @@ TEST_F(PmodTest, int32) {
   EXPECT_EQ(INT32_MAX, pmod<int32_t>(-1, INT32_MIN));
 
   setAnsi(true);
+  EXPECT_EQ(INT32_MAX, pmod<int32_t>(-1, INT32_MIN));
   VELOX_ASSERT_THROW(pmod<int32_t>(1, 0), "Division by zero");
   EXPECT_EQ(std::nullopt, pmod<int32_t>(std::nullopt, 0));
 }
@@ -93,6 +94,7 @@ TEST_F(PmodTest, int64) {
   EXPECT_EQ(INT64_MAX, pmod<int64_t>(-1, INT64_MIN));
 
   setAnsi(true);
+  EXPECT_EQ(INT64_MAX, pmod<int64_t>(-1, INT64_MIN));
   VELOX_ASSERT_THROW(pmod<int64_t>(1, 0), "Division by zero");
 }
 
@@ -103,6 +105,7 @@ TEST_F(PmodTest, float) {
   EXPECT_FLOAT_EQ(0x1.99999p-4f, pmod<float>(0.7f, -0.3f).value());
   EXPECT_TRUE(std::signbit(pmod<float>(-0.0f, 3).value()));
   EXPECT_TRUE(std::signbit(pmod<float>(-6, -3).value()));
+  EXPECT_FALSE(std::signbit(pmod<float>(6, -3).value()));
   EXPECT_EQ(0, pmod<float>(0, std::numeric_limits<float>::infinity()));
   EXPECT_TRUE(
       std::isnan(
@@ -120,6 +123,7 @@ TEST_F(PmodTest, double) {
   EXPECT_DOUBLE_EQ(0.1, pmod<double>(0.7, -0.3).value());
   EXPECT_TRUE(std::signbit(pmod<double>(-0.0, 3).value()));
   EXPECT_TRUE(std::signbit(pmod<double>(-6, -3).value()));
+  EXPECT_FALSE(std::signbit(pmod<double>(6, -3).value()));
   EXPECT_EQ(0, pmod<double>(0, std::numeric_limits<double>::infinity()));
   EXPECT_TRUE(
       std::isnan(
