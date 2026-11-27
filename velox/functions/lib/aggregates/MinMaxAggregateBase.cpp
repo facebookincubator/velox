@@ -16,6 +16,7 @@
 
 #include "velox/functions/lib/aggregates/MinMaxAggregateBase.h"
 
+#include <cstring>
 #include <limits>
 #include "velox/functions/lib/CheckNestedNulls.h"
 #include "velox/functions/lib/aggregates/Compare.h"
@@ -310,6 +311,24 @@ template <>
 const double SimpleNumericMinAggregate<double>::kInitialValue_ =
     MinMaxTrait<double>::quiet_NaN();
 
+// Returns 'input' as the intermediate result for 'rows', with NULL in the rows
+// that are not selected. Wraps 'input' in a dictionary instead of copying it,
+// which would deep copy complex types.
+VectorPtr maskedInputAsIntermediate(
+    const SelectivityVector& rows,
+    const VectorPtr& input,
+    memory::MemoryPool* pool) {
+  if (rows.isAllSelected()) {
+    return input;
+  }
+  BufferPtr nulls = allocateNulls(rows.size(), pool, bits::kNull);
+  rows.clearNulls(nulls);
+  BufferPtr indices = allocateIndices(rows.size(), pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::iota(rawIndices, rawIndices + rows.size(), 0);
+  return BaseVector::wrapInDictionary(nulls, indices, rows.size(), input);
+}
+
 class MinMaxAggregateBase : public exec::Aggregate {
  public:
   explicit MinMaxAggregateBase(
@@ -349,22 +368,7 @@ class MinMaxAggregateBase : public exec::Aggregate {
       });
     }
 
-    if (rows.isAllSelected()) {
-      result = input;
-      return;
-    }
-
-    auto* pool = allocator_->pool();
-
-    // Set result to NULL for rows that are masked out.
-    BufferPtr nulls = allocateNulls(rows.size(), pool, bits::kNull);
-    rows.clearNulls(nulls);
-
-    BufferPtr indices = allocateIndices(rows.size(), pool);
-    auto* rawIndices = indices->asMutable<vector_size_t>();
-    std::iota(rawIndices, rawIndices + rows.size(), 0);
-
-    result = BaseVector::wrapInDictionary(nulls, indices, rows.size(), input);
+    result = maskedInputAsIntermediate(rows, input, allocator_->pool());
   }
 
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
@@ -606,7 +610,186 @@ class MinAggregate : public MinMaxAggregateBase {
   }
 };
 
+// The current min or max of a VARCHAR or VARBINARY group. A value that is not
+// inline in the StringView is copied into 'buffer', which is reused while
+// later values fit into it.
+struct StringMinMaxAccumulator {
+  StringView value;
+  HashStringAllocator::Header* buffer{nullptr};
+
+  void write(StringView newValue, HashStringAllocator* allocator) {
+    if (newValue.isInline()) {
+      value = newValue;
+      return;
+    }
+    const auto size = newValue.size();
+    if (buffer != nullptr && buffer->size() < size) {
+      allocator->free(buffer);
+      buffer = nullptr;
+    }
+    if (buffer == nullptr) {
+      buffer = allocator->allocate(size);
+    }
+    std::memcpy(buffer->begin(), newValue.data(), size);
+    value = StringView(buffer->begin(), size);
+  }
+
+  void destroy(HashStringAllocator* allocator) {
+    if (buffer != nullptr) {
+      allocator->free(buffer);
+      buffer = nullptr;
+    }
+  }
+};
+
+// min / max of VARCHAR and VARBINARY. Compares StringViews directly, without
+// deserializing the current value for every input row.
+template <bool isMax>
+class StringMinMaxAggregate : public exec::Aggregate {
+ public:
+  explicit StringMinMaxAggregate(const TypePtr& resultType)
+      : exec::Aggregate(resultType) {}
+
+  int32_t accumulatorFixedWidthSize() const override {
+    return sizeof(StringMinMaxAccumulator);
+  }
+
+  int32_t accumulatorAlignmentSize() const override {
+    return alignof(StringMinMaxAccumulator);
+  }
+
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  bool supportsFillEmptyIntermediate() const override {
+    return true;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    result->addNulls(rows);
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    result = maskedInputAsIntermediate(rows, args[0], allocator_->pool());
+  }
+
+  void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    VELOX_CHECK(result);
+    auto* flatResult = (*result)->asFlatVector<StringView>();
+    VELOX_CHECK_NOT_NULL(flatResult);
+    flatResult->resize(numGroups);
+    for (auto i = 0; i < numGroups; ++i) {
+      char* group = groups[i];
+      if (isNull(group)) {
+        flatResult->setNull(i, true);
+      } else {
+        flatResult->set(i, value<StringMinMaxAccumulator>(group)->value);
+      }
+    }
+  }
+
+  void extractAccumulators(char** groups, int32_t numGroups, VectorPtr* result)
+      override {
+    // Partial and final aggregations are the same.
+    extractValues(groups, numGroups, result);
+  }
+
+  void addRawInput(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    decoded_.decode(*args[0], rows);
+    if (decoded_.isConstantMapping()) {
+      if (decoded_.isNullAt(0)) {
+        return;
+      }
+      const auto value = decoded_.valueAt<StringView>(0);
+      rows.applyToSelected([&](vector_size_t i) { update(groups[i], value); });
+      return;
+    }
+    rows.applyToSelected([&](vector_size_t i) {
+      if (!decoded_.isNullAt(i)) {
+        update(groups[i], decoded_.valueAt<StringView>(i));
+      }
+    });
+  }
+
+  void addIntermediateResults(
+      char** groups,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) override {
+    addRawInput(groups, rows, args, mayPushdown);
+  }
+
+  void addSingleGroupRawInput(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool /*mayPushdown*/) override {
+    decoded_.decode(*args[0], rows);
+    if (decoded_.isConstantMapping()) {
+      if (!decoded_.isNullAt(0)) {
+        update(group, decoded_.valueAt<StringView>(0));
+      }
+      return;
+    }
+    rows.applyToSelected([&](vector_size_t i) {
+      if (!decoded_.isNullAt(i)) {
+        update(group, decoded_.valueAt<StringView>(i));
+      }
+    });
+  }
+
+  void addSingleGroupIntermediateResults(
+      char* group,
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      bool mayPushdown) override {
+    addSingleGroupRawInput(group, rows, args, mayPushdown);
+  }
+
+ protected:
+  void initializeNewGroupsInternal(
+      char** groups,
+      folly::Range<const vector_size_t*> indices) override {
+    exec::Aggregate::setAllNulls(groups, indices);
+    for (auto i : indices) {
+      new (groups[i] + offset_) StringMinMaxAccumulator();
+    }
+  }
+
+  void destroyInternal(folly::Range<char**> groups) override {
+    for (auto group : groups) {
+      if (isInitialized(group)) {
+        value<StringMinMaxAccumulator>(group)->destroy(allocator_);
+      }
+    }
+  }
+
+ private:
+  void update(char* group, StringView newValue) {
+    auto* accumulator = value<StringMinMaxAccumulator>(group);
+    // clearNull() returns true for the first value of the group.
+    if (clearNull(group) ||
+        (isMax ? newValue > accumulator->value
+               : newValue < accumulator->value)) {
+      accumulator->write(newValue, allocator_);
+    }
+  }
+
+  DecodedVector decoded_;
+};
+
 template <
+    bool isMax,
     template <typename T> class TSimpleNumericAggregate,
     template <
         CompareFlags::NullHandlingMode nullHandlingMode> typename TAggregate>
@@ -651,9 +834,7 @@ exec::AggregateFunctionFactory getMinMaxFunctionFactoryInternal(
       case TypeKind::VARBINARY:
         [[fallthrough]];
       case TypeKind::VARCHAR:
-        return std::make_unique<
-            TAggregate<CompareFlags::NullHandlingMode::kNullAsIndeterminate>>(
-            inputType, false);
+        return std::make_unique<StringMinMaxAggregate<isMax>>(resultType);
       case TypeKind::ARRAY:
         [[fallthrough]];
       case TypeKind::ROW:
@@ -686,6 +867,7 @@ exec::AggregateFunctionFactory getMinFunctionFactory(
     CompareFlags::NullHandlingMode nullHandlingMode,
     TimestampPrecision precision) {
   return getMinMaxFunctionFactoryInternal<
+      /*isMax=*/false,
       SimpleNumericMinAggregate,
       MinAggregate>(name, nullHandlingMode, precision);
 }
@@ -695,6 +877,7 @@ exec::AggregateFunctionFactory getMaxFunctionFactory(
     CompareFlags::NullHandlingMode nullHandlingMode,
     TimestampPrecision precision) {
   return getMinMaxFunctionFactoryInternal<
+      /*isMax=*/true,
       SimpleNumericMaxAggregate,
       MaxAggregate>(name, nullHandlingMode, precision);
 }
