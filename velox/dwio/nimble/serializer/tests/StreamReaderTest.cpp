@@ -1931,6 +1931,101 @@ TEST_F(StreamReaderTest, keepsStringsInStreamBufferHolders) {
           "sixth long string"));
 }
 
+TEST_F(StreamReaderTest, keepsStreamBufferHoldersUntilTheBindingEnds) {
+  const auto stream = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"first long string", "second long string"},
+      EncodingType::Trivial);
+  auto holder =
+      velox::AlignedBuffer::allocate<char>(stream.size(), pool_.get());
+  std::copy(stream.begin(), stream.end(), holder->asMutable<char>());
+  const std::array<std::string_view, 1> streams{
+      std::string_view{holder->as<char>(), holder->size()}};
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::String});
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  auto* rawHolder = holder.get();
+  {
+    // The caller drops every reference to the buffer once the streams bind,
+    // so that the reader alone keeps its bytes alive.
+    const std::array<velox::BufferPtr, 1> holders{std::move(holder)};
+    reader.setStreams(streams, holders, /*alphabets=*/{}, /*options=*/{});
+  }
+  ASSERT_GT(rawHolder->refCount(), 0);
+
+  auto output = velox::BaseVector::create(velox::VARCHAR(), 2, pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 2}}};
+  runRead(reader, ranges, /*outputOffset=*/0, output);
+  const auto* flat = output->asFlatVector<velox::StringView>();
+  ASSERT_NE(flat, nullptr);
+  EXPECT_THAT(
+      flat->stringBuffers(), testing::Contains(velox::BufferPtr{rawHolder}));
+
+  // The output keeps the buffer after the binding ends.
+  reader.reset();
+  EXPECT_EQ(rawHolder->refCount(), 1);
+  EXPECT_EQ(flat->valueAt(0).str(), "first long string");
+  EXPECT_EQ(flat->valueAt(1).str(), "second long string");
+}
+
+TEST_F(StreamReaderTest, keepsStreamBufferHoldersOfStringsOnly) {
+  // Only the views of the chunks of a stream of strings point to the buffer of
+  // their stream, so the reader keeps the buffer of the stream of strings and
+  // not that of the stream of integers.
+  const auto makeHolder = [&](std::string_view stream) {
+    auto holder =
+        velox::AlignedBuffer::allocate<char>(stream.size(), pool_.get());
+    std::copy(stream.begin(), stream.end(), holder->asMutable<char>());
+    return holder;
+  };
+  const auto stringHolder = makeHolder(
+      encodeChunk<std::string_view>(
+          std::vector<std::string_view>{
+              "first long string", "second long string"},
+          EncodingType::Trivial));
+  const auto integerHolder = makeHolder(
+      encodeChunk<int64_t>(
+          std::vector<int64_t>{10, 11}, EncodingType::Trivial));
+  const std::array<std::string_view, 3> streams{
+      std::string_view{},
+      std::string_view{stringHolder->as<char>(), stringHolder->size()},
+      std::string_view{integerHolder->as<char>(), integerHolder->size()}};
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"name", "count"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::String}),
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{2, ScalarKind::Int64}),
+      });
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  {
+    const std::array<velox::BufferPtr, 3> holders{
+        nullptr, stringHolder, integerHolder};
+    reader.setStreams(streams, holders, /*alphabets=*/{}, /*options=*/{});
+  }
+  EXPECT_EQ(stringHolder->refCount(), 2);
+  EXPECT_EQ(integerHolder->refCount(), 1);
+
+  auto output = velox::BaseVector::create(
+      velox::ROW({{"name", velox::VARCHAR()}, {"count", velox::BIGINT()}}),
+      2,
+      pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 2}}};
+  runRead(reader, ranges, /*outputOffset=*/0, output);
+  reader.reset();
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  const auto* names = row->childAt(0)->asFlatVector<velox::StringView>();
+  ASSERT_NE(names, nullptr);
+  EXPECT_EQ(names->valueAt(0).str(), "first long string");
+  EXPECT_EQ(names->valueAt(1).str(), "second long string");
+  const auto* counts = row->childAt(1)->asFlatVector<int64_t>();
+  ASSERT_NE(counts, nullptr);
+  EXPECT_EQ(counts->valueAt(0), 10);
+  EXPECT_EQ(counts->valueAt(1), 11);
+}
+
 TEST_F(StreamReaderTest, keepsStringsOfStreamChunksInOneBuffer) {
   // Three FSST chunks, whose views decode their strings into the buffers that
   // the reader gives the stream, cached or not. Their strings fit in the first

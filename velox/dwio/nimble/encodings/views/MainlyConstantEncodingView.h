@@ -25,6 +25,8 @@
 #include <type_traits>
 #include <vector>
 
+#include <folly/CPortability.h>
+
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -221,9 +223,10 @@ class MainlyConstantEncodingView final : public TypedEncodingView<T> {
   // other rows, whose first value is at 'otherValue' in 'otherValues_'. 'row'
   // counts from 'offset'. Without the lookup structures, reads the flags of
   // the rows alone and counts the non-common rows before them once, instead
-  // of consulting structures over every row.
+  // of consulting structures over every row. Always inlined, so that
+  // readPhysical() fills the runs in place, as a loop of its own would.
   template <typename OnCommon, typename OnOther>
-  void forEachRun(
+  FOLLY_ALWAYS_INLINE void forEachRun(
       uint32_t offset,
       uint32_t length,
       const OnCommon& onCommon,
