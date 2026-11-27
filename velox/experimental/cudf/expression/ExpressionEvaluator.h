@@ -106,12 +106,28 @@ using CudfFunctionFactory = std::function<std::shared_ptr<CudfFunction>(
 using CudfCanEvaluate = std::function<
     bool(const core::TypedExprPtr& expr, const core::QueryConfig& config)>;
 
+/// Optional check that the function's kernel, for `expr`, fails the whole batch
+/// when one row holds a value it rejects, e.g. a DECIMAL divide by zero or an
+/// array index out of bounds, where Velox CPU fails only if it evaluates that
+/// row. Such kernels pass a null row, so a special form that nulls the rows
+/// Velox CPU would not evaluate keeps them from failing; see
+/// registerCudfSpecialForm().
+using CudfFailsOnInvalidRow =
+    std::function<bool(const core::TypedExprPtr& expr)>;
+
+/// A CudfFailsOnInvalidRow for a function whose kernel can fail on any call.
+inline bool alwaysFailsOnInvalidRow(const core::TypedExprPtr& /*expr*/) {
+  return true;
+}
+
 /// A function implementation and the signatures and settings it supports.
 struct CudfFunctionSpec {
   CudfFunctionFactory factory;
   std::vector<exec::FunctionSignaturePtr> signatures;
   // If set, this must return true before the factory is selected.
   CudfCanEvaluate canEvaluate;
+  // If unset, the kernel never fails the batch over a single row.
+  CudfFailsOnInvalidRow failsOnInvalidRow;
 };
 
 /// Registers a function implementation with an optional eligibility predicate.
@@ -122,7 +138,8 @@ bool registerCudfFunction(
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite = true,
-    CudfCanEvaluate canEvaluate = nullptr);
+    CudfCanEvaluate canEvaluate = nullptr,
+    CudfFailsOnInvalidRow failsOnInvalidRow = nullptr);
 
 /// Registers the same function implementation under each alias.
 void registerCudfFunctions(
@@ -130,7 +147,8 @@ void registerCudfFunctions(
     CudfFunctionFactory factory,
     const std::vector<exec::FunctionSignaturePtr>& signatures,
     bool overwrite = true,
-    CudfCanEvaluate canEvaluate = nullptr);
+    CudfCanEvaluate canEvaluate = nullptr,
+    CudfFailsOnInvalidRow failsOnInvalidRow = nullptr);
 
 /// Creates a function for the expression and session config. Returns nullptr
 /// if no registered function matches the signature and eligibility predicate.
@@ -207,6 +225,114 @@ class FunctionExpression : public CudfExpression {
   RowTypePtr inputRowSchema_;
 };
 
+/// Evaluates AND and OR, handing each operand only the rows the operands
+/// before it leave undecided, the rows Velox CPU's ConjunctExpr evaluates it
+/// on. LogicalFunction folds operands that were each materialized over every
+/// row, so otherwise a guard like d <> 0 would not keep a later q / d off the
+/// zero rows.
+class ConjunctExpression : public CudfExpression {
+ public:
+  /// Builds the function and its operand evaluators with the session config.
+  static std::shared_ptr<ConjunctExpression> create(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
+
+  ColumnOrView eval(
+      std::vector<cudf::column_view> inputColumnViews,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) override;
+
+  void close() override;
+
+ private:
+  bool isAnd_{false};
+  std::shared_ptr<CudfFunction> function_;
+  // The non-constant operands, in order; LogicalFunction inlines the
+  // constants.
+  std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+};
+
+/// Evaluates IF and single-branch SWITCH, handing each branch only the rows
+/// it supplies, the rows Velox CPU's SwitchExpr evaluates it on.
+/// SwitchFunction selects between branches that were each materialized over
+/// every row, so otherwise a fail-fast kernel in one branch would abort the
+/// batch over rows the condition discards.
+class ConditionalExpression : public CudfExpression {
+ public:
+  /// Builds the function and its operand evaluators with the session config.
+  static std::shared_ptr<ConditionalExpression> create(
+      const core::TypedExprPtr& expr,
+      const RowTypePtr& inputRowSchema,
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
+
+  ColumnOrView eval(
+      std::vector<cudf::column_view> inputColumnViews,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr,
+      bool finalize = false) override;
+
+  void close() override;
+
+  /// True if the condition is computed, which the branch masks are built from.
+  /// A constant or input-reference condition stays on FunctionExpression.
+  static bool canEvaluate(
+      const core::TypedExprPtr& expr,
+      const core::QueryConfig& config);
+
+ private:
+  core::TypedExprPtr expr_;
+  std::shared_ptr<CudfFunction> function_;
+  // The condition followed by the non-constant branches; SwitchFunction
+  // inlines the constants.
+  std::vector<std::shared_ptr<CudfExpression>> subexpressions_;
+  // Whether each branch in subexpressions_[1..] is the THEN branch. Branch
+  // positions shift when a constant branch is dropped, so `if(c, 1, x)` keeps
+  // only the ELSE branch.
+  std::vector<bool> isThenBranch_;
+};
+
+/// The evaluator for a special form, a call that, like Velox CPU's ConjunctExpr
+/// and SwitchExpr, evaluates each operand after the first only on some rows.
+struct CudfSpecialFormSpec {
+  CudfExpressionEvaluatorCreate create;
+  // If set, this must return true before 'create' is used.
+  CudfExpressionEvaluatorCanEvaluate canEvaluate;
+};
+
+/// Registers the evaluator for the special forms in `names`. The forms keep
+/// their CudfFunction registration, which the evaluator uses to combine the
+/// operands, so FunctionExpression still evaluates a call that needs no
+/// narrowing.
+void registerCudfSpecialForm(
+    const std::vector<std::string>& names,
+    CudfSpecialFormSpec spec);
+
+/// True if `expr` is a registered special form an operand after the first of
+/// which holds a kernel that fails on an invalid row (hasFailFastSubexpr). Such
+/// a call must evaluate that operand only on the rows Velox CPU would, so the
+/// AST and JIT evaluators, which run every operand over every row, turn it
+/// down.
+bool needsOperandNarrowing(const core::TypedExprPtr& expr);
+
+/// True if the special-form evaluator registered for `expr` can evaluate it:
+/// the call needs narrowing and FunctionExpression can evaluate it. Does not
+/// recursively check the operands.
+bool canEvaluateSpecialForm(
+    const core::TypedExprPtr& expr,
+    const core::QueryConfig& config);
+
+/// Builds the special-form evaluator registered for `expr`, which
+/// canEvaluateSpecialForm() accepted.
+std::shared_ptr<CudfExpression> createSpecialFormExpression(
+    const core::TypedExprPtr& expr,
+    const RowTypePtr& inputRowSchema,
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config);
+
 /// Create a CudfExpression from a TypedExpr, selecting the best evaluator.
 /// Does not apply expression-level optimization; callers that need
 /// optimization should run expression::optimize at the top-level entry point
@@ -261,6 +387,11 @@ bool containsCastFromVarchar(
 
 /// Returns true if 'expr' holds a CAST or TRY_CAST from TIMESTAMP to VARCHAR.
 bool containsTimestampToVarcharCast(const core::TypedExprPtr& expr);
+
+/// Returns true if a node in 'expr' calls a function whose registration
+/// declares that, for that call, its kernel fails the whole batch on one row's
+/// value; see CudfFailsOnInvalidRow.
+bool hasFailFastSubexpr(const core::TypedExprPtr& expr);
 
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.

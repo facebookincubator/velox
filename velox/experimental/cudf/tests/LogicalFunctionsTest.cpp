@@ -224,4 +224,25 @@ TEST_F(CudfLogicalFunctionsTest, notOfIsNull) {
       "SELECT NOT (c0 IS NULL) AS r FROM tmp");
 }
 
+// LogicalFunction: AND and OR with no fail-fast operand to guard. They skip
+// ConjunctExpression's per-operand narrowing and evaluate every operand over
+// every row.
+TEST_F(CudfLogicalFunctionsTest, conjunctWithoutFailFastOperand) {
+  auto data = makeRowVector(
+      {"a", "c0"},
+      {makeNullableFlatVector<bool>(
+           {true, false, std::nullopt, true, std::nullopt}),
+       makeNullableFlatVector<int64_t>({1, 2, 3, std::nullopt, 5})});
+  runProject(
+      {data},
+      "a AND c0 > 2",
+      "a AND c0 > 2 AS r",
+      "SELECT a AND c0 > 2 AS r FROM tmp");
+  runProject(
+      {data},
+      "a OR c0 > 2",
+      "a OR c0 > 2 AS r",
+      "SELECT a OR c0 > 2 AS r FROM tmp");
+}
+
 } // namespace

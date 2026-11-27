@@ -361,7 +361,14 @@ void registerPrestoFunctions(const std::string& prefix) {
            .returnType("date")
            .argumentType("date")
            .argumentType("interval day to second")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      /*canEvaluate=*/nullptr,
+      // An interval that is not a whole number of days. The constructor checks
+      // a constant interval.
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[1]->isConstantKind();
+      });
 
   registerCudfFunction(
       prefix + "date_add",
@@ -380,6 +387,11 @@ void registerPrestoFunctions(const std::string& prefix) {
       true,
       [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return prestosql::DateAddFunction::canEvaluate(expr);
+      },
+      // A value outside INTEGER. A constant value is checked once per batch,
+      // whatever its rows.
+      [](const core::TypedExprPtr& expr) {
+        return !expr->inputs()[1]->isConstantKind();
       });
 
   registerCudfFunction(
@@ -420,7 +432,9 @@ void registerPrestoFunctions(const std::string& prefix) {
       true,
       [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
         return prestosql::FromUnixtimeFunction::canEvaluate(expr);
-      });
+      },
+      // Seconds past the range of the cuDF timestamp unit.
+      alwaysFailsOnInvalidRow);
 
   registerCudfFunction(
       prefix + "to_unixtime",

@@ -1385,6 +1385,60 @@ TEST_F(CudfFilterProjectTest, dateAddDateScaledOverflowMatchesVelox) {
   assertProjectMatchesVelox(vectors, projections);
 }
 
+// Array subscript, date_add, date plus interval and from_unixtime fail the
+// whole batch on a bad row. Rows 1 and 3 hold one, and the guard ahead of each
+// decides them, so as on Velox CPU they must not reach the kernel.
+TEST_F(CudfFilterProjectTest, failFastKernelGuardedByConjunct) {
+  auto data = makeRowVector(
+      {"event_id",
+       "a",
+       "event_date",
+       "amount",
+       "whole_days",
+       "interval_val",
+       "seconds",
+       "idx"},
+      {makeFlatVector<int64_t>({0, 1, 2, 3}),
+       makeArrayVector<int64_t>({{1, 2, 3}, {1}, {4, 5, -6}, {}}),
+       makeFlatVector<int32_t>(
+           {toDateDays("2020-01-01"),
+            toDateDays("2020-06-15"),
+            toDateDays("2020-12-31"),
+            toDateDays("2021-03-01")},
+           DATE()),
+       makeFlatVector<int64_t>(
+           {1,
+            std::numeric_limits<int64_t>::max(),
+            -2,
+            std::numeric_limits<int64_t>::min()}),
+       makeFlatVector<bool>({true, false, true, false}),
+       makeFlatVector<int64_t>(
+           {kMillisInDay, kMillisInHour, -2 * kMillisInDay, kMillisInHour},
+           INTERVAL_DAY_TIME()),
+       makeFlatVector<double>({0.0, 1e300, 5.0, -1e300}),
+       makeFlatVector<int64_t>({1, 0, -1, 5})});
+  std::vector<RowVectorPtr> vectors{data};
+
+  // A false guard decides AND, and a true one decides OR.
+  for (const std::string condition :
+       {"abs(seconds) < 1e10 AND to_unixtime(from_unixtime(seconds)) >= 0.0",
+        "abs(seconds) >= 1e10 OR to_unixtime(from_unixtime(seconds)) >= 0.0",
+        "cardinality(a) >= 3 AND a[3] > 0",
+        "cardinality(a) < 3 OR a[3] > 0",
+        "idx <> 0 AND element_at(a, idx) > 0",
+        "idx = 0 OR element_at(a, idx) > 0",
+        "amount BETWEEN -10 AND 10 AND "
+        "date_add('day', amount, event_date) > event_date",
+        "amount NOT BETWEEN -10 AND 10 OR "
+        "date_add('day', amount, event_date) > event_date",
+        "whole_days AND plus(event_date, interval_val) > event_date",
+        "NOT whole_days OR plus(event_date, interval_val) > event_date"}) {
+    SCOPED_TRACE(condition);
+    assertFilterMatchesVelox(vectors, condition);
+    assertProjectMatchesVelox(vectors, {condition + " AS r"});
+  }
+}
+
 TEST_F(CudfFilterProjectTest, dateTruncTimestampUnits) {
   auto vectors = makeTimestampExtractVectors();
   const std::vector<std::string> projections{
@@ -3248,6 +3302,38 @@ TEST_F(CudfPrestoFunctionTest, arrayJoinMatchesCpu) {
     SCOPED_TRACE(expr);
     assertExpressionMatchesCpu(expr, input, rowType);
   }
+}
+
+// A kernel whose only argument that can fail is a constant checks it once, not
+// per row, so narrowing an and/or operand to the undecided rows cannot change
+// the result and the conjunct stays with AST. subscript still fails per row on
+// a constant index, past the end of a row's array.
+TEST_F(CudfPrestoFunctionTest, constantArgumentNeedsNoOperandNarrowing) {
+  const auto rowType = ROW(
+      {{"guard", BOOLEAN()},
+       {"a", ARRAY(BIGINT())},
+       {"i", BIGINT()},
+       {"d", DATE()},
+       {"n", BIGINT()},
+       {"iv", INTERVAL_DAY_TIME()}});
+  const auto needsNarrowing = [&](const std::string& operand) {
+    SCOPED_TRACE(operand);
+    return cudf_velox::needsOperandNarrowing(
+        cudf_velox::test_utils::optimizeTypedExpr(
+            fmt::format("guard AND {}", operand),
+            rowType,
+            queryCtx_.get(),
+            &execCtx_));
+  };
+
+  EXPECT_FALSE(needsNarrowing("element_at(a, 2) > 0"));
+  EXPECT_FALSE(needsNarrowing("date_add('day', CAST(30 AS BIGINT), d) > d"));
+  EXPECT_FALSE(needsNarrowing("plus(d, INTERVAL 30 DAYS) > d"));
+
+  EXPECT_TRUE(needsNarrowing("element_at(a, i) > 0"));
+  EXPECT_TRUE(needsNarrowing("a[3] > 0"));
+  EXPECT_TRUE(needsNarrowing("date_add('day', n, d) > d"));
+  EXPECT_TRUE(needsNarrowing("plus(d, iv) > d"));
 }
 
 TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {

@@ -349,6 +349,14 @@ bool isAstExprSupported(const core::TypedExprPtr& expr) {
   }
 
   if (expr->isCallKind()) {
+    // Precomputed operands are materialized over every row, so an operand
+    // after the first would also run on the rows the ones before it decide,
+    // e.g. q / d on the zero rows of `d <> 0 AND q / d > 1`. Leave such calls
+    // to their special-form evaluator, which narrows each operand's rows.
+    if (needsOperandNarrowing(expr)) {
+      return false;
+    }
+
     const auto* call = expr->asUnchecked<core::CallTypedExpr>();
     const auto name =
         stripPrefix(call->name(), CudfConfig::getInstance().functionNamePrefix);
