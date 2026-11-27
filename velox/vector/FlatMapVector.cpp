@@ -16,6 +16,7 @@
 
 #include <numeric>
 
+#include <folly/container/F14Set.h>
 #include <folly/hash/Hash.h>
 
 #include "velox/vector/FlatMapVector.h"
@@ -520,6 +521,99 @@ bool FlatMapVector::containsNullAt(vector_size_t index) const {
     }
   }
   return false;
+}
+
+namespace {
+
+uint64_t vectorSize(const BaseVector& vector, uint64_t* totalStringBufferSize) {
+  return totalStringBufferSize != nullptr
+      ? vector.retainedSize(*totalStringBufferSize)
+      : vector.estimateFlatSize();
+}
+
+uint64_t sizeOfIfNew(
+    const VectorPtr& vector,
+    folly::F14FastSet<const BaseVector*>& counted,
+    uint64_t* totalStringBufferSize) {
+  return counted.insert(vector.get()).second
+      ? vectorSize(*vector, totalStringBufferSize)
+      : 0;
+}
+
+uint64_t valueSize(
+    const VectorPtr& vector,
+    folly::F14FastSet<const BaseVector*>& counted,
+    uint64_t* totalStringBufferSize) {
+  if (vector->type()->isPrimitiveType()) {
+    return vectorSize(*vector, totalStringBufferSize);
+  }
+  const auto encoding = vector->encoding();
+  const uint64_t nullsSize = vector->nulls() ? vector->nulls()->capacity() : 0;
+  uint64_t size{0};
+  if (encoding == VectorEncoding::Simple::ARRAY) {
+    const auto* array = vector->asUnchecked<ArrayVector>();
+    size = nullsSize + array->offsets()->capacity() +
+        array->sizes()->capacity() +
+        sizeOfIfNew(array->elements(), counted, totalStringBufferSize);
+  } else if (encoding == VectorEncoding::Simple::MAP) {
+    const auto* map = vector->asUnchecked<MapVector>();
+    size = nullsSize + map->offsets()->capacity() + map->sizes()->capacity() +
+        sizeOfIfNew(map->mapKeys(), counted, totalStringBufferSize) +
+        sizeOfIfNew(map->mapValues(), counted, totalStringBufferSize);
+  } else if (encoding == VectorEncoding::Simple::ROW) {
+    size = nullsSize;
+    for (const auto& child : vector->asUnchecked<RowVector>()->children()) {
+      if (child) {
+        size += sizeOfIfNew(child, counted, totalStringBufferSize);
+      }
+    }
+  }
+  return size;
+}
+
+// Sums the sizes of the values of each key.
+uint64_t mapValuesSize(
+    const std::vector<VectorPtr>& mapValues,
+    uint64_t* totalStringBufferSize) {
+  folly::F14FastSet<const BaseVector*> counted;
+  uint64_t size{0};
+  for (const auto& values : mapValues) {
+    if (values) {
+      size += valueSize(values, counted, totalStringBufferSize);
+    }
+  }
+  return size;
+}
+
+} // namespace
+
+uint64_t FlatMapVector::retainedSizeImpl(
+    uint64_t& totalStringBufferSize) const {
+  auto size = BaseVector::retainedSizeImpl();
+  if (distinctKeys_) {
+    size += distinctKeys_->retainedSize(totalStringBufferSize);
+  }
+  size += mapValuesSize(mapValues_, &totalStringBufferSize);
+  for (const auto& inMap : inMaps_) {
+    if (inMap) {
+      size += inMap->capacity();
+    }
+  }
+  return size;
+}
+
+uint64_t FlatMapVector::estimateFlatSize() const {
+  auto size = BaseVector::retainedSizeImpl();
+  if (distinctKeys_) {
+    size += distinctKeys_->estimateFlatSize();
+  }
+  size += mapValuesSize(mapValues_, nullptr);
+  for (const auto& inMap : inMaps_) {
+    if (inMap) {
+      size += inMap->capacity();
+    }
+  }
+  return size;
 }
 
 uint64_t FlatMapVector::hashValueAt(vector_size_t index) const {
