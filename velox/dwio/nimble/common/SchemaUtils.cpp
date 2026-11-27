@@ -131,51 +131,75 @@ std::shared_ptr<TypeBuilder> convertToNimbleType(
 
 namespace {
 
+// Appends the stream of 'descriptor' to 'streamOffsets', and, when they are
+// not null, whether it holds the decode barrier to 'barrierStreams' and
+// whether it holds strings, the values of a String or Binary scalar, to
+// 'stringStreams'.
 void appendProjectionStream(
+    const StreamDescriptor& descriptor,
+    bool isBarrierStream,
     std::vector<uint32_t>& streamOffsets,
     std::vector<bool>* barrierStreams,
-    uint32_t streamOffset,
-    bool isBarrierStream) {
-  streamOffsets.emplace_back(streamOffset);
+    std::vector<bool>* stringStreams) {
+  streamOffsets.emplace_back(descriptor.offset());
   if (barrierStreams != nullptr) {
     barrierStreams->emplace_back(isBarrierStream);
+  }
+  if (stringStreams != nullptr) {
+    stringStreams->emplace_back(
+        descriptor.scalarKind() == ScalarKind::String ||
+        descriptor.scalarKind() == ScalarKind::Binary);
   }
 }
 
 void appendProjectionStreams(
     const Type& type,
+    bool allowFlatMap,
     std::vector<uint32_t>& streamOffsets,
     std::vector<bool>* barrierStreams,
-    bool allowFlatMap) {
-  const auto append = [&](uint32_t streamOffset, bool isBarrierStream = false) {
+    std::vector<bool>* stringStreams) {
+  const auto append = [&](const StreamDescriptor& descriptor,
+                          bool isBarrierStream = false) {
     appendProjectionStream(
-        streamOffsets, barrierStreams, streamOffset, isBarrierStream);
+        descriptor,
+        isBarrierStream,
+        streamOffsets,
+        barrierStreams,
+        stringStreams);
   };
 
   switch (type.kind()) {
     case Kind::Scalar:
-      append(type.asScalar().scalarDescriptor().offset());
+      append(type.asScalar().scalarDescriptor());
       return;
     case Kind::TimestampMicroNano: {
       const auto& timestamp = type.asTimestampMicroNano();
-      append(timestamp.microsDescriptor().offset());
-      append(timestamp.nanosDescriptor().offset());
+      append(timestamp.microsDescriptor());
+      append(timestamp.nanosDescriptor());
       return;
     }
     case Kind::Row: {
       const auto& row = type.asRow();
-      append(row.nullsDescriptor().offset(), true);
+      append(row.nullsDescriptor(), true);
       for (size_t i{0}; i < row.childrenCount(); ++i) {
         appendProjectionStreams(
-            *row.childAt(i), streamOffsets, barrierStreams, allowFlatMap);
+            *row.childAt(i),
+            allowFlatMap,
+            streamOffsets,
+            barrierStreams,
+            stringStreams);
       }
       return;
     }
     case Kind::Array: {
       const auto& array = type.asArray();
-      append(array.lengthsDescriptor().offset());
+      append(array.lengthsDescriptor());
       appendProjectionStreams(
-          *array.elements(), streamOffsets, barrierStreams, allowFlatMap);
+          *array.elements(),
+          allowFlatMap,
+          streamOffsets,
+          barrierStreams,
+          stringStreams);
       return;
     }
     case Kind::ArrayWithOffsets: {
@@ -183,13 +207,17 @@ void appendProjectionStreams(
       // holding them is decoded on its own.
       const auto& array = type.asArrayWithOffsets();
       append(
-          array.offsetsDescriptor().offset(),
+          array.offsetsDescriptor(),
           /*isBarrierStream=*/true);
       append(
-          array.lengthsDescriptor().offset(),
+          array.lengthsDescriptor(),
           /*isBarrierStream=*/true);
       appendProjectionStreams(
-          *array.elements(), streamOffsets, barrierStreams, allowFlatMap);
+          *array.elements(),
+          allowFlatMap,
+          streamOffsets,
+          barrierStreams,
+          stringStreams);
       return;
     }
     case Kind::SlidingWindowArray: {
@@ -197,34 +225,54 @@ void appendProjectionStreams(
       // so a batch holding them is decoded on its own.
       const auto& array = type.asSlidingWindowArray();
       append(
-          array.offsetsDescriptor().offset(),
+          array.offsetsDescriptor(),
           /*isBarrierStream=*/true);
       append(
-          array.lengthsDescriptor().offset(),
+          array.lengthsDescriptor(),
           /*isBarrierStream=*/true);
       appendProjectionStreams(
-          *array.elements(), streamOffsets, barrierStreams, allowFlatMap);
+          *array.elements(),
+          allowFlatMap,
+          streamOffsets,
+          barrierStreams,
+          stringStreams);
       return;
     }
     case Kind::Map: {
       const auto& map = type.asMap();
-      append(map.lengthsDescriptor().offset());
+      append(map.lengthsDescriptor());
       appendProjectionStreams(
-          *map.keys(), streamOffsets, barrierStreams, allowFlatMap);
+          *map.keys(),
+          allowFlatMap,
+          streamOffsets,
+          barrierStreams,
+          stringStreams);
       appendProjectionStreams(
-          *map.values(), streamOffsets, barrierStreams, allowFlatMap);
+          *map.values(),
+          allowFlatMap,
+          streamOffsets,
+          barrierStreams,
+          stringStreams);
       return;
     }
     case Kind::SlidingWindowMap: {
       // The offsets index the distinct maps of their own stripe, so a batch
       // holding them is decoded on its own.
       const auto& map = type.asSlidingWindowMap();
-      append(map.offsetsDescriptor().offset(), /*isBarrierStream=*/true);
-      append(map.lengthsDescriptor().offset(), /*isBarrierStream=*/true);
+      append(map.offsetsDescriptor(), /*isBarrierStream=*/true);
+      append(map.lengthsDescriptor(), /*isBarrierStream=*/true);
       appendProjectionStreams(
-          *map.keys(), streamOffsets, barrierStreams, allowFlatMap);
+          *map.keys(),
+          allowFlatMap,
+          streamOffsets,
+          barrierStreams,
+          stringStreams);
       appendProjectionStreams(
-          *map.values(), streamOffsets, barrierStreams, allowFlatMap);
+          *map.values(),
+          allowFlatMap,
+          streamOffsets,
+          barrierStreams,
+          stringStreams);
       return;
     }
     case Kind::FlatMap: {
@@ -232,11 +280,15 @@ void appendProjectionStreams(
           allowFlatMap,
           "FlatMap projection is supported only for top-level columns");
       const auto& flatMap = type.asFlatMap();
-      append(flatMap.nullsDescriptor().offset(), true);
+      append(flatMap.nullsDescriptor(), true);
       for (size_t i{0}; i < flatMap.childrenCount(); ++i) {
         appendProjectionStreams(
-            *flatMap.childAt(i), streamOffsets, barrierStreams, allowFlatMap);
-        append(flatMap.inMapDescriptorAt(i).offset());
+            *flatMap.childAt(i),
+            allowFlatMap,
+            streamOffsets,
+            barrierStreams,
+            stringStreams);
+        append(flatMap.inMapDescriptorAt(i));
       }
       return;
     }
@@ -249,13 +301,19 @@ void appendProjectionStreams(
 
 } // namespace
 
-std::vector<uint32_t> projectionStreamOffsets(const Type& type) {
+std::vector<uint32_t> projectionStreamOffsets(
+    const Type& type,
+    std::vector<bool>* stringStreams) {
+  if (stringStreams != nullptr) {
+    stringStreams->clear();
+  }
   std::vector<uint32_t> streamOffsets;
   appendProjectionStreams(
       type,
+      /*allowFlatMap=*/true,
       streamOffsets,
       /*barrierStreams=*/nullptr,
-      /*allowFlatMap=*/true);
+      stringStreams);
   return streamOffsets;
 }
 
@@ -1406,9 +1464,10 @@ void projectStreamOffsets(
   if (selectedIt == selectedChildren.end()) {
     appendProjectionStreams(
         *type,
+        /*allowFlatMap=*/false,
         projectedStreamOffsets,
         &barrierStreams,
-        /*allowFlatMap=*/false);
+        /*stringStreams=*/nullptr);
     return;
   }
 
