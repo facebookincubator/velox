@@ -36,6 +36,18 @@ target_link_libraries(
 
 # --- other benchmarks ---
 
+add_executable(
+  velox_cudf_temporary_memory_resource_benchmark
+  CudfTemporaryMemoryResourceBenchmark.cpp
+)
+
+target_link_libraries(
+  velox_cudf_temporary_memory_resource_benchmark
+  velox_cudf_exec
+  velox_memory
+  Folly::folly
+)
+
 add_executable(velox_cudf_interop_benchmark CudfInteropBenchmark.cpp)
 
 target_link_libraries(

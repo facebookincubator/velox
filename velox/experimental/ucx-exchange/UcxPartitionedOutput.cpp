@@ -23,6 +23,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfMemoryResource.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -70,16 +71,14 @@ UcxPartitionedOutput::UcxPartitionedOutput(
     const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
     bool eagerFlush,
     const std::shared_ptr<UcxOutputQueueManager>& queueManager)
-    : Operator(
+    : CudfOperatorBase(
+          operatorId,
           ctx,
           planNode->outputType(),
-          operatorId,
           planNode->id(),
-          "cudfPartitionedOutput"),
-      NvtxHelper(
+          "cudfPartitionedOutput",
           nvtx3::rgb{255, 215, 0}, // Gold
-          operatorId,
-          fmt::format("[{}]", planNode->id())),
+          NvtxMethodFlag::kAddInput | NvtxMethodFlag::kGetOutput),
       queueManager_(queueManager),
       numPartitions_(planNode->numPartitions()),
       replicateNullsAndAny_(planNode->isReplicateNullsAndAny()),
@@ -95,6 +94,10 @@ UcxPartitionedOutput::UcxPartitionedOutput(
   VELOX_CHECK(
       queueManager == UcxOutputQueueManager::getInstanceRef(),
       "UcxPartitionedOutput requires the process-wide output queue manager");
+
+  exchangeOutputMemoryResource_ =
+      cudfExchangeOutputMemoryResource(*ctx->task->queryCtx());
+
   this->initPartitionKeys(planNode);
   auto sources = planNode->sources();
   std::vector<std::string> inNames, outNames;
@@ -111,10 +114,9 @@ UcxPartitionedOutput::UcxPartitionedOutput(
   }
 }
 
-void UcxPartitionedOutput::addInput(RowVectorPtr input) {
+void UcxPartitionedOutput::doAddInput(RowVectorPtr input) {
   VLOG(3) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
           << " addInput";
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
   auto cudfVector = std::dynamic_pointer_cast<CudfVector>(input);
   VELOX_CHECK_NOT_NULL(cudfVector, "Input must be a CudfVector");
   VELOX_CHECK(
@@ -226,7 +228,8 @@ void UcxPartitionedOutput::flushPending() {
         partitionAndEnqueue(tableView, numRows, stream);
       }
     } else if (numRows > 0) {
-      auto packedCols = cudf::pack(tableView, stream, get_output_mr());
+      auto packedCols =
+          cudf::pack(tableView, stream, exchangeOutputMemoryResource());
       stream.sync();
       auto packedColsPtr = std::make_unique<cudf::packed_columns>(
           std::move(packedCols.metadata), std::move(packedCols.gpu_data));
@@ -246,10 +249,11 @@ void UcxPartitionedOutput::flushPending() {
     pendingInputs_.clear();
     pendingRows_ = 0;
 
-  } catch (const rmm::bad_alloc& e) {
-    VLOG(1)
-        << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
-        << " caught memory alloc error, removing all memory in output queues";
+  } catch (...) {
+    // Any failure fails the task. Drop what this flush and earlier ones queued
+    // so device memory is released now rather than when the task goes away.
+    VLOG(1) << "@" << taskId() << "#" << pipelineId_ << "/" << driverId_
+            << " failed to flush, removing all memory in output queues";
     pendingInputs_.clear();
     pendingRows_ = 0;
     for (int i = 0; i < numPartitions_; i++) {
@@ -259,7 +263,7 @@ void UcxPartitionedOutput::flushPending() {
   }
 }
 
-exec::BlockingReason UcxPartitionedOutput::isBlocked(ContinueFuture* future) {
+exec::BlockingReason UcxPartitionedOutput::doIsBlocked(ContinueFuture* future) {
   if (blockingReason_ != exec::BlockingReason::kNotBlocked) {
     *future = std::move(future_);
     blockingReason_ = exec::BlockingReason::kNotBlocked;
@@ -268,8 +272,7 @@ exec::BlockingReason UcxPartitionedOutput::isBlocked(ContinueFuture* future) {
   return exec::BlockingReason::kNotBlocked;
 }
 
-RowVectorPtr UcxPartitionedOutput::getOutput() {
-  VELOX_NVTX_OPERATOR_FUNC_RANGE();
+RowVectorPtr UcxPartitionedOutput::doGetOutput() {
   if (finished_) {
     return nullptr;
   }
@@ -374,7 +377,7 @@ void UcxPartitionedOutput::equalPartitionRowCountOnly(
     return;
   }
 
-  auto mr = get_output_mr();
+  auto mr = exchangeOutputMemoryResource();
   // Same boundaries equalPartition() computes, so the split is identical to the
   // column-bearing case and the rows still add up to numRows.
   // The products are formed in 64 bits: numRows * (destination + 1) overflows
@@ -526,7 +529,7 @@ void UcxPartitionedOutput::packAndEnqueueToAllDestinations(
     return;
   }
 
-  auto mr = get_output_mr();
+  auto mr = exchangeOutputMemoryResource();
   std::vector<std::unique_ptr<cudf::packed_columns>> perDestination;
   perDestination.reserve(numPartitions_);
   for (size_t destination = 0; destination < numPartitions_; ++destination) {
@@ -593,6 +596,13 @@ void UcxPartitionedOutput::equalPartition(
   splitAndEnqueue(tableView, offsets, stream);
 }
 
+rmm::device_async_resource_ref
+UcxPartitionedOutput::exchangeOutputMemoryResource() {
+  return exchangeOutputMemoryResource_.has_value()
+      ? rmm::device_async_resource_ref{*exchangeOutputMemoryResource_}
+      : get_output_mr();
+}
+
 void UcxPartitionedOutput::splitAndEnqueue(
     cudf::table_view tableView,
     std::vector<cudf::size_type> offsets,
@@ -601,8 +611,8 @@ void UcxPartitionedOutput::splitAndEnqueue(
   // table, which the loop below would index out of bounds. Such payloads are
   // routed to equalPartitionRowCountOnly instead and never arrive here.
   VELOX_CHECK_GT(tableView.num_columns(), 0);
-  auto contiguousTables =
-      cudf::contiguous_split(tableView, offsets, stream, get_output_mr());
+  auto contiguousTables = cudf::contiguous_split(
+      tableView, offsets, stream, exchangeOutputMemoryResource());
 
   // Synchronize the stream to ensure CUDA operations complete before enqueuing.
   // UCXX/UCX is not stream-aware, so without syncing, data could be sent before

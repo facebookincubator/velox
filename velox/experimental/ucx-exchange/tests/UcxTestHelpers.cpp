@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -153,6 +155,43 @@ std::shared_ptr<Task> createPartitionedOutputTask(
       Task::ExecutionMode::kParallel);
 
   return task;
+}
+
+std::shared_ptr<Task> createPartitionedOutputTask(
+    std::string_view taskId,
+    std::shared_ptr<core::QueryCtx> queryCtx,
+    std::shared_ptr<memory::MemoryPool> pool,
+    RowTypePtr rowType,
+    int numPartitions,
+    const std::vector<std::string>& partitionKeys) {
+  // The Values node only fixes the plan's row type; the tests feed the
+  // operator themselves.
+  std::vector<VectorPtr> children;
+  for (const auto& type : rowType->children()) {
+    children.push_back(BaseVector::create(type, 0, pool.get()));
+  }
+  auto rowVector = std::make_shared<RowVector>(
+      pool.get(), rowType, BufferPtr(nullptr), 0, std::move(children));
+  auto planFragment = exec::test::PlanBuilder()
+                          .values({rowVector})
+                          .partitionedOutput(partitionKeys, numPartitions)
+                          .planFragment();
+  return Task::create(
+      std::string{taskId},
+      std::move(planFragment),
+      0, // partition number
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
+}
+
+CudfRegistration::CudfRegistration()
+    : previousOutputMr_(cudf_velox::output_mr_) {
+  cudf_velox::registerCudf();
+}
+
+CudfRegistration::~CudfRegistration() {
+  cudf_velox::unregisterCudf();
+  cudf_velox::output_mr_ = std::move(previousOutputMr_);
 }
 
 std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(

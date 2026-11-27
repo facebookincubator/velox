@@ -20,8 +20,10 @@
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
+#include <cuda/memory_resource>
 #include <cuda/stream>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
@@ -98,6 +100,36 @@ std::shared_ptr<facebook::velox::exec::Task> createPartitionedOutputTask(
     uint64_t kMaxOutputBufferSize = FOUR_GBYTES,
     const std::unordered_map<std::string, std::string>& extraConfig = {},
     bool replicateNullsAndAny = false);
+
+/// Creates the same task as above in 'queryCtx', for tests that need a query
+/// context of their own, e.g. one with custom memory pools.
+std::shared_ptr<facebook::velox::exec::Task> createPartitionedOutputTask(
+    std::string_view taskId,
+    std::shared_ptr<facebook::velox::core::QueryCtx> queryCtx,
+    std::shared_ptr<facebook::velox::memory::MemoryPool> pool,
+    facebook::velox::RowTypePtr rowType,
+    int numPartitions,
+    const std::vector<std::string>& partitionKeys);
+
+/// Pairs registerCudf() with unregisterCudf() so the cuDF driver adapter and
+/// the transport registrations it installs do not outlive a test even if it
+/// throws. unregisterCudf() empties output_mr_, which main() seeded for the
+/// whole binary, so the previous value is put back for the tests that run
+/// later and still allocate through get_output_mr().
+class CudfRegistration {
+ public:
+  CudfRegistration();
+
+  ~CudfRegistration();
+
+  CudfRegistration(const CudfRegistration&) = delete;
+  CudfRegistration& operator=(const CudfRegistration&) = delete;
+
+ private:
+  // The output resource from before registerCudf().
+  std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>>
+      previousOutputMr_;
+};
 
 /// @brief Helper function to create a CudfVector for testing.
 /// Uses makeTable when tableGenerator is null, or tableGenerator->makeTable()

@@ -52,14 +52,14 @@ class CudfLocalPartition : public CudfOperatorBase {
     return true;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* future) override;
-
   bool isFinished() override;
 
   static bool shouldReplace(
       const std::shared_ptr<const core::LocalPartitionNode>& planNode);
 
  protected:
+  exec::BlockingReason doIsBlocked(ContinueFuture* future) override;
+
   void doAddInput(RowVectorPtr input) override;
 
   RowVectorPtr doGetOutput() override {
