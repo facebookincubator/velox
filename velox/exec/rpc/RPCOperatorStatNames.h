@@ -94,7 +94,7 @@ struct RPCOperatorStatNames {
 
   /// Overloaded attempts the transport reported before each completed PER_ROW
   /// row's final attempt (RPCResponse::numOverloadedAttempts), failed rows
-  /// included. BATCH completions are not counted.
+  /// included. BATCH completions count in kRpcBatchOverloadedAttempts.
   /// This and kRpcSuccessesAfterOverload are per-driver live counters that sum
   /// across drivers.
   static inline const std::string kRpcOverloadedAttempts{
@@ -103,6 +103,14 @@ struct RPCOperatorStatNames {
   /// Successes whose response reported at least one overloaded attempt.
   static inline const std::string kRpcSuccessesAfterOverload{
       "rpcSuccessesAfterOverload"};
+
+  /// Overloaded attempts the transport reported for each completed BATCH
+  /// flush, summed over its responses, such as the rejected submissions of an
+  /// async job. Kept apart from kRpcOverloadedAttempts because a flush can be
+  /// one job for many rows. A per-driver live counter that sums across
+  /// drivers.
+  static inline const std::string kRpcBatchOverloadedAttempts{
+      "rpcBatchOverloadedAttempts"};
 
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};

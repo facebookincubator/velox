@@ -1440,6 +1440,55 @@ TEST_F(RPCStateTest, completedBatchOverloadBacksOffBeforeDriverOutput) {
   EXPECT_TRUE(readyBatch->admissionEpoch.has_value());
 }
 
+// A flush's overloaded attempts are summed over its responses and counted
+// apart from PER_ROW rows. The limiter does not back off for them.
+TEST_F(RPCStateTest, completedBatchCountsOverloadedAttemptsApart) {
+  state_->setStreamingMode(RPCStreamingMode::kBatch);
+  auto limiter =
+      std::make_shared<RPCRateLimiter>("test.batch.overloaded_attempts");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+  auto reserved = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(reserved.size(), 1);
+
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state_->addPendingBatch(
+      state_,
+      std::move(future),
+      {},
+      /*admissionUnits=*/1,
+      limiter->makeLease(std::move(reserved)));
+  std::vector<RPCResponse> responses;
+  responses.push_back(RPCResponse::ok(0, makeTextPayload("answer")));
+  responses.back().numOverloadedAttempts = 3;
+  responses.push_back(
+      RPCResponse::failed(
+          1, velox::rpc::RPCErrorKind::kBackendError, "backend error"));
+  responses.back().numOverloadedAttempts = 2;
+  promise.setValue(std::move(responses));
+
+  // The completion callback ran inline, so the count is live before the driver
+  // polls the flush.
+  const auto snapshot = state_->operatorSnapshot();
+  EXPECT_EQ(snapshot.numBatchOverloadedAttempts, 5);
+  EXPECT_EQ(snapshot.numOverloadedAttempts, 0);
+  EXPECT_EQ(snapshot.numSuccessesAfterOverload, 0);
+  std::optional<RPCState::ReadyBatch> readyBatch;
+  waitFor([&]() {
+    readyBatch = state_->tryPollReady();
+    return readyBatch.has_value();
+  });
+  ASSERT_TRUE(readyBatch.has_value());
+  EXPECT_FALSE(readyBatch->sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 2'000);
+}
+
 TEST_F(RPCStateTest, closeReleasesQueuedPayloadAndIgnoresLateCompletion) {
   auto root = memory::memoryManager()->addRootPool("rpcCloseAccounting");
   auto pool = root->addLeafChild("leaf");
