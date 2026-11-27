@@ -20,6 +20,7 @@
 
 #include "velox/vector/BiasVector.h"
 #include "velox/vector/DictionaryVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/VectorTypeUtils.h"
 
@@ -439,6 +440,10 @@ void serializeMapVectorRanges(
     const folly::Range<const IndexRange*>& ranges,
     VectorStream* stream,
     Scratch& scratch) {
+  VELOX_CHECK(
+      !stream->isFlatMapStream(),
+      "Cannot append a regular map to a stream that holds flat maps: {}",
+      vector->type()->toString());
   auto mapVector = vector->as<MapVector>();
   auto rawSizes = mapVector->rawSizes();
   auto rawOffsets = mapVector->rawOffsets();
@@ -464,6 +469,131 @@ void serializeMapVectorRanges(
       mapVector->mapKeys(), childRanges, stream->childAt(0), scratch);
   serializeColumn(
       mapVector->mapValues(), childRanges, stream->childAt(1), scratch);
+}
+
+// Returns in 'present' a bit per row in 'rows' that is set if the map at that
+// row is not null and has the key at 'channel'. Returns the number of set
+// bits.
+int32_t flatMapKeyPresence(
+    const FlatMapVector& flatMap,
+    column_index_t channel,
+    folly::Range<const vector_size_t*> rows,
+    const raw_vector<uint64_t>& nonNull,
+    bool mayHaveNulls,
+    raw_vector<uint64_t>& present) {
+  const auto* inMap = flatMap.rawInMapsAt(channel);
+  if (inMap == nullptr) {
+    std::copy(nonNull.begin(), nonNull.end(), present.begin());
+  } else {
+    simd::gatherBits(inMap, rows, present.data());
+    if (mayHaveNulls) {
+      for (auto i = 0; i < present.size(); ++i) {
+        present[i] &= nonNull[i];
+      }
+    }
+  }
+  return bits::countBits(present.data(), 0, rows.size());
+}
+
+void serializeFlatMapVector(
+    const VectorPtr& vector,
+    folly::Range<const vector_size_t*> rows,
+    VectorStream* stream,
+    Scratch& scratch) {
+  stream->startFlatMap();
+  if (rows.empty()) {
+    return;
+  }
+  // raw_vector pads its end, so SIMD gathers may read past the last row.
+  raw_vector<vector_size_t> paddedRows(rows.size());
+  std::copy(rows.begin(), rows.end(), paddedRows.begin());
+  rows = folly::Range<const vector_size_t*>(paddedRows.data(), rows.size());
+
+  const auto& flatMap = *vector->asUnchecked<FlatMapVector>();
+  const int32_t firstRow = stream->numRows();
+  const int32_t numRows = rows.size();
+  const auto numWords = bits::nwords(numRows);
+
+  raw_vector<uint64_t> nonNull(numWords);
+  const bool mayHaveNulls = flatMap.rawNulls() != nullptr;
+  if (mayHaveNulls) {
+    simd::gatherBits(flatMap.rawNulls(), rows, nonNull.data());
+    stream->appendNulls(
+        nonNull.data(),
+        0,
+        numRows,
+        bits::countBits(nonNull.data(), 0, numRows));
+  } else {
+    std::fill(nonNull.begin(), nonNull.end(), ~uint64_t{0});
+    stream->appendNonNull(numRows);
+  }
+
+  const auto& keys = flatMap.distinctKeys();
+  raw_vector<uint64_t> present(numWords);
+  raw_vector<vector_size_t> newKeys(flatMap.numDistinctKeys());
+  vector_size_t numNewKeys{0};
+  raw_vector<int32_t> positions;
+  raw_vector<vector_size_t> sourceRows;
+  for (column_index_t channel = 0; channel < flatMap.numDistinctKeys();
+       ++channel) {
+    const auto& values = flatMap.mapValuesAt(channel);
+    if (values == nullptr) {
+      continue;
+    }
+    const auto numPresent = flatMapKeyPresence(
+        flatMap, channel, rows, nonNull, mayHaveNulls, present);
+    if (numPresent == 0) {
+      continue;
+    }
+    const auto [keyChannel, isNewKey] = stream->addFlatMapKey(keys, channel);
+    if (isNewKey) {
+      newKeys[numNewKeys++] = channel;
+    }
+    stream->setFlatMapPresence(keyChannel, present.data(), firstRow, numRows);
+
+    sourceRows.resize(numPresent);
+    if (numPresent == numRows) {
+      std::copy(rows.begin(), rows.end(), sourceRows.begin());
+    } else {
+      positions.resize(numPresent);
+      simd::indicesOfSetBits(present.data(), 0, numRows, positions.data());
+      simd::transpose(
+          rows.data(),
+          folly::Range<const vector_size_t*>(positions.data(), numPresent),
+          sourceRows.data());
+    }
+    serializeColumn(
+        values,
+        folly::Range<const vector_size_t*>(sourceRows.data(), numPresent),
+        stream->childAt(1 + keyChannel),
+        scratch);
+  }
+  if (numNewKeys > 0) {
+    serializeColumn(
+        keys,
+        folly::Range<const vector_size_t*>(newKeys.data(), numNewKeys),
+        stream->childAt(0),
+        scratch);
+  }
+}
+
+void serializeFlatMapVectorRanges(
+    const VectorPtr& vector,
+    const folly::Range<const IndexRange*>& ranges,
+    VectorStream* stream,
+    Scratch& scratch) {
+  std::vector<vector_size_t> rows;
+  rows.reserve(rangesTotalSize(ranges));
+  for (const auto& range : ranges) {
+    for (auto row = range.begin; row < range.begin + range.size; ++row) {
+      rows.push_back(row);
+    }
+  }
+  serializeFlatMapVector(
+      vector,
+      folly::Range<const vector_size_t*>(rows.data(), rows.size()),
+      stream,
+      scratch);
 }
 
 void appendTimestamps(
@@ -953,6 +1083,10 @@ void serializeMapVector(
     const folly::Range<const vector_size_t*>& rows,
     VectorStream* stream,
     Scratch& scratch) {
+  VELOX_CHECK(
+      !stream->isFlatMapStream(),
+      "Cannot append a regular map to a stream that holds flat maps: {}",
+      vector->type()->toString());
   auto mapVector = vector->as<MapVector>();
 
   ScratchPtr<IndexRange> rangesHolder(scratch);
@@ -1098,7 +1232,8 @@ void serializeColumn(
       serializeMapVectorRanges(vector, ranges, stream, scratch);
       break;
     case VectorEncoding::Simple::FLAT_MAP:
-      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
+      serializeFlatMapVectorRanges(vector, ranges, stream, scratch);
+      break;
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), ranges, stream, scratch);
@@ -1144,7 +1279,8 @@ void serializeColumn(
       serializeMapVector(vector, rows, stream, scratch);
       break;
     case VectorEncoding::Simple::FLAT_MAP:
-      VELOX_NYI("PrestoVectorSerde does not support flat map vectors");
+      serializeFlatMapVector(vector, rows, stream, scratch);
+      break;
     case VectorEncoding::Simple::LAZY:
       serializeColumn(
           BaseVector::loadedVectorShared(vector), rows, stream, scratch);

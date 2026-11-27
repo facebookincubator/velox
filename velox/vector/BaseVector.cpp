@@ -1357,12 +1357,21 @@ void BaseVector::flattenVector(VectorPtr& vector) {
       BaseVector::flattenVector(mapVector->mapValues());
       return;
     }
+    case VectorEncoding::Simple::FLAT_MAP: {
+      vector = vector->asUnchecked<FlatMapVector>()->toMapVector();
+      BaseVector::flattenVector(vector);
+      return;
+    }
     case VectorEncoding::Simple::LAZY: {
       vector = vector->asUnchecked<LazyVector>()->loadedVectorShared();
       BaseVector::flattenVector(vector);
       return;
     }
     default:
+      if (vector->wrappedVector()->encoding() ==
+          VectorEncoding::Simple::FLAT_MAP) {
+        vector->loadedVector();
+      }
       BaseVector::ensureWritable(
           SelectivityVector::empty(), vector->type(), vector->pool(), vector);
   }

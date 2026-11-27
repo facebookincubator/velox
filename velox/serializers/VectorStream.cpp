@@ -205,8 +205,101 @@ void VectorStream::flattenStream(
   initializeFlatStream(vector, initialNumRows);
 }
 
+void VectorStream::startFlatMap() {
+  if (isFlatMapStream()) {
+    return;
+  }
+  VELOX_CHECK_EQ(
+      nonNullCount_,
+      0,
+      "Cannot append a flat map to a stream that holds regular maps: {}",
+      type_->toString());
+  VELOX_CHECK(!isConstantStream_);
+  VELOX_CHECK(!isDictionaryStream_);
+  flatMapKeys_ = std::make_unique<FlatMapVector>(
+      streamArena_->pool(),
+      type_,
+      nullptr,
+      0,
+      BaseVector::create(type_->childAt(0), 0, streamArena_->pool()),
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  hasLengths_ = false;
+  initializeHeader(kFlatMap, *streamArena_);
+}
+
+std::pair<int32_t, bool> VectorStream::addFlatMapKey(
+    const VectorPtr& keys,
+    vector_size_t index) {
+  if (const auto channel = flatMapKeys_->getKeyChannel(keys, index)) {
+    return {channel.value(), false};
+  }
+  flatMapKeys_->appendDistinctKey(keys, index);
+  const int32_t channel = flatMapKeys_->numDistinctKeys() - 1;
+  if (children_.size() <= channel + 1) {
+    children_.emplace_back(
+        type_->childAt(1),
+        std::nullopt,
+        std::nullopt,
+        streamArena_,
+        numRows(),
+        opts_);
+  }
+  return {channel, true};
+}
+
+void VectorStream::setFlatMapPresence(
+    int32_t channel,
+    const uint64_t* present,
+    int32_t firstRow,
+    int32_t numRows) {
+  auto& inMap = flatMapKeys_->inMapsAt(channel, true);
+  const auto endRow = firstRow + numRows;
+  if (inMap == nullptr) {
+    inMap = AlignedBuffer::allocate<bool>(endRow, streamArena_->pool(), false);
+  } else if (inMap->size() < bits::nbytes(endRow)) {
+    AlignedBuffer::reallocate<bool>(&inMap, endRow, false);
+  }
+  bits::copyBits(present, 0, inMap->asMutable<uint64_t>(), firstRow, numRows);
+}
+
+// The FLAT_MAP column is: number of rows, nulls, the key column, the number of
+// keys, then for each key the number of non-null rows that have it, a bitmap
+// with a bit per row unless every non-null row has the key, and a column with
+// its values in the rows that have it. The key column holds each key once, in
+// the order the keys first appear in the page, and the keys follow that order.
+void VectorStream::flushFlatMap(OutputStream* out) {
+  static constexpr char kZeros[64]{};
+  writeInt32(out, numRows());
+  flushNulls(out);
+  children_[0].flush(out);
+  const auto numKeys = flatMapKeys_->numDistinctKeys();
+  writeInt32(out, numKeys);
+  const auto numBytes = bits::nbytes(numRows());
+  for (column_index_t channel = 0; channel < numKeys; ++channel) {
+    const auto& inMap = flatMapKeys_->inMapsAt(channel);
+    const int32_t numPresent =
+        bits::countBits(inMap->as<uint64_t>(), 0, inMap->size() * 8);
+    writeInt32(out, numPresent);
+    if (numPresent != nonNullCount_) {
+      out->write(inMap->as<char>(), inMap->size());
+      for (auto remaining = numBytes - inMap->size(); remaining > 0;) {
+        const auto size = std::min<size_t>(remaining, sizeof(kZeros));
+        out->write(kZeros, size);
+        remaining -= size;
+      }
+    }
+    children_[1 + channel].flush(out);
+  }
+}
+
 void VectorStream::flush(OutputStream* out) {
   out->write(reinterpret_cast<char*>(header_.buffer), header_.size);
+
+  if (isFlatMapStream()) {
+    flushFlatMap(out);
+    return;
+  }
 
   if (encoding_.has_value()) {
     switch (encoding_.value()) {
@@ -308,6 +401,13 @@ void VectorStream::flushNulls(OutputStream* out) {
 
 void VectorStream::clear() {
   encoding_ = std::nullopt;
+  if (isFlatMapStream()) {
+    flatMapKeys_.reset();
+    while (children_.size() > 2) {
+      children_.pop_back();
+    }
+    hasLengths_ = true;
+  }
   initializeHeader(typeToEncodingName(type_), *streamArena_);
   nonNullCount_ = 0;
   nullCount_ = 0;

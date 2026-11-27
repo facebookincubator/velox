@@ -77,6 +77,33 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
     assertEqualVectors(expectedFlatMap, baseFlatMap);
   }
 
+  void assertFlattenedMap(
+      const VectorPtr& vector,
+      const std::vector<std::optional<std::map<int32_t, int64_t>>>& expected) {
+    ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::MAP);
+    const auto* map = vector->as<MapVector>();
+    ASSERT_EQ(map->mapKeys()->encoding(), VectorEncoding::Simple::FLAT);
+    ASSERT_EQ(map->mapValues()->encoding(), VectorEncoding::Simple::FLAT);
+    ASSERT_EQ(map->size(), expected.size());
+    const auto* keys = map->mapKeys()->asFlatVector<int32_t>();
+    const auto* values = map->mapValues()->asFlatVector<int64_t>();
+    for (vector_size_t row = 0; row < expected.size(); ++row) {
+      SCOPED_TRACE(fmt::format("row {}", row));
+      ASSERT_EQ(map->isNullAt(row), !expected[row].has_value());
+      if (expected[row].has_value()) {
+        std::map<int32_t, int64_t> actual;
+        const auto end = map->offsetAt(row) + map->sizeAt(row);
+        for (auto entry = map->offsetAt(row); entry < end; ++entry) {
+          ASSERT_FALSE(values->isNullAt(entry));
+          ASSERT_TRUE(
+              actual.emplace(keys->valueAt(entry), values->valueAt(entry))
+                  .second);
+        }
+        ASSERT_EQ(actual, *expected[row]);
+      }
+    }
+  }
+
   std::shared_ptr<memory::MemoryPool> pool_{
       memory::memoryManager()->addLeafPool()};
   VectorMaker maker_{pool_.get()};
@@ -238,6 +265,172 @@ TEST_F(FlatMapVectorTest, fail) {
   // All good including in maps.
   ASSERT_NO_THROW(buildVector(
       type, keys, mapValues, std::vector<BufferPtr>{nullptr, nullptr}));
+}
+
+TEST_F(FlatMapVectorTest, flattenVector) {
+  const auto makeFlatMap = [&]() {
+    VectorPtr flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+        "{1: 10, 2: 20}",
+        "{3: 30}",
+    });
+    auto& values = flatMap->as<FlatMapVector>()->mapValuesAt(0);
+    values =
+        BaseVector::wrapInDictionary(nullptr, makeIndices({0, 1}), 2, values);
+    return flatMap;
+  };
+  const std::vector<std::optional<std::map<int32_t, int64_t>>> expected{
+      std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+      std::map<int32_t, int64_t>{{3, 30}},
+  };
+
+  {
+    VectorPtr vector = makeFlatMap();
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(vector, expected);
+  }
+
+  {
+    const auto flatMap = makeFlatMap();
+    VectorPtr vector = flatMap;
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(vector, expected);
+    ASSERT_EQ(flatMap->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    ASSERT_EQ(
+        flatMap->as<FlatMapVector>()->mapValuesAt(0)->encoding(),
+        VectorEncoding::Simple::DICTIONARY);
+    test::assertEqualVectors(makeFlatMap(), flatMap);
+  }
+}
+
+TEST_F(FlatMapVectorTest, flattenWrappedVector) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "{3: 30}",
+      "{1: 11}",
+  });
+
+  {
+    VectorPtr vector = BaseVector::wrapInDictionary(
+        makeNulls({false, true, false}), makeIndices({2, 0, 0}), 3, flatMap);
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::nullopt,
+            std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+        });
+  }
+
+  {
+    VectorPtr vector = BaseVector::wrapInConstant(3, 1, flatMap);
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{3, 30}},
+            std::map<int32_t, int64_t>{{3, 30}},
+            std::map<int32_t, int64_t>{{3, 30}},
+        });
+  }
+
+  {
+    std::vector<std::vector<std::pair<int32_t, std::optional<int64_t>>>> maps;
+    for (int32_t row = 0; row < 1'000; ++row) {
+      maps.push_back({{row, row * 10}});
+    }
+    VectorPtr vector = BaseVector::wrapInDictionary(
+        nullptr,
+        makeIndices({10, 500}),
+        2,
+        maker_.flatMapVector<int32_t, int64_t>(maps));
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{10, 100}},
+            std::map<int32_t, int64_t>{{500, 5'000}},
+        });
+    ASSERT_EQ(vector->encoding(), VectorEncoding::Simple::MAP);
+    ASSERT_EQ(vector->as<MapVector>()->mapKeys()->size(), 2);
+  }
+}
+
+TEST_F(FlatMapVectorTest, flattenLazyVector) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "{3: 30}",
+      "{1: 11}",
+      "{4: 40}",
+  });
+  auto lazy = [&](const VectorPtr& loaded) {
+    return std::make_shared<LazyVector>(
+        pool(),
+        loaded->type(),
+        loaded->size(),
+        std::make_unique<SimpleVectorLoader>(
+            [loaded](RowSet /*rows*/) { return loaded; }));
+  };
+
+  {
+    VectorPtr vector = lazy(flatMap);
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+            std::map<int32_t, int64_t>{{3, 30}},
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::map<int32_t, int64_t>{{4, 40}},
+        });
+  }
+
+  {
+    VectorPtr vector = lazy(
+        BaseVector::wrapInDictionary(
+            makeNulls({false, true, false}),
+            makeIndices({2, 1, 0}),
+            3,
+            flatMap));
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::nullopt,
+            std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+        });
+  }
+
+  {
+    VectorPtr vector = BaseVector::wrapInDictionary(
+        nullptr, makeIndices({3, 2, 3}), 3, lazy(flatMap));
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{4, 40}},
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::map<int32_t, int64_t>{{4, 40}},
+        });
+  }
+
+  {
+    for (column_index_t channel = 0; channel < flatMap->numDistinctKeys();
+         ++channel) {
+      flatMap->mapValuesAt(channel) = lazy(flatMap->mapValuesAt(channel));
+    }
+    VectorPtr vector = flatMap;
+    BaseVector::flattenVector(vector);
+    assertFlattenedMap(
+        vector,
+        {
+            std::map<int32_t, int64_t>{{1, 10}, {2, 20}},
+            std::map<int32_t, int64_t>{{3, 30}},
+            std::map<int32_t, int64_t>{{1, 11}},
+            std::map<int32_t, int64_t>{{4, 40}},
+        });
+  }
 }
 
 TEST_F(FlatMapVectorTest, empty) {
@@ -486,6 +679,412 @@ TEST_F(FlatMapVectorTest, withNulls) {
   EXPECT_FALSE(flatMapVector->isInMap(*channel, 0));
   EXPECT_FALSE(flatMapVector->isInMap(*channel, 1));
   EXPECT_TRUE(flatMapVector->isInMap(*channel, 2));
+}
+
+TEST_F(FlatMapVectorTest, retainedSize) {
+  auto distinctKeys = maker_.flatVector<std::string>({
+      "first key longer than inline",
+      "second key longer than inline",
+  });
+  std::vector<VectorPtr> mapValues{
+      maker_.flatVector<std::string>({
+          "first value longer than inline",
+          "short",
+          "third value longer than inline",
+      }),
+      maker_.flatVector<std::string>({
+          "fourth value longer than inline",
+          "fifth value longer than inline",
+          "sixth value longer than inline",
+      }),
+  };
+  std::vector<BufferPtr> inMaps{
+      nullptr,
+      AlignedBuffer::allocate<bool>(3, pool_.get(), true),
+  };
+  auto nulls = AlignedBuffer::allocate<bool>(3, pool_.get(), bits::kNotNull);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(VARCHAR(), VARCHAR()),
+      nulls,
+      3,
+      distinctKeys,
+      mapValues,
+      inMaps);
+
+  uint64_t expectedStringBufferSize{0};
+  const auto expectedRetainedSize = nulls->capacity() +
+      distinctKeys->retainedSize(expectedStringBufferSize) +
+      mapValues[0]->retainedSize(expectedStringBufferSize) +
+      mapValues[1]->retainedSize(expectedStringBufferSize) +
+      inMaps[1]->capacity();
+  uint64_t stringBufferSize{0};
+  EXPECT_EQ(flatMap->retainedSize(stringBufferSize), expectedRetainedSize);
+  EXPECT_EQ(stringBufferSize, expectedStringBufferSize);
+  EXPECT_GT(stringBufferSize, 0);
+
+  EXPECT_EQ(
+      flatMap->estimateFlatSize(),
+      nulls->capacity() + distinctKeys->estimateFlatSize() +
+          mapValues[0]->estimateFlatSize() + mapValues[1]->estimateFlatSize() +
+          inMaps[1]->capacity());
+}
+
+TEST_F(FlatMapVectorTest, sizeOfValuesSharingChildren) {
+  constexpr vector_size_t kSize{3};
+  constexpr vector_size_t kNumKeys{3};
+  const auto makeElements = [&]() {
+    return maker_.flatVector<int64_t>(
+        kSize * kNumKeys, [](auto row) { return row * 1'000; });
+  };
+  const auto makeOffsetsAndSizes = [&](vector_size_t key) {
+    auto offsets = allocateOffsets(kSize, pool_.get());
+    auto sizes = allocateSizes(kSize, pool_.get());
+    for (vector_size_t row = 0; row < kSize; ++row) {
+      offsets->asMutable<vector_size_t>()[row] = key * kSize + row;
+      sizes->asMutable<vector_size_t>()[row] = 1;
+    }
+    return std::make_pair(offsets, sizes);
+  };
+  const auto makeFlatMap = [&](const TypePtr& valueType,
+                               const std::vector<VectorPtr>& mapValues) {
+    return std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(INTEGER(), valueType),
+        nullptr,
+        kSize,
+        maker_.flatVector<int32_t>({1, 2, 3}),
+        mapValues,
+        std::vector<BufferPtr>(kNumKeys));
+  };
+
+  {
+    const auto shared = makeElements();
+    std::vector<VectorPtr> sharedValues;
+    std::vector<VectorPtr> unsharedValues;
+    for (vector_size_t key = 0; key < kNumKeys; ++key) {
+      const auto [offsets, sizes] = makeOffsetsAndSizes(key);
+      sharedValues.push_back(
+          std::make_shared<ArrayVector>(
+              pool_.get(),
+              ARRAY(BIGINT()),
+              nullptr,
+              kSize,
+              offsets,
+              sizes,
+              shared));
+      unsharedValues.push_back(
+          std::make_shared<ArrayVector>(
+              pool_.get(),
+              ARRAY(BIGINT()),
+              nullptr,
+              kSize,
+              offsets,
+              sizes,
+              makeElements()));
+    }
+    const auto sharedFlatMap = makeFlatMap(ARRAY(BIGINT()), sharedValues);
+    const auto unsharedFlatMap = makeFlatMap(ARRAY(BIGINT()), unsharedValues);
+
+    EXPECT_EQ(
+        sharedFlatMap->retainedSize(),
+        unsharedFlatMap->retainedSize() -
+            (kNumKeys - 1) * shared->retainedSize());
+    EXPECT_EQ(
+        sharedFlatMap->estimateFlatSize(),
+        unsharedFlatMap->estimateFlatSize() -
+            (kNumKeys - 1) * shared->estimateFlatSize());
+  }
+
+  {
+    const auto sharedKeys = makeElements();
+    const auto sharedValues = makeElements();
+    std::vector<VectorPtr> sharedMaps;
+    std::vector<VectorPtr> unsharedMaps;
+    for (vector_size_t key = 0; key < kNumKeys; ++key) {
+      const auto [offsets, sizes] = makeOffsetsAndSizes(key);
+      sharedMaps.push_back(
+          std::make_shared<MapVector>(
+              pool_.get(),
+              MAP(BIGINT(), BIGINT()),
+              nullptr,
+              kSize,
+              offsets,
+              sizes,
+              sharedKeys,
+              sharedValues));
+      unsharedMaps.push_back(
+          std::make_shared<MapVector>(
+              pool_.get(),
+              MAP(BIGINT(), BIGINT()),
+              nullptr,
+              kSize,
+              offsets,
+              sizes,
+              makeElements(),
+              makeElements()));
+    }
+    const auto sharedFlatMap = makeFlatMap(MAP(BIGINT(), BIGINT()), sharedMaps);
+    const auto unsharedFlatMap =
+        makeFlatMap(MAP(BIGINT(), BIGINT()), unsharedMaps);
+
+    EXPECT_EQ(
+        sharedFlatMap->retainedSize(),
+        unsharedFlatMap->retainedSize() -
+            (kNumKeys - 1) *
+                (sharedKeys->retainedSize() + sharedValues->retainedSize()));
+    EXPECT_EQ(
+        sharedFlatMap->estimateFlatSize(),
+        unsharedFlatMap->estimateFlatSize() -
+            (kNumKeys - 1) *
+                (sharedKeys->estimateFlatSize() +
+                 sharedValues->estimateFlatSize()));
+  }
+
+  {
+    const auto keys = maker_.flatVector<int32_t>({1, 2, 3});
+    const auto makeScalars = [&]() {
+      return maker_.flatVector<int64_t>(kSize, [](auto row) { return row; });
+    };
+    const std::vector<VectorPtr> values{
+        makeScalars(), makeScalars(), makeScalars()};
+    const auto flatMap = makeFlatMap(BIGINT(), values);
+    EXPECT_EQ(
+        flatMap->retainedSize(),
+        keys->retainedSize() + values[0]->retainedSize() +
+            values[1]->retainedSize() + values[2]->retainedSize());
+    EXPECT_EQ(
+        flatMap->estimateFlatSize(),
+        keys->estimateFlatSize() + values[0]->estimateFlatSize() +
+            values[1]->estimateFlatSize() + values[2]->estimateFlatSize());
+
+    const auto reusedFlatMap =
+        makeFlatMap(BIGINT(), {values[0], values[0], values[2]});
+    EXPECT_EQ(reusedFlatMap->retainedSize(), flatMap->retainedSize());
+    EXPECT_EQ(reusedFlatMap->estimateFlatSize(), flatMap->estimateFlatSize());
+  }
+
+  {
+    const auto makeArrays = [&](vector_size_t key, const VectorPtr& elements) {
+      const auto [offsets, sizes] = makeOffsetsAndSizes(key);
+      return std::make_shared<ArrayVector>(
+          pool_.get(),
+          ARRAY(BIGINT()),
+          nullptr,
+          kSize,
+          offsets,
+          sizes,
+          elements);
+    };
+    const auto shared = makeElements();
+    const auto other = makeElements();
+    const auto adjacentFlatMap = makeFlatMap(
+        ARRAY(BIGINT()),
+        {makeArrays(0, shared), makeArrays(1, shared), makeArrays(2, other)});
+    const auto nonAdjacentFlatMap = makeFlatMap(
+        ARRAY(BIGINT()),
+        {makeArrays(0, shared), makeArrays(1, other), makeArrays(2, shared)});
+    const auto unsharedFlatMap = makeFlatMap(
+        ARRAY(BIGINT()),
+        {makeArrays(0, makeElements()),
+         makeArrays(1, makeElements()),
+         makeArrays(2, makeElements())});
+
+    const auto reusedArrays = makeArrays(0, shared);
+    const auto reusedFlatMap = makeFlatMap(
+        ARRAY(BIGINT()), {reusedArrays, makeArrays(1, other), reusedArrays});
+
+    EXPECT_EQ(
+        adjacentFlatMap->retainedSize(),
+        unsharedFlatMap->retainedSize() - shared->retainedSize());
+    EXPECT_EQ(
+        nonAdjacentFlatMap->retainedSize(), adjacentFlatMap->retainedSize());
+    EXPECT_EQ(reusedFlatMap->retainedSize(), adjacentFlatMap->retainedSize());
+    EXPECT_EQ(
+        adjacentFlatMap->estimateFlatSize(),
+        unsharedFlatMap->estimateFlatSize() - shared->estimateFlatSize());
+    EXPECT_EQ(
+        nonAdjacentFlatMap->estimateFlatSize(),
+        adjacentFlatMap->estimateFlatSize());
+    EXPECT_EQ(
+        reusedFlatMap->estimateFlatSize(), adjacentFlatMap->estimateFlatSize());
+  }
+
+  {
+    const auto makeMaps = [&](vector_size_t key,
+                              const VectorPtr& mapKeys,
+                              const VectorPtr& mapValues) {
+      const auto [offsets, sizes] = makeOffsetsAndSizes(key);
+      return std::make_shared<MapVector>(
+          pool_.get(),
+          MAP(BIGINT(), BIGINT()),
+          nullptr,
+          kSize,
+          offsets,
+          sizes,
+          mapKeys,
+          mapValues);
+    };
+    const auto sharedKeys = makeElements();
+    const auto sharedValues = makeElements();
+    const auto nonAdjacentFlatMap = makeFlatMap(
+        MAP(BIGINT(), BIGINT()),
+        {makeMaps(0, sharedKeys, sharedValues),
+         makeMaps(1, makeElements(), makeElements()),
+         makeMaps(2, sharedKeys, sharedValues)});
+    const auto unsharedFlatMap = makeFlatMap(
+        MAP(BIGINT(), BIGINT()),
+        {makeMaps(0, makeElements(), makeElements()),
+         makeMaps(1, makeElements(), makeElements()),
+         makeMaps(2, makeElements(), makeElements())});
+
+    EXPECT_EQ(
+        nonAdjacentFlatMap->retainedSize(),
+        unsharedFlatMap->retainedSize() - sharedKeys->retainedSize() -
+            sharedValues->retainedSize());
+    EXPECT_EQ(
+        nonAdjacentFlatMap->estimateFlatSize(),
+        unsharedFlatMap->estimateFlatSize() - sharedKeys->estimateFlatSize() -
+            sharedValues->estimateFlatSize());
+  }
+
+  {
+    const auto rowType = ROW({"a", "b"}, BIGINT());
+    const auto makeRows = [&](const VectorPtr& first, const VectorPtr& second) {
+      return std::make_shared<RowVector>(
+          pool_.get(),
+          rowType,
+          nullptr,
+          kSize,
+          std::vector<VectorPtr>{first, second});
+    };
+    const auto sharedFirst = makeElements();
+    const auto sharedSecond = makeElements();
+    const auto adjacentFlatMap = makeFlatMap(
+        rowType,
+        {makeRows(sharedFirst, sharedSecond),
+         makeRows(sharedFirst, sharedSecond),
+         makeRows(makeElements(), makeElements())});
+    const auto nonAdjacentFlatMap = makeFlatMap(
+        rowType,
+        {makeRows(sharedFirst, sharedSecond),
+         makeRows(makeElements(), makeElements()),
+         makeRows(sharedFirst, sharedSecond)});
+    const auto unsharedFlatMap = makeFlatMap(
+        rowType,
+        {makeRows(makeElements(), makeElements()),
+         makeRows(makeElements(), makeElements()),
+         makeRows(makeElements(), makeElements())});
+
+    const auto expectedRetainedSize = unsharedFlatMap->retainedSize() -
+        sharedFirst->retainedSize() - sharedSecond->retainedSize();
+    EXPECT_EQ(adjacentFlatMap->retainedSize(), expectedRetainedSize);
+    EXPECT_EQ(nonAdjacentFlatMap->retainedSize(), expectedRetainedSize);
+    const auto expectedFlatSize = unsharedFlatMap->estimateFlatSize() -
+        sharedFirst->estimateFlatSize() - sharedSecond->estimateFlatSize();
+    EXPECT_EQ(adjacentFlatMap->estimateFlatSize(), expectedFlatSize);
+    EXPECT_EQ(nonAdjacentFlatMap->estimateFlatSize(), expectedFlatSize);
+  }
+}
+
+TEST_F(FlatMapVectorTest, sizeOfDictionaryValues) {
+  constexpr vector_size_t kBaseSize{1'000};
+  constexpr vector_size_t kSize{2};
+  const auto base = makeArrayVector<int64_t>(
+      kBaseSize, [](auto /*row*/) { return 3; }, [](auto row) { return row; });
+  const auto indices = makeIndices(kSize, [](auto row) { return row * 500; });
+  const auto keys = makeFlatVector<int32_t>({1, 2, 3});
+  const auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), ARRAY(BIGINT())),
+      nullptr,
+      kSize,
+      keys,
+      std::vector<VectorPtr>{
+          wrapInDictionary(indices, kSize, base),
+          wrapInDictionary(indices, kSize, base),
+          wrapInDictionary(
+              makeIndices(kSize, [](auto row) { return row; }),
+              kSize,
+              makeArrayVector<int64_t>({{1, 2}, {3}})),
+      },
+      std::vector<BufferPtr>(3));
+
+  EXPECT_EQ(flatMap->retainedSize(), keys->retainedSize());
+  EXPECT_EQ(flatMap->estimateFlatSize(), keys->estimateFlatSize());
+}
+
+TEST_F(FlatMapVectorTest, sizeOfConstantAndFlatMapValues) {
+  constexpr vector_size_t kSize{2};
+  const auto keys = makeFlatVector<int32_t>({1, 2});
+  {
+    const auto nullArrays =
+        BaseVector::createNullConstant(ARRAY(BIGINT()), kSize, pool());
+    const auto arrays = BaseVector::wrapInConstant(
+        kSize, 0, makeArrayVector<int64_t>({{1, 2}, {3}}));
+    const auto flatMap = std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(INTEGER(), ARRAY(BIGINT())),
+        nullptr,
+        kSize,
+        keys,
+        std::vector<VectorPtr>{nullArrays, arrays},
+        std::vector<BufferPtr>(2));
+
+    EXPECT_EQ(flatMap->retainedSize(), keys->retainedSize());
+    EXPECT_EQ(flatMap->estimateFlatSize(), keys->estimateFlatSize());
+  }
+
+  {
+    const auto first = maker_.flatMapVectorNullable<int64_t, int64_t>({
+        {{{1L, 10L}, {2L, 20L}}},
+        {{{1L, 11L}}},
+    });
+    const auto second = maker_.flatMapVectorNullable<int64_t, int64_t>({
+        {{{3L, 30L}}},
+        {{{3L, 31L}, {4L, 41L}}},
+    });
+    const auto flatMap = std::make_shared<FlatMapVector>(
+        pool_.get(),
+        MAP(INTEGER(), MAP(BIGINT(), BIGINT())),
+        nullptr,
+        kSize,
+        keys,
+        std::vector<VectorPtr>{first, second},
+        std::vector<BufferPtr>(2));
+
+    EXPECT_EQ(flatMap->retainedSize(), keys->retainedSize());
+    EXPECT_EQ(flatMap->estimateFlatSize(), keys->estimateFlatSize());
+  }
+}
+
+TEST_F(FlatMapVectorTest, sizeOfLazyValues) {
+  constexpr vector_size_t kSize{3};
+  const auto makeLazyArrays = [&]() {
+    return std::make_shared<LazyVector>(
+        pool(),
+        ARRAY(BIGINT()),
+        kSize,
+        std::make_unique<SimpleVectorLoader>([&](RowSet /*rows*/) {
+          return makeArrayVector<int64_t>({{1, 2}, {3}, {4, 5, 6}});
+        }));
+  };
+  const auto first = makeLazyArrays();
+  const auto second = makeLazyArrays();
+  const auto keys = makeFlatVector<int32_t>({1, 2});
+  const auto flatMap = std::make_shared<FlatMapVector>(
+      pool_.get(),
+      MAP(INTEGER(), ARRAY(BIGINT())),
+      nullptr,
+      kSize,
+      keys,
+      std::vector<VectorPtr>{first, second},
+      std::vector<BufferPtr>(2));
+
+  EXPECT_EQ(flatMap->retainedSize(), keys->retainedSize());
+  EXPECT_EQ(flatMap->estimateFlatSize(), keys->estimateFlatSize());
+  EXPECT_FALSE(first->isLoaded());
+  EXPECT_FALSE(second->isLoaded());
 }
 
 TEST_F(FlatMapVectorTest, containsNullAtValues) {
