@@ -86,6 +86,41 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     target_link_libraries(velox_paimon_connector_test nimble_writer nimble_velox_selective)
   endif()
 
+  # The golden tables are Nimble files.
+  if(VELOX_ENABLE_NIMBLE)
+    add_executable(velox_paimon_golden_table_test PaimonGoldenTableTest.cpp)
+    add_test(
+      NAME velox_paimon_golden_table_test
+      COMMAND velox_paimon_golden_table_test
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_include_directories(
+      velox_paimon_golden_table_test
+      BEFORE
+      PRIVATE "${PROJECT_SOURCE_DIR}/velox/external/fsst"
+    )
+    target_compile_definitions(
+      velox_paimon_golden_table_test
+      PRIVATE DISABLE_META_INTERNAL_COMPRESSOR=1
+    )
+    if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
+      target_compile_definitions(
+        velox_paimon_golden_table_test
+        PRIVATE NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      )
+    endif()
+    target_link_libraries(
+      velox_paimon_golden_table_test
+      velox_paimon_connector
+      velox_hive_connector
+      velox_exec_test_lib
+      nimble_velox_selective
+      velox_type_fbhive
+      GTest::gtest
+      GTest::gtest_main
+    )
+  endif()
+
   add_executable(velox_paimon_split_test PaimonConnectorSplitTest.cpp)
   add_test(velox_paimon_split_test velox_paimon_split_test)
 

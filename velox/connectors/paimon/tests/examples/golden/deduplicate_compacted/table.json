@@ -1,0 +1,23 @@
+{
+  "schemaId" : 0,
+  "columns" : [ {
+    "name" : "id",
+    "type" : "bigint",
+    "id" : 0
+  }, {
+    "name" : "name",
+    "type" : "string",
+    "id" : 1
+  }, {
+    "name" : "score",
+    "type" : "double",
+    "id" : 2
+  } ],
+  "primaryKeys" : [ "id" ],
+  "partitionKeys" : [ ],
+  "options" : {
+    "bucket" : "1",
+    "manifest.format" : "parquet",
+    "file.format" : "nimble"
+  }
+}
