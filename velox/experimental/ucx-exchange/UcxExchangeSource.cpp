@@ -260,8 +260,12 @@ bool UcxExchangeSource::processClosed() {
                 << " closed without a handshake response, sending the close";
         sendClose();
       } else {
+        // A handshake still in flight can reach the producer after the
+        // source gives up. The server it creates then waits until the
+        // coordinator aborts the producer task.
         VLOG(1) << toString()
-                << " closed before its handshake was sent, sending no close";
+                << " closed before its handshake send completed, sending no "
+                   "close";
       }
       setState(ReceiverState::Done);
       cleanUp();
