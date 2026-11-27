@@ -1610,41 +1610,184 @@ TEST_F(FsstEncodingTest, sliceRandomRanges) {
   }
 }
 
-TEST_F(FsstEncodingTest, estimateSizeUsesTargetRatioAndLengthEncodingWidth) {
-  const std::vector<std::string_view> values{
-      "alpha",
-      "common/prefix/string/value/one",
-      "common/prefix/string/value/two",
-      "common/prefix/string/value/three",
+TEST_F(FsstEncodingTest, sampledSelectionWinsAgainstWeightedTrivial) {
+  std::vector<std::string> storage;
+  storage.reserve(4'096);
+  for (uint32_t i = 0; i < 4'096; ++i) {
+    storage.emplace_back(
+        fmt::format(
+            "common/prefix/with/repeated/symbols/{:04}/common/suffix/"
+            "common/prefix/with/repeated/symbols/{:04}/common/suffix",
+            i,
+            i));
+  }
+  const std::vector<std::string_view> values(storage.begin(), storage.end());
+  auto makePolicy = []() {
+    return std::make_unique<ManualEncodingSelectionPolicy<std::string_view>>(
+        std::vector<std::pair<EncodingType, float>>{
+            {EncodingType::Trivial, 0.5}, {EncodingType::Fsst, 1.0}},
+        CompressionOptions{.compressionAcceptRatio = 0.0},
+        std::nullopt);
   };
   const auto statistics = Statistics<std::string_view>::create(values);
-  auto makeOptions = [](double compressionTargetRatio) {
-    Encoding::Options options;
-    options.fsstCompressionTargetRatio = compressionTargetRatio;
-    return options;
-  };
+  const auto selected = makePolicy()->select(values, statistics, {});
+  ASSERT_EQ(selected.encodingType, EncodingType::Fsst);
 
-  auto estimatedVariablePart = [&](const Encoding::Options& options) {
-    const uint64_t estimatedBlobSize = static_cast<uint64_t>(
-        statistics.totalStringsLength() * options.fsstCompressionTargetRatio);
-    const uint64_t estimatedMaxCompressedLength =
-        static_cast<uint64_t>(std::ceil(
-            statistics.max().size() * options.fsstCompressionTargetRatio));
-    return estimatedBlobSize +
-        FixedBitWidthEncoding<uint32_t>::estimateSize(
-               values.size(), 0, estimatedMaxCompressedLength, options);
-  };
+  Buffer buffer{*pool_};
+  const auto encoded =
+      EncodingFactory::encode<std::string_view>(makePolicy(), values, buffer);
+  auto encoding =
+      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  ASSERT_EQ(encoding->encodingType(), EncodingType::Fsst);
+  EXPECT_LT(encoded.size(), statistics.totalStringsLength() / 2);
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(encoding->rowCount(), decoded.data());
+  EXPECT_EQ(decoded, values);
+}
 
-  const auto optionsAt50 = makeOptions(0.5);
-  const auto optionsAt60 = makeOptions(0.6);
-  const auto fixedWidthSizeAt50 =
-      FsstEncoding::estimateSize(values.size(), statistics, optionsAt50);
-  const auto fixedWidthSizeAt60 =
-      FsstEncoding::estimateSize(values.size(), statistics, optionsAt60);
-
+TEST_F(
+    FsstEncodingTest,
+    sampleEstimateMeasuresBytesAndIgnoresAcceptanceTarget) {
+  std::mt19937 random{0x5eed};
+  const std::string repeated =
+      "common/prefix/with/repeated/symbols/common/suffix/"
+      "common/prefix/with/repeated/symbols/common/suffix/";
+  std::vector<std::string> storage(1'024, std::string(repeated.size(), '\0'));
+  for (auto& value : storage) {
+    for (auto& character : value) {
+      character = static_cast<char>(random() & 0xff);
+    }
+  }
+  const std::vector<std::string_view> randomValues(
+      storage.begin(), storage.end());
+  const std::vector<std::string_view> repeatedValues(storage.size(), repeated);
+  const auto randomStats = Statistics<std::string_view>::create(randomValues);
+  const auto repeatedStats =
+      Statistics<std::string_view>::create(repeatedValues);
+  ASSERT_EQ(
+      randomStats.totalStringsLength(), repeatedStats.totalStringsLength());
+  const auto estimate =
+      FsstEncoding::estimateSize(repeatedValues, repeatedStats, {});
+  EXPECT_LT(estimate, repeatedStats.totalStringsLength() / 2);
+  EXPECT_GT(
+      FsstEncoding::estimateSize(randomValues, randomStats, {}),
+      randomStats.totalStringsLength() * 0.8);
   EXPECT_EQ(
-      fixedWidthSizeAt60 - fixedWidthSizeAt50,
-      estimatedVariablePart(optionsAt60) - estimatedVariablePart(optionsAt50));
+      estimate,
+      FsstEncoding::estimateSize(
+          repeatedValues, repeatedStats, {.fsstCompressionTargetRatio = 0.01}));
+}
+
+TEST_F(FsstEncodingTest, boundedSampleChargesSymbolTableOnce) {
+  const std::vector<std::string_view> values(
+      256, "common/prefix/common/suffix");
+  const std::vector<std::string_view> largerValues(
+      values.size() * 4, values[0]);
+  const auto statistics = Statistics<std::string_view>::create(values);
+  const auto largerStatistics =
+      Statistics<std::string_view>::create(largerValues);
+  ManualEncodingSelectionPolicy<std::string_view> policy{
+      {{EncodingType::Fsst, 1.0}}, {}, std::nullopt};
+  for (const bool useVarintRowCount : {false, true}) {
+    Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    const auto baseline = policy.select(values, statistics, options);
+    const auto larger = policy.select(largerValues, largerStatistics, options);
+    ASSERT_EQ(larger.encodingType, EncodingType::Fsst);
+    ASSERT_TRUE(baseline.estimatedSize.has_value());
+    ASSERT_TRUE(larger.estimatedSize.has_value());
+    EXPECT_EQ(
+        larger.estimatedSize,
+        FsstEncoding::estimateSize(largerValues, largerStatistics, options));
+    EXPECT_GT(*larger.estimatedSize, *baseline.estimatedSize);
+    EXPECT_LT(*larger.estimatedSize, *baseline.estimatedSize * 4);
+    EXPECT_FALSE(policy.select(values, statistics, largerValues.size(), options)
+                     .has_value());
+  }
+}
+
+TEST_F(FsstEncodingTest, sampleSelectionRejectsSmallAndEmptyPayloads) {
+  ManualEncodingSelectionPolicy<std::string_view> policy{
+      {{EncodingType::Trivial, 0.5}, {EncodingType::Fsst, 1.0}},
+      {},
+      std::nullopt};
+  for (const auto& values : std::vector<std::vector<std::string_view>>{
+           {}, {"alpha", "beta"}, std::vector<std::string_view>(1'024, "")}) {
+    const auto statistics = Statistics<std::string_view>::create(values);
+    EXPECT_EQ(
+        policy.select(values, statistics, {}).encodingType,
+        EncodingType::Trivial);
+  }
+}
+
+TEST_F(FsstEncodingTest, sampleWindowsInspectLongStringBodies) {
+  std::mt19937 random{0x5eed};
+  const std::string repeated(1'024 * 1'024, 'a');
+  std::string randomBody(repeated.size(), 'a');
+  for (size_t i = 256; i < randomBody.size(); ++i) {
+    randomBody[i] = static_cast<char>(random() & 0xff);
+  }
+  ManualEncodingSelectionPolicy<std::string_view> policy{
+      {{EncodingType::Trivial, 0.5}, {EncodingType::Fsst, 1.0}},
+      {},
+      std::nullopt};
+  const std::vector<std::string_view> repeatedValues(1'024, repeated);
+  const std::vector<std::string_view> randomValues(1'024, randomBody);
+  EXPECT_EQ(
+      policy
+          .select(
+              repeatedValues,
+              Statistics<std::string_view>::create(repeatedValues),
+              {})
+          .encodingType,
+      EncodingType::Fsst);
+  EXPECT_EQ(
+      policy
+          .select(
+              randomValues,
+              Statistics<std::string_view>::create(randomValues),
+              {})
+          .encodingType,
+      EncodingType::Trivial);
+}
+
+TEST_F(FsstEncodingTest, sampleMissPreservesFinalSizeFallback) {
+  std::mt19937 random{0x5eed};
+  const std::string repeated =
+      "common/prefix/with/repeated/symbols/common/suffix/"
+      "common/prefix/with/repeated/symbols/common/suffix/";
+  std::vector<std::string> storage(4'096, std::string(repeated.size(), '\0'));
+  for (auto& value : storage) {
+    for (auto& character : value) {
+      character = static_cast<char>(random() & 0xff);
+    }
+  }
+  // Make the sampled rows compressible while the bulk of the stream expands.
+  for (size_t i = 0; i < 256; ++i) {
+    storage[i * (storage.size() - 1) / 255] = repeated;
+  }
+  const std::vector<std::string_view> values(storage.begin(), storage.end());
+  auto makePolicy = []() {
+    return std::make_unique<ManualEncodingSelectionPolicy<std::string_view>>(
+        std::vector<std::pair<EncodingType, float>>{
+            {EncodingType::Trivial, 0.5}, {EncodingType::Fsst, 1.0}},
+        CompressionOptions{.compressionAcceptRatio = 0.0},
+        std::nullopt);
+  };
+  ASSERT_EQ(
+      makePolicy()
+          ->select(values, Statistics<std::string_view>::create(values), {})
+          .encodingType,
+      EncodingType::Fsst);
+  Buffer buffer{*pool_};
+  const auto encoded =
+      EncodingFactory::encode<std::string_view>(makePolicy(), values, buffer);
+  auto encoding =
+      EncodingFactory().create(*pool_, encoded, createStringBufferFactory());
+  ASSERT_EQ(encoding->encodingType(), EncodingType::Trivial);
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(encoding->rowCount(), decoded.data());
+  EXPECT_EQ(decoded, values);
 }
 
 TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
