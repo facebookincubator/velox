@@ -281,21 +281,7 @@ class WriterContext : public FieldWriterContext {
 
  private:
   static bool hasStripeDictionaryConfig(const WriterOptions& options) {
-    for (const auto& columnDictionary :
-         options.experimentalSharedDictionaryEncoding.columns) {
-      if (columnDictionary.dictionary.scope == SharedDictionaryScope::Stripe) {
-        return true;
-      }
-    }
-    for (const auto& flatMap :
-         options.experimentalSharedDictionaryEncoding.flatMaps) {
-      for (const auto& flatMapKey : flatMap.keys) {
-        if (flatMapKey.dictionary.scope == SharedDictionaryScope::Stripe) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return options.experimentalSharedDictionaryEncoding.hasStripeDictionary();
   }
 
   const WriterOptions options_;
@@ -805,29 +791,47 @@ class WriterStreamContext : public StreamContext {
     sharedDictionaryConfig_ = config;
   }
 
-  // Returns the shared dictionary configuration, if this stream is configured
-  // to use one.
-  const std::optional<SharedDictionaryConfig>& sharedDictionaryConfig() const {
-    return sharedDictionaryConfig_;
-  }
-
   SharedDictionaryWriter* sharedDictionaryWriter() const {
     return sharedDictionaryWriter_.get();
   }
 
-  void setSharedDictionaryWriter(
-      std::unique_ptr<SharedDictionaryWriter> writer) const {
-    NIMBLE_CHECK_NULL(
-        sharedDictionaryWriter_, "Shared dictionary writer already exists.");
-    sharedDictionaryWriter_ = std::move(writer);
+  // Returns whether a shared dictionary owns this value stream's encoding
+  // selection.
+  bool usesSharedDictionary() const {
+    // A shared dictionary owns the entire selection for its value stream: the
+    // indices it emits are meaningful only against its own alphabet, so a
+    // replayed layout can neither be applied to nor captured from this stream.
+    return sharedDictionaryConfig_.has_value();
   }
 
+  // Creates the encoding selection policy for one chunk of this stream. A
+  // shared dictionary config, if set, takes over selection. Otherwise
+  // |encodingLayout| is replayed, or nullopt runs a fresh selection; callers
+  // pass nullopt to retry a failed replay.
+  template <typename T>
+  std::unique_ptr<EncodingSelectionPolicy<T>> createEncodingPolicy(
+      std::optional<EncodingLayout> encodingLayout,
+      detail::WriterContext& context,
+      Buffer& buffer,
+      velox::BufferPool* encodingScratchBufferPool,
+      EncodingBufferPool* encodingBufferPool);
+
  private:
+  // Returns this stream's shared dictionary writer, creating it on first use.
+  // Chunked writes revisit the same value stream, so the writer outlives the
+  // per-chunk policies built over it.
+  template <typename T>
+  TypedSharedDictionaryWriter<T>& ensureSharedDictionaryWriter(
+      detail::WriterContext& context,
+      Buffer& buffer,
+      velox::BufferPool* encodingScratchBufferPool,
+      EncodingBufferPool* encodingBufferPool);
+
   bool isNullStream_{false};
   std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
-  mutable std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
+  std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
 };
 
 // Context attached to one FlatMap TypeBuilder node. It carries the per-key
@@ -851,12 +855,18 @@ class FlatmapEncodingLayoutContext : public TypeBuilderContext {
 
   explicit FlatmapEncodingLayoutContext(
       KeyEncodingMap keyEncodings = {},
-      ValueDictionaryMap valueDictionaries = {})
+      ValueDictionaryMap valueDictionaries = {},
+      std::optional<SharedDictionaryConfig> allKeyDictionary = std::nullopt)
       : keyEncodings{std::move(keyEncodings)},
-        valueDictionaries{std::move(valueDictionaries)} {}
+        valueDictionaries{std::move(valueDictionaries)},
+        allKeyDictionary{std::move(allKeyDictionary)} {}
 
   const KeyEncodingMap keyEncodings;
   const ValueDictionaryMap valueDictionaries;
+  // Set when the whole column is enabled, so every key that materializes gets
+  // its own dictionary with these settings. Mutually exclusive with
+  // valueDictionaries, which names specific keys.
+  const std::optional<SharedDictionaryConfig> allKeyDictionary;
 };
 
 WriterStreamContext& streamContext(const StreamDescriptorBuilder& descriptor);
@@ -873,11 +883,22 @@ Encoding::Options makeEncodingOptions(
   return encodingOptions;
 }
 
-bool hasDictionaryConfig(const StreamData& streamData) {
-  const auto* streamContext =
-      streamData.descriptor().context<WriterStreamContext>();
-  return streamContext != nullptr &&
-      streamContext->sharedDictionaryConfig().has_value();
+// Creates the encoding selection policy for a stream that carries no
+// state of its own beyond an optional layout to replay.
+template <typename T>
+std::unique_ptr<EncodingSelectionPolicy<T>> createReplayedOrDefaultPolicy(
+    std::optional<EncodingLayout> encodingLayout,
+    const WriterOptions& options) {
+  if (encodingLayout.has_value()) {
+    return std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+        std::move(encodingLayout.value()),
+        options.compressionOptions,
+        options.encodingSelectionPolicyCreator);
+  }
+  return std::unique_ptr<EncodingSelectionPolicy<T>>(
+      static_cast<EncodingSelectionPolicy<T>*>(
+          options.encodingSelectionPolicyCreator(TypeTraits<T>::dataType)
+              .release()));
 }
 
 bool isSharedDictionaryScalarKind(ScalarKind scalarKind) {
@@ -916,42 +937,38 @@ bool isSharedDictionaryLogicalType(const velox::Type& type) {
 }
 
 template <typename T>
-// NOLINTNEXTLINE(facebook-hte-NullableReturn)
-TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
-    const StreamData& streamData,
+TypedSharedDictionaryWriter<T>&
+WriterStreamContext::ensureSharedDictionaryWriter(
     detail::WriterContext& context,
     Buffer& buffer,
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool) {
-  auto* streamContext = streamData.descriptor().context<WriterStreamContext>();
-  if (streamContext == nullptr) {
-    return nullptr;
-  }
-
-  // Chunked writes revisit the same value stream, so the writer is cached in
-  // the stream context. The type check guards against reusing that state with
-  // a different physical value type.
-  if (auto* dictionaryWriter = streamContext->sharedDictionaryWriter()) {
+  // Chunked writes revisit the same value stream, so the writer is cached here
+  // rather than rebuilt per chunk. The type check guards against reusing that
+  // state with a different physical value type.
+  if (auto* dictionaryWriter = sharedDictionaryWriter_.get()) {
     NIMBLE_CHECK_EQ(
         dictionaryWriter->dataType(),
         TypeTraits<T>::dataType,
         "Shared dictionary writer has unexpected value type.");
-    return velox::checkedPointerCast<TypedSharedDictionaryWriter<T>>(
+    return *velox::checkedPointerCast<TypedSharedDictionaryWriter<T>>(
         dictionaryWriter);
   }
 
-  const auto& config = streamContext->sharedDictionaryConfig();
-  if (!config.has_value()) {
-    return nullptr;
-  }
+  NIMBLE_CHECK(
+      sharedDictionaryConfig_.has_value(),
+      "Shared dictionary writer requested for a stream with no shared "
+      "dictionary config.");
+  const auto& config = sharedDictionaryConfig_.value();
   const auto& writerOptions = context.options();
   auto encodingOptions = makeEncodingOptions(
       writerOptions, encodingScratchBufferPool, encodingBufferPool);
   SharedDictionaryWriter::Options dictionaryOptions{
-      .scope = config->scope,
-      .dictionaryId = config->dictionaryId,
-      .useExternalAlphabet = config->useExternalAlphabet,
-      .alphabetEncodings = config->alphabetEncodings,
+      .scope = config.scope,
+      .dictionaryId = config.dictionaryId,
+      .resolverKey = config.resolverKey,
+      .useExternalAlphabet = config.useExternalAlphabet,
+      .alphabetEncodings = config.alphabetEncodings,
       .encodingSelectionPolicyCreator =
           writerOptions.encodingSelectionPolicyCreator,
       .encodingOptions = std::move(encodingOptions),
@@ -960,52 +977,37 @@ TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
   };
   auto writer = std::make_unique<TypedSharedDictionaryWriter<T>>(
       &buffer.getMemoryPool(), dictionaryOptions);
-  auto* writerPtr = writer.get();
-  streamContext->setSharedDictionaryWriter(std::move(writer));
-  return writerPtr;
+  auto& writerRef = *writer;
+  sharedDictionaryWriter_ = std::move(writer);
+  return writerRef;
 }
 
 template <typename T>
-std::unique_ptr<EncodingSelectionPolicy<T>> makeEncodingPolicy(
-    bool hasEncodingLayout,
+std::unique_ptr<EncodingSelectionPolicy<T>>
+WriterStreamContext::createEncodingPolicy(
     std::optional<EncodingLayout> encodingLayout,
     detail::WriterContext& context,
     Buffer& buffer,
     velox::BufferPool* encodingScratchBufferPool,
-    EncodingBufferPool* encodingBufferPool,
-    const StreamData& streamData) {
-  if (hasDictionaryConfig(streamData)) {
+    EncodingBufferPool* encodingBufferPool) {
+  if (usesSharedDictionary()) {
     NIMBLE_USER_CHECK(
         isSharedDictionaryType(TypeTraits<T>::dataType),
         "Shared dictionary encoding only supports integer or string streams, "
         "got {}.",
         TypeTraits<T>::dataType);
     if constexpr (isSharedDictionaryType<T>()) {
-      auto* dictionaryWriter = sharedDictionaryWriter<T>(
-          streamData,
-          context,
-          buffer,
-          encodingScratchBufferPool,
-          encodingBufferPool);
-      NIMBLE_CHECK_NOT_NULL(dictionaryWriter);
-      return dictionaryWriter->createEncodingPolicy(context.getStripeIndex());
+      return ensureSharedDictionaryWriter<T>(
+                 context, buffer, encodingScratchBufferPool, encodingBufferPool)
+          .createEncodingPolicy(context.getStripeIndex());
     } else {
       NIMBLE_UNREACHABLE(
           "Shared dictionary type validation accepted unsupported {}.",
           TypeTraits<T>::dataType);
     }
   }
-  if (hasEncodingLayout) {
-    return std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
-        std::move(encodingLayout.value()),
-        context.options().compressionOptions,
-        context.options().encodingSelectionPolicyCreator);
-  }
-  return std::unique_ptr<EncodingSelectionPolicy<T>>(
-      static_cast<EncodingSelectionPolicy<T>*>(
-          context.options()
-              .encodingSelectionPolicyCreator(TypeTraits<T>::dataType)
-              .release()));
+  return createReplayedOrDefaultPolicy<T>(
+      std::move(encodingLayout), context.options());
 }
 
 void configureDictionary(
@@ -1020,13 +1022,34 @@ void configureDictionary(
           "Shared dictionary value must be an integer or string scalar, got "
           "{}.",
           scalar.scalarDescriptor().scalarKind());
-      if (config.scope == SharedDictionaryScope::Stripe) {
-        NIMBLE_USER_CHECK_EQ(
-            config.dictionaryId,
-            0,
-            "Stripe shared dictionary config must leave dictionaryId unset.");
-        config.dictionaryId = schemaBuilder.createSharedDictionaryStream(
-            scalar.scalarDescriptor().offset());
+      // Stripe and File dictionaries are named inside the written file, so the
+      // writer allocates their ids here, once per configured value stream.
+      // External dictionaries are named by the caller and keep the id they came
+      // with, which the reader hands back to the resolver.
+      switch (config.scope) {
+        case SharedDictionaryScope::Stripe:
+          NIMBLE_USER_CHECK_EQ(
+              config.dictionaryId,
+              0,
+              "Stripe shared dictionary config must leave dictionaryId unset.");
+          config.dictionaryId = schemaBuilder.createSharedDictionaryStream(
+              scalar.scalarDescriptor().offset());
+          break;
+        case SharedDictionaryScope::File:
+          // TODO: Support one File dictionary shared by several value streams.
+          // Callers would label the streams that share, through a nonzero
+          // dictionaryId or a dedicated group field. collectDictionaryConfigs()
+          // would remap the labels to ids 0..k-1 in config order and start this
+          // counter at k, and the streams of one label would share a single
+          // TypedSharedDictionaryWriter instead of owning one each.
+          NIMBLE_USER_CHECK_EQ(
+              config.dictionaryId,
+              0,
+              "File shared dictionary config must leave dictionaryId unset.");
+          config.dictionaryId = schemaBuilder.createFileSharedDictionaryId();
+          break;
+        case SharedDictionaryScope::External:
+          break;
       }
       streamContext(scalar.scalarDescriptor())
           .setSharedDictionaryConfig(config);
@@ -1067,20 +1090,6 @@ void configureDictionary(
           "scalar, array element, or map value, got {}.",
           typeBuilder.kind());
   }
-}
-
-void maybeAddFileDictionaryId(
-    const SharedDictionaryConfig& config,
-    folly::F14FastSet<uint32_t>& fileDictionaryIds) {
-  if (config.scope != SharedDictionaryScope::File) {
-    return;
-  }
-  const bool inserted = fileDictionaryIds.insert(config.dictionaryId).second;
-  NIMBLE_USER_CHECK(
-      inserted,
-      "File shared dictionary ID {} is configured for multiple streams. "
-      "Cross-stream domains are not supported yet.",
-      config.dictionaryId);
 }
 
 const TypeWithId& resolveDictionaryValueType(
@@ -1143,14 +1152,17 @@ std::string_view encode(
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::encode", const_cast<bool*>(&hasEncodingLayout));
 
-  auto policy = makeEncodingPolicy<T>(
-      hasEncodingLayout,
-      std::move(encodingLayout),
-      context,
-      buffer,
-      encodingScratchBufferPool,
-      encodingBufferPool,
-      streamData);
+  auto* writerStreamContext =
+      streamData.descriptor().context<WriterStreamContext>();
+  auto policy = writerStreamContext != nullptr
+      ? writerStreamContext->createEncodingPolicy<T>(
+            std::move(encodingLayout),
+            context,
+            buffer,
+            encodingScratchBufferPool,
+            encodingBufferPool)
+      : createReplayedOrDefaultPolicy<T>(
+            std::move(encodingLayout), context.options());
 
   auto encodingOptions = makeEncodingOptions(
       context.options(), encodingScratchBufferPool, encodingBufferPool);
@@ -1248,14 +1260,16 @@ std::string_view encodeStreamTyped(
     const StreamData& streamData) {
   const auto* writerStreamContext =
       streamData.descriptor().context<WriterStreamContext>();
-  const bool hasDictionary = hasDictionaryConfig(streamData);
+  // Streams with no context of their own carry no state to select over.
+  const bool usesSharedDictionary = writerStreamContext != nullptr &&
+      writerStreamContext->usesSharedDictionary();
 
   // Replay an externally provided (EncodingLayoutTree) or previously captured
   // layout, falling back to a fresh selection if it no longer fits the data.
   // TODO: Replace the exception-based best-effort replay in encodeWithFallback
   // with a non-throwing compatibility check before the replay attempt.
-  if (!hasDictionary && writerStreamContext &&
-      writerStreamContext->encoding()) {
+  if (!usesSharedDictionary && writerStreamContext != nullptr &&
+      writerStreamContext->encoding() != nullptr) {
     return encodeWithFallback<T>(
         writerStreamContext->encoding(),
         context,
@@ -1279,7 +1293,7 @@ std::string_view encodeStreamTyped(
   // already strips any Nullable/Sentinel wrapper, so the cached layout is the
   // data encoding alone — Nimble re-applies per-chunk nullability at encode
   // time, so it stays valid regardless of a later chunk's nulls.
-  if (!hasDictionary && context.options().enableEncodingSelectionCache) {
+  if (!usesSharedDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
         .setEncoding(
             cacheEncodingLayout<T>(EncodingLayoutCapture::capture(
@@ -1450,10 +1464,103 @@ struct DictionaryConfigs {
   folly::F14FastMap<uint32_t, SharedDictionaryConfig> columns;
   folly::F14FastMap<uint32_t, FlatmapEncodingLayoutContext::ValueDictionaryMap>
       flatMaps;
+  // Flat-map columns enabled wholesale, mapped to the config every key of that
+  // column receives. Enabled columns name no keys, so the keys are discovered
+  // as the data materializes them.
+  folly::F14FastMap<uint32_t, SharedDictionaryConfig> allKeyFlatMaps;
 };
 
+// Rejects a shared dictionary on a value stream that targeted FSST or
+// SubIntSplit encoding already claims.
+void checkNoTargetedEncoding(
+    const detail::WriterContext& context,
+    uint32_t valueNodeId,
+    const std::string& fieldPath) {
+  NIMBLE_USER_CHECK(
+      !context.fsstEncodingNodeIds().contains(valueNodeId),
+      "Targeted FSST and shared dictionary column '{}' resolve to the same "
+      "value stream (schema node {}).",
+      fieldPath,
+      valueNodeId);
+  NIMBLE_USER_CHECK(
+      !context.subIntSplitEncodingNodeIds().contains(valueNodeId),
+      "Targeted SubIntSplit and shared dictionary column '{}' resolve to the same "
+      "value stream (schema node {}).",
+      fieldPath,
+      valueNodeId);
+}
+
+// Registers one enabled top-level column. Flat-map columns are recorded for
+// all keys and resolved later, when each key materializes; every other column
+// resolves to its single eligible value stream now.
+void collectEnabledColumn(
+    const TypeWithId& type,
+    const std::string& column,
+    const SharedDictionaryConfig& dictionary,
+    const detail::WriterContext& context,
+    DictionaryConfigs& configs) {
+  const auto& fieldType =
+      resolveValueStreamSubfield(type, parseValueStreamSubfield(column));
+  const auto nodeId = static_cast<uint32_t>(fieldType.id());
+
+  if (context.hasFlatMapNodeId(fieldType.id())) {
+    const auto inserted =
+        configs.allKeyFlatMaps.emplace(nodeId, dictionary).second;
+    NIMBLE_USER_CHECK(
+        inserted, "Duplicate shared dictionary column '{}'.", column);
+    return;
+  }
+
+  const auto& valueType = resolveDictionaryValueType(fieldType, column);
+  NIMBLE_USER_CHECK(
+      isSharedDictionaryLogicalType(*valueType.type()),
+      "Shared dictionary column '{}' must resolve to an integer or string "
+      "scalar, array element, or map value, got {}.",
+      column,
+      valueType.type()->toString());
+  checkNoTargetedEncoding(
+      context, static_cast<uint32_t>(valueType.id()), column);
+  const auto inserted = configs.columns.emplace(nodeId, dictionary).second;
+  NIMBLE_USER_CHECK(
+      inserted, "Duplicate shared dictionary column '{}'.", column);
+}
+
+// Registers one path-addressed provided dictionary.
+void collectProvidedDictionary(
+    const TypeWithId& type,
+    const ProvidedDictionary& provided,
+    const detail::WriterContext& context,
+    folly::F14FastSet<uint32_t>& valueNodeIds,
+    DictionaryConfigs& configs) {
+  const auto& fieldType = resolveValueStreamSubfield(
+      type, parseValueStreamSubfield(provided.fieldPath));
+  const auto& valueType =
+      resolveDictionaryValueType(fieldType, provided.fieldPath);
+  const auto valueNodeId = static_cast<uint32_t>(valueType.id());
+  NIMBLE_USER_CHECK(
+      valueNodeIds.insert(valueNodeId).second,
+      "Duplicate provided shared dictionary configuration for schema value "
+      "node {}.",
+      valueNodeId);
+  NIMBLE_USER_CHECK(
+      isSharedDictionaryLogicalType(*valueType.type()),
+      "Provided shared dictionary '{}' must resolve to an integer or string "
+      "scalar, array element, or map value, got {}.",
+      provided.fieldPath,
+      valueType.type()->toString());
+  checkNoTargetedEncoding(context, valueNodeId, provided.fieldPath);
+  const auto nodeId = static_cast<uint32_t>(fieldType.id());
+  const auto inserted =
+      configs.columns.emplace(nodeId, provided.dictionary).second;
+  NIMBLE_USER_CHECK(
+      inserted,
+      "Duplicate shared dictionary configuration for schema node {}.",
+      nodeId);
+}
+
 // Resolves shared dictionary configs to writer schema targets. Flat-map value
-// stream assignment is deferred until each configured key is materialized.
+// stream assignment is deferred until each key is materialized, for both
+// enabled columns and per-key provided dictionaries.
 DictionaryConfigs collectDictionaryConfigs(
     const TypeWithId& type,
     const detail::WriterContext& context) {
@@ -1473,60 +1580,31 @@ DictionaryConfigs collectDictionaryConfigs(
       velox::TypeKind::ROW,
       "Shared dictionary encoding requires a row root type, got {}.",
       type.type()->toString());
-  folly::F14FastSet<uint32_t> fileDictionaryIds;
-  folly::F14FastSet<uint32_t> columnValueNodeIds;
+
   configs.columns.reserve(dictionaryEncodingConfig.columns.size());
-  for (const auto& columnDictionary : dictionaryEncodingConfig.columns) {
-    const auto subfield = parseValueStreamSubfield(columnDictionary.fieldPath);
-    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
-    const auto& valueType =
-        resolveDictionaryValueType(fieldType, columnDictionary.fieldPath);
-    const auto valueNodeId = static_cast<uint32_t>(valueType.id());
-    const auto insertedValueNode =
-        columnValueNodeIds.insert(valueNodeId).second;
-    NIMBLE_USER_CHECK(
-        insertedValueNode,
-        "Duplicate shared dictionary column configuration for schema value "
-        "node {}.",
-        valueNodeId);
-    NIMBLE_USER_CHECK(
-        isSharedDictionaryLogicalType(*valueType.type()),
-        "Shared dictionary column '{}' must resolve to an integer or string "
-        "scalar, array element, or map value, got {}.",
-        columnDictionary.fieldPath,
-        valueType.type()->toString());
-    NIMBLE_USER_CHECK(
-        !fsstEncodingNodeIds.contains(valueNodeId),
-        "Targeted FSST and shared dictionary column '{}' resolve to the same "
-        "value stream (schema node {}).",
-        columnDictionary.fieldPath,
-        valueNodeId);
-    NIMBLE_USER_CHECK(
-        !subIntSplitEncodingNodeIds.contains(valueNodeId),
-        "Targeted SubIntSplit and shared dictionary column '{}' resolve to the same "
-        "value stream (schema node {}).",
-        columnDictionary.fieldPath,
-        valueNodeId);
-    maybeAddFileDictionaryId(columnDictionary.dictionary, fileDictionaryIds);
-    const auto nodeId = static_cast<uint32_t>(fieldType.id());
-    const auto inserted =
-        configs.columns.emplace(nodeId, columnDictionary.dictionary).second;
-    NIMBLE_USER_CHECK(
-        inserted,
-        "Duplicate shared dictionary column configuration for schema node {}.",
-        nodeId);
+  for (const auto& [column, columnScope] : dictionaryEncodingConfig.columns) {
+    // The writer supplies the id, so a column entry carries only its scope and
+    // the file-wide alphabet encodings.
+    collectEnabledColumn(
+        type,
+        column,
+        SharedDictionaryConfig{
+            .scope = columnScope,
+            .alphabetEncodings = dictionaryEncodingConfig.alphabetEncodings},
+        context,
+        configs);
   }
 
-  configs.flatMaps.reserve(dictionaryEncodingConfig.flatMaps.size());
-  for (const auto& flatMap : dictionaryEncodingConfig.flatMaps) {
-    const auto subfield = parseValueStreamSubfield(flatMap.fieldPath);
-    NIMBLE_USER_CHECK_EQ(
-        subfield.path().size(),
-        1,
-        "Shared dictionary flat-map path '{}' must be a top-level writer input "
-        "column.",
-        flatMap.fieldPath);
-    const auto& fieldType = resolveValueStreamSubfield(type, subfield);
+  folly::F14FastSet<uint32_t> providedValueNodeIds;
+  for (const auto& provided : dictionaryEncodingConfig.provided) {
+    collectProvidedDictionary(
+        type, provided, context, providedValueNodeIds, configs);
+  }
+
+  configs.flatMaps.reserve(dictionaryEncodingConfig.providedFlatMaps.size());
+  for (const auto& flatMap : dictionaryEncodingConfig.providedFlatMaps) {
+    const auto& fieldType = resolveValueStreamSubfield(
+        type, parseValueStreamSubfield(flatMap.fieldPath));
     NIMBLE_USER_CHECK_EQ(
         fieldType.type()->kind(),
         velox::TypeKind::MAP,
@@ -1539,10 +1617,14 @@ DictionaryConfigs collectDictionaryConfigs(
         flatMap.fieldPath);
 
     const auto nodeId = static_cast<uint32_t>(fieldType.id());
+    NIMBLE_USER_CHECK(
+        !configs.allKeyFlatMaps.contains(nodeId),
+        "Flat-map column '{}' is both enabled and configured with provided "
+        "per-key dictionaries.",
+        flatMap.fieldPath);
     auto& flatMapKeys = configs.flatMaps[nodeId];
     const auto& mapValueType = *fieldType.childAt(1);
     for (const auto& flatMapKey : flatMap.keys) {
-      const auto& config = flatMapKey.dictionary;
       if (!fsstEncodingNodeIds.empty() || !subIntSplitEncodingNodeIds.empty()) {
         const TypeWithId* configuredType = &mapValueType;
         if (!flatMapKey.valueSubfield.empty()) {
@@ -1572,10 +1654,10 @@ DictionaryConfigs collectDictionaryConfigs(
             flatMapKey.valueSubfield,
             valueType.id());
       }
-      maybeAddFileDictionaryId(config, fileDictionaryIds);
       flatMapKeys[std::to_string(flatMapKey.key)].push_back(
           FlatmapEncodingLayoutContext::ValueDictionaryConfig{
-              .valueSubfield = flatMapKey.valueSubfield, .dictionary = config});
+              .valueSubfield = flatMapKey.valueSubfield,
+              .dictionary = flatMapKey.dictionary});
     }
   }
   return configs;
@@ -1610,6 +1692,16 @@ void configureFlatMapValueStreams(
     if (it != flatMapContext.keyEncodings.end()) {
       initializeEncodingLayouts(fieldType, *it->second);
     }
+  }
+
+  // An enabled column gives every key its own dictionary, so this key needs no
+  // configuration of its own.
+  if (flatMapContext.allKeyDictionary.has_value()) {
+    configureDictionary(
+        fieldType,
+        flatMapContext.allKeyDictionary.value(),
+        context.schemaBuilder());
+    return;
   }
 
   auto it = flatMapContext.valueDictionaries.find(std::string{fieldKey});
@@ -1653,12 +1745,19 @@ void configureAddedType(
     if (dictionaryIt != dictionaryConfigs.flatMaps.end()) {
       valueDictionaries = dictionaryIt->second;
     }
-    const bool hasFlatMapValueEncoding =
-        !keyEncodings.empty() || !valueDictionaries.empty();
+    std::optional<SharedDictionaryConfig> allKeyDictionary;
+    auto allKeyIt = dictionaryConfigs.allKeyFlatMaps.find(nodeId);
+    if (allKeyIt != dictionaryConfigs.allKeyFlatMaps.end()) {
+      allKeyDictionary = allKeyIt->second;
+    }
+    const bool hasFlatMapValueEncoding = !keyEncodings.empty() ||
+        !valueDictionaries.empty() || allKeyDictionary.has_value();
     if (hasFlatMapValueEncoding) {
       type.setContext(
           std::make_unique<FlatmapEncodingLayoutContext>(
-              std::move(keyEncodings), std::move(valueDictionaries)));
+              std::move(keyEncodings),
+              std::move(valueDictionaries),
+              std::move(allKeyDictionary)));
     }
     const auto* predefinedKeys = context.getFlatMapNodeKeys(nodeId);
     if (predefinedKeys != nullptr && hasFlatMapValueEncoding) {

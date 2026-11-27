@@ -88,15 +88,63 @@ void validateValueSubfield(const std::string& valueSubfield) {
   }
 }
 
+// Provided dictionaries exist to carry a caller-owned resolver key, so reject
+// the configurations that have no key to carry.
+void validateProvidedDictionary(
+    const SharedDictionaryConfig& dictionary,
+    const std::string& fieldPath) {
+  NIMBLE_USER_CHECK(
+      dictionary.scope == SharedDictionaryScope::External ||
+          (dictionary.scope == SharedDictionaryScope::File &&
+           dictionary.useExternalAlphabet),
+      "Provided shared dictionary '{}' must use external scope, or file scope "
+      "with useExternalAlphabet. Writer-assigned dictionaries are enabled by "
+      "column instead.",
+      fieldPath);
+}
+
 } // namespace
+
+SharedDictionaryConfigBuilder::SharedDictionaryConfigBuilder() = default;
 
 SharedDictionaryConfigBuilder::SharedDictionaryConfigBuilder(
     SharedDictionaryEncodingConfig&& config)
     : config_{std::move(config)} {}
 
+SharedDictionaryConfigBuilder SharedDictionaryEncodingConfig::builder() {
+  return SharedDictionaryConfigBuilder{};
+}
+
 SharedDictionaryConfigBuilder SharedDictionaryEncodingConfig::builder(
     SharedDictionaryEncodingConfig&& config) {
   return SharedDictionaryConfigBuilder{std::move(config)};
+}
+
+bool SharedDictionaryEncodingConfig::hasStripeDictionary() const {
+  for (const auto& [_, columnScope] : columns) {
+    if (columnScope == SharedDictionaryScope::Stripe) {
+      return true;
+    }
+  }
+  // The builder rejects stripe-scoped provided dictionaries, but the fields are
+  // public and assignable, so scan rather than trust that invariant here: the
+  // writer sizes stripe state off this answer and under-reporting is silent.
+  const auto isStripe = [](const SharedDictionaryConfig& dictionary) {
+    return dictionary.scope == SharedDictionaryScope::Stripe;
+  };
+  return std::any_of(
+             provided.begin(),
+             provided.end(),
+             [&](const auto& entry) { return isStripe(entry.dictionary); }) ||
+      std::any_of(
+             providedFlatMaps.begin(),
+             providedFlatMaps.end(),
+             [&](const auto& column) {
+               return std::any_of(
+                   column.keys.begin(),
+                   column.keys.end(),
+                   [&](const auto& key) { return isStripe(key.dictionary); });
+             });
 }
 
 SharedDictionaryConfigBuilder&
@@ -107,43 +155,76 @@ SharedDictionaryConfigBuilder::setExternalResolver(
 }
 
 SharedDictionaryConfigBuilder&
-SharedDictionaryConfigBuilder::addColumnDictionary(
+SharedDictionaryConfigBuilder::setAlphabetEncodings(
+    std::vector<EncodingType> alphabetEncodings) {
+  config_.alphabetEncodings = std::move(alphabetEncodings);
+  return *this;
+}
+
+SharedDictionaryConfigBuilder& SharedDictionaryConfigBuilder::addColumn(
+    std::string column,
+    SharedDictionaryScope scope) {
+  NIMBLE_USER_CHECK_NE(
+      scope,
+      SharedDictionaryScope::External,
+      "Enabled column '{}' cannot use external scope; an external dictionary "
+      "is named by a caller-owned resolver key and must be configured per "
+      "value stream.",
+      column);
+  NIMBLE_USER_CHECK(
+      !column.empty(), "Shared dictionary column name must not be empty.");
+  NIMBLE_USER_CHECK(
+      column.find_first_of(".[") == std::string::npos,
+      "Shared dictionary column '{}' must be a top-level writer input column "
+      "name, not a path. Struct members are only reachable through a provided "
+      "dictionary.",
+      column);
+  const auto inserted = config_.columns.emplace(column, scope).second;
+  NIMBLE_USER_CHECK(
+      inserted, "Duplicate shared dictionary column '{}'.", column);
+  return *this;
+}
+
+SharedDictionaryConfigBuilder&
+SharedDictionaryConfigBuilder::addProvidedDictionary(
     std::string fieldPath,
     SharedDictionaryConfig dictionary) {
   validateValueStreamPath(fieldPath, "column");
+  validateProvidedDictionary(dictionary, fieldPath);
 
   const auto duplicate = std::any_of(
-      config_.columns.begin(),
-      config_.columns.end(),
+      config_.provided.begin(),
+      config_.provided.end(),
       [&](const auto& candidate) { return candidate.fieldPath == fieldPath; });
   NIMBLE_USER_CHECK(
       !duplicate,
-      "Duplicate shared dictionary column configuration for path '{}'.",
+      "Duplicate provided shared dictionary configuration for path '{}'.",
       fieldPath);
-  config_.columns.push_back(
-      ColumnDictionary{
+  config_.provided.push_back(
+      ProvidedDictionary{
           .fieldPath = std::move(fieldPath),
           .dictionary = std::move(dictionary)});
   return *this;
 }
 
 SharedDictionaryConfigBuilder&
-SharedDictionaryConfigBuilder::addFlatmapValueDictionary(
+SharedDictionaryConfigBuilder::addProvidedFlatmapValueDictionary(
     std::string fieldPath,
     int64_t key,
     SharedDictionaryConfig dictionary,
     std::string valueSubfield) {
   const auto subfield = validateFlatMapColumnPath(fieldPath);
   validateValueSubfield(valueSubfield);
+  validateProvidedDictionary(dictionary, fieldPath);
 
   auto column = std::find_if(
-      config_.flatMaps.begin(),
-      config_.flatMaps.end(),
+      config_.providedFlatMaps.begin(),
+      config_.providedFlatMaps.end(),
       [&](const auto& candidate) { return candidate.fieldPath == fieldPath; });
-  if (column == config_.flatMaps.end()) {
-    config_.flatMaps.push_back(
-        FlatmapColumnDictionary{.fieldPath = fieldPath, .keys = {}});
-    column = std::prev(config_.flatMaps.end());
+  if (column == config_.providedFlatMaps.end()) {
+    config_.providedFlatMaps.push_back(
+        ProvidedFlatmapColumnDictionary{.fieldPath = fieldPath, .keys = {}});
+    column = std::prev(config_.providedFlatMaps.end());
   }
 
   const auto duplicate = std::any_of(
@@ -152,13 +233,13 @@ SharedDictionaryConfigBuilder::addFlatmapValueDictionary(
       });
   NIMBLE_USER_CHECK(
       !duplicate,
-      "Duplicate shared dictionary flat-map value configuration for path '{}', "
-      "key {}, and value subfield '{}'.",
+      "Duplicate provided shared dictionary flat-map value configuration for "
+      "path '{}', key {}, and value subfield '{}'.",
       fieldPath,
       key,
       valueSubfield);
   column->keys.push_back(
-      FlatmapKeyDictionary{
+      ProvidedFlatmapKeyDictionary{
           .key = key,
           .valueSubfield = std::move(valueSubfield),
           .dictionary = std::move(dictionary)});
