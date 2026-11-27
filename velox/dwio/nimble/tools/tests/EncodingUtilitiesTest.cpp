@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -381,6 +382,73 @@ TEST_F(EncodingUtilitiesTest, traverseEncodingsPforChildren) {
   const std::vector<std::pair<std::string, uint32_t>> expected{
       {"ExceptionPositions", 1u}, {"ExceptionValues", 1u}};
   EXPECT_EQ(nestedVisits, expected);
+}
+
+TEST_F(EncodingUtilitiesTest, traverseEncodingsFsstChildren) {
+  std::vector<std::string> storage;
+  storage.reserve(200);
+  for (int i = 0; i < 200; ++i) {
+    storage.push_back("common/prefix/for/fsst/tool/" + std::to_string(i % 8));
+  }
+  Vector<std::string_view> values{pool_.get()};
+  for (const auto& value : storage) {
+    values.emplace_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto current = nimble::test::Encoder<FsstEncoding>::encode(
+      buffer,
+      values,
+      CompressionType::Uncompressed,
+      {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+
+  // The layout written before decoded lengths existed: no decoded lengths
+  // section and no flag in the compression type byte.
+  const auto prefixSize = EncodingPrefix::prefixSize(current, false);
+  const auto header = FsstEncoding::parseHeader(current, prefixSize);
+  std::string older{current.substr(0, prefixSize)};
+  older.push_back(static_cast<char>(header.compressionType));
+  for (const auto section : {header.symbolTable, header.lengths}) {
+    char size[5];
+    char* cursor = size;
+    varint::writeVarint(static_cast<uint32_t>(section.size()), &cursor);
+    older.append(size, cursor);
+    older.append(section);
+  }
+  older.append(header.blob);
+
+  for (const bool hasDecodedLengths : {false, true}) {
+    SCOPED_TRACE(hasDecodedLengths ? "decoded lengths" : "no decoded lengths");
+    const std::string_view stream =
+        hasDecodedLengths ? std::string_view{current} : std::string_view{older};
+    EncodingType rootType = EncodingType::Constant; // init to something else
+    std::vector<std::tuple<std::string, uint32_t, uint32_t>>
+        nestedVisits; // name, level, index
+    traverseEncodings(
+        stream,
+        [&](EncodingType encodingType,
+            DataType /* dataType */,
+            uint32_t level,
+            uint32_t index,
+            const std::string& nestedEncodingName,
+            const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+            /* properties */) -> bool {
+          if (level == 0) {
+            rootType = encodingType;
+          } else {
+            nestedVisits.emplace_back(nestedEncodingName, level, index);
+          }
+          return true;
+        });
+
+    EXPECT_EQ(rootType, EncodingType::Fsst);
+    std::vector<std::tuple<std::string, uint32_t, uint32_t>> expected{
+        {"Lengths", 1u, 0u}};
+    if (hasDecodedLengths) {
+      expected.emplace_back("DecodedLengths", 1u, 1u);
+    }
+    EXPECT_EQ(nestedVisits, expected);
+  }
 }
 
 TEST_F(EncodingUtilitiesTest, traverseEncodingsPforNoExceptions) {

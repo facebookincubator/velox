@@ -148,6 +148,7 @@ struct EncodingIdentifiers {
 
   struct Fsst {
     static constexpr NestedEncodingIdentifier Lengths = 0;
+    static constexpr NestedEncodingIdentifier DecodedLengths = 1;
   };
 };
 
