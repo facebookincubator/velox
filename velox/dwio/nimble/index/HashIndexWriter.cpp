@@ -94,16 +94,19 @@ HashIndexWriter::buildBloomFilter(
   if (accumulator.options.bloomFilter == nullptr) {
     return 0;
   }
-  const auto& config = *accumulator.options.bloomFilter;
-  auto bloomFilter =
-      createBloomFilterBuilder(config, accumulator.entries.size(), pool_);
+  // The configured filter was set up before any keys existed. The entry count
+  // is exact for this file, so size the filter up front rather than having the
+  // builder keep a hash per key until finish().
+  auto config = accumulator.options.bloomFilter->clone();
+  config->numKeys = accumulator.entries.size();
+  auto bloomFilter = createBloomFilterBuilder(*config, pool_);
   for (const auto& entry : accumulator.entries) {
     bloomFilter->insert(entry.key);
   }
   const auto serialized = bloomFilter->finish();
   auto dataVec = builder.CreateVector(
       reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size());
-  return serialization::CreateBloomFilter(builder, config.bitsPerKey, dataVec);
+  return serialization::CreateBloomFilter(builder, config->bitsPerKey, dataVec);
 }
 
 void HashIndexWriter::buildIndexFlatBuffer(
