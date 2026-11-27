@@ -17,12 +17,16 @@
 #include "velox/exec/Operator.h"
 
 namespace facebook::velox::exec {
+struct FlatMapEntries;
+
 class Unnest : public Operator {
  public:
   Unnest(
       int32_t operatorId,
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::UnnestNode>& unnestNode);
+
+  ~Unnest() override;
 
   BlockingReason isBlocked(ContinueFuture* /*future*/) override {
     return BlockingReason::kNotBlocked;
@@ -170,6 +174,9 @@ class Unnest : public Operator {
   std::vector<const vector_size_t*> rawSizes_;
   std::vector<const vector_size_t*> rawOffsets_;
   std::vector<const vector_size_t*> rawIndices_;
+
+  // Set for the unnest channels whose decoded base is a flat map.
+  std::vector<std::unique_ptr<FlatMapEntries>> flatMapEntries_;
 
   // Next 'input_' row to process in getOutput().
   vector_size_t nextInputRow_{0};
