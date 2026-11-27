@@ -145,28 +145,6 @@ TEST_F(PaimonConnectorSplitTest, fileWithoutFormatThrows) {
       "Paimon data file must have a format: data-001");
 }
 
-TEST_F(PaimonConnectorSplitTest, rawConvertibleWithDeleteRowCountThrows) {
-  PaimonDataFile file;
-  file.path = "data-001.orc";
-  file.fileFormat = FileFormat::ORC;
-  file.size = 1024;
-  file.rowCount = 100;
-  file.level = 1;
-  file.deleteRowCount = 5;
-
-  std::vector<PaimonDataFile> files{file};
-  VELOX_ASSERT_THROW(
-      std::make_shared<PaimonConnectorSplit>(
-          kConnectorId,
-          /*snapshotId=*/1,
-          PaimonTableType::kPrimaryKey,
-          files,
-          PartitionKeys{},
-          std::nullopt,
-          /*rawConvertible=*/true),
-      "rawConvertible split cannot have files with deleteRowCount > 0");
-}
-
 TEST_F(PaimonConnectorSplitTest, notRawConvertibleWithDeleteRowCount) {
   PaimonDataFile file;
   file.path = "data-001.orc";

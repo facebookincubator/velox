@@ -67,16 +67,6 @@ PaimonConnectorSplit::PaimonConnectorSplit(
         "Paimon data file must have a format: {}",
         file.path);
   }
-
-  if (rawConvertible_) {
-    for (const auto& file : dataFiles_) {
-      VELOX_CHECK_EQ(
-          file.deleteRowCount,
-          0,
-          "rawConvertible split cannot have files with deleteRowCount > 0: {}",
-          file.toString());
-    }
-  }
 }
 
 std::string PaimonConnectorSplit::toString() const {
