@@ -104,24 +104,33 @@ uint32_t readSelected(
   }
   NIMBLE_CHECK_NOT_NULL(output);
 
-  void* outputNulls{nullptr};
-  const auto setNull = [&](uint32_t outputIndex) {
+  // Holds the state of setNull, so that setNull captures a single reference.
+  // The reads of the views take setNull as a std::function, which stores a
+  // callable of at most two pointers in place and allocates a larger one on
+  // each read.
+  struct OutputNulls {
+    const std::function<void*()>& getNulls;
+    const uint32_t numRows{0};
+    void* nulls{nullptr};
+  } outputNulls{getOutputNulls, numRows};
+  const auto setNull = [&outputNulls](uint32_t outputIndex) {
     NIMBLE_CHECK_NOT_NULL(
-        getOutputNulls, "Nullable selected read requires output nulls");
-    if (outputNulls == nullptr) {
-      outputNulls = getOutputNulls();
+        outputNulls.getNulls, "Nullable selected read requires output nulls");
+    if (outputNulls.nulls == nullptr) {
+      outputNulls.nulls = outputNulls.getNulls();
       velox::bits::fillBits(
-          static_cast<uint64_t*>(outputNulls),
+          static_cast<uint64_t*>(outputNulls.nulls),
           0,
-          static_cast<velox::vector_size_t>(numRows),
+          static_cast<velox::vector_size_t>(outputNulls.numRows),
           velox::bits::kNotNull);
     }
-    velox::bits::clearBit(static_cast<uint64_t*>(outputNulls), outputIndex);
+    velox::bits::clearBit(
+        static_cast<uint64_t*>(outputNulls.nulls), outputIndex);
   };
 
   const auto numNonNulls = readFunction(setNull);
   if (dataType == DataType::String) {
-    retainFunction(outputNulls);
+    retainFunction(outputNulls.nulls);
   }
   return numNonNulls;
 }
