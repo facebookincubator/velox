@@ -2399,6 +2399,7 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     if constexpr (K == velox::TypeKind::VARCHAR) {
       group.keyPresenceList->mutableData().push_back(
           context_.stringBuffer().writeString(key));
+      group.keyPresenceList->extraMemory() += key.size();
     } else {
       group.keyPresenceList->mutableData().push_back(folly::to<KeyType>(key));
     }
@@ -2462,6 +2463,11 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     } else {
       auto decodingContext = context_.decodingContext();
       auto& decodedMap = decodingContext.decode(vector, ranges);
+      if (decodedMap.base()->encoding() ==
+          velox::VectorEncoding::Simple::FLAT_MAP) {
+        NIMBLE_NOT_IMPLEMENTED(
+            "FlatMapVector input to a Hybrid FlatMap column is not implemented yet.");
+      }
       map = decodedMap.base()->template as<velox::MapVector>();
       NIMBLE_USER_CHECK_NOT_NULL(
           map, "Hybrid FlatMap requires MapVector-backed MAP input.");
@@ -2488,8 +2494,15 @@ class HybridFlatMapFieldWriter : public FieldWriter {
                           const auto& keysVector,
                           uint32_t rowOrdinal) {
       totalKeyCount += lengths[row];
+      const bool keysMayHaveNulls = keysVector.hasNulls();
       for (auto entry = offsets[row], end = entry + lengths[row]; entry < end;
            ++entry) {
+        if (keysMayHaveNulls) {
+          NIMBLE_USER_CHECK(
+              !keysVector.isNullAt(entry),
+              "Hybrid FlatMap keys cannot be null for node {}.",
+              nodeId_);
+        }
         const auto keyValue = keysVector.valueAt(entry);
         const auto key = canonicalKey(flatMapKeyToString(keyValue));
         if constexpr (K == velox::TypeKind::VARCHAR) {
@@ -3608,6 +3621,44 @@ std::unique_ptr<FieldWriter> createSlidingWindowArrayFieldWriter(
 }
 
 } // namespace
+
+void FieldWriterContext::addHybridFlatMapColumns(
+    const velox::dwio::common::TypeWithId& root,
+    const folly::F14FastMap<std::string, HybridFlatMap>& columns) {
+  if (columns.empty()) {
+    return;
+  }
+  reserveHybridFlatMapNodes(columns.size());
+  const auto& rowType = root.type()->asRow();
+  for (const auto& [columnName, hybridMap] : columns) {
+    const auto childIndex = rowType.getChildIdxIfExists(columnName);
+    NIMBLE_USER_CHECK(
+        childIndex.has_value(),
+        "Hybrid FlatMap column '{}' does not exist.",
+        columnName);
+    const auto& child = *root.childAt(*childIndex);
+    NIMBLE_USER_CHECK(
+        !hasFlatMapNodeId(child.id()),
+        "Column '{}' cannot use both FlatMap and hybrid FlatMap options.",
+        columnName);
+    NIMBLE_USER_CHECK_EQ(
+        child.type()->kind(),
+        velox::TypeKind::MAP,
+        "Hybrid FlatMap column '{}' must be a MAP.",
+        columnName);
+    for (auto nodeId = child.id(); nodeId <= child.maxId(); ++nodeId) {
+      NIMBLE_USER_CHECK(
+          !hasDictionaryArrayNodeId(nodeId),
+          "Hybrid FlatMap column cannot use dictionary arrays: {}.",
+          columnName);
+    }
+    NIMBLE_USER_CHECK(
+        !hasDeduplicatedMapNodeId(child.id()),
+        "Hybrid FlatMap column cannot use deduplicated maps: {}.",
+        columnName);
+    addHybridFlatMapNode(child.id(), hybridMap);
+  }
+}
 
 DecodingContextPool::DecodingContext::DecodingContext(
     DecodingContextPool& pool,
