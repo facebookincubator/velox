@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <condition_variable>
+#include <deque>
 #include <future>
 #include <limits>
 #include <map>
@@ -62,7 +63,9 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileLayout.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
+#include "velox/dwio/nimble/tests/HybridFlatMapGroupings.h"
 #include "velox/dwio/nimble/tests/WriterTestUtils.h"
+#include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/Writer.h"
@@ -11218,6 +11221,538 @@ TEST_F(WriterTest, flatmapColumnsKeysImplicitFlatMapColumn) {
   for (auto i = 0; i < kTotalRows; ++i) {
     ASSERT_TRUE(expected->equalValueAt(result.get(), i, i))
         << "Mismatch at row " << i;
+  }
+}
+
+TEST_F(WriterTest, hybridFlatMapRoundtrip) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const auto type =
+      velox::ROW("m", velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  // The grouped keys 3 and 7 are absent from the second batch. Default keys
+  // first appear in different batches.
+  const std::vector<std::vector<int32_t>> batchKeys{
+      {3, 20, 7, 5, 10},
+      {40, 20, 10},
+      {10, 1, 5},
+      {7, 3, 20, 40},
+  };
+  constexpr velox::vector_size_t kRowsPerBatch{250};
+
+  std::vector<velox::RowVectorPtr> batches;
+  for (size_t batch = 0; batch < batchKeys.size(); ++batch) {
+    const auto& keys = batchKeys[batch];
+    const auto numKeys = static_cast<velox::vector_size_t>(keys.size());
+    const auto firstRow = static_cast<int64_t>(batch) * kRowsPerBatch;
+    batches.push_back(vectorMaker.rowVector(
+        {"m"},
+        {vectorMaker.mapVector<int32_t, int64_t>(
+            kRowsPerBatch,
+            /*sizeAt=*/[&](auto row) { return row % (numKeys + 1); },
+            /*keyAt=*/
+            [&](auto /*row*/, auto mapIndex) { return keys[mapIndex]; },
+            /*valueAt=*/
+            [&](auto row, auto mapIndex) {
+              return (firstRow + row) * 100 + mapIndex;
+            },
+            /*isNullAt=*/[](auto row) { return row % 100 == 0; })}));
+  }
+
+  std::string file;
+  {
+    nimble::WriterOptions options;
+    options.hybridFlatMapColumns.emplace(
+        "m",
+        nimble::test::makeHybridFlatMap(
+            nimble::ScalarKind::Int32,
+            {{"3", "10", "7"}},
+            nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+    options.bufferPolicyFactory =
+        nimble::test::stripePerWriteBufferPolicyFactory();
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options));
+    for (const auto& batch : batches) {
+      writer.write(batch);
+    }
+    writer.close();
+  }
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  EXPECT_EQ(tablet->stripeCount(), batches.size());
+
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const auto& hybridMap =
+      reader.schema()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(hybridMap.groupCount(), 2);
+  EXPECT_THAT(
+      hybridMap.groupAt(0).groupKeys, testing::ElementsAre("3", "7", "10"));
+  EXPECT_THAT(
+      hybridMap.defaultGroup().groupKeys,
+      testing::ElementsAre("20", "5", "40", "1"));
+
+  velox::VectorPtr result;
+  for (const auto& batch : batches) {
+    ASSERT_TRUE(reader.next(batch->size(), result));
+    ASSERT_EQ(result->size(), batch->size());
+    for (velox::vector_size_t row = 0; row < batch->size(); ++row) {
+      ASSERT_TRUE(batch->equalValueAt(result.get(), row, row))
+          << "Mismatch at row " << row;
+    }
+  }
+  EXPECT_FALSE(reader.next(1, result));
+}
+
+TEST_F(WriterTest, hybridFlatMapWritesEmptyFile) {
+  const auto type =
+      velox::ROW("m", velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  nimble::WriterOptions options;
+  options.hybridFlatMapColumns.emplace(
+      "m",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  options.bufferPolicyFactory = [] {
+    return std::make_unique<nimble::StripeRawSizeBufferPolicy>(1 << 20);
+  };
+
+  // A file without rows has no stripes, but its schema keeps every explicit
+  // group and an empty Default group.
+  std::string file;
+  {
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options));
+    writer.close();
+  }
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  EXPECT_EQ(tablet->stripeCount(), 0);
+
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  const auto& hybridMap =
+      reader.schema()->asRow().childAt(0)->asHybridFlatMap();
+  ASSERT_EQ(hybridMap.groupCount(), 2);
+  EXPECT_THAT(hybridMap.groupAt(0).groupKeys, testing::ElementsAre("1"));
+  EXPECT_THAT(hybridMap.defaultGroup().groupKeys, testing::IsEmpty());
+  velox::VectorPtr result;
+  EXPECT_FALSE(reader.next(1, result));
+}
+
+TEST_F(WriterTest, hybridFlatMapRejectsInvalidOptions) {
+  const auto type =
+      velox::ROW("m", velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  const auto makeOptions = [](nimble::HybridFlatMap grouping) {
+    nimble::WriterOptions options;
+    options.hybridFlatMapColumns.emplace("m", std::move(grouping));
+    options.bufferPolicyFactory =
+        nimble::test::stripePerWriteBufferPolicyFactory();
+    return options;
+  };
+  const auto grouping = nimble::test::makeHybridFlatMap(
+      nimble::ScalarKind::Int32,
+      {{"1"}},
+      nimble::HybridFlatMap::KeyPresenceMode::kBitmap);
+
+  {
+    nimble::WriterOptions options;
+    options.hybridFlatMapColumns.emplace("missing", grouping);
+    options.bufferPolicyFactory =
+        nimble::test::stripePerWriteBufferPolicyFactory();
+    expectWriterCreationThrows(
+        type,
+        std::move(options),
+        "Hybrid FlatMap column 'missing' does not exist.");
+  }
+
+  {
+    auto options = makeOptions(grouping);
+    options.flatMapColumns.emplace("m", std::set<std::string>{});
+    expectWriterCreationThrows(
+        type,
+        std::move(options),
+        "Column 'm' cannot use both FlatMap and hybrid FlatMap options.");
+  }
+
+  expectWriterCreationThrows(
+      velox::ROW("m", velox::BIGINT()),
+      makeOptions(grouping),
+      "Hybrid FlatMap column 'm' must be a MAP.");
+
+  {
+    auto options = makeOptions(grouping);
+    options.dictionaryArrayColumns.insert("m");
+    expectWriterCreationThrows(
+        velox::ROW(
+            "m", velox::MAP(velox::INTEGER(), velox::ARRAY(velox::BIGINT()))),
+        std::move(options),
+        "Hybrid FlatMap column cannot use dictionary arrays: m.");
+  }
+
+  {
+    auto options = makeOptions(grouping);
+    options.deduplicatedMapColumns.insert("m");
+    expectWriterCreationThrows(
+        type,
+        std::move(options),
+        "Hybrid FlatMap column cannot use deduplicated maps: m.");
+  }
+
+  for (const auto* fieldPath : {"m", "m[*]"}) {
+    SCOPED_TRACE(fieldPath);
+    auto options = makeOptions(grouping);
+    options.experimentalSharedDictionaryEncoding =
+        nimble::SharedDictionaryEncodingConfig::builder()
+            .addColumnDictionary(fieldPath, nimble::SharedDictionaryConfig{})
+            .build();
+    expectWriterCreationThrows(
+        type,
+        std::move(options),
+        fmt::format(
+            "Shared dictionary column cannot target a Hybrid FlatMap column: {}.",
+            fieldPath));
+  }
+
+  for (const auto& keyType :
+       std::vector<velox::TypePtr>{velox::BOOLEAN(), velox::VARBINARY()}) {
+    SCOPED_TRACE(keyType->toString());
+    expectWriterCreationThrows(
+        velox::ROW("m", velox::MAP(keyType, velox::BIGINT())),
+        makeOptions(grouping),
+        "Unsupported hybrid FlatMap key type");
+  }
+
+  // Each write() is written as its own stripe, so a bad input fails at write().
+  const auto expectWriteThrows = [&](const velox::RowVectorPtr& input,
+                                     const std::string& message) {
+    std::string file;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        makeOptions(grouping));
+    NIMBLE_ASSERT_USER_THROW(writer.write(input), message);
+  };
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  {
+    SCOPED_TRACE("null key");
+    expectWriteThrows(
+        vectorMaker.rowVector(
+            {"m"},
+            {vectorMaker.mapVector(
+                {0, 1},
+                vectorMaker.flatVectorNullable<int32_t>({1, std::nullopt}),
+                vectorMaker.flatVector<int64_t>({10, 20}))}),
+        "Hybrid FlatMap keys cannot be null for node");
+  }
+
+  // A FlatMap column also takes a ROW with one field per key.
+  {
+    SCOPED_TRACE("ROW input");
+    expectWriteThrows(
+        vectorMaker.rowVector(
+            {"m"},
+            {vectorMaker.rowVector(
+                {"1", "2"},
+                {vectorMaker.flatVector<int64_t>({10}),
+                 vectorMaker.flatVector<int64_t>({20})})}),
+        "Hybrid FlatMap writer expects MAP input");
+  }
+
+  {
+    std::string file;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        makeOptions(grouping));
+    NIMBLE_ASSERT_THROW(
+        writer.write(vectorMaker.rowVector(
+            {"m"},
+            {vectorMaker.flatMapVectorFromJson<int32_t, int64_t>(
+                {"{1: 10, 2: 20}"})})),
+        "FlatMapVector input to a Hybrid FlatMap column is not implemented yet.");
+  }
+}
+
+TEST_F(WriterTest, hybridFlatMapEncodingLayoutReplay) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const auto input = vectorMaker.rowVector(
+      {"m"},
+      {vectorMaker.mapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20}",
+          "{3: 30}",
+      })});
+  const auto makeOptions = [](nimble::Kind layoutKind) {
+    nimble::WriterOptions options;
+    options.hybridFlatMapColumns.emplace(
+        "m",
+        nimble::test::makeHybridFlatMap(
+            nimble::ScalarKind::Int32,
+            {{"1"}},
+            nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+    options.bufferPolicyFactory = [] {
+      return std::make_unique<nimble::StripeRawSizeBufferPolicy>(1 << 20);
+    };
+    options.encodingLayoutTree.emplace(
+        nimble::Kind::Row,
+        std::unordered_map<
+            nimble::EncodingLayoutTree::StreamIdentifier,
+            nimble::EncodingLayout>{},
+        "",
+        std::vector<nimble::EncodingLayoutTree>{
+            nimble::EncodingLayoutTree{layoutKind, {}, "m"}});
+    return options;
+  };
+
+  // A layout captured while the column was a MAP is not replayed.
+  {
+    std::string file;
+    {
+      nimble::Writer writer(
+          input->type(),
+          std::make_unique<velox::InMemoryWriteFile>(&file),
+          *rootPool_,
+          makeOptions(nimble::Kind::Map));
+      writer.write(input);
+      writer.close();
+    }
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    nimble::BatchReader reader(readFile.get(), *leafPool_);
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(input->size(), result));
+    ASSERT_EQ(result->size(), input->size());
+    for (velox::vector_size_t row = 0; row < input->size(); ++row) {
+      EXPECT_TRUE(input->equalValueAt(result.get(), row, row))
+          << "Mismatch at row " << row;
+    }
+  }
+
+  {
+    std::string file;
+    NIMBLE_ASSERT_THROW(
+        nimble::Writer(
+            input->type(),
+            std::make_unique<velox::InMemoryWriteFile>(&file),
+            *rootPool_,
+            makeOptions(nimble::Kind::HybridFlatMap)),
+        "Hybrid FlatMap encoding layout replay is not implemented yet.");
+  }
+}
+
+// A buffer policy may emit a range without rows. It writes no stripe and does
+// not use up the one write the Hybrid FlatMap field writer takes per stripe.
+TEST_F(WriterTest, hybridFlatMapSkipsEmptyBufferRanges) {
+  // Emits each write as a range without rows, then a range of all its rows.
+  class EmptyRangeFirstBufferPolicy final : public nimble::BufferPolicy {
+   public:
+    void bufferInput(velox::VectorPtr input) override {
+      for (const auto numRows : {0U, static_cast<uint32_t>(input->size())}) {
+        nimble::BufferRange range;
+        range.inputs.push_back(input);
+        range.rowRanges.emplace_back(0, numRows);
+        ready_.push_back(std::move(range));
+      }
+    }
+
+    nimble::BufferRange flushInput() override {
+      if (ready_.empty()) {
+        return {};
+      }
+      auto range = std::move(ready_.front());
+      ready_.pop_front();
+      return range;
+    }
+
+    void finalize() override {}
+
+   private:
+    // Ranges not yet returned by flushInput(), oldest first.
+    std::deque<nimble::BufferRange> ready_;
+  };
+
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const std::vector<velox::RowVectorPtr> writes{
+      vectorMaker.rowVector(
+          {"m"},
+          {vectorMaker.mapVectorFromJson<int32_t, int64_t>(
+              {"{1: 10, 2: 20}", "{3: 30}"})}),
+      vectorMaker.rowVector(
+          {"m"},
+          {vectorMaker.mapVectorFromJson<int32_t, int64_t>(
+              {"{1: 11, 2: 21}"})}),
+  };
+  nimble::WriterOptions options;
+  options.hybridFlatMapColumns.emplace(
+      "m",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::Int32,
+          {{"1"}},
+          nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+  options.bufferPolicyFactory = [] {
+    return std::make_unique<EmptyRangeFirstBufferPolicy>();
+  };
+  std::string file;
+  {
+    nimble::Writer writer(
+        writes[0]->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options));
+    for (const auto& write : writes) {
+      writer.write(write);
+    }
+    writer.close();
+  }
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  EXPECT_EQ(tablet->stripeCount(), writes.size());
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  for (const auto& expected : writes) {
+    velox::VectorPtr result;
+    ASSERT_TRUE(reader.next(expected->size(), result));
+    ASSERT_EQ(result->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(expected->equalValueAt(result.get(), row, row))
+          << "Mismatch at row " << row;
+    }
+  }
+}
+
+// A Default group that lists its keys writes them in one chunk per stripe,
+// which the reader requires, however far the keys exceed the chunk size.
+TEST_F(WriterTest, hybridFlatMapStringKeyListStaysInOneChunk) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  // Each key is longer than a StringView holds inline, and the listed keys
+  // take several times the 64-byte chunk size.
+  const auto input = vectorMaker.rowVector(
+      {"m"},
+      {vectorMaker.mapVectorFromJson<std::string, int64_t>({
+          R"({"default_key_one": 1, "default_key_two": 2})",
+          R"({"default_key_three": 3, "default_key_four": 4})",
+          R"({"default_key_five": 5, "default_key_one": 6})",
+      })});
+  nimble::WriterOptions options;
+  options.hybridFlatMapColumns.emplace(
+      "m",
+      nimble::test::makeHybridFlatMap(
+          nimble::ScalarKind::String,
+          {},
+          nimble::HybridFlatMap::KeyPresenceMode::kKeyList));
+  options.bufferPolicyFactory = [] {
+    return std::make_unique<nimble::StripeRawSizeBufferPolicy>(1 << 20);
+  };
+  options.minStreamChunkRawSize = 0;
+  options.maxStreamChunkRawSize = 64;
+  const auto file =
+      nimble::test::createNimbleFile(*rootPool_, input, std::move(options));
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  velox::VectorPtr result;
+  ASSERT_TRUE(reader.next(input->size(), result));
+  ASSERT_EQ(result->size(), input->size());
+  for (velox::vector_size_t row = 0; row < input->size(); ++row) {
+    EXPECT_TRUE(input->equalValueAt(result.get(), row, row))
+        << "Mismatch at row " << row;
+  }
+}
+
+TEST_F(WriterTest, hybridFlatMapRejectsTopLevelNullRows) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  const auto input = vectorMaker.rowVector(
+      {"id", "m"},
+      {vectorMaker.flatVector<int64_t>({11, 12, 13, 14}),
+       vectorMaker.mapVectorFromJson<int32_t, int64_t>({
+           "{1: 10, 2: 20}",
+           "{4: 40}",
+           "{3: 30}",
+           "null",
+       })});
+  input->setNull(1, true);
+  input->setNull(3, true);
+  const auto makeOptions = [](bool ignoreTopLevelNulls) {
+    nimble::WriterOptions options;
+    options.hybridFlatMapColumns.emplace(
+        "m",
+        nimble::test::makeHybridFlatMap(
+            nimble::ScalarKind::Int32,
+            {{"1"}},
+            nimble::HybridFlatMap::KeyPresenceMode::kBitmap));
+    options.bufferPolicyFactory = [] {
+      return std::make_unique<nimble::StripeRawSizeBufferPolicy>(1 << 20);
+    };
+    options.ignoreTopLevelNulls = ignoreTopLevelNulls;
+    return options;
+  };
+
+  {
+    // Each write() is written as its own stripe, so the rows fail at write().
+    auto options = makeOptions(/*ignoreTopLevelNulls=*/false);
+    options.bufferPolicyFactory =
+        nimble::test::stripePerWriteBufferPolicyFactory();
+    std::string file;
+    nimble::Writer writer(
+        input->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options));
+    NIMBLE_ASSERT_USER_THROW(
+        writer.write(input),
+        "Nimble files with Hybrid FlatMap columns cannot contain top-level null rows");
+  }
+
+  // Ignored top-level nulls are written as present rows that keep their
+  // fields, also when a stripe merges the rows of several writes.
+  const auto expected = vectorMaker.rowVector(
+      {"id", "m"}, {input->childAt(0), input->childAt(1)});
+  const auto verifyIgnoredNulls =
+      [&](const std::vector<velox::VectorPtr>& writes) {
+        std::string file;
+        {
+          nimble::Writer writer(
+              input->type(),
+              std::make_unique<velox::InMemoryWriteFile>(&file),
+              *rootPool_,
+              makeOptions(/*ignoreTopLevelNulls=*/true));
+          for (const auto& write : writes) {
+            writer.write(write);
+          }
+          writer.close();
+        }
+
+        auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+        auto tablet = nimble::TabletReader::create(
+            readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+        EXPECT_FALSE(tablet->properties().hasTopLevelNulls());
+
+        nimble::BatchReader reader(readFile.get(), *leafPool_);
+        velox::VectorPtr result;
+        ASSERT_TRUE(reader.next(expected->size(), result));
+        ASSERT_EQ(result->size(), expected->size());
+        for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+          EXPECT_TRUE(expected->equalValueAt(result.get(), row, row))
+              << "Mismatch at row " << row << ": expected "
+              << expected->toString(row) << " got " << result->toString(row);
+        }
+      };
+  {
+    SCOPED_TRACE("one write per stripe");
+    verifyIgnoredNulls({input});
+  }
+  {
+    SCOPED_TRACE("two writes in one stripe");
+    verifyIgnoredNulls({input->slice(0, 2), input->slice(2, 2)});
   }
 }
 
