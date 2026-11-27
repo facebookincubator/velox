@@ -100,7 +100,12 @@ class DictionaryEncodingTest : public ::testing::Test {
         nimble::test::Encoder<nimble::DictionaryEncoding<V>>::encode(
             *buffer_, values, nimble::CompressionType::Uncompressed, options);
     nimble::DictionaryEncoding<V> encoding{
-        *pool_, encoded, /*stringBufferFactory=*/nullptr, options};
+        *pool_,
+        encoded,
+        [this](uint32_t totalLength) {
+          return this->stringBufferFactory(totalLength);
+        },
+        options};
     std::vector<V> output(input.size());
     encoding.materialize(input.size(), output.data());
     EXPECT_EQ(output, input);
@@ -250,135 +255,137 @@ TYPED_TEST(DictionaryEncodingTest, slicePreservesAlphabetAndMaterializesRange) {
 
 TYPED_TEST(DictionaryEncodingTest, sortDictionaryAlphabet) {
   using DataType = TypeParam;
-  if constexpr (std::is_same_v<DataType, std::string_view>) {
-    GTEST_SKIP() << "String alphabets are not sorted.";
+  // First occurrence orders the alphabet 40, 10, 30, 20 (or 8.0, -3.75, 2.5,
+  // 1.25, or "delta", "alpha", "gamma", "beta"), so a sorted alphabet differs
+  // from it.
+  std::vector<DataType> input;
+  if constexpr (std::is_integral_v<DataType>) {
+    input = {40, 10, 30, 10, 20, 40, 30};
+  } else if constexpr (std::is_floating_point_v<DataType>) {
+    input = {8.0, -3.75, 2.5, -3.75, 1.25, 8.0, 2.5};
   } else {
-    // First occurrence orders the alphabet 40, 10, 30, 20 (or 8.0, -3.75,
-    // 2.5, 1.25), so a sorted alphabet differs from it.
-    std::vector<DataType> input;
-    if constexpr (std::is_integral_v<DataType>) {
-      input = {40, 10, 30, 10, 20, 40, 30};
-    } else {
-      input = {8.0, -3.75, 2.5, -3.75, 1.25, 8.0, 2.5};
-    }
-    const auto firstOccurrence =
-        this->encodeAndReadAlphabet(input, {.sortDictionaryAlphabet = false});
-    const auto sorted =
-        this->encodeAndReadAlphabet(input, {.sortDictionaryAlphabet = true});
-    if constexpr (std::is_integral_v<DataType>) {
-      EXPECT_THAT(firstOccurrence, testing::ElementsAre(40, 10, 30, 20));
-      EXPECT_THAT(sorted, testing::ElementsAre(10, 20, 30, 40));
-    } else {
-      // Floating-point alphabets keep the first-occurrence order.
-      EXPECT_EQ(sorted, firstOccurrence);
-    }
+    input = {"delta", "alpha", "gamma", "alpha", "beta", "delta", "gamma"};
   }
-}
-
-TYPED_TEST(DictionaryEncodingTest, sortDictionaryAlphabetSignedAndWide) {
-  using DataType = TypeParam;
-  if constexpr (!std::is_same_v<DataType, uint32_t>) {
-    GTEST_SKIP() << "Covers other integer types, once.";
+  const auto firstOccurrence =
+      this->encodeAndReadAlphabet(input, {.sortDictionaryAlphabet = false});
+  const auto sorted =
+      this->encodeAndReadAlphabet(input, {.sortDictionaryAlphabet = true});
+  if constexpr (std::is_integral_v<DataType>) {
+    EXPECT_THAT(firstOccurrence, testing::ElementsAre(40, 10, 30, 20));
+    EXPECT_THAT(sorted, testing::ElementsAre(10, 20, 30, 40));
+  } else if constexpr (std::is_floating_point_v<DataType>) {
+    // Floating-point alphabets keep the first-occurrence order.
+    EXPECT_EQ(sorted, firstOccurrence);
   } else {
+    // String alphabets keep the first-occurrence order.
+    EXPECT_EQ(
+        firstOccurrence,
+        (std::vector<std::string_view>{"delta", "alpha", "gamma", "beta"}));
+    EXPECT_EQ(sorted, firstOccurrence);
+  }
+
+  if constexpr (std::is_integral_v<DataType>) {
     const nimble::Encoding::Options options{.sortDictionaryAlphabet = true};
 
     // The alphabet sorts by physical value, which stores a negative value as
     // a large unsigned one, so negative values follow the others.
     {
-      const std::vector<int32_t> input{5, -3, 7, -3, 0, 5};
+      const std::vector<int32_t> values{5, -3, 7, -3, 0, 5};
       EXPECT_THAT(
-          this->encodeAndReadAlphabet(input, options),
+          this->encodeAndReadAlphabet(values, options),
           testing::ElementsAre(0, 5, 7, -3));
     }
     {
       constexpr int64_t kLarge{int64_t{1} << 40};
-      const std::vector<int64_t> input{kLarge, -2, 3, -2, kLarge};
+      const std::vector<int64_t> values{kLarge, -2, 3, -2, kLarge};
       EXPECT_THAT(
-          this->encodeAndReadAlphabet(input, options),
+          this->encodeAndReadAlphabet(values, options),
           testing::ElementsAre(3, kLarge, -2));
     }
     {
       constexpr uint64_t kMax{std::numeric_limits<uint64_t>::max()};
       constexpr uint64_t kHighBit{uint64_t{1} << 63};
-      const std::vector<uint64_t> input{kMax, 1, kHighBit, 1};
+      const std::vector<uint64_t> values{kMax, 1, kHighBit, 1};
       EXPECT_THAT(
-          this->encodeAndReadAlphabet(input, options),
+          this->encodeAndReadAlphabet(values, options),
           testing::ElementsAre(1, kHighBit, kMax));
     }
-  }
-}
-
-TYPED_TEST(DictionaryEncodingTest, sortDictionaryAlphabetEdgeCases) {
-  using DataType = TypeParam;
-  if constexpr (!std::is_same_v<DataType, uint32_t>) {
-    GTEST_SKIP() << "Covers integer alphabets.";
-  } else {
-    const nimble::Encoding::Options options{.sortDictionaryAlphabet = true};
 
     // A single-entry alphabet has nothing to sort.
     {
-      const std::vector<uint32_t> input{7, 7, 7};
+      const std::vector<uint32_t> values{7, 7, 7};
       EXPECT_THAT(
-          this->encodeAndReadAlphabet(input, options), testing::ElementsAre(7));
+          this->encodeAndReadAlphabet(values, options),
+          testing::ElementsAre(7));
     }
 
     // Every value distinct, as in an id column.
     {
-      const std::vector<uint32_t> input{30, 10, 40, 20};
+      const std::vector<uint32_t> values{30, 10, 40, 20};
       EXPECT_THAT(
-          this->encodeAndReadAlphabet(input, options),
+          this->encodeAndReadAlphabet(values, options),
           testing::ElementsAre(10, 20, 30, 40));
     }
   }
 }
 
-TYPED_TEST(DictionaryEncodingTest, sortedAlphabetSelectsAscendingEncoding) {
+TYPED_TEST(DictionaryEncodingTest, sortedAlphabetEncodingSelection) {
   using DataType = TypeParam;
-  if constexpr (!std::is_same_v<DataType, uint32_t>) {
-    GTEST_SKIP() << "Covers integer alphabets.";
-  } else {
-    // Wide values with repeats.
-    const auto input = randomValues(/*numDistinct=*/1'000, /*numRows=*/4'000);
-    const std::vector<std::pair<nimble::EncodingType, float>> candidates{
-        {nimble::EncodingType::Trivial, 1.0},
-        {nimble::EncodingType::FixedBitWidth, 1.0},
-        {nimble::EncodingType::Dictionary, 1.0},
-        {nimble::EncodingType::DeltaBlock, 1.0},
-        {nimble::EncodingType::EliasFano, 1.0},
+  if constexpr (!std::is_integral_v<DataType>) {
+    // Only integer alphabets are sorted, so the option leaves the encoding of
+    // other types unchanged.
+    const auto values = this->makeValues();
+    const auto encode = [&](bool sortDictionaryAlphabet) {
+      return std::string{
+          nimble::test::Encoder<nimble::DictionaryEncoding<DataType>>::encode(
+              *this->buffer_,
+              values,
+              nimble::CompressionType::Uncompressed,
+              {.sortDictionaryAlphabet = sortDictionaryAlphabet})};
     };
-    const auto firstOccurrence = this->encodeWithCandidates(
-        input, candidates, /*sortDictionaryAlphabet=*/false);
-    const auto sorted = this->encodeWithCandidates(
-        input, candidates, /*sortDictionaryAlphabet=*/true);
-    ASSERT_EQ(
-        rootEncodingType(firstOccurrence), nimble::EncodingType::Dictionary);
-    ASSERT_EQ(rootEncodingType(sorted), nimble::EncodingType::Dictionary);
-    EXPECT_THAT(
-        alphabetEncodingType(firstOccurrence),
-        testing::AnyOf(
-            nimble::EncodingType::Trivial,
-            nimble::EncodingType::FixedBitWidth));
-    EXPECT_THAT(
-        alphabetEncodingType(sorted),
-        testing::AnyOf(
-            nimble::EncodingType::DeltaBlock, nimble::EncodingType::EliasFano));
-    EXPECT_LT(sorted.size(), firstOccurrence.size());
-  }
-}
-
-TYPED_TEST(
-    DictionaryEncodingTest,
-    sortedAlphabetEstimateNeedsEliasFanoCandidate) {
-  using DataType = TypeParam;
-  if constexpr (!std::is_same_v<DataType, uint32_t>) {
-    GTEST_SKIP() << "Covers integer alphabets.";
+    const auto firstOccurrence = encode(/*sortDictionaryAlphabet=*/false);
+    const auto sorted = encode(/*sortDictionaryAlphabet=*/true);
+    EXPECT_EQ(sorted, firstOccurrence);
   } else {
+    using Candidates = std::vector<std::pair<nimble::EncodingType, float>>;
+
+    // Wide values with repeats: sorting lets DeltaBlock or EliasFano store the
+    // alphabet by its gaps.
+    {
+      const auto input = randomValues(/*numDistinct=*/1'000, /*numRows=*/4'000);
+      const Candidates candidates{
+          {nimble::EncodingType::Trivial, 1.0},
+          {nimble::EncodingType::FixedBitWidth, 1.0},
+          {nimble::EncodingType::Dictionary, 1.0},
+          {nimble::EncodingType::DeltaBlock, 1.0},
+          {nimble::EncodingType::EliasFano, 1.0},
+      };
+      const auto firstOccurrence = this->encodeWithCandidates(
+          input, candidates, /*sortDictionaryAlphabet=*/false);
+      const auto sorted = this->encodeWithCandidates(
+          input, candidates, /*sortDictionaryAlphabet=*/true);
+      ASSERT_EQ(
+          rootEncodingType(firstOccurrence), nimble::EncodingType::Dictionary);
+      ASSERT_EQ(rootEncodingType(sorted), nimble::EncodingType::Dictionary);
+      EXPECT_THAT(
+          alphabetEncodingType(firstOccurrence),
+          testing::AnyOf(
+              nimble::EncodingType::Trivial,
+              nimble::EncodingType::FixedBitWidth));
+      EXPECT_THAT(
+          alphabetEncodingType(sorted),
+          testing::AnyOf(
+              nimble::EncodingType::DeltaBlock,
+              nimble::EncodingType::EliasFano));
+      EXPECT_LT(sorted.size(), firstOccurrence.size());
+    }
+
     // 24,000 distinct values over 40,000 rows, with 16-bit indices. Unsorted,
     // the alphabet takes 32 bits per entry and Dictionary is larger than
     // FixedBitWidth. Sorted, EliasFano stores the alphabet in about 20 bits per
-    // entry, so only sorting makes Dictionary the smallest.
+    // entry, so only sorting makes Dictionary the smallest. The estimate needs
+    // an EliasFano candidate.
     const auto input = randomValues(/*numDistinct=*/24'000, /*numRows=*/40'000);
-    using Candidates = std::vector<std::pair<nimble::EncodingType, float>>;
     const Candidates baseCandidates{
         {nimble::EncodingType::Trivial, 1.0},
         {nimble::EncodingType::FixedBitWidth, 1.0},
