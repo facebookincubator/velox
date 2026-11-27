@@ -76,7 +76,7 @@ class PrestoPageDeviceTest : public testing::Test {
       int64_t numBits,
       const std::function<bool(int64_t)>& valid) {
     std::vector<cudf::bitmask_type> words(
-        cudf::util::div_rounding_up_safe<int64_t>(numBits, 32), 0);
+        cudf::detail::div_rounding_up_safe<int64_t>(numBits, 32), 0);
     for (int64_t i = 0; i < numBits; ++i) {
       if (valid(i)) {
         cudf::set_bit_unsafe(words.data(), static_cast<cudf::size_type>(i));
@@ -191,7 +191,7 @@ TEST_F(PrestoPageDeviceTest, nullBytes) {
   };
   std::vector<uint8_t> expected;
   for (const auto& task : tasks) {
-    const size_t numBytes = cudf::util::div_rounding_up_safe(task.numRows, 8);
+    const size_t numBytes = cudf::detail::div_rounding_up_safe(task.numRows, 8);
     std::vector<uint8_t> bytes(numBytes, 0);
     for (int32_t row = 0; row < task.numRows; ++row) {
       if (!valid(task.firstBit + row)) {

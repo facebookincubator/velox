@@ -709,30 +709,106 @@ TEST(SchemaUtilsTest, projectionStreamOffsets) {
   const auto& attributes = root.childAt(4)->asMap();
   const auto& properties = root.childAt(5)->asSlidingWindowMap();
   const auto& features = root.childAt(6)->asFlatMap();
-  EXPECT_THAT(
-      projectionStreamOffsets(*schema),
-      testing::ElementsAre(
-          root.nullsDescriptor().offset(),
-          id.scalarDescriptor().offset(),
-          createdAt.microsDescriptor().offset(),
-          createdAt.nanosDescriptor().offset(),
-          items.lengthsDescriptor().offset(),
-          items.elements()->asScalar().scalarDescriptor().offset(),
-          tags.offsetsDescriptor().offset(),
-          tags.lengthsDescriptor().offset(),
-          tags.elements()->asScalar().scalarDescriptor().offset(),
-          attributes.lengthsDescriptor().offset(),
-          attributes.keys()->asScalar().scalarDescriptor().offset(),
-          attributes.values()->asScalar().scalarDescriptor().offset(),
-          properties.offsetsDescriptor().offset(),
-          properties.lengthsDescriptor().offset(),
-          properties.keys()->asScalar().scalarDescriptor().offset(),
-          properties.values()->asScalar().scalarDescriptor().offset(),
-          features.nullsDescriptor().offset(),
-          features.childAt(0)->asScalar().scalarDescriptor().offset(),
-          features.inMapDescriptorAt(0).offset(),
-          features.childAt(1)->asScalar().scalarDescriptor().offset(),
-          features.inMapDescriptorAt(1).offset()));
+
+  // Of these streams, only the elements of 'tags' and the keys of 'attributes'
+  // and 'properties' hold strings.
+  const std::vector<bool> expectedStringStreams{
+      /*root nulls=*/false,
+      /*id=*/false,
+      /*created_at micros=*/false,
+      /*created_at nanos=*/false,
+      /*items lengths=*/false,
+      /*items elements=*/false,
+      /*tags offsets=*/false,
+      /*tags lengths=*/false,
+      /*tags elements=*/true,
+      /*attributes lengths=*/false,
+      /*attributes keys=*/true,
+      /*attributes values=*/false,
+      /*properties offsets=*/false,
+      /*properties lengths=*/false,
+      /*properties keys=*/true,
+      /*properties values=*/false,
+      /*features nulls=*/false,
+      /*features a=*/false,
+      /*features a in-map=*/false,
+      /*features b=*/false,
+      /*features b in-map=*/false,
+  };
+
+  // Reporting the streams of strings leaves the offsets unchanged.
+  for (const bool withStringStreams : {false, true}) {
+    SCOPED_TRACE(fmt::format("withStringStreams={}", withStringStreams));
+    std::vector<bool> stringStreams;
+    EXPECT_THAT(
+        projectionStreamOffsets(
+            *schema, withStringStreams ? &stringStreams : nullptr),
+        testing::ElementsAre(
+            root.nullsDescriptor().offset(),
+            id.scalarDescriptor().offset(),
+            createdAt.microsDescriptor().offset(),
+            createdAt.nanosDescriptor().offset(),
+            items.lengthsDescriptor().offset(),
+            items.elements()->asScalar().scalarDescriptor().offset(),
+            tags.offsetsDescriptor().offset(),
+            tags.lengthsDescriptor().offset(),
+            tags.elements()->asScalar().scalarDescriptor().offset(),
+            attributes.lengthsDescriptor().offset(),
+            attributes.keys()->asScalar().scalarDescriptor().offset(),
+            attributes.values()->asScalar().scalarDescriptor().offset(),
+            properties.offsetsDescriptor().offset(),
+            properties.lengthsDescriptor().offset(),
+            properties.keys()->asScalar().scalarDescriptor().offset(),
+            properties.values()->asScalar().scalarDescriptor().offset(),
+            features.nullsDescriptor().offset(),
+            features.childAt(0)->asScalar().scalarDescriptor().offset(),
+            features.inMapDescriptorAt(0).offset(),
+            features.childAt(1)->asScalar().scalarDescriptor().offset(),
+            features.inMapDescriptorAt(1).offset()));
+    if (withStringStreams) {
+      EXPECT_EQ(stringStreams, expectedStringStreams);
+    }
+  }
+}
+
+TEST(SchemaUtilsTest, projectionStreamOffsetsOfStringStreams) {
+  SchemaBuilder schemaBuilder;
+  test::FlatMapChildAdder featuresAdder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({
+          {"id", NIMBLE_BIGINT()},
+          {"name", NIMBLE_STRING()},
+          {"payload", NIMBLE_BINARY()},
+          {"tags", NIMBLE_ARRAY(NIMBLE_STRING())},
+          {"attributes", NIMBLE_MAP(NIMBLE_STRING(), NIMBLE_BIGINT())},
+          {"features", NIMBLE_FLATMAP(String, NIMBLE_STRING(), featuresAdder)},
+      }));
+  featuresAdder.addChild("a");
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+
+  // Only the values of String and Binary scalars hold strings. Null, length
+  // and in-map streams do not, and the keys of a flat map are no stream.
+  const std::vector<bool> expected{
+      /*root nulls=*/false,
+      /*id=*/false,
+      /*name=*/true,
+      /*payload=*/true,
+      /*tags lengths=*/false,
+      /*tags elements=*/true,
+      /*attributes lengths=*/false,
+      /*attributes keys=*/true,
+      /*attributes values=*/false,
+      /*features nulls=*/false,
+      /*features a=*/true,
+      /*features a in-map=*/false,
+  };
+
+  // Starts from a stale entry, which the call replaces.
+  std::vector<bool> stringStreams{true};
+  const auto streamOffsets = projectionStreamOffsets(*schema, &stringStreams);
+  EXPECT_EQ(stringStreams, expected);
+  EXPECT_EQ(streamOffsets.size(), expected.size());
 }
 
 // The keys that groups holding none lend to a type builder.
@@ -2487,7 +2563,8 @@ TEST(SchemaUtilsTest, projectionEncodingHintsFlatMapValues) {
           sourceScoreMap.values()->asScalar().scalarDescriptor().offset(),
           sourceScoreMaps.inMapDescriptorAt(0).offset()));
   EXPECT_EQ(
-      projectionStreamOffsets(*projection.nimbleType).size(),
+      projectionStreamOffsets(*projection.nimbleType, /*stringStreams=*/nullptr)
+          .size(),
       projection.streamOffsets.size());
 }
 
