@@ -37,6 +37,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "velox/common/base/BitUtil.h"
@@ -50,6 +51,9 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/index/VectorIndex.h"
+#ifdef VELOX_ENABLE_FAISS_GPU
+#include "velox/dwio/nimble/index/VectorIndexGpu.h"
+#endif
 #include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
@@ -2489,6 +2493,1112 @@ TEST_F(VectorIndexTest, missingUncompressedIndexSizeRejected) {
       writer->close(createMetadataFn, writeMetadataFn),
       "Persisted vector index must record its uncompressed size");
   EXPECT_FALSE(sectionWritten);
+}
+
+// Returns the fraction of expected row IDs that the actual results contain.
+double rowIdOverlap(
+    folly::Range<const VectorIndex::SearchResult*> actual,
+    folly::Range<const VectorIndex::SearchResult*> expected) {
+  if (expected.empty()) {
+    return 1.0;
+  }
+  std::set<int64_t> actualRows;
+  for (const auto& result : actual) {
+    actualRows.insert(result.rowId);
+  }
+  size_t numMatches{0};
+  for (const auto& result : expected) {
+    numMatches += actualRows.count(result.rowId);
+  }
+  return static_cast<double>(numMatches) / static_cast<double>(expected.size());
+}
+
+double meanRowIdOverlap(
+    const VectorIndex::SearchResults& actual,
+    const VectorIndex::SearchResults& expected) {
+  double totalOverlap{0};
+  for (size_t queryIndex = 0; queryIndex < expected.numQueries();
+       ++queryIndex) {
+    totalOverlap +=
+        rowIdOverlap(actual.results(queryIndex), expected.results(queryIndex));
+  }
+  return totalOverlap / static_cast<double>(expected.numQueries());
+}
+
+TEST_F(VectorIndexTest, gpuSearchMatchesCpu) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  struct TestParam {
+    VectorIndexType indexType;
+    VectorDistanceMetric metric;
+    // Quantized codes are scored with different arithmetic on the GPU.
+    double minOverlap;
+  };
+  constexpr uint32_t kNumVectors{2'000};
+  constexpr uint32_t kNumQueries{50};
+  constexpr uint32_t kNumNeighbors{10};
+  constexpr uint32_t kNumPartitions{16};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+
+  const std::array testParams{
+      TestParam{VectorIndexType::kIvfFlat, VectorDistanceMetric::kL2, 1.0},
+      TestParam{VectorIndexType::kIvfFlat, VectorDistanceMetric::kCosine, 1.0},
+      TestParam{
+          VectorIndexType::kIvfFlat, VectorDistanceMetric::kDotProduct, 1.0},
+      TestParam{VectorIndexType::kIvfSq8, VectorDistanceMetric::kL2, 0.9},
+      TestParam{VectorIndexType::kIvfSq8, VectorDistanceMetric::kCosine, 0.9},
+      TestParam{VectorIndexType::kIvfPq, VectorDistanceMetric::kL2, 0.8},
+  };
+  for (const auto& param : testParams) {
+    SCOPED_TRACE(fmt::format(
+        "indexType={}, metric={}",
+        static_cast<int>(param.indexType),
+        static_cast<int>(param.metric)));
+    const auto reader = readIndex(writeIndexFromVectors(
+        makeConfig(param.indexType, param.metric, kDimensions, kNumPartitions),
+        data));
+    const auto search = [&](bool useGpu) {
+      return reader->search({
+          .numQueries = kNumQueries,
+          .queryVectors = queries,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions =
+              std::make_shared<VectorIndex::IvfSearchOptions>(kNumPartitions),
+          .useGpu = useGpu,
+      });
+    };
+    const auto cpuResults = search(/*useGpu=*/false);
+    const auto gpuResults = search(/*useGpu=*/true);
+    EXPECT_FALSE(cpuResults.stats().usedGpu);
+    ASSERT_TRUE(gpuResults.stats().usedGpu);
+    EXPECT_FALSE(gpuResults.stats().ivf.has_value());
+    ASSERT_EQ(gpuResults.numQueries(), kNumQueries);
+
+    double totalOverlap{0};
+    for (size_t queryIndex = 0; queryIndex < kNumQueries; ++queryIndex) {
+      const auto gpu = gpuResults.results(queryIndex);
+      const auto cpu = cpuResults.results(queryIndex);
+      ASSERT_EQ(gpu.size(), cpu.size());
+      totalOverlap += rowIdOverlap(gpu, cpu);
+      if (param.indexType == VectorIndexType::kIvfFlat) {
+        for (size_t i = 0; i < cpu.size(); ++i) {
+          EXPECT_EQ(gpu[i].rowId, cpu[i].rowId);
+          EXPECT_NEAR(gpu[i].score, cpu[i].score, 1e-4);
+        }
+      }
+    }
+    EXPECT_GE(totalOverlap / kNumQueries, param.minOverlap);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuIvfPqReturnsShortResults) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+
+  constexpr uint32_t kNumVectors{1'024};
+  constexpr uint32_t kNumNearVectors{256};
+  constexpr uint32_t kDimensions{8};
+  constexpr uint32_t kNumNeighbors{300};
+  auto data = generateRandomVectors(kNumVectors, kDimensions);
+  // Build two separated partitions, with fewer than kNumNeighbors in the
+  // partition nearest the first query.
+  for (size_t i = kNumNearVectors * kDimensions; i < data.size(); ++i) {
+    data[i] += 100.0f;
+  }
+
+  auto config = makeConfig(
+      VectorIndexType::kIvfPq, VectorDistanceMetric::kL2, kDimensions, 2);
+  config.pqBits = 4;
+  auto reader = readIndex(writeIndexFromVectors(config, data));
+  std::vector<float> queries(2 * kDimensions, 0.0f);
+  std::fill(queries.begin() + kDimensions, queries.end(), 100.0f);
+  const auto results = reader->search({
+      .numQueries = 2,
+      .queryVectors = queries,
+      .numNeighbors = kNumNeighbors,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+      .useGpu = true,
+  });
+
+  ASSERT_TRUE(results.stats().usedGpu);
+  ASSERT_EQ(results.numQueries(), 2);
+  ASSERT_EQ(results.results(0).size(), kNumNearVectors);
+  ASSERT_EQ(results.results(1).size(), kNumNeighbors);
+  for (const auto& result : results.results(0)) {
+    EXPECT_LT(result.rowId, kNumNearVectors);
+  }
+  for (const auto& result : results.results(1)) {
+    EXPECT_GE(result.rowId, kNumNearVectors);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuSearchAppliesRowSelection) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{20};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  std::vector<uint8_t> everyFifthRow(velox::bits::nbytes(kNumVectors));
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    everyFifthRow[row / 8] |= static_cast<uint8_t>(1U << (row % 8));
+  }
+  const RowRange rowRange{100, 200};
+  const auto reader = readIndex(
+      writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data));
+
+  const std::array selections{
+      VectorIndex::SearchConfig::RowSelection::fromBitmap(everyFifthRow),
+      VectorIndex::SearchConfig::RowSelection::fromRange(rowRange),
+  };
+  for (size_t selectionIndex = 0; selectionIndex < selections.size();
+       ++selectionIndex) {
+    SCOPED_TRACE(fmt::format("selection={}", selectionIndex));
+    const auto search = [&](bool useGpu) {
+      return reader->search({
+          .numQueries = 1,
+          .queryVectors = query,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+          .rowSelection = selections[selectionIndex],
+          .useGpu = useGpu,
+      });
+    };
+    const auto cpuResults = search(/*useGpu=*/false);
+    const auto gpuResults = search(/*useGpu=*/true);
+    ASSERT_TRUE(gpuResults.stats().usedGpu);
+    const auto results = gpuResults.results(0);
+    ASSERT_EQ(results.size(), kNumNeighbors);
+    for (const auto& result : results) {
+      if (selectionIndex == 0) {
+        EXPECT_EQ(result.rowId % 5, 0);
+      } else {
+        EXPECT_GE(result.rowId, rowRange.startRow);
+        EXPECT_LT(result.rowId, rowRange.endRow);
+      }
+    }
+    EXPECT_EQ(rowIdOverlap(results, cpuResults.results(0)), 1.0);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuSearchFallsBackToCpu) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  const auto usedGpu =
+      [&](VectorIndexType indexType,
+          std::shared_ptr<const VectorIndex::SearchOptions> searchOptions,
+          bool useGpu) {
+        const auto reader =
+            readIndex(writeIndexFromVectors(makeConfig(indexType), data));
+        return reader
+            ->search({
+                .numQueries = 1,
+                .queryVectors = query,
+                .numNeighbors = 10,
+                .searchOptions = std::move(searchOptions),
+                .useGpu = useGpu,
+            })
+            .stats()
+            .usedGpu;
+      };
+  const auto ivfOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8);
+
+#ifdef VELOX_ENABLE_FAISS_GPU
+  EXPECT_FALSE(GpuVectorIndex::supports(VectorIndexType::kIvfRaBitQFastScan));
+#endif
+  EXPECT_FALSE(usedGpu(VectorIndexType::kIvfFlat, ivfOptions, false));
+  EXPECT_TRUE(usedGpu(
+      VectorIndexType::kHnswSq8,
+      std::make_shared<VectorIndex::HnswSearchOptions>(32),
+      true));
+  EXPECT_TRUE(usedGpu(VectorIndexType::kIvfRaBitQ, ivfOptions, true));
+  EXPECT_TRUE(usedGpu(
+      VectorIndexType::kCagra,
+      std::make_shared<VectorIndex::HnswSearchOptions>(32),
+      true));
+  EXPECT_FALSE(usedGpu(
+      VectorIndexType::kIvfFlat,
+      std::make_shared<VectorIndex::IvfSearchOptions>(8, 100, false),
+      true));
+  EXPECT_TRUE(usedGpu(VectorIndexType::kIvfFlat, ivfOptions, true));
+}
+
+TEST_F(VectorIndexTest, gpuCagraSearchAgreesWithCpu) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{1'000};
+  constexpr uint32_t kNumQueries{20};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+  const std::array metrics{
+      VectorDistanceMetric::kL2,
+      VectorDistanceMetric::kCosine,
+      VectorDistanceMetric::kDotProduct,
+  };
+  for (const auto metric : metrics) {
+    SCOPED_TRACE(static_cast<int>(metric));
+    const auto reader = readIndex(writeIndexFromVectors(
+        makeConfig(VectorIndexType::kCagra, metric), data));
+    const auto search = [&](bool useGpu) {
+      return reader->search({
+          .numQueries = kNumQueries,
+          .queryVectors = queries,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(64),
+          .useGpu = useGpu,
+      });
+    };
+    const auto cpuResults = search(/*useGpu=*/false);
+    const auto gpuResults = search(/*useGpu=*/true);
+    EXPECT_FALSE(cpuResults.stats().usedGpu);
+    ASSERT_TRUE(gpuResults.stats().usedGpu);
+    ASSERT_EQ(gpuResults.numQueries(), kNumQueries);
+    for (size_t queryIndex = 0; queryIndex < kNumQueries; ++queryIndex) {
+      ASSERT_EQ(gpuResults.results(queryIndex).size(), kNumNeighbors);
+      ASSERT_EQ(cpuResults.results(queryIndex).size(), kNumNeighbors);
+    }
+    EXPECT_GE(meanRowIdOverlap(gpuResults, cpuResults), 0.4);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuCagraAppliesRowSelection) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  std::vector<uint8_t> everyFifthRow(velox::bits::nbytes(kNumVectors));
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    everyFifthRow[row / 8] |= static_cast<uint8_t>(1U << (row % 8));
+  }
+  const RowRange rowRange{100, 200};
+  const auto reader = readIndex(
+      writeIndexFromVectors(makeConfig(VectorIndexType::kCagra), data));
+  const std::array selections{
+      VectorIndex::SearchConfig::RowSelection::fromBitmap(everyFifthRow),
+      VectorIndex::SearchConfig::RowSelection::fromRange(rowRange),
+  };
+  for (size_t selectionIndex = 0; selectionIndex < selections.size();
+       ++selectionIndex) {
+    SCOPED_TRACE(fmt::format("selection={}", selectionIndex));
+    const auto search = [&](bool useGpu) {
+      return reader->search({
+          .numQueries = 1,
+          .queryVectors = query,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(128),
+          .rowSelection = selections[selectionIndex],
+          .useGpu = useGpu,
+      });
+    };
+    const auto cpuResults = search(/*useGpu=*/false);
+    const auto gpuResults = search(/*useGpu=*/true);
+    ASSERT_TRUE(gpuResults.stats().usedGpu);
+    const auto results = gpuResults.results(0);
+    ASSERT_EQ(results.size(), kNumNeighbors);
+    for (const auto& result : results) {
+      if (selectionIndex == 0) {
+        EXPECT_EQ(result.rowId % 5, 0);
+      } else {
+        EXPECT_GE(result.rowId, rowRange.startRow);
+        EXPECT_LT(result.rowId, rowRange.endRow);
+      }
+    }
+    EXPECT_GE(rowIdOverlap(results, cpuResults.results(0)), 0.4);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuHnswSearchAgreesWithCpu) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumQueries{20};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+  const std::array metrics{
+      VectorDistanceMetric::kL2,
+      VectorDistanceMetric::kCosine,
+      VectorDistanceMetric::kDotProduct,
+  };
+  for (const auto metric : metrics) {
+    SCOPED_TRACE(static_cast<int>(metric));
+    const auto reader = readIndex(writeIndexFromVectors(
+        makeConfig(VectorIndexType::kHnswSq8, metric), data));
+    const auto search = [&](bool useGpu) {
+      return reader->search({
+          .numQueries = kNumQueries,
+          .queryVectors = queries,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(64),
+          .useGpu = useGpu,
+      });
+    };
+    const auto cpuResults = search(/*useGpu=*/false);
+    const auto gpuResults = search(/*useGpu=*/true);
+    EXPECT_FALSE(cpuResults.stats().usedGpu);
+    ASSERT_TRUE(gpuResults.stats().usedGpu);
+    for (size_t queryIndex = 0; queryIndex < kNumQueries; ++queryIndex) {
+      ASSERT_EQ(gpuResults.results(queryIndex).size(), kNumNeighbors);
+      ASSERT_EQ(cpuResults.results(queryIndex).size(), kNumNeighbors);
+    }
+    // The GPU index is a CAGRA graph of the reconstructed SQ8 vectors.
+    EXPECT_GE(meanRowIdOverlap(gpuResults, cpuResults), 0.3);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuHnswAppliesRowSelection) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  std::vector<uint8_t> everyFifthRow(velox::bits::nbytes(kNumVectors));
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    everyFifthRow[row / 8] |= static_cast<uint8_t>(1U << (row % 8));
+  }
+  const RowRange rowRange{100, 200};
+  const auto reader = readIndex(
+      writeIndexFromVectors(makeConfig(VectorIndexType::kHnswSq8), data));
+  const std::array selections{
+      VectorIndex::SearchConfig::RowSelection::fromBitmap(everyFifthRow),
+      VectorIndex::SearchConfig::RowSelection::fromRange(rowRange),
+  };
+  for (size_t selectionIndex = 0; selectionIndex < selections.size();
+       ++selectionIndex) {
+    SCOPED_TRACE(fmt::format("selection={}", selectionIndex));
+    const auto search = [&](bool useGpu) {
+      return reader->search({
+          .numQueries = 1,
+          .queryVectors = query,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(128),
+          .rowSelection = selections[selectionIndex],
+          .useGpu = useGpu,
+      });
+    };
+    const auto cpuResults = search(/*useGpu=*/false);
+    const auto gpuResults = search(/*useGpu=*/true);
+    ASSERT_TRUE(gpuResults.stats().usedGpu);
+    const auto results = gpuResults.results(0);
+    ASSERT_EQ(results.size(), kNumNeighbors);
+    for (const auto& result : results) {
+      if (selectionIndex == 0) {
+        EXPECT_EQ(result.rowId % 5, 0);
+      } else {
+        EXPECT_GE(result.rowId, rowRange.startRow);
+        EXPECT_LT(result.rowId, rowRange.endRow);
+      }
+    }
+    EXPECT_GE(rowIdOverlap(results, cpuResults.results(0)), 0.3);
+  }
+}
+
+// The probed partition holds fewer vectors than requested, so the search
+// returns fewer results. cuVS leaves the unfilled slots in an unspecified
+// state, which must neither fail the row ID validation nor reach the results.
+TEST_F(VectorIndexTest, gpuSearchShortResults) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{1'000};
+  constexpr uint32_t kNumQueries{20};
+  constexpr uint32_t kNumPartitions{16};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+  for (const auto indexType :
+       {VectorIndexType::kIvfPq,
+        VectorIndexType::kIvfFlat,
+        VectorIndexType::kIvfSq8}) {
+    for (const auto metric :
+         {VectorDistanceMetric::kL2, VectorDistanceMetric::kCosine}) {
+      const auto reader = readIndex(writeIndexFromVectors(
+          makeConfig(indexType, metric, kDimensions, kNumPartitions), data));
+      // From fewer neighbors than the probed partition holds, to far more.
+      for (const uint32_t numNeighbors : {10U, 100U, 200U, 300U}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "indexType={}, metric={}, numNeighbors={}",
+                static_cast<int>(indexType),
+                static_cast<int>(metric),
+                numNeighbors));
+        const auto search = [&](bool useGpu) {
+          return reader->search({
+              .numQueries = kNumQueries,
+              .queryVectors = queries,
+              .numNeighbors = numNeighbors,
+              .searchOptions =
+                  std::make_shared<VectorIndex::IvfSearchOptions>(1),
+              .useGpu = useGpu,
+          });
+        };
+        const auto cpuResults = search(/*useGpu=*/false);
+        const auto gpuResults = search(/*useGpu=*/true);
+        // One partition is too short for the cuVS IVF-PQ radix selector.
+        EXPECT_EQ(
+            gpuResults.stats().usedGpu,
+            indexType != VectorIndexType::kIvfPq || numNeighbors <= 256);
+        ASSERT_EQ(gpuResults.numQueries(), kNumQueries);
+        for (size_t queryIndex = 0; queryIndex < kNumQueries; ++queryIndex) {
+          const auto gpu = gpuResults.results(queryIndex);
+          const auto cpu = cpuResults.results(queryIndex);
+          // Both return everything in the probed partition, up to the request.
+          EXPECT_EQ(gpu.size(), cpu.size()) << "query " << queryIndex;
+          std::unordered_set<int64_t> rowIds;
+          for (size_t i = 0; i < gpu.size(); ++i) {
+            EXPECT_GE(gpu[i].rowId, 0);
+            EXPECT_LT(gpu[i].rowId, static_cast<int64_t>(kNumVectors));
+            EXPECT_TRUE(rowIds.insert(gpu[i].rowId).second);
+            if (i > 0) {
+              // Each id kept its own score: scores are in order, best first.
+              if (metric == VectorDistanceMetric::kL2) {
+                EXPECT_LE(gpu[i - 1].score, gpu[i].score);
+              } else {
+                EXPECT_GE(gpu[i - 1].score, gpu[i].score);
+              }
+            }
+          }
+          EXPECT_GE(rowIdOverlap(gpu, cpu), 0.9) << "query " << queryIndex;
+        }
+      }
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, gpuIvfPqCandidateBufferLimit) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{1'000};
+  constexpr uint32_t kNumPartitions{16};
+  constexpr uint32_t kNumNeighbors{257};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  const auto reader = readIndex(writeIndexFromVectors(
+      makeConfig(
+          VectorIndexType::kIvfPq,
+          VectorDistanceMetric::kL2,
+          kDimensions,
+          kNumPartitions),
+      data));
+  using RowSelection = VectorIndex::SearchConfig::RowSelection;
+  for (const auto& selection :
+       {RowSelection::all(),
+        RowSelection::fromRange(RowRange{0, kNumVectors - 1})}) {
+    VectorIndex::SearchConfig config{
+        .numQueries = 1,
+        .queryVectors = query,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+        .rowSelection = selection,
+    };
+    const auto cpu = reader->search(config);
+    ASSERT_GT(cpu.totalNumResults(), 1);
+    ASSERT_LT(cpu.totalNumResults(), kNumNeighbors);
+
+    config.useGpu = true;
+    const auto fallback = reader->search(config);
+    EXPECT_FALSE(fallback.stats().usedGpu);
+    expectSearchResultsEqual(fallback, cpu);
+
+    // Probing four partitions provides enough slots for the same request.
+    config.searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(4);
+    const auto gpu = reader->search(config);
+    ASSERT_TRUE(gpu.stats().usedGpu);
+    config.useGpu = false;
+    const auto cpuWithMoreProbes = reader->search(config);
+    EXPECT_EQ(gpu.totalNumResults(), cpuWithMoreProbes.totalNumResults());
+  }
+}
+
+// A row selection that passes few or no rows leaves most slots unfilled.
+TEST_F(VectorIndexTest, gpuSearchShortResultsWithRowSelection) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{1'000};
+  constexpr uint32_t kNumNeighbors{300};
+  constexpr uint32_t kNumPartitions{16};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries = generateRandomVectors(4, kDimensions, /*seed=*/99);
+  std::vector<uint8_t> onlyRowFive(velox::bits::nbytes(kNumVectors));
+  onlyRowFive[0] = 1U << 5;
+  const std::vector<uint8_t> noRows(velox::bits::nbytes(kNumVectors));
+  for (const auto indexType :
+       {VectorIndexType::kIvfPq,
+        VectorIndexType::kIvfFlat,
+        VectorIndexType::kIvfSq8}) {
+    const auto reader = readIndex(writeIndexFromVectors(
+        makeConfig(
+            indexType, VectorDistanceMetric::kL2, kDimensions, kNumPartitions),
+        data));
+    const auto search = [&](VectorIndex::SearchConfig::RowSelection selection) {
+      return reader->search({
+          .numQueries = 4,
+          .queryVectors = queries,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions =
+              std::make_shared<VectorIndex::IvfSearchOptions>(kNumPartitions),
+          .rowSelection = std::move(selection),
+          .useGpu = true,
+      });
+    };
+    SCOPED_TRACE(static_cast<int>(indexType));
+
+    const auto none =
+        search(VectorIndex::SearchConfig::RowSelection::fromBitmap(noRows));
+    const auto emptyRange = search(
+        VectorIndex::SearchConfig::RowSelection::fromRange(RowRange{100, 100}));
+    for (size_t queryIndex = 0; queryIndex < 4; ++queryIndex) {
+      EXPECT_TRUE(none.results(queryIndex).empty());
+      EXPECT_TRUE(emptyRange.results(queryIndex).empty());
+    }
+
+    const auto one = search(
+        VectorIndex::SearchConfig::RowSelection::fromBitmap(onlyRowFive));
+    for (size_t queryIndex = 0; queryIndex < 4; ++queryIndex) {
+      const auto results = one.results(queryIndex);
+      ASSERT_EQ(results.size(), 1);
+      EXPECT_EQ(results[0].rowId, 5);
+    }
+  }
+}
+
+// RaBitQ stays on the CPU where the pinned cuVS search fails: a partition too
+// large for the kernel's shared memory, and a large Top-K that probes only
+// some partitions.
+TEST_F(VectorIndexTest, gpuRaBitQLargePartitionsAndTopK) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  {
+    constexpr uint32_t kNumVectors{100'000};
+    const auto data = generateRandomVectors(kNumVectors, kDimensions);
+    const auto queries = generateRandomVectors(2, kDimensions, /*seed=*/99);
+    const auto reader = readIndex(writeIndexFromVectors(
+        makeConfig(
+            VectorIndexType::kIvfRaBitQ,
+            VectorDistanceMetric::kL2,
+            kDimensions,
+            /*numPartitions=*/1),
+        data));
+    for (const uint32_t numNeighbors : {10U, 64U, 65U, 300U}) {
+      SCOPED_TRACE(numNeighbors);
+      const auto results = reader->search({
+          .numQueries = 2,
+          .queryVectors = queries,
+          .numNeighbors = numNeighbors,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+          .useGpu = true,
+      });
+      for (size_t queryIndex = 0; queryIndex < 2; ++queryIndex) {
+        EXPECT_EQ(results.results(queryIndex).size(), numNeighbors);
+      }
+    }
+  }
+  {
+    constexpr uint32_t kNumVectors{1'000};
+    constexpr uint32_t kNumPartitions{16};
+    const auto data = generateRandomVectors(kNumVectors, kDimensions);
+    const auto queries = generateRandomVectors(4, kDimensions, /*seed=*/99);
+    const auto reader = readIndex(writeIndexFromVectors(
+        makeConfig(
+            VectorIndexType::kIvfRaBitQ,
+            VectorDistanceMetric::kL2,
+            kDimensions,
+            kNumPartitions),
+        data));
+    const auto search = [&](uint32_t numProbes, bool useGpu) {
+      return reader->search({
+          .numQueries = 4,
+          .queryVectors = queries,
+          .numNeighbors = 300,
+          .searchOptions =
+              std::make_shared<VectorIndex::IvfSearchOptions>(numProbes),
+          .useGpu = useGpu,
+      });
+    };
+    const auto partial = search(/*numProbes=*/1, /*useGpu=*/true);
+    EXPECT_FALSE(partial.stats().usedGpu);
+    const auto cpu = search(/*numProbes=*/1, /*useGpu=*/false);
+    for (size_t queryIndex = 0; queryIndex < 4; ++queryIndex) {
+      EXPECT_EQ(
+          partial.results(queryIndex).size(), cpu.results(queryIndex).size());
+    }
+    // Probing every partition supplies enough candidates.
+    const auto all = search(kNumPartitions, /*useGpu=*/true);
+    EXPECT_TRUE(all.stats().usedGpu);
+    for (size_t queryIndex = 0; queryIndex < 4; ++queryIndex) {
+      EXPECT_EQ(all.results(queryIndex).size(), 300);
+    }
+  }
+}
+
+// A wide CAGRA graph still searches for a single query.
+TEST_F(VectorIndexTest, gpuWideCagraGraphSingleQuery) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{2'000};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  for (const auto indexType :
+       {VectorIndexType::kCagra, VectorIndexType::kHnswSq8}) {
+    // The graph degree is twice the number of connections.
+    for (const uint32_t numConnections : {32U, 64U, 96U, 128U}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "indexType={}, numConnections={}",
+              static_cast<int>(indexType),
+              numConnections));
+      auto config = makeConfig(indexType);
+      config.hnswNumConnections = numConnections;
+      const auto reader = readIndex(writeIndexFromVectors(config, data));
+      const auto results = reader->search({
+          .numQueries = 1,
+          .queryVectors = query,
+          .numNeighbors = kNumNeighbors,
+          .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(64),
+          .useGpu = true,
+      });
+      ASSERT_TRUE(results.stats().usedGpu);
+      EXPECT_EQ(results.results(0).size(), kNumNeighbors);
+    }
+  }
+}
+
+// CAGRA searches up to 1,024 neighbors on the GPU, as the local vector index.
+TEST_F(VectorIndexTest, gpuCagraNeighborLimit) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{2'000};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  for (const auto indexType :
+       {VectorIndexType::kCagra, VectorIndexType::kHnswSq8}) {
+    const auto reader =
+        readIndex(writeIndexFromVectors(makeConfig(indexType), data));
+    for (const uint32_t numNeighbors : {1'024U, 1'025U}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "indexType={}, numNeighbors={}",
+              static_cast<int>(indexType),
+              numNeighbors));
+      const auto results = reader->search({
+          .numQueries = 1,
+          .queryVectors = query,
+          .numNeighbors = numNeighbors,
+          .searchOptions =
+              std::make_shared<VectorIndex::HnswSearchOptions>(2'000),
+          .useGpu = true,
+      });
+      EXPECT_EQ(results.stats().usedGpu, numNeighbors <= 1'024);
+      EXPECT_EQ(results.results(0).size(), numNeighbors);
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, gpuRaBitQSearchAgreesWithCpu) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumQueries{20};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+  const auto reader = readIndex(writeIndexFromVectors(
+      makeConfig(VectorIndexType::kIvfRaBitQ), data));
+  const auto options = std::make_shared<VectorIndex::IvfSearchOptions>(8);
+  const auto search = [&](bool useGpu) {
+    return reader->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = options,
+        .useGpu = useGpu,
+    });
+  };
+  const auto cpuResults = search(/*useGpu=*/false);
+  const auto gpuResults = search(/*useGpu=*/true);
+  EXPECT_FALSE(cpuResults.stats().usedGpu);
+  ASSERT_TRUE(gpuResults.stats().usedGpu);
+  for (size_t queryIndex = 0; queryIndex < kNumQueries; ++queryIndex) {
+    ASSERT_EQ(gpuResults.results(queryIndex).size(), kNumNeighbors);
+    ASSERT_EQ(cpuResults.results(queryIndex).size(), kNumNeighbors);
+  }
+  // The GPU index is a cuVS IVF-RaBitQ index of the decoded vectors.
+  EXPECT_GE(meanRowIdOverlap(gpuResults, cpuResults), 0.2);
+}
+
+TEST_F(VectorIndexTest, gpuRaBitQStaysOnCpu) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumNeighbors{10};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  const auto ivfOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8);
+  const std::array metrics{
+      VectorDistanceMetric::kCosine,
+      VectorDistanceMetric::kDotProduct,
+  };
+  for (const auto metric : metrics) {
+    SCOPED_TRACE(static_cast<int>(metric));
+    const auto reader = readIndex(writeIndexFromVectors(
+        makeConfig(VectorIndexType::kIvfRaBitQ, metric), data));
+    const auto cpuResults = reader->search({
+        .numQueries = 1,
+        .queryVectors = query,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = ivfOptions,
+        .useGpu = false,
+    });
+    const auto gpuResults = reader->search({
+        .numQueries = 1,
+        .queryVectors = query,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = ivfOptions,
+        .useGpu = true,
+    });
+    EXPECT_FALSE(gpuResults.stats().usedGpu);
+    expectSearchResultsEqual(gpuResults, cpuResults);
+  }
+
+  const auto reader = readIndex(
+      writeIndexFromVectors(makeConfig(VectorIndexType::kIvfRaBitQ), data));
+  std::vector<uint8_t> everyFifthRow(velox::bits::nbytes(kNumVectors));
+  for (uint32_t row = 0; row < kNumVectors; row += 5) {
+    everyFifthRow[row / 8] |= static_cast<uint8_t>(1U << (row % 8));
+  }
+  const auto filtered = [&](bool useGpu) {
+    return reader->search({
+        .numQueries = 1,
+        .queryVectors = query,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = ivfOptions,
+        .rowSelection =
+            VectorIndex::SearchConfig::RowSelection::fromBitmap(everyFifthRow),
+        .useGpu = useGpu,
+    });
+  };
+  const auto cpuFiltered = filtered(/*useGpu=*/false);
+  const auto gpuFiltered = filtered(/*useGpu=*/true);
+  EXPECT_FALSE(gpuFiltered.stats().usedGpu);
+  expectSearchResultsEqual(gpuFiltered, cpuFiltered);
+  ASSERT_EQ(gpuFiltered.results(0).size(), kNumNeighbors);
+  for (const auto& result : gpuFiltered.results(0)) {
+    EXPECT_EQ(result.rowId % 5, 0);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuNewIndexesAreThreadSafe) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{500};
+  constexpr uint32_t kNumQueries{8};
+  constexpr int kNumThreads{4};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+  struct Case {
+    VectorIndexType indexType;
+    std::shared_ptr<const VectorIndex::SearchOptions> searchOptions;
+  };
+  const std::array cases{
+      Case{
+          VectorIndexType::kCagra,
+          std::make_shared<VectorIndex::HnswSearchOptions>(32)},
+      Case{
+          VectorIndexType::kHnswSq8,
+          std::make_shared<VectorIndex::HnswSearchOptions>(32)},
+      Case{
+          VectorIndexType::kIvfRaBitQ,
+          std::make_shared<VectorIndex::IvfSearchOptions>(8)},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(static_cast<int>(testCase.indexType));
+    const auto reader = readIndex(
+        writeIndexFromVectors(makeConfig(testCase.indexType), data));
+    const auto search = [&] {
+      return reader->search({
+          .numQueries = kNumQueries,
+          .queryVectors = queries,
+          .numNeighbors = 10,
+          .searchOptions = testCase.searchOptions,
+          .useGpu = true,
+      });
+    };
+    const auto expected = search();
+    ASSERT_TRUE(expected.stats().usedGpu);
+    std::vector<std::future<VectorIndex::SearchResults>> futures;
+    for (int thread = 0; thread < kNumThreads; ++thread) {
+      futures.push_back(std::async(std::launch::async, search));
+    }
+    for (auto& future : futures) {
+      const auto actual = future.get();
+      ASSERT_TRUE(actual.stats().usedGpu);
+      expectSearchResultsEqual(actual, expected);
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, gpuSearchIsThreadSafe) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{2'000};
+  constexpr uint32_t kNumQueries{16};
+  constexpr int kNumThreads{8};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+  const auto reader = readIndex(
+      writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data));
+  const auto search = [&] {
+    return reader->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = 10,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+        .useGpu = true,
+    });
+  };
+  const auto expected = search();
+  ASSERT_TRUE(expected.stats().usedGpu);
+
+  std::vector<std::future<VectorIndex::SearchResults>> futures;
+  for (int thread = 0; thread < kNumThreads; ++thread) {
+    futures.push_back(std::async(std::launch::async, search));
+  }
+  for (auto& future : futures) {
+    expectSearchResultsEqual(future.get(), expected);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuIvfFiltersWithFewerRowsThanRequested) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{12'000};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto query = generateRandomVectors(1, kDimensions, /*seed=*/99);
+  std::vector<uint8_t> bitmap(velox::bits::nbytes(kNumVectors));
+  bitmap[0] = 1U << 5;
+  const auto empty = VectorIndex::SearchConfig::RowSelection::fromRange({0, 0});
+  const auto oneRow =
+      VectorIndex::SearchConfig::RowSelection::fromRange({5, 6});
+  const auto bitmapSelection =
+      VectorIndex::SearchConfig::RowSelection::fromBitmap(bitmap);
+  for (auto type : {VectorIndexType::kIvfFlat, VectorIndexType::kIvfPq}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const auto reader =
+        readIndex(writeIndexFromVectors(makeConfig(type), data));
+    for (const auto& selection : {empty, oneRow, bitmapSelection}) {
+      const auto result = reader->search({
+          .numQueries = 1,
+          .queryVectors = query,
+          .numNeighbors = 5,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+          .rowSelection = selection,
+          .useGpu = true,
+      });
+      ASSERT_TRUE(result.stats().usedGpu);
+      if (selection.range() && selection.range()->endRow == 0) {
+        EXPECT_TRUE(result.results(0).empty());
+      } else {
+        ASSERT_EQ(result.results(0).size(), 1);
+        EXPECT_EQ(result.results(0)[0].rowId, 5);
+      }
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, gpuIvfReturnsScoreOrderedResults) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{12'000};
+  constexpr uint32_t kNumQueries{19};
+  constexpr uint32_t kNumNeighbors{1'025};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+  for (auto type :
+       {VectorIndexType::kIvfFlat,
+        VectorIndexType::kIvfPq,
+        VectorIndexType::kIvfSq8,
+        VectorIndexType::kIvfRaBitQ}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const auto reader =
+        readIndex(writeIndexFromVectors(makeConfig(type), data));
+    const auto result = reader->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = kNumNeighbors,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+        .useGpu = true,
+    });
+    ASSERT_TRUE(result.stats().usedGpu);
+    for (size_t i = 0; i < kNumQueries; ++i) {
+      const auto row = result.results(i);
+      ASSERT_EQ(row.size(), kNumNeighbors);
+      EXPECT_TRUE(
+          std::ranges::is_sorted(
+              row, std::less<>{}, &VectorIndex::SearchResult::score));
+    }
+  }
+}
+
+TEST_F(VectorIndexTest, gpuRaBitQFallsBackForLargePartialSearch) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  constexpr uint32_t kNumVectors{1'024};
+  constexpr uint32_t kQueriedPartitionSize{32};
+  auto data = generateRandomVectors(kNumVectors, kDimensions);
+  for (size_t i = kQueriedPartitionSize * kDimensions; i < data.size(); ++i) {
+    data[i] += 100;
+  }
+  const auto reader = readIndex(writeIndexFromVectors(
+      makeConfig(
+          VectorIndexType::kIvfRaBitQ,
+          VectorDistanceMetric::kL2,
+          kDimensions,
+          /*numPartitions=*/2),
+      data));
+  VectorIndex::SearchConfig config{
+      .numQueries = 1,
+      .queryVectors = std::vector<float>(kDimensions, 0),
+      .numNeighbors = 64,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+      .useGpu = true,
+  };
+  const auto small = reader->search(config);
+  EXPECT_TRUE(small.stats().usedGpu);
+  EXPECT_EQ(small.results(0).size(), kQueriedPartitionSize);
+
+  config.numNeighbors = 300;
+  const auto large = reader->search(config);
+  EXPECT_FALSE(large.stats().usedGpu);
+  EXPECT_EQ(large.results(0).size(), kQueriedPartitionSize);
+
+  config.searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(2);
+  const auto allPartitions = reader->search(config);
+  EXPECT_TRUE(allPartitions.stats().usedGpu);
+  EXPECT_EQ(allPartitions.results(0).size(), 300);
+}
+
+TEST_F(VectorIndexTest, gpuCagraFallsBackAboveSupportedNeighborCount) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  const auto data = generateRandomVectors(4096, kDimensions);
+  for (auto type : {VectorIndexType::kCagra, VectorIndexType::kHnswSq8}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    const auto reader =
+        readIndex(writeIndexFromVectors(makeConfig(type), data));
+    VectorIndex::SearchConfig config{
+        .numQueries = 1,
+        .queryVectors = generateRandomVectors(1, kDimensions, /*seed=*/99),
+        .numNeighbors = 1024,
+        .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(1024),
+        .useGpu = true,
+    };
+    const auto inRange = reader->search(config);
+    EXPECT_TRUE(inRange.stats().usedGpu);
+    EXPECT_FALSE(inRange.results(0).empty());
+    config.numNeighbors = 1025;
+    const auto fallback = reader->search(config);
+    EXPECT_FALSE(fallback.stats().usedGpu);
+    EXPECT_FALSE(fallback.results(0).empty());
+  }
+}
+
+TEST_F(VectorIndexTest, gpuSingleQuerySearchesWideCagraGraphs) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  const auto data = generateRandomVectors(4096, kDimensions);
+  for (auto kind : {VectorIndexType::kCagra, VectorIndexType::kHnswSq8}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    auto indexConfig = makeConfig(kind);
+    indexConfig.hnswNumConnections = 128;
+    const auto index = readIndex(writeIndexFromVectors(indexConfig, data));
+    VectorIndex::SearchConfig config{
+        .numQueries = 1,
+        .queryVectors = generateRandomVectors(1, kDimensions),
+        .numNeighbors = 10,
+        .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(128),
+        .useGpu = true,
+    };
+    const auto result = index->search(config);
+    EXPECT_TRUE(result.stats().usedGpu);
+    EXPECT_EQ(result.totalNumResults(), 10);
+
+    config.searchOptions =
+        std::make_shared<VectorIndex::HnswSearchOptions>(4096);
+    const auto fallback = index->search(config);
+    EXPECT_FALSE(fallback.stats().usedGpu);
+    EXPECT_EQ(fallback.totalNumResults(), 10);
+  }
+}
+
+TEST_F(VectorIndexTest, gpuRaBitQFallsBackForOversizedSharedMemory) {
+  if (!VectorIndex::gpuSearchAvailable()) {
+    GTEST_SKIP() << "Requires FAISS GPU support and a CUDA device";
+  }
+  const auto data = generateRandomVectors(100'000, kDimensions);
+  const auto index = readIndex(writeIndexFromVectors(
+      makeConfig(
+          VectorIndexType::kIvfRaBitQ,
+          VectorDistanceMetric::kL2,
+          kDimensions,
+          /*numPartitions=*/1),
+      data));
+  VectorIndex::SearchConfig config{
+      .numQueries = 1,
+      .queryVectors = generateRandomVectors(1, kDimensions),
+      .numNeighbors = 10,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(1),
+      .useGpu = true,
+  };
+  const auto fallback = index->search(config);
+  EXPECT_FALSE(fallback.stats().usedGpu);
+  ASSERT_EQ(fallback.totalNumResults(), 10);
+  config.useGpu = false;
+  const auto cpu = index->search(config);
+  expectSearchResultsEqual(fallback, cpu);
+  config.useGpu = true;
+  config.numNeighbors = 65;
+  const auto gpu = index->search(config);
+  EXPECT_TRUE(gpu.stats().usedGpu);
+  EXPECT_EQ(gpu.totalNumResults(), 65);
 }
 
 } // namespace

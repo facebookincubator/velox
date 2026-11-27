@@ -70,7 +70,7 @@ DEFINE_string(
     vector_index_type,
     "ivf_rabitq",
     "Index type to benchmark: ivf_flat, ivf_sq8, ivf_pq, ivf_rabitq, "
-    "ivf_rabitq_fast_scan, or hnsw_sq8.");
+    "ivf_rabitq_fast_scan, hnsw_sq8, or cagra.");
 DEFINE_string(
     vector_index_metric,
     "cosine",
@@ -241,6 +241,9 @@ VectorIndexType parseIndexType(std::string_view name) {
   }
   if (name == "hnsw_sq8") {
     return VectorIndexType::kHnswSq8;
+  }
+  if (name == "cagra") {
+    return VectorIndexType::kCagra;
   }
   VELOX_USER_FAIL("Unsupported vector index type: {}", name);
 }
@@ -439,7 +442,8 @@ class VectorIndexBenchmark {
 
   // Prints the complete configuration and serialized index size.
   void printConfiguration() const {
-    const auto indexParameters = options_.indexType == VectorIndexType::kHnswSq8
+    const auto indexParameters = options_.indexType == VectorIndexType::kHnswSq8 ||
+            options_.indexType == VectorIndexType::kCagra
         ? fmt::format("hnsw_search_depth={}", options_.hnswSearchDepth)
         : fmt::format(
               "partitions={}, probes={}",
@@ -642,7 +646,8 @@ class VectorIndexBenchmark {
         queries.size(),
         static_cast<size_t>(options_.numQueries) * options_.dimensions);
     std::shared_ptr<const VectorIndex::SearchOptions> searchOptions;
-    if (options_.indexType == VectorIndexType::kHnswSq8) {
+    if (options_.indexType == VectorIndexType::kHnswSq8 ||
+        options_.indexType == VectorIndexType::kCagra) {
       searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(
           options_.hnswSearchDepth);
     } else {

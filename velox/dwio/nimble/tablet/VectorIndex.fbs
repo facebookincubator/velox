@@ -38,6 +38,8 @@ enum VectorIndexType : byte {
   IVF_RABITQ,
   IVF_RABITQ_FAST_SCAN,
   HNSW_SQ8,
+  /// CAGRA nearest-neighbor graph. GPU search uses this graph directly.
+  CAGRA,
 }
 
 /// Serialized configuration for the vector index.

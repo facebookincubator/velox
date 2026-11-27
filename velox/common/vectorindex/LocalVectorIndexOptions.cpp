@@ -110,15 +110,19 @@ void LocalVectorIndexOptions::validate(VectorIndexKind kind) const {
   validateSetting(nlist, kNlist, isIvf(kind), kind);
   validateSetting(nprobe, kNprobe, isIvf(kind), kind);
 
-  const bool hnsw = kind == VectorIndexKind::kHnswSq;
-  validateSetting(m, kM, hnsw, kind);
+  const bool graph =
+      kind == VectorIndexKind::kHnswSq || kind == VectorIndexKind::kCagra;
+  validateSetting(m, kM, graph, kind);
   if (m.has_value()) {
     VELOX_USER_CHECK_GE(*m, kMinM, "Vector index option is too small: {}", kM);
     VELOX_USER_CHECK_LE(*m, kMaxM, "Vector index option is too large: {}", kM);
   }
 
-  validateSetting(efConstruction, kEfConstruction, hnsw, kind);
-  validateSetting(efSearch, kEfSearch, hnsw, kind);
+  // efConstruction is the HNSW build's candidate count. A CAGRA graph is built
+  // by NN-descent, so that setting does not apply to it.
+  validateSetting(
+      efConstruction, kEfConstruction, kind == VectorIndexKind::kHnswSq, kind);
+  validateSetting(efSearch, kEfSearch, graph, kind);
 }
 
 } // namespace facebook::velox::common::vectorindex

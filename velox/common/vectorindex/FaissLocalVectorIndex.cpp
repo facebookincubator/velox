@@ -131,6 +131,16 @@ std::unique_ptr<faiss::Index> makeIndex(
       graph->hnsw.efSearch = options.efSearch.value_or(kDefaultEfSearch);
       return withIds(std::move(graph));
     }
+    case VectorIndexKind::kCagra: {
+      // Stored as IndexHNSWCagra, wrapped so the embeddings keep their ids.
+      // base_level_only keeps the CAGRA graph as the one level both the CPU
+      // and the GPU search. The GPU build fills it.
+      auto graph = std::make_unique<faiss::IndexHNSWCagra>(
+          dimension, options.m.value_or(kDefaultM), metric);
+      graph->base_level_only = true;
+      graph->hnsw.efSearch = options.efSearch.value_or(kDefaultEfSearch);
+      return withIds(std::move(graph));
+    }
   }
   VELOX_UNREACHABLE();
 }
@@ -140,12 +150,17 @@ std::unique_ptr<faiss::Index> makeIndex(
 // error for any other FAISS index.
 std::pair<VectorIndexKind, faiss::Index*> classify(faiss::Index* index) {
   if (auto* idMap = dynamic_cast<faiss::IndexIDMap*>(index)) {
+    if (dynamic_cast<faiss::IndexHNSWCagra*>(idMap->index)) {
+      return {VectorIndexKind::kCagra, idMap->index};
+    }
     if (dynamic_cast<faiss::IndexHNSWSQ*>(idMap->index)) {
       return {VectorIndexKind::kHnswSq, idMap->index};
     }
     if (dynamic_cast<faiss::IndexFlat*>(idMap->index)) {
       return {VectorIndexKind::kFlat, idMap->index};
     }
+  } else if (dynamic_cast<faiss::IndexHNSWCagra*>(index)) {
+    return {VectorIndexKind::kCagra, index};
   } else if (dynamic_cast<faiss::IndexIVFScalarQuantizer*>(index)) {
     return {VectorIndexKind::kIvfSq, index};
   } else if (dynamic_cast<faiss::IndexIVFFlat*>(index)) {
@@ -163,6 +178,10 @@ bool hasMissingId(const faiss::Index* index) {
                idMap->id_map.end(),
                LocalVectorIndex::kPaddingId) != idMap->id_map.end();
   }
+  if (dynamic_cast<const faiss::IndexHNSW*>(index) != nullptr) {
+    // A CAGRA graph without an id map numbers its embeddings from 0.
+    return false;
+  }
   const auto* ivf = dynamic_cast<const faiss::IndexIVF*>(index);
   VELOX_CHECK_NOT_NULL(ivf);
   const auto* lists = ivf->invlists;
@@ -177,7 +196,33 @@ bool hasMissingId(const faiss::Index* index) {
   return false;
 }
 
+std::mutex& acceleratorMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::shared_ptr<const LocalVectorIndexAccelerator>& acceleratorSlot() {
+  // A registered accelerator may own CUDA resources. Destroying it from
+  // static storage at process exit can run after the CUDA runtime shuts down.
+  // Explicit unregister still releases the accelerator.
+  static auto* const accelerator =
+      new std::shared_ptr<const LocalVectorIndexAccelerator>();
+  return *accelerator;
+}
+
 } // namespace
+
+void setLocalVectorIndexAccelerator(
+    std::shared_ptr<const LocalVectorIndexAccelerator> accelerator) {
+  const std::lock_guard<std::mutex> lock(acceleratorMutex());
+  acceleratorSlot() = std::move(accelerator);
+}
+
+std::shared_ptr<const LocalVectorIndexAccelerator>
+localVectorIndexAccelerator() {
+  const std::lock_guard<std::mutex> lock(acceleratorMutex());
+  return acceleratorSlot();
+}
 
 void FaissLocalVectorIndex::build(
     VectorIndexKind kind,
@@ -200,8 +245,17 @@ void FaissLocalVectorIndex::build(
           options,
           embeddings.size(),
           embeddings.dimension());
-      index->train(embeddings.size(), embeddings.data());
-      index->add_with_ids(embeddings.size(), embeddings.data(), ids.data());
+      const auto accelerator = localVectorIndexAccelerator();
+      if (accelerator == nullptr ||
+          !accelerator->build(kind, *index, embeddings, ids)) {
+        // A CAGRA graph is built by NN-descent on the GPU and stored as an
+        // IndexHNSWCagra. There is no CPU build of it.
+        VELOX_USER_CHECK(
+            kind != VectorIndexKind::kCagra,
+            "A CAGRA local vector index is built on the GPU");
+        index->train(embeddings.size(), embeddings.data());
+        index->add_with_ids(embeddings.size(), embeddings.data(), ids.data());
+      }
       CallbackWriter writer(write);
       faiss::write_index(index.get(), &writer);
       return;
@@ -431,6 +485,9 @@ FaissLocalVectorIndex::FaissLocalVectorIndex(
     dynamic_cast<faiss::IndexHNSW*>(index)->hnsw.efSearch =
         *searchOptions.efSearch;
   }
+  if (const auto accelerator = localVectorIndexAccelerator()) {
+    accelerated_ = accelerator->load(kind_, *index_);
+  }
 }
 
 FaissLocalVectorIndex::~FaissLocalVectorIndex() = default;
@@ -459,6 +516,10 @@ void FaissLocalVectorIndex::search(
       "Query embedding length must match the vector index's");
   VELOX_CHECK_EQ(ids.size(), queries.size() * k);
   VELOX_CHECK_EQ(scores.size(), queries.size() * k);
+  if (accelerated_ != nullptr &&
+      accelerated_->search(queries, k, ids, scores)) {
+    return;
+  }
   FaissThreads singleThreaded{1};
   const auto* ivf = dynamic_cast<const faiss::IndexIVF*>(index_.get());
   if (ivf == nullptr) {

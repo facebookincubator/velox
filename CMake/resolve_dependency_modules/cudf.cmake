@@ -17,18 +17,7 @@ include_guard(GLOBAL)
 # 4.0 is the minimum version required by cudf
 cmake_minimum_required(VERSION 4.0)
 
-# rapids_cmake commit 037d4c5 from 2026-10-09 (main branch)
-set(VELOX_rapids_cmake_VERSION 26.12)
-set(VELOX_rapids_cmake_COMMIT 037d4c5489cc13f5b378b54197238a6e2cdbff17)
-set(
-  VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM
-  946ebc43d81dc7359e973df54bc0749f281a0b65b32a299b00ee6a66507b0a04
-)
-set(
-  VELOX_rapids_cmake_SOURCE_URL
-  "https://github.com/rapidsai/rapids-cmake/archive/${VELOX_rapids_cmake_COMMIT}.tar.gz"
-)
-velox_resolve_dependency_url(rapids_cmake)
+include("${CMAKE_CURRENT_LIST_DIR}/rapids-cmake-source.cmake")
 
 # rmm commit 7e29fc0 from 2026-10-15 (main branch)
 set(VELOX_rmm_VERSION 26.12)
@@ -131,13 +120,6 @@ block(SCOPE_FOR VARIABLES)
   set(CUDF_BUILD_STATIC_DEPS OFF)
   set(BUILD_SHARED_LIBS ON)
   set(KvikIO_BUILD_NSYS_PLUGIN OFF)
-
-  FetchContent_Declare(
-    rapids-cmake
-    URL ${VELOX_rapids_cmake_SOURCE_URL}
-    URL_HASH ${VELOX_rapids_cmake_BUILD_SHA256_CHECKSUM}
-    UPDATE_DISCONNECTED 1
-  )
 
   FetchContent_Declare(
     rmm

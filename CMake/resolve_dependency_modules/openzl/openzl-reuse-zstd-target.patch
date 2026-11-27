@@ -1,0 +1,25 @@
+--- a/build-scripts/cmake/openzl-deps.cmake
++++ b/build-scripts/cmake/openzl-deps.cmake
+@@ -104,7 +104,10 @@
+ set(ZSTD_BUILD_TESTS OFF CACHE BOOL "")
+ 
+ # Add zstd subdirectory directly instead of using FetchContent
+-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/deps/zstd/build/cmake" zstd_build)
++# Reuse a zstd that another dependency (e.g. cuDF) already added.
++if(NOT TARGET libzstd)
++    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/deps/zstd/build/cmake" zstd_build)
++endif()
+ # Note: find_package not needed when using add_subdirectory - targets are directly available
+ list(APPEND OPENZL_LINK_LIBRARIES libzstd)
+ 
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -203,7 +203,7 @@
+         $<TARGET_PROPERTY:openzl_deps,INTERFACE_INCLUDE_DIRECTORIES>
+ )
+ 
+-target_include_directories(openzl
++target_compile_definitions(openzl
+     PUBLIC
+         $<TARGET_PROPERTY:openzl_deps,INTERFACE_COMPILE_DEFINITIONS>
+ )

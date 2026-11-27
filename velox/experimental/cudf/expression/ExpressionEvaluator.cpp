@@ -1947,6 +1947,18 @@ class SwitchFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> right_;
 };
 
+bool containsVectorDistanceCall(const core::TypedExprPtr& expr) {
+  if (expr->isCallKind()) {
+    // Presto function names may have a registration prefix.
+    const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
+    if (name.ends_with("cosine_similarity") || name.ends_with("l2_squared") ||
+        name.ends_with("dot_product")) {
+      return true;
+    }
+  }
+  return std::ranges::any_of(expr->inputs(), containsVectorDistanceCall);
+}
+
 class CoalesceFunction : public CudfFunction {
  public:
   CoalesceFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool) {
@@ -2950,7 +2962,18 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .returnType("T")
            .argumentType("T")
            .variableArity("T")
-           .build()});
+           .build()},
+      /*overwrite=*/true,
+      [](const core::TypedExprPtr& expr, const core::QueryConfig&) {
+        // Later arguments run only on unresolved rows on the CPU. Eager GPU
+        // evaluation could raise a vector size error on a row already resolved.
+        const auto& inputs = expr->inputs();
+        return inputs.size() < 2 ||
+            std::none_of(
+                   inputs.begin() + 1,
+                   inputs.end(),
+                   containsVectorDistanceCall);
+      });
 
   // row_constructor is a special form and doesn't have a prefix in its name.
   registerCudfFunction(

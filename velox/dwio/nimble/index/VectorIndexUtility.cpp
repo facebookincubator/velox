@@ -95,6 +95,8 @@ serialization::VectorIndexType toSerializedIndexType(
       return serialization::VectorIndexType_IVF_RABITQ_FAST_SCAN;
     case VectorIndexType::kHnswSq8:
       return serialization::VectorIndexType_HNSW_SQ8;
+    case VectorIndexType::kCagra:
+      return serialization::VectorIndexType_CAGRA;
     default:
       NIMBLE_UNREACHABLE(
           "Unknown vector index type: {}", static_cast<int>(indexType));
@@ -116,6 +118,8 @@ VectorIndexType fromSerializedIndexType(int8_t indexType) {
       return VectorIndexType::kIvfRaBitQFastScan;
     case static_cast<int8_t>(serialization::VectorIndexType_HNSW_SQ8):
       return VectorIndexType::kHnswSq8;
+    case static_cast<int8_t>(serialization::VectorIndexType_CAGRA):
+      return VectorIndexType::kCagra;
     default:
       NIMBLE_CHECK_FILE(
           false,
