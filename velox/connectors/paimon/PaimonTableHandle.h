@@ -21,6 +21,73 @@
 
 namespace facebook::velox::connector::paimon {
 
+/// Names of the Paimon table options that PaimonTableHandle parses into
+/// PaimonTableHandle::MergeOptions, as Paimon Java's CoreOptions names them.
+class PaimonTableOptions {
+ public:
+  /// Merge engine of a primary-key table, one of the PaimonMergeEngine values.
+  static constexpr const char* kMergeEngine = "merge-engine";
+
+  /// Whether merge-on-read skips DELETE and UPDATE_BEFORE rows. When it is not
+  /// set, the first of the three fallback names below that is set applies,
+  /// whatever the merge engine.
+  static constexpr const char* kIgnoreDelete = "ignore-delete";
+
+  /// First fallback name of kIgnoreDelete.
+  static constexpr const char* kFirstRowIgnoreDelete =
+      "first-row.ignore-delete";
+
+  /// Second fallback name of kIgnoreDelete.
+  static constexpr const char* kDeduplicateIgnoreDelete =
+      "deduplicate.ignore-delete";
+
+  /// Third fallback name of kIgnoreDelete.
+  static constexpr const char* kPartialUpdateIgnoreDelete =
+      "partial-update.ignore-delete";
+
+  /// Comma-separated columns that order the rows of a key before their
+  /// sequence numbers do.
+  static constexpr const char* kSequenceField = "sequence.field";
+
+  /// Order of the sequence fields, 'ascending' or 'descending'.
+  static constexpr const char* kSequenceFieldSortOrder =
+      "sequence.field.sort-order";
+
+  /// Whether the rows of a key are ordered by the snapshot that committed them.
+  static constexpr const char* kSequenceSnapshotOrdering =
+      "sequence.snapshot-ordering";
+
+  /// How a primary-key table writes changelog files, one of the
+  /// PaimonChangelogProducer values.
+  static constexpr const char* kChangelogProducer = "changelog-producer";
+
+  /// Whether writes mark replaced rows in deletion vectors.
+  static constexpr const char* kDeletionVectorsEnabled =
+      "deletion-vectors.enabled";
+
+  /// Whether compaction looks up keys in higher levels even if no other option
+  /// asks for it.
+  static constexpr const char* kForceLookup = "force-lookup";
+};
+
+/// Values of the PaimonTableOptions::kChangelogProducer table option, which
+/// Paimon Java accepts in any capitalization.
+class PaimonChangelogProducer {
+ public:
+  /// Writes no changelog files.
+  static constexpr const char* kNone = "none";
+
+  /// Writes the input rows as changelog files when the writer flushes them.
+  static constexpr const char* kInput = "input";
+
+  /// Writes changelog files with each full compaction.
+  static constexpr const char* kFullCompaction = "full-compaction";
+
+  /// Writes changelog files with lookup compaction, which looks up keys in
+  /// higher levels.
+  static constexpr const char* kLookup = "lookup";
+};
+
 /// Table handle for Paimon scans. Stores the fixed table definition and scan
 /// conditions, including a schema version ID and stable field IDs aligned with
 /// the top-level columns of its Velox RowType.
@@ -86,6 +153,15 @@ class PaimonTableHandle final : public connector::FileTableHandle {
     /// sequence number 100 from snapshot 10 is then older than one with
     /// sequence number 2 from snapshot 11. Merge-on-read does not support it.
     bool sequenceSnapshotOrdering{false};
+
+    /// Whether compaction looks up keys in higher levels, so that a row of a
+    /// level above 0 already merges the rows of its key in higher levels. Then
+    /// merge-on-read merges the rows of a key in level 0 with only the first
+    /// row of the lowest level above 0, as Paimon Java's LookupMergeFunction
+    /// does for every merge engine but first-row. Set when 'changelog-producer'
+    /// is 'lookup', 'deletion-vectors.enabled' or 'force-lookup' is true, or
+    /// the merge engine is first-row.
+    bool needLookup{false};
   };
 
   /// rowType includes partition columns; fieldIds follow its column order.

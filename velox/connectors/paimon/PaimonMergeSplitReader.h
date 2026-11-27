@@ -26,14 +26,17 @@ namespace facebook::velox::connector::paimon {
 /// that are not partition columns, the sequence fields, _SEQUENCE_NUMBER and
 /// _VALUE_KIND of every file, orders the rows of each key by sequence fields
 /// and then by sequence number as Paimon Java does, and picks the row the
-/// merge engine returns: the last for deduplicate, the first for first-row. A
-/// key whose picked row is a DELETE or UPDATE_BEFORE returns nothing. Rows
-/// deleted by a deletion vector take no part, as Paimon Java applies the
-/// deletion vector of each file before it merges. The picked rows of each
-/// file form its row selection. The files are then read one by one as for raw
-/// splits, with the rows outside the selection deleted, so filters, sampling
-/// and lazy loading see merged rows only. Paimon Java pushes only key filters
-/// below its merge, so filtering merged rows returns the same result.
+/// merge engine returns: the last for deduplicate, the first for first-row.
+/// When compaction looks up keys, deduplicate considers only the rows of level
+/// 0 and the first row of the lowest level above 0, as Paimon Java's
+/// LookupMergeFunction does. A key whose picked row is a DELETE or
+/// UPDATE_BEFORE returns nothing. Rows deleted by a deletion vector take no
+/// part, as Paimon Java applies the deletion vector of each file before it
+/// merges. The picked rows of each file form its row selection. The files are
+/// then read one by one as for raw splits, with the rows outside the selection
+/// deleted, so filters, sampling and lazy loading see merged rows only. Paimon
+/// Java pushes only key filters below its merge, so filtering merged rows
+/// returns the same result.
 ///
 /// Supports the deduplicate and first-row merge engines.
 class PaimonMergeSplitReader : public PaimonSplitReader {
