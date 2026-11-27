@@ -24,6 +24,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
@@ -141,8 +142,43 @@ TEST_F(DecodedStringBuffersTest, doublesBuffersUpTo1MB) {
 TEST_F(DecodedStringBuffersTest, reservesMoreThanTheNextBuffer) {
   // A reservation larger than the next buffer takes a buffer of its size.
   DecodedStringBuffers buffers{pool_.get()};
-  constexpr size_t kSize{3 << 20};
+  constexpr size_t kSize{100 << 10};
   EXPECT_EQ(buffers.reserve(/*numReservedBytes=*/kSize).size(), kSize);
+}
+
+TEST_F(DecodedStringBuffersTest, givesOversizeRoomABufferOfItsOwn) {
+  DecodedStringBuffers buffers{pool_.get()};
+  const auto first = buffers.reserve(/*numReservedBytes=*/100);
+  std::fill_n(first.data(), 60, 'a');
+  const auto firstBuffer = buffers.finish(/*numUsedBytes=*/60);
+
+  // A room larger than a buffer of the largest size holds takes a buffer of
+  // exactly its size, which no later room shares.
+  constexpr size_t kSize{DecodedStringBuffers::testingMaxBufferBytes() + 1};
+  const auto oversize = buffers.reserve(/*numReservedBytes=*/kSize);
+  EXPECT_EQ(oversize.size(), kSize);
+  std::fill_n(oversize.data(), 10, 'b');
+  const auto oversizeBuffer = buffers.finish(/*numUsedBytes=*/10);
+  EXPECT_NE(oversizeBuffer, firstBuffer);
+  EXPECT_EQ(oversize.data(), oversizeBuffer->as<char>());
+
+  // The next room goes on in the first buffer, right after its strings.
+  const auto next = buffers.reserve(/*numReservedBytes=*/100);
+  EXPECT_EQ(next.data(), firstBuffer->as<char>() + 60);
+  EXPECT_EQ(buffers.finish(/*numUsedBytes=*/0), firstBuffer);
+  EXPECT_EQ(
+      std::string_view(firstBuffer->as<char>(), 60), std::string(60, 'a'));
+  EXPECT_EQ(
+      std::string_view(oversizeBuffer->as<char>(), 10), std::string(10, 'b'));
+}
+
+TEST_F(DecodedStringBuffersTest, isNeitherCopyableNorMovable) {
+  // Views keep the address of an instance, and a copy would give out the same
+  // bytes as the original.
+  static_assert(!std::is_copy_constructible_v<DecodedStringBuffers>);
+  static_assert(!std::is_copy_assignable_v<DecodedStringBuffers>);
+  static_assert(!std::is_move_constructible_v<DecodedStringBuffers>);
+  static_assert(!std::is_move_assignable_v<DecodedStringBuffers>);
 }
 
 TEST_F(DecodedStringBuffersTest, clearStartsOverWith32KB) {
