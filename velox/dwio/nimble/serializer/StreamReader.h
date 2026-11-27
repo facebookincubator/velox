@@ -19,11 +19,13 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include <folly/Executor.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <folly/coro/Task.h>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
@@ -69,6 +71,15 @@ class StreamReader {
     /// task has enough work to amortize scheduling it.
     uint32_t minStreamsPerDecodeTask{1};
 
+    /// Names the top-level FlatMap columns of the projected schema, which must
+    /// then be a Row, that the reader returns as structs instead of maps. A
+    /// struct has one field per key that the schema gives its column, in the
+    /// schema's key order, typed as the map's values. A field is null in a row
+    /// that lacks its key. For example, a column "features" whose keys in the
+    /// schema are "a" and "b" reads as ROW(a, b), and the map {"b": 2} reads
+    /// as {a: null, b: 2}.
+    folly::F14FastSet<std::string> readFlatMapFieldAsStruct{};
+
     /// Returns true when the reader can decode child fields in parallel.
     bool parallelDecodeEnabled() const {
       return decodeExecutor != nullptr && maxDecodeParallelism > 1;
@@ -83,6 +94,13 @@ class StreamReader {
       Options options);
 
   ~StreamReader();
+
+  /// Returns the Velox type of the rows that the reader returns: that of the
+  /// projected schema, with each column that Options::readFlatMapFieldAsStruct
+  /// names typed as a ROW of its keys.
+  const velox::TypePtr& outputType() const {
+    return outputType_;
+  }
 
   /// Decodes source ranges contiguously starting at `outputOffset`.
   /// Source ranges must be non-empty, ordered by `startRow`, and disjoint.
@@ -248,9 +266,6 @@ class StreamReader {
   // Projected schema shared by every stream set decoded by this instance.
   const std::shared_ptr<const Type> type_;
 
-  // Velox counterpart of type_, used when allocating each result.
-  const velox::TypePtr outputType_;
-
   // Owns all buffers allocated while decoding.
   velox::memory::MemoryPool* const pool_;
 
@@ -266,6 +281,10 @@ class StreamReader {
 
   // Builds a FieldReader tree for each stream binding.
   std::unique_ptr<FieldReaderFactory> readerFactory_;
+
+  // Velox type of the rows that readerFactory_ decodes, used when allocating
+  // each result. Set by init().
+  velox::TypePtr outputType_;
 
   // Holds the buffers that the views of the chunks of each stream of strings
   // decode strings into, in the layout of co_read(), or null for a stream
