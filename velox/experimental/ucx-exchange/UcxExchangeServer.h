@@ -70,6 +70,11 @@ class UcxExchangeServer
   /// on the Communicator thread.
   void onEndpointClosed(std::string_view reason) override;
 
+  /// Fails the producer task with 'error', as a failed send does, and closes.
+  /// The consumer is still there and has not received the destination's
+  /// results. Called on the Communicator thread.
+  void onElementFailed(std::string_view error) override;
+
   /// Cancels the outstanding requests and the intra-node transfer that no
   /// source read, unbinds from the producer task's output queue
   /// and unregisters from the Communicator and the endpoint. Decides nothing

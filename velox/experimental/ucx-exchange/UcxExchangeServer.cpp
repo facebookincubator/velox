@@ -17,6 +17,7 @@
 #include <fmt/format.h>
 #include <glog/logging.h>
 #include "cuda_runtime.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -146,6 +147,8 @@ void UcxExchangeServer::process() {
     close();
     return;
   }
+  common::testutil::TestValue::adjust(
+      "facebook::velox::ucx_exchange::UcxExchangeServer::process", this);
   switch (state_) {
     case ServerState::Created:
       setState(ServerState::ReadyToTransfer);
@@ -251,6 +254,11 @@ void UcxExchangeServer::process() {
 void UcxExchangeServer::onEndpointClosed(std::string_view reason) {
   VLOG(1) << toString() << " " << reason;
   outputQueue_->consumerGone(partitionKey_.destination);
+  close();
+}
+
+void UcxExchangeServer::onElementFailed(std::string_view error) {
+  failProducer(fmt::format("Exchange server failed: {}", error));
   close();
 }
 

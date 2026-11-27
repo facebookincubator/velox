@@ -1785,6 +1785,41 @@ TEST_F(UcxOutputQueueManagerTest, sendFailedFailsProducerTask) {
   queueManager_->removeTask(taskId);
 }
 
+// A failed send frees its destination's chunks, so the removal that follows
+// finds no output left. It must still end the task's remaining consumers with
+// the send's error: an intra-node consumer that is still polling would
+// otherwise end cleanly without the freed rows.
+TEST_F(UcxOutputQueueManagerTest, removalAfterSendFailureReportsProducerError) {
+  const std::string taskId = "removalAfterSendFailure";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  enqueue(taskId, 0, 10);
+  noMoreData(taskId);
+
+  auto error = outputQueue->sendFailed(0, "Injected send failure");
+  ASSERT_TRUE(error.has_value());
+  task->setError(*error);
+  queueManager_->releaseReader(outputQueue, 0);
+  queueManager_->removeTask(taskId);
+
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const auto cancelled =
+      registry->poll({taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  ASSERT_TRUE(cancelled.has_value());
+  EXPECT_TRUE(cancelled->atEnd);
+  EXPECT_EQ(cancelled->outcome.kind, OutcomeKind::kProducerError);
+  EXPECT_THAT(
+      cancelled->outcome.error,
+      testing::AllOf(
+          testing::HasSubstr(
+              "Producer task failed to send its output. Task: " + taskId),
+          testing::HasSubstr(
+              "Failed to send to consumer over UCX, task " + taskId +
+              ": Injected send failure")));
+  registry->clearCancelledTask(taskId);
+}
+
 // The release callback runs outside the manager's and the output queue's locks,
 // so that it may call back into them.
 TEST_F(UcxOutputQueueManagerTest, onReleasedFiresOutsideLock) {

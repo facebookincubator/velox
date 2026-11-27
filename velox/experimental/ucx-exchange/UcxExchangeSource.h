@@ -111,6 +111,10 @@ class UcxExchangeSource
   /// released already. Called on the Communicator thread.
   void onEndpointClosed(std::string_view reason) override;
 
+  /// Ends the source with a transport error that names 'error', the failure of
+  /// its process() on this worker. Called on the Communicator thread.
+  void onElementFailed(std::string_view error) override;
+
   /// @brief Called by UcxExchangeClient::next() on the consumer (driver)
   /// thread to wake up this source after it went dormant due to backpressure.
   /// Uses CAS to ensure exactly one wake-up per dormant period.

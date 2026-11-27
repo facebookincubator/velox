@@ -48,6 +48,12 @@ class CommElement {
   /// names the endpoint's close status.
   virtual void onEndpointClosed(std::string_view reason) = 0;
 
+  /// Called on the Communicator thread when process() threw. 'error' is the
+  /// exception's message. The failure happened on this worker, so the peer is
+  /// still there: a server fails its producer task, and a source fails its
+  /// consumer.
+  virtual void onElementFailed(std::string_view error) = 0;
+
  protected:
   const std::shared_ptr<Communicator> communicator_;
   std::shared_ptr<EndpointRef> endpointRef_;

@@ -276,9 +276,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   void consumerGone(int destination);
 
   /// Releases 'destination' because a send to its consumer failed while the
-  /// endpoint stayed open, and frees its chunks. Returns the error for the
-  /// caller to pass to Task::setError() outside every lock, or nullopt if the
-  /// destination had already ended or was released.
+  /// endpoint stayed open, or its server failed, and frees its chunks. Returns
+  /// the error for the caller to pass to Task::setError() outside every lock,
+  /// or nullopt if the destination was released already or is unpublished. A
+  /// later remove() ends the remaining consumers with the first such error.
   std::optional<std::string> sendFailed(
       int destination,
       std::string_view status);
@@ -583,6 +584,11 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // The outcome remove() decided. Readers of a Removed output queue's
   // destinations that were never published get it.
   std::shared_ptr<const ChannelOutcome> removedOutcome_;
+
+  // The error of the first send that failed the task. A failed send frees its
+  // destination's chunks, so remove() reports this error instead of counting
+  // the output left.
+  std::optional<std::string> sendFailure_;
 
   // The release callbacks of the bound readers, by destination.
   std::unordered_map<int, std::function<void()>> onReleased_;

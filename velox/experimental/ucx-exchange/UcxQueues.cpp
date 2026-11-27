@@ -417,6 +417,13 @@ ChannelOutcome UcxOutputQueue::removalOutcomeLocked(
             facts.state,
             facts.error)));
   }
+  if (sendFailure_.has_value()) {
+    return ChannelOutcome::producerError(truncateProducerError(
+        fmt::format(
+            "Producer task failed to send its output. Task: {}, error: {}",
+            facts.taskId,
+            *sendFailure_)));
+  }
   // Counts only the output that removal destroys: chunks still queued, chunks
   // kept for broadcast destinations not added yet, and intra-node chunks
   // published but not read, which the registry drops with the task. The count
@@ -537,7 +544,7 @@ std::optional<std::string> UcxOutputQueue::sendFailed(
     int destination,
     std::string_view status) {
   Deferred deferred;
-  bool failTask{false};
+  std::optional<std::string> error;
   {
     std::lock_guard<std::mutex> l(mutex_);
     auto* slot = findDestinationLocked(destination);
@@ -546,20 +553,23 @@ std::optional<std::string> UcxOutputQueue::sendFailed(
     }
     // No setAllOutputConsumed(): the caller fails the task, and a finished
     // task would drop that error.
-    failTask = applyLocked(
-                   *slot,
-                   destination,
-                   DestinationEvent::kSendFailed,
-                   cleanOutcome(),
-                   deferred)
-                   .failTask;
+    const bool failTask = applyLocked(
+                              *slot,
+                              destination,
+                              DestinationEvent::kSendFailed,
+                              cleanOutcome(),
+                              deferred)
+                              .failTask;
+    if (failTask) {
+      error = fmt::format(
+          "Failed to send to consumer over UCX, task {}: {}", taskId_, status);
+      if (!sendFailure_.has_value()) {
+        sendFailure_ = error;
+      }
+    }
   }
   deferred.run();
-  if (!failTask) {
-    return std::nullopt;
-  }
-  return fmt::format(
-      "Failed to send to consumer over UCX, task {}: {}", taskId_, status);
+  return error;
 }
 
 void UcxOutputQueue::setOnReleased(

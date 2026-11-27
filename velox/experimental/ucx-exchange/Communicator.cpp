@@ -15,7 +15,6 @@
  */
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include <cuda_runtime.h>
-#include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
@@ -116,10 +115,13 @@ Communicator::~Communicator() {
 }
 
 namespace {
-// Runs 'element's process(). An exception ends only that element, as if its
-// endpoint closed: a server Releases its destination and a source fails its
-// consumer. The loop serves every exchange on this worker, so one element's
-// failure, such as a post that throws, must not stop it.
+// Runs 'element's process(). An exception ends only that element, through
+// onElementFailed(): a server fails its producer task and a source fails its
+// consumer. The failure is local and must not be reported as a closed
+// endpoint. A closed endpoint tells a server that its consumer is gone, and
+// the producer task then finishes without the rows the server dropped. The
+// loop serves every exchange on this worker, so one element's failure, such as
+// a post that throws, must not stop it.
 void processElement(CommElement& element) {
   std::string error;
   try {
@@ -136,7 +138,7 @@ void processElement(CommElement& element) {
   LOG(ERROR) << "UCX exchange element failed on the Communicator thread: "
              << error;
   try {
-    element.onEndpointClosed(fmt::format("Exchange element failed: {}", error));
+    element.onElementFailed(error);
   } catch (const std::exception& e) {
     LOG(ERROR) << "Cannot end a failed UCX exchange element: " << e.what();
   } catch (...) {

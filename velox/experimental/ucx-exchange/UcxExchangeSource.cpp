@@ -434,6 +434,11 @@ void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
       "Connection to producer closed before it sent all its data,", reason)));
 }
 
+void UcxExchangeSource::onElementFailed(std::string_view error) {
+  end(ChannelOutcome::transportError(
+      formatError("Exchange source failed to receive from producer,", error)));
+}
+
 void UcxExchangeSource::resumeFromBackpressure() {
   bool expected = true;
   if (backpressureActive_.compare_exchange_strong(

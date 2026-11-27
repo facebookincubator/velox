@@ -61,6 +61,8 @@ class SelfRequeueingElement final
 
   void onEndpointClosed(std::string_view /*reason*/) override {}
 
+  void onElementFailed(std::string_view /*error*/) override {}
+
   // Asks the element to stop requeueing and waits until it has unregistered.
   bool stopAndWait(std::chrono::milliseconds timeout) {
     stop_.store(true, std::memory_order_release);
@@ -89,6 +91,8 @@ class EndpointClosedProbe final : public CommElement {
     closed_.post();
   }
 
+  void onElementFailed(std::string_view /*error*/) override {}
+
   bool waitForClosed(std::chrono::milliseconds timeout) {
     return closed_.try_wait_for(timeout);
   }
@@ -110,25 +114,34 @@ class ThrowingElement final
     VELOX_FAIL("Injected process() failure");
   }
 
-  void onEndpointClosed(std::string_view reason) override {
-    reason_ = std::string(reason);
-    communicator_->unregister(shared_from_this());
-    ended_.post();
+  void onEndpointClosed(std::string_view /*reason*/) override {
+    endpointClosed_.store(true, std::memory_order_release);
   }
 
-  // Returns the reason the element was ended with, or nullopt if it was not
-  // ended within 'timeout'.
-  std::optional<std::string> waitForEnd(std::chrono::milliseconds timeout) {
-    if (!ended_.try_wait_for(timeout)) {
+  void onElementFailed(std::string_view error) override {
+    error_ = std::string(error);
+    communicator_->unregister(shared_from_this());
+    failed_.post();
+  }
+
+  // Returns the error the element was failed with, or nullopt if it was not
+  // failed within 'timeout'.
+  std::optional<std::string> waitForFailure(std::chrono::milliseconds timeout) {
+    if (!failed_.try_wait_for(timeout)) {
       return std::nullopt;
     }
-    return reason_;
+    return error_;
+  }
+
+  bool endpointClosed() const {
+    return endpointClosed_.load(std::memory_order_acquire);
   }
 
  private:
-  // Written on the Communicator thread before 'ended_' is posted.
-  std::string reason_;
-  folly::Baton<> ended_;
+  // Written on the Communicator thread before 'failed_' is posted.
+  std::string error_;
+  folly::Baton<> failed_;
+  std::atomic<bool> endpointClosed_{false};
 };
 
 // Starts a self-requeueing element and waits until the Communicator is
@@ -273,16 +286,17 @@ TEST_F(CommunicatorStallTest, closeMessageHandledWhileAnElementRequeuesItself) {
          "requeued itself";
 }
 
-// An element whose process() throws is ended with the error, as if its
-// endpoint closed, and the Communicator keeps serving every other element on
-// this worker.
-TEST_F(CommunicatorStallTest, throwingElementIsEndedAndLoopContinues) {
+// An element whose process() throws is failed with the error, not told that
+// its endpoint closed: the failure is local, and its peer is still there. The
+// Communicator keeps serving every other element on this worker.
+TEST_F(CommunicatorStallTest, throwingElementFailsAndLoopContinues) {
   auto communicator = Communicator::getInstance();
   auto element = std::make_shared<ThrowingElement>(communicator);
   communicator->registerCommElement(element);
   EXPECT_EQ(
-      element->waitForEnd(std::chrono::milliseconds(2'000)),
-      "Exchange element failed: Injected process() failure");
+      element->waitForFailure(std::chrono::milliseconds(2'000)),
+      "Injected process() failure");
+  EXPECT_FALSE(element->endpointClosed());
   EXPECT_TRUE(
       postedActionLatency(communicator, std::chrono::milliseconds(2'000))
           .has_value())

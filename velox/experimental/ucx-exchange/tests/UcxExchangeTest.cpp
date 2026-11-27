@@ -50,6 +50,7 @@
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/Ports.h"
@@ -180,6 +181,8 @@ class TestEndpointOwner final : public CommElement {
   void process() override {}
 
   void onEndpointClosed(std::string_view /*reason*/) override {}
+
+  void onElementFailed(std::string_view /*error*/) override {}
 };
 
 // Returns true if 'buffer' holds an end message with a clean outcome. Runs in a
@@ -3408,6 +3411,114 @@ TEST_F(UcxExchangeFocusedTest, oversizedChunkMetadataFailsProducer) {
   table.reset();
   EXPECT_TRUE(waitForOutputFinished(taskId));
   EXPECT_NE(task->state(), TaskState::kFailed);
+}
+
+// A server whose process() throws failed on the producer's worker, while its
+// consumer is still there. The producer task must fail, so that the query
+// fails, rather than finish as if its consumer were gone. An intra-node
+// consumer must not end cleanly without the chunks that the failure freed: the
+// producer finished its output before the server ran, so the output left at
+// removal is none. A remote consumer gets no end message; the coordinator
+// aborts it with the failed query.
+DEBUG_ONLY_TEST_F(UcxExchangeFocusedTest, serverFailureFailsProducer) {
+  using common::testutil::TestValue;
+  const bool testValuesEnabled = TestValue::enabled();
+  TestValue::enable();
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  SCOPE_EXIT {
+    config.intraNodeExchange = previousIntraNode;
+    if (!testValuesEnabled) {
+      TestValue::disable();
+    }
+  };
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const int32_t numChunks = 3;
+  const vector_size_t numRowsPerChunk = 100;
+  for (const bool intraNode : {false, true}) {
+    SCOPED_TRACE(intraNode ? "intra-node" : "remote");
+    config.intraNodeExchange = intraNode;
+    const std::string srcTaskId =
+        taskPrefix + (intraNode ? "intraNodeServerFailure" : "serverFailure");
+    std::atomic<bool> injected{false};
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::ucx_exchange::UcxExchangeServer::process",
+        std::function<void(UcxExchangeServer*)>([&](UcxExchangeServer* server) {
+          if (server->getPartitionKey().taskId == srcTaskId &&
+              !injected.exchange(true)) {
+            VELOX_FAIL("Injected server failure");
+          }
+        }));
+
+    auto srcTask =
+        createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+    queueManager()->initializeTask(
+        srcTask,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        /*numDestinations=*/1,
+        /*numDrivers=*/1);
+    auto removeProducer = folly::makeGuard([&]() {
+      srcTask->requestAbort().wait();
+      queueManager()->removeTask(srcTaskId);
+    });
+    for (int32_t chunk = 0; chunk < numChunks; ++chunk) {
+      queueManager()->enqueue(
+          srcTaskId, 0, makePackedColumns(numRowsPerChunk), numRowsPerChunk);
+    }
+    queueManager()->noMoreData(srcTaskId);
+
+    std::shared_ptr<Task> sinkTask;
+    std::shared_ptr<DriverCtx> driverCtx;
+    auto exchangeClient = startIntraNodeConsumer(
+        srcTaskId + "Sink", remoteSplit(srcTaskId, 0), sinkTask, driverCtx);
+    UcxExchange exchange(
+        0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+    SCOPE_EXIT {
+      exchange.close();
+    };
+
+    EXPECT_TRUE(waitUntil(
+        [&]() { return srcTask->state() == TaskState::kFailed; },
+        std::chrono::milliseconds(10'000)))
+        << "Producer task state: " << srcTask->state();
+    EXPECT_TRUE(injected.load());
+    EXPECT_THAT(
+        srcTask->errorMessage(),
+        testing::AllOf(
+            testing::HasSubstr(
+                "Failed to send to consumer over UCX, task " + srcTaskId),
+            testing::HasSubstr(
+                "Exchange server failed: Injected server failure")));
+
+    removeProducer.dismiss();
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+    if (!intraNode) {
+      continue;
+    }
+    uint64_t numRows{0};
+    std::optional<std::string> error;
+    try {
+      numRows = drainToEnd(
+          exchange,
+          /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+          std::chrono::seconds(30));
+    } catch (const VeloxException& e) {
+      error = e.message();
+    }
+    EXPECT_EQ(numRows, uint64_t{0});
+    EXPECT_THAT(
+        error,
+        testing::Optional(
+            testing::AllOf(
+                testing::HasSubstr(
+                    "Producer task failed to send its output. Task: " +
+                    srcTaskId),
+                testing::HasSubstr(
+                    "Exchange server failed: Injected server failure"))));
+    IntraNodeTransferRegistry::getInstance()->clearCancelledTask(srcTaskId);
+  }
 }
 
 // A source that closes before the handshake response arrives waits for the
