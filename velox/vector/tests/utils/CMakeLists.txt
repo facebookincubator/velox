@@ -24,6 +24,7 @@ velox_add_test_headers(
 target_link_libraries(
   velox_vector_test_lib
   velox_row_fast
+  velox_test_util
   velox_vector
   gflags::gflags
   GTest::gtest
