@@ -38,6 +38,7 @@
 #include "velox/dwio/nimble/common/Zigzag.h"
 #include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/compression/CompressionPolicy.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -349,6 +350,71 @@ std::string_view encodeTyped(
       options.compressionOptions);
 }
 
+/// Encodes the values `data` holds, of C++ type T, as SharedDictionary with
+/// `indices`, one index per value into a dictionary the reader supplies.
+template <typename T>
+std::string_view encodeSharedDictionaryTyped(
+    const SerializerOptions& options,
+    std::string_view data,
+    std::span<const uint32_t> indices,
+    nimble::Buffer& encodingBuffer,
+    const Encoding::Options& encodingOptions) {
+  NIMBLE_CHECK_EQ(
+      data.size() / sizeof(T),
+      indices.size(),
+      "Shared dictionary index count differs from value count");
+  return SharedDictionaryEncoding<T>::encode(
+      indices,
+      options.encodingSelectionPolicyCreator,
+      encodingBuffer,
+      encodingOptions);
+}
+
+/// Dispatches encodeSharedDictionaryTyped() on `scalarKind`: integers and
+/// strings, the types a shared dictionary holds.
+inline std::string_view encodeSharedDictionaryScalar(
+    const SerializerOptions& options,
+    ScalarKind scalarKind,
+    std::string_view data,
+    std::span<const uint32_t> indices,
+    nimble::Buffer& encodingBuffer,
+    const Encoding::Options& encodingOptions) {
+  switch (scalarKind) {
+    case ScalarKind::Int8:
+      return encodeSharedDictionaryTyped<int8_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::UInt8:
+      return encodeSharedDictionaryTyped<uint8_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::Int16:
+      return encodeSharedDictionaryTyped<int16_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::UInt16:
+      return encodeSharedDictionaryTyped<uint16_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::Int32:
+      return encodeSharedDictionaryTyped<int32_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::UInt32:
+      return encodeSharedDictionaryTyped<uint32_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::Int64:
+      return encodeSharedDictionaryTyped<int64_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::UInt64:
+      return encodeSharedDictionaryTyped<uint64_t>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    case ScalarKind::String:
+      [[fallthrough]];
+    case ScalarKind::Binary:
+      return encodeSharedDictionaryTyped<std::string_view>(
+          options, data, indices, encodingBuffer, encodingOptions);
+    default:
+      NIMBLE_USER_FAIL(
+          "A shared dictionary holds integers or strings, not {}", scalarKind);
+  }
+}
+
 /// Dispatch to typed nimble encoding based on ScalarKind.
 template <typename Buffer>
 std::string_view encodeScalar(
@@ -542,13 +608,22 @@ class StreamDataWriter {
   /// @param streamEncodingLayouts Optional encoding layouts for replaying
   ///        captured encodings. When provided, looks up EncodingLayout by
   ///        stream offset and uses ReplayedEncodingSelectionPolicy.
+  /// @param sharedDictionaryIndicesMap Optional streams to encode as
+  ///        SharedDictionary, by stream offset: one index per value of the
+  ///        stream into a file or external dictionary that the reader
+  ///        supplies (Encoding::Options::sharedDictionaryAlphabet). E.g.
+  ///        {3: [1, 0, 1]} writes stream 3's values "b", "a", "b" as indices
+  ///        into the dictionary ["a", "b"]. Such a stream may hold no nulls.
+  ///        The indices must stay valid until the stream is written.
   StreamDataWriter(
       const SerializerOptions& options,
       T& buffer,
       uint32_t rowCount,
       velox::memory::MemoryPool* pool,
       const std::unordered_map<uint32_t, const EncodingLayout*>*
-          streamEncodingLayouts);
+          streamEncodingLayouts,
+      const std::unordered_map<uint32_t, std::span<const uint32_t>>*
+          sharedDictionaryIndicesMap = nullptr);
 
   /// Write data for a single stream.
   void writeData(const nimble::StreamData& streamData);
@@ -581,6 +656,10 @@ class StreamDataWriter {
   // encodings. Only set when options_.encodingLayoutTree is specified.
   const std::unordered_map<uint32_t, const EncodingLayout*>* const
       streamEncodingLayouts_;
+  // Optional map from stream offset to the shared dictionary indices of its
+  // values; see the constructor.
+  const std::unordered_map<uint32_t, std::span<const uint32_t>>* const
+      sharedDictionaryIndicesMap_;
 
   // --- Mutable members ---
   // Final serialized output. Encoded stream bytes and stream metadata are
@@ -603,11 +682,14 @@ StreamDataWriter<T>::StreamDataWriter(
     uint32_t rowCount,
     velox::memory::MemoryPool* pool,
     const std::unordered_map<uint32_t, const EncodingLayout*>*
-        streamEncodingLayouts)
+        streamEncodingLayouts,
+    const std::unordered_map<uint32_t, std::span<const uint32_t>>*
+        sharedDictionaryIndicesMap)
     : options_{options},
       pool_{pool},
       streamEncodingBuffer_{std::make_unique<nimble::Buffer>(*pool)},
       streamEncodingLayouts_{streamEncodingLayouts},
+      sharedDictionaryIndicesMap_{sharedDictionaryIndicesMap},
       outputBuffer_{buffer},
       requiredBarrier_{!options_.hybridFlatMapColumns.empty()} {
   NIMBLE_CHECK_NOT_NULL(pool, "Memory pool cannot be null");
@@ -685,8 +767,27 @@ void StreamDataWriter<T>::encodeStream(
     }
   }
 
+  const std::span<const uint32_t>* sharedDictionaryIndices = nullptr;
+  if (sharedDictionaryIndicesMap_ != nullptr) {
+    auto it = sharedDictionaryIndicesMap_->find(streamOffset);
+    if (it != sharedDictionaryIndicesMap_->end()) {
+      sharedDictionaryIndices = &it->second;
+    }
+  }
+
   std::string_view encoded;
-  if (!facebook::nimble::StreamData::hasNullValues(nonNulls)) {
+  if (sharedDictionaryIndices != nullptr) {
+    NIMBLE_USER_CHECK(
+        !facebook::nimble::StreamData::hasNullValues(nonNulls),
+        "A shared dictionary stream may hold no nulls");
+    encoded = detail::encodeSharedDictionaryScalar(
+        options_,
+        scalarKind,
+        data,
+        *sharedDictionaryIndices,
+        *streamEncodingBuffer_,
+        options_.encodingOptions);
+  } else if (!facebook::nimble::StreamData::hasNullValues(nonNulls)) {
     encoded = detail::encodeScalar<T>(
         options_,
         scalarKind,
