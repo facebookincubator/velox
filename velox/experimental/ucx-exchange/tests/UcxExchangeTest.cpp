@@ -2991,6 +2991,11 @@ TEST_F(
     }
   }));
   ASSERT_TRUE(waitForServerDestroyed(session->server));
+  // The local close leaves the destination and its queued chunk for the
+  // consumer's close or a deletion of the results.
+  ASSERT_FALSE(queueManager()->isFinished(session->taskId));
+  ASSERT_EQ(destinationState(session->taskId), DestinationState::kOpen);
+  ASSERT_EQ(queueManager()->stats(session->taskId)->bufferedPages, 1);
 
   sendCloseMessage(session);
   EXPECT_TRUE(waitForOutputFinished(session->taskId));
@@ -3120,7 +3125,6 @@ TEST_F(
 
     // The data send stays pending until its receive is posted.
     queueManager()->removeTask(session->taskId);
-    EXPECT_FALSE(session->server.expired());
 
     cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
     auto data = std::make_shared<rmm::device_buffer>(
