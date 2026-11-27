@@ -53,6 +53,7 @@ static inline const std::string_view kInt128Array{"INT128_ARRAY"};
 static inline const std::string_view kVariableWidth{"VARIABLE_WIDTH"};
 static inline const std::string_view kArray{"ARRAY"};
 static inline const std::string_view kMap{"MAP"};
+static inline const std::string_view kFlatMap{"FLAT_MAP"};
 static inline const std::string_view kRow{"ROW"};
 static inline const std::string_view kRLE{"RLE"};
 static inline const std::string_view kDictionary{"DICTIONARY"};

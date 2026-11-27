@@ -24,6 +24,7 @@
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/ByteStream.h"
+#include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -134,6 +135,143 @@ class PrestoSerializerTest
     paramOptions.useMicrosecondPrecision = useMicrosecondPrecision;
 
     return paramOptions;
+  }
+
+  std::string serializeFlatMapPage(const std::vector<RowVectorPtr>& batches) {
+    const auto paramOptions = getParamSerdeOptions(nullptr);
+    StreamArena arena(pool_.get());
+    auto pageSerializer = serde_->createIterativeSerializer(
+        asRowType(batches[0]->type()),
+        batches[0]->size(),
+        &arena,
+        &paramOptions);
+    for (const auto& batch : batches) {
+      pageSerializer->append(batch);
+    }
+    const auto maxSize = pageSerializer->maxSerializedSize();
+    std::ostringstream out;
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream output(&out, &listener);
+    pageSerializer->flush(&output);
+    if (paramOptions.compressionKind == common::CompressionKind_NONE) {
+      EXPECT_EQ(maxSize, out.str().size());
+    }
+    return out.str();
+  }
+
+  RowVectorPtr deserializeFlatMapPage(
+      const RowTypePtr& rowType,
+      const std::string& page) {
+    return deserialize(rowType, page, nullptr);
+  }
+
+  // Returns 'times' copies of the flat maps in the first column of 'data', one
+  // after the other.
+  RowVectorPtr repeatFlatMaps(const RowVectorPtr& data, int32_t times) {
+    const auto& flatMap = data->childAt(0);
+    const auto size = flatMap->size();
+    auto result =
+        BaseVector::createEmptyLike(flatMap.get(), size * times, pool());
+    for (auto i = 0; i < times; ++i) {
+      result->copy(flatMap.get(), i * size, 0, size);
+    }
+    return makeRowVector({result});
+  }
+
+  // Returns a flat map with keys 0 to 3 and values of 'valueType'. Key 0 is in
+  // every row, key 1 is in every row but each third, key 2 is in the same rows
+  // as key 1 and key 3 is in every row. Keys 2 and 3 have a null value in each
+  // fifth row. Each seventh row is null if 'pageNulls' is true.
+  FlatMapVectorPtr makeFixedWidthFlatMap(
+      const TypePtr& valueType,
+      vector_size_t numRows,
+      bool pageNulls) {
+    VectorFuzzer::Options options;
+    options.nullRatio = 0;
+    options.timestampPrecision =
+        VectorFuzzer::Options::TimestampPrecision::kMilliSeconds;
+    VectorFuzzer fuzzer(options, pool());
+    BufferPtr nulls;
+    if (pageNulls) {
+      nulls = allocateNulls(numRows, pool());
+      for (auto row = 0; row < numRows; row += 7) {
+        bits::setNull(nulls->asMutable<uint64_t>(), row);
+      }
+    }
+    std::vector<VectorPtr> values;
+    std::vector<BufferPtr> inMaps;
+    for (auto key = 0; key < 4; ++key) {
+      values.push_back(fuzzer.fuzzFlat(valueType, numRows));
+      if (key >= 2) {
+        for (auto row = 1; row < numRows; row += 5) {
+          values.back()->setNull(row, true);
+        }
+      }
+      BufferPtr inMap;
+      if (key == 1 || key == 2) {
+        inMap = AlignedBuffer::allocate<bool>(numRows, pool(), true);
+        for (auto row = 0; row < numRows; row += 3) {
+          bits::clearBit(inMap->asMutable<uint64_t>(), row);
+        }
+      }
+      inMaps.push_back(std::move(inMap));
+    }
+    return std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), valueType),
+        std::move(nulls),
+        numRows,
+        makeFlatVector<int32_t>({0, 1, 2, 3}),
+        std::move(values),
+        std::move(inMaps));
+  }
+
+  // Asserts that the rows of 'expected' are the rows of 'actual' from
+  // 'offset' on: the same nulls, each key in the same rows with the same
+  // values and, if 'absentIsNull' is true, a null value where a row does not
+  // have the key.
+  void assertFlatMapKeys(
+      const FlatMapVector& expected,
+      const FlatMapVector& actual,
+      vector_size_t offset,
+      bool absentIsNull) {
+    for (column_index_t channel = 0; channel < expected.numDistinctKeys();
+         ++channel) {
+      const auto actualChannel =
+          actual.getKeyChannel(expected.distinctKeys(), channel);
+      ASSERT_TRUE(actualChannel.has_value());
+      const auto& expectedValues = expected.mapValuesAt(channel);
+      const auto& actualValues = actual.mapValuesAt(actualChannel.value());
+      for (auto row = 0; row < expected.size(); ++row) {
+        SCOPED_TRACE(fmt::format("key {}, row {}", channel, row));
+        const auto actualRow = offset + row;
+        ASSERT_EQ(actual.isNullAt(actualRow), expected.isNullAt(row));
+        const bool present =
+            !expected.isNullAt(row) && expected.isInMap(channel, row);
+        ASSERT_EQ(
+            !actual.isNullAt(actualRow) &&
+                actual.isInMap(actualChannel.value(), actualRow),
+            present);
+        if (present) {
+          ASSERT_EQ(
+              actualValues->isNullAt(actualRow), expectedValues->isNullAt(row));
+          ASSERT_TRUE(
+              actualValues->equalValueAt(expectedValues.get(), actualRow, row));
+        } else if (absentIsNull) {
+          ASSERT_TRUE(actualValues->isNullAt(actualRow));
+        }
+      }
+    }
+  }
+
+  void assertFlatMapRoundTrip(
+      const std::vector<RowVectorPtr>& batches,
+      const RowVectorPtr& expected) {
+    const auto page = serializeFlatMapPage(batches);
+    const auto result =
+        deserializeFlatMapPage(asRowType(expected->type()), page);
+    ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
   }
 
   SerializeStats serialize(
@@ -1013,32 +1151,6 @@ TEST_P(PrestoSerializerTest, serializeNoRowsSelected) {
   assertEqualVectors(deserialized, expected);
 }
 
-TEST_P(PrestoSerializerTest, flatMapUnsupported) {
-  auto paramOptions = getParamSerdeOptions(nullptr);
-  auto arena = std::make_unique<StreamArena>(pool_.get());
-  auto rowVector = makeRowVector({makeFlatMapVector<int32_t, int64_t>({
-      {{1, 10}, {2, 20}},
-      {{1, 11}},
-  })});
-  auto serializer = serde_->createIterativeSerializer(
-      asRowType(rowVector->type()),
-      rowVector->size(),
-      arena.get(),
-      &paramOptions);
-  Scratch scratch;
-
-  const IndexRange range{0, rowVector->size()};
-  VELOX_ASSERT_THROW(
-      serializer->append(rowVector, folly::Range(&range, 1), scratch),
-      "PrestoVectorSerde does not support flat map vectors");
-
-  const std::vector<vector_size_t> rows{0, 1};
-  VELOX_ASSERT_THROW(
-      serializer->append(
-          rowVector, folly::Range(rows.data(), rows.size()), scratch),
-      "PrestoVectorSerde does not support flat map vectors");
-}
-
 TEST_P(PrestoSerializerTest, emptyArray) {
   auto arrayVector = makeArrayVector<int32_t>(
       1'000,
@@ -1056,6 +1168,1032 @@ TEST_P(PrestoSerializerTest, emptyMap) {
       [](vector_size_t row) { return row * 2; });
 
   testRoundTrip(mapVector);
+}
+
+TEST_P(PrestoSerializerTest, flatMap) {
+  const auto data = makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "null",
+      "{}",
+      "{2: null, 3: 30}",
+      "{1: 11}",
+  })});
+
+  const auto page = serializeFlatMapPage({data});
+  const auto result = deserializeFlatMapPage(asRowType(data->type()), page);
+  ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  assertEqualVectors(data, result);
+
+  const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+  const auto channel = flatMap->getKeyChannel(int32_t{2});
+  ASSERT_TRUE(channel.has_value());
+  EXPECT_TRUE(flatMap->isInMap(channel.value(), 3));
+  EXPECT_TRUE(flatMap->mapValuesAt(channel.value())->isNullAt(3));
+  EXPECT_FALSE(flatMap->isInMap(channel.value(), 4));
+  EXPECT_EQ(flatMap->sizeAt(2), 0);
+  EXPECT_TRUE(flatMap->isNullAt(1));
+}
+
+TEST_P(PrestoSerializerTest, flatMapKeySetsDifferAcrossBatches) {
+  const auto first = makeRowVector({makeFlatMapVectorFromJson<int64_t, double>({
+      "{1: 1.5, 2: 2.5}",
+      "{2: 3.5}",
+  })});
+  const auto second =
+      makeRowVector({makeFlatMapVectorFromJson<int64_t, double>({
+          "{3: 4.5}",
+          "null",
+          "{2: 5.5, 3: null}",
+      })});
+  const auto third = makeRowVector({makeFlatMapVectorFromJson<int64_t, double>({
+      "{}",
+  })});
+  const auto expected =
+      makeRowVector({makeFlatMapVectorFromJson<int64_t, double>({
+          "{1: 1.5, 2: 2.5}",
+          "{2: 3.5}",
+          "{3: 4.5}",
+          "null",
+          "{2: 5.5, 3: null}",
+          "{}",
+      })});
+  assertFlatMapRoundTrip({first, second, third}, expected);
+}
+
+TEST_P(PrestoSerializerTest, flatMapRangesAndRows) {
+  const auto data = makeRowVector({makeFlatMapVectorFromJson<int32_t, int32_t>({
+      "{1: 1}",
+      "{1: 2, 2: 2}",
+      "null",
+      "{3: 3}",
+      "{2: 4}",
+  })});
+  const auto rowType = asRowType(data->type());
+  const auto options = getParamSerdeOptions(nullptr);
+  Scratch scratch;
+
+  {
+    StreamArena arena(pool_.get());
+    auto pageSerializer =
+        serde_->createIterativeSerializer(rowType, 3, &arena, &options);
+    const std::vector<IndexRange> ranges{{1, 2}, {4, 1}};
+    pageSerializer->append(
+        data, folly::Range(ranges.data(), ranges.size()), scratch);
+    std::ostringstream out;
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream output(&out, &listener);
+    pageSerializer->flush(&output);
+
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int32_t>({
+            "{1: 2, 2: 2}",
+            "null",
+            "{2: 4}",
+        })});
+    const auto result = deserializeFlatMapPage(rowType, out.str());
+    ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    StreamArena arena(pool_.get());
+    auto pageSerializer =
+        serde_->createIterativeSerializer(rowType, 3, &arena, &options);
+    const std::vector<vector_size_t> rows{0, 3, 4};
+    pageSerializer->append(
+        data, folly::Range(rows.data(), rows.size()), scratch);
+    std::ostringstream out;
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream output(&out, &listener);
+    pageSerializer->flush(&output);
+
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int32_t>({
+            "{1: 1}",
+            "{3: 3}",
+            "{2: 4}",
+        })});
+    const auto result = deserializeFlatMapPage(rowType, out.str());
+    ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapKeyPresence) {
+  const auto assertPresence = [](const RowVectorPtr& result,
+                                 int32_t key,
+                                 const std::vector<bool>& expected) {
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    const auto channel = flatMap->getKeyChannel(key);
+    ASSERT_TRUE(channel.has_value());
+    for (auto row = 0; row < expected.size(); ++row) {
+      if (!flatMap->isNullAt(row)) {
+        EXPECT_EQ(flatMap->isInMap(channel.value(), row), expected[row])
+            << "key " << key << ", row " << row;
+      }
+    }
+  };
+
+  {
+    const auto first =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 10, 2: 20}",
+            "null",
+            "{1: 11}",
+            "{1: 12, 2: 22}",
+        })});
+    const auto second =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 13}",
+        })});
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 10, 2: 20}",
+            "null",
+            "{1: 11}",
+            "{1: 12, 2: 22}",
+            "{1: 13}",
+        })});
+    const auto result = deserializeFlatMapPage(
+        asRowType(expected->type()), serializeFlatMapPage({first, second}));
+    assertEqualVectors(expected, result);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    EXPECT_EQ(
+        flatMap->rawInMapsAt(flatMap->getKeyChannel(int32_t{1}).value()),
+        nullptr);
+    assertPresence(result, 1, {true, false, true, true, true});
+    assertPresence(result, 2, {true, false, false, true, false});
+  }
+
+  {
+    const auto first =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 1, 2: 2}",
+            "{1: 3}",
+        })});
+    const auto second =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{2: 4}",
+            "{1: 5}",
+            "null",
+        })});
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 1, 2: 2}",
+            "{1: 3}",
+            "{2: 4}",
+            "{1: 5}",
+            "null",
+        })});
+    const auto result = deserializeFlatMapPage(
+        asRowType(expected->type()), serializeFlatMapPage({first, second}));
+    assertEqualVectors(expected, result);
+    assertPresence(result, 1, {true, true, false, true, false});
+    assertPresence(result, 2, {true, false, true, false, false});
+  }
+
+  {
+    const auto first =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 1}",
+            "{1: 2}",
+        })});
+    const auto second =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{2: 3}",
+        })});
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 1}",
+            "{1: 2}",
+            "{2: 3}",
+        })});
+    const auto result = deserializeFlatMapPage(
+        asRowType(expected->type()), serializeFlatMapPage({first, second}));
+    assertEqualVectors(expected, result);
+    assertPresence(result, 1, {true, true, false});
+    assertPresence(result, 2, {false, false, true});
+  }
+
+  {
+    const auto data =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 1, 2: 2}",
+        })});
+    const auto result = deserializeFlatMapPage(
+        asRowType(data->type()), serializeFlatMapPage({data}));
+    assertEqualVectors(data, result);
+    assertPresence(result, 1, {true});
+    assertPresence(result, 2, {true});
+  }
+
+  {
+    constexpr vector_size_t kSize{1'000};
+    std::vector<
+        std::optional<std::vector<std::pair<int32_t, std::optional<int64_t>>>>>
+        maps(kSize);
+    for (auto row = 0; row < kSize; ++row) {
+      if (row % 10 == 3) {
+        continue;
+      }
+      std::vector<std::pair<int32_t, std::optional<int64_t>>> map;
+      map.emplace_back(1, row);
+      if (row % 2 == 0) {
+        map.emplace_back(2, row * 2);
+      }
+      maps[row] = std::move(map);
+    }
+    const auto data =
+        makeRowVector({makeNullableFlatMapVector<int32_t, int64_t>(maps)});
+    assertFlatMapRoundTrip({data, data}, repeatFlatMaps(data, 2));
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapKeyValuesInRowsWithKey) {
+  const auto data = makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20, 3: 30}",
+      "null",
+      "{1: 11, 3: null}",
+      "{1: 12, 2: 22}",
+  })});
+  const auto result = deserializeFlatMapPage(
+      asRowType(data->type()), serializeFlatMapPage({data}));
+  assertEqualVectors(data, result);
+  const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+  const auto assertValues =
+      [&](int32_t key,
+          bool hasInMap,
+          const std::vector<std::optional<std::optional<int64_t>>>& expected) {
+        const auto channel = flatMap->getKeyChannel(key).value();
+        EXPECT_EQ(flatMap->rawInMapsAt(channel) != nullptr, hasInMap);
+        const auto* values =
+            flatMap->mapValuesAt(channel)->as<SimpleVector<int64_t>>();
+        ASSERT_EQ(values->size(), expected.size());
+        for (auto row = 0; row < expected.size(); ++row) {
+          SCOPED_TRACE(fmt::format("key {}, row {}", key, row));
+          if (!flatMap->isNullAt(row)) {
+            EXPECT_EQ(
+                flatMap->isInMap(channel, row), expected[row].has_value());
+          }
+          if (expected[row].has_value() && expected[row]->has_value()) {
+            ASSERT_FALSE(values->isNullAt(row));
+            EXPECT_EQ(values->valueAt(row), expected[row]->value());
+          } else {
+            EXPECT_TRUE(values->isNullAt(row));
+          }
+        }
+      };
+  assertValues(1, false, {10, std::nullopt, 11, 12});
+  assertValues(2, true, {20, std::nullopt, std::nullopt, 22});
+  assertValues(
+      3, true, {30, std::nullopt, std::optional<int64_t>{}, std::nullopt});
+}
+
+TEST_P(PrestoSerializerTest, flatMapLayout) {
+  if (getParamSerdeOptions(nullptr).compressionKind !=
+      common::CompressionKind_NONE) {
+    GTEST_SKIP() << "Reads the uncompressed page";
+  }
+  const auto readHeader = [](ByteInputStream& input, int32_t numRows) {
+    input.skip(serializer::presto::detail::kHeaderSize);
+    EXPECT_EQ(input.read<int32_t>(), 1);
+    std::string encoding(input.read<int32_t>(), '\0');
+    input.readBytes(encoding.data(), encoding.size());
+    EXPECT_EQ(encoding, "FLAT_MAP");
+    EXPECT_EQ(input.read<int32_t>(), numRows);
+  };
+  const auto readIntColumn = [](ByteInputStream& input) {
+    std::string encoding(input.read<int32_t>(), '\0');
+    input.readBytes(encoding.data(), encoding.size());
+    std::vector<int64_t> values(input.read<int32_t>());
+    EXPECT_EQ(input.readByte(), 0);
+    for (auto& value : values) {
+      value = encoding == "INT_ARRAY" ? input.read<int32_t>()
+                                      : input.read<int64_t>();
+    }
+    return values;
+  };
+  const auto makeFlatMap =
+      [&](const std::vector<int32_t>& keys,
+          const std::vector<std::vector<std::optional<int64_t>>>& values,
+          std::optional<vector_size_t> nullRow = std::nullopt) {
+        const vector_size_t size = values[0].size();
+        std::vector<VectorPtr> mapValues;
+        std::vector<BufferPtr> inMaps;
+        for (const auto& keyValues : values) {
+          auto inMap = AlignedBuffer::allocate<bool>(size, pool());
+          for (auto row = 0; row < size; ++row) {
+            bits::setBit(
+                inMap->asMutable<uint64_t>(), row, keyValues[row].has_value());
+          }
+          mapValues.push_back(makeFlatVector<int64_t>(size, [&](auto row) {
+            return keyValues[row].value_or(0);
+          }));
+          inMaps.push_back(std::move(inMap));
+        }
+        BufferPtr nulls;
+        if (nullRow.has_value()) {
+          nulls = allocateNulls(size, pool());
+          bits::setNull(nulls->asMutable<uint64_t>(), nullRow.value());
+        }
+        return makeRowVector({std::make_shared<FlatMapVector>(
+            pool(),
+            MAP(INTEGER(), BIGINT()),
+            std::move(nulls),
+            size,
+            makeFlatVector<int32_t>(keys),
+            std::move(mapValues),
+            std::move(inMaps))});
+      };
+
+  {
+    const auto first = makeFlatMap(
+        {1, 2}, {{10, std::nullopt, 11}, {20, std::nullopt, std::nullopt}}, 1);
+    const auto second = makeFlatMap({2, 3}, {{21, 22}, {30, std::nullopt}});
+    const auto page = serializeFlatMapPage({first, second});
+    auto input = toByteStream(page);
+    readHeader(*input, 5);
+    EXPECT_EQ(input->readByte(), 1);
+    EXPECT_EQ(input->readByte() >> 3, 0b01000);
+    EXPECT_EQ(readIntColumn(*input), (std::vector<int64_t>{1, 2, 3}));
+    EXPECT_EQ(input->read<int32_t>(), 3);
+    EXPECT_EQ(input->read<int32_t>(), 2);
+    EXPECT_EQ(input->readByte(), 0b0'0101);
+    EXPECT_EQ(readIntColumn(*input), (std::vector<int64_t>{10, 11}));
+    EXPECT_EQ(input->read<int32_t>(), 3);
+    EXPECT_EQ(input->readByte(), 0b1'1001);
+    EXPECT_EQ(readIntColumn(*input), (std::vector<int64_t>{20, 21, 22}));
+    EXPECT_EQ(input->read<int32_t>(), 1);
+    EXPECT_EQ(input->readByte(), 0b0'1000);
+    EXPECT_EQ(readIntColumn(*input), (std::vector<int64_t>{30}));
+    EXPECT_TRUE(input->atEnd());
+
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 10, 2: 20}",
+            "null",
+            "{1: 11}",
+            "{2: 21, 3: 30}",
+            "{2: 22}",
+        })});
+    const auto result =
+        deserializeFlatMapPage(asRowType(expected->type()), page);
+    assertEqualVectors(expected, result);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    for (const auto key : {1, 2, 3}) {
+      const auto channel = flatMap->getKeyChannel(int32_t{key}).value();
+      EXPECT_NE(flatMap->rawInMapsAt(channel), nullptr) << key;
+      EXPECT_EQ(
+          flatMap->mapValuesAt(channel)->encoding(),
+          VectorEncoding::Simple::FLAT)
+          << key;
+    }
+  }
+
+  {
+    const auto first = makeFlatMap({1}, {{10, std::nullopt}}, 1);
+    const auto second = makeFlatMap({1, 2}, {{11, 12}, {20, std::nullopt}});
+    const auto page = serializeFlatMapPage({first, second});
+    auto input = toByteStream(page);
+    readHeader(*input, 4);
+    EXPECT_EQ(input->readByte(), 1);
+    EXPECT_EQ(input->readByte() >> 4, 0b0100);
+    EXPECT_EQ(readIntColumn(*input), (std::vector<int64_t>{1, 2}));
+    EXPECT_EQ(input->read<int32_t>(), 2);
+    EXPECT_EQ(input->read<int32_t>(), 3);
+    EXPECT_EQ(readIntColumn(*input), (std::vector<int64_t>{10, 11, 12}));
+    EXPECT_EQ(input->read<int32_t>(), 1);
+    EXPECT_EQ(input->readByte(), 0b0100);
+    EXPECT_EQ(readIntColumn(*input), (std::vector<int64_t>{20}));
+    EXPECT_TRUE(input->atEnd());
+
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 10}",
+            "null",
+            "{1: 11, 2: 20}",
+            "{1: 12}",
+        })});
+    const auto result =
+        deserializeFlatMapPage(asRowType(expected->type()), page);
+    assertEqualVectors(expected, result);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    const auto channel = flatMap->getKeyChannel(int32_t{1}).value();
+    EXPECT_EQ(flatMap->rawInMapsAt(channel), nullptr);
+    const auto& values = flatMap->mapValuesAt(channel);
+    ASSERT_EQ(values->size(), 4);
+    for (const auto& [row, value] :
+         std::vector<std::pair<vector_size_t, int64_t>>{
+             {0, 10}, {2, 11}, {3, 12}}) {
+      EXPECT_EQ(values->as<SimpleVector<int64_t>>()->valueAt(row), value)
+          << row;
+    }
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapKeyPresenceAcrossAppends) {
+  constexpr vector_size_t kSize{100};
+  const auto early = makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>(
+      {"{1: 10, 2: 20}", "{1: 11}", "{2: 21}"})});
+  std::vector<std::string> laterMaps;
+  for (auto row = 0; row < kSize; ++row) {
+    laterMaps.push_back(
+        row % 7 == 3 ? fmt::format("{{2: {}, 3: {}}}", row, row * 2)
+                     : fmt::format("{{2: {}}}", row));
+  }
+  const auto later =
+      makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>(laterMaps)});
+  std::vector<std::string> expectedMaps{"{1: 10, 2: 20}", "{1: 11}", "{2: 21}"};
+  expectedMaps.insert(expectedMaps.end(), laterMaps.begin(), laterMaps.end());
+  expectedMaps.insert(expectedMaps.end(), laterMaps.begin(), laterMaps.end());
+  const auto expected = makeRowVector(
+      {makeFlatMapVectorFromJson<int32_t, int64_t>(expectedMaps)});
+  const auto result = deserializeFlatMapPage(
+      asRowType(expected->type()), serializeFlatMapPage({early, later, later}));
+  assertEqualVectors(expected, result);
+
+  const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+  const auto firstKey = flatMap->getKeyChannel(int32_t{1}).value();
+  const auto laterKey = flatMap->getKeyChannel(int32_t{3}).value();
+  for (auto row = 0; row < expected->size(); ++row) {
+    EXPECT_EQ(flatMap->isInMap(firstKey, row), row < 2) << row;
+    EXPECT_EQ(
+        flatMap->isInMap(laterKey, row), row >= 3 && (row - 3) % kSize % 7 == 3)
+        << row;
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapManyAppends) {
+  VectorFuzzer::Options opts;
+  opts.vectorSize = 50;
+  opts.nullRatio = 0.1;
+  opts.allowFlatMapVector = true;
+  opts.flatMapRatio = 1;
+  VectorFuzzer fuzzer(opts, pool_.get());
+  const auto rowType = ROW(
+      {"a", "b"}, {MAP(INTEGER(), BIGINT()), MAP(VARCHAR(), ARRAY(DOUBLE()))});
+  for (auto i = 0; i < 5; ++i) {
+    std::vector<RowVectorPtr> batches;
+    auto expected = BaseVector::create<RowVector>(rowType, 0, pool());
+    for (auto batch = 0; batch < 16; ++batch) {
+      batches.push_back(fuzzer.fuzzInputRow(rowType));
+      expected->append(batches.back().get());
+    }
+    const auto result =
+        deserializeFlatMapPage(rowType, serializeFlatMapPage(batches));
+    ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapWrapped) {
+  const auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10}",
+      "{2: 20}",
+      "{1: 30, 2: 40}",
+  });
+  const auto rowType = ROW("c0", flatMap->type());
+
+  {
+    auto nulls = makeNulls(4, [](auto row) { return row == 1; });
+    auto indices = makeIndices({2, 0, 0, 1});
+    const auto data = makeRowVector(
+        {BaseVector::wrapInDictionary(nulls, indices, 4, flatMap)});
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 30, 2: 40}",
+            "null",
+            "{1: 10}",
+            "{2: 20}",
+        })});
+    assertFlatMapRoundTrip({data}, expected);
+  }
+
+  {
+    auto nulls = makeNulls(3, [](auto row) { return row == 0; });
+    auto indices = makeIndices({0, 1, 2});
+    const auto data = makeRowVector(
+        {BaseVector::wrapInDictionary(nulls, indices, 3, flatMap)});
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "null",
+            "{2: 20}",
+            "{1: 30, 2: 40}",
+        })});
+    assertFlatMapRoundTrip({data}, expected);
+  }
+
+  {
+    const auto data =
+        makeRowVector({BaseVector::wrapInConstant(3, 2, flatMap)});
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+            "{1: 30, 2: 40}",
+            "{1: 30, 2: 40}",
+            "{1: 30, 2: 40}",
+        })});
+    assertFlatMapRoundTrip({data}, expected);
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapStringKeysAndArrayValues) {
+  const std::string longKey(40, 'k');
+  const auto keys = makeFlatVector<std::string>({"a", longKey});
+  const auto values = makeNullableArrayVector<int64_t>({
+      {1, 2},
+      {std::nullopt},
+      {},
+  });
+  const auto otherValues = makeArrayVector<int64_t>({{3}, {4, 5}, {6}});
+  auto inMap = AlignedBuffer::allocate<bool>(3, pool(), true);
+  bits::setBit(inMap->asMutable<uint64_t>(), 1, false);
+  const auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(VARCHAR(), ARRAY(BIGINT())),
+      nullptr,
+      3,
+      keys,
+      std::vector<VectorPtr>{values, otherValues},
+      std::vector<BufferPtr>{nullptr, inMap});
+  const auto data = makeRowVector({flatMap});
+  assertFlatMapRoundTrip({data, data}, repeatFlatMaps(data, 2));
+}
+
+TEST_P(PrestoSerializerTest, flatMapAppendDeserialize) {
+  const auto first =
+      makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10}",
+          "{1: 11, 2: 21}",
+      })});
+  const auto second =
+      makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+          "{3: 30}",
+          "null",
+      })});
+  const auto rowType = asRowType(first->type());
+  const auto options = getParamSerdeOptions(nullptr);
+
+  RowVectorPtr result;
+  vector_size_t resultOffset{0};
+  for (const auto& batch : {first, second}) {
+    const auto page = serializeFlatMapPage({batch});
+    auto input = toByteStream(page);
+    serde_->deserialize(
+        input.get(), pool(), rowType, &result, resultOffset, &options);
+    resultOffset = result->size();
+  }
+  const auto expected =
+      makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10}",
+          "{1: 11, 2: 21}",
+          "{3: 30}",
+          "null",
+      })});
+  ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  assertEqualVectors(expected, result);
+}
+
+TEST_P(PrestoSerializerTest, flatMapBatchSerializer) {
+  const auto data = makeRowVector({
+      makeFlatMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20}",
+          "null",
+          "{2: null}",
+      }),
+      makeRowVector(
+          {makeFlatVector<int64_t>({1, 2, 3})},
+          [](auto row) { return row == 1; }),
+  });
+  std::ostringstream out;
+  serializeBatch(data, &out, nullptr);
+  const auto result =
+      deserializeFlatMapPage(asRowType(data->type()), out.str());
+  ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  assertEqualVectors(data, result);
+}
+
+TEST_P(PrestoSerializerTest, flatMapBatchSerializerPreserveEncodings) {
+  const auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "null",
+      "{2: null}",
+      "{3: 30}",
+  });
+  const auto indices = makeIndices(8, [](auto row) { return row / 2; });
+  const auto data = makeRowVector({
+      makeFlatMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20}",
+          "null",
+          "{2: null}",
+          "{3: 30}",
+          "{}",
+          "{1: 40}",
+          "{1: 50, 3: 60}",
+          "{2: 70}",
+      }),
+      BaseVector::wrapInDictionary(nullptr, indices, 8, flatMap),
+      makeRowVector({BaseVector::wrapInDictionary(
+          nullptr,
+          makeIndices(8, [](auto row) { return 3 - row / 2; }),
+          8,
+          flatMap)}),
+  });
+  serializer::presto::PrestoVectorSerde::PrestoOptions serdeOptions;
+  serdeOptions.preserveEncodings = true;
+  std::ostringstream out;
+  serializeBatch(data, &out, &serdeOptions);
+  const auto result =
+      deserialize(asRowType(data->type()), out.str(), &serdeOptions);
+  ASSERT_EQ(result->size(), data->size());
+  ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+  ASSERT_EQ(result->childAt(1)->encoding(), VectorEncoding::Simple::DICTIONARY);
+  ASSERT_EQ(
+      result->childAt(1)->valueVector()->encoding(),
+      VectorEncoding::Simple::FLAT_MAP);
+  const std::vector<std::pair<VectorPtr, VectorPtr>> columns{
+      {data->childAt(0), result->childAt(0)},
+      {data->childAt(1), result->childAt(1)},
+      {data->childAt(2)->as<RowVector>()->childAt(0),
+       result->childAt(2)->as<RowVector>()->childAt(0)},
+  };
+  for (const auto& [expected, actual] : columns) {
+    DecodedVector decodedExpected(*expected);
+    DecodedVector decodedActual(*actual);
+    const auto* expectedMap = decodedExpected.base()->as<FlatMapVector>();
+    const auto* actualMap = decodedActual.base()->as<FlatMapVector>();
+    ASSERT_NE(actualMap, nullptr);
+    for (auto row = 0; row < expected->size(); ++row) {
+      ASSERT_EQ(decodedExpected.isNullAt(row), decodedActual.isNullAt(row))
+          << row;
+      if (decodedExpected.isNullAt(row)) {
+        continue;
+      }
+      const auto expectedIndex = decodedExpected.index(row);
+      const auto actualIndex = decodedActual.index(row);
+      for (int32_t key = 1; key <= 3; ++key) {
+        const auto expectedChannel = expectedMap->getKeyChannel(key);
+        const auto actualChannel = actualMap->getKeyChannel(key);
+        const bool expectedPresent = expectedChannel.has_value() &&
+            expectedMap->isInMap(expectedChannel.value(), expectedIndex);
+        const bool actualPresent = actualChannel.has_value() &&
+            actualMap->isInMap(actualChannel.value(), actualIndex);
+        ASSERT_EQ(expectedPresent, actualPresent) << row << " " << key;
+        if (expectedPresent) {
+          EXPECT_TRUE(
+              expectedMap->mapValuesAt(expectedChannel.value())
+                  ->equalValueAt(
+                      actualMap->mapValuesAt(actualChannel.value()).get(),
+                      expectedIndex,
+                      actualIndex))
+              << row << " " << key;
+        }
+      }
+    }
+  }
+  assertEqualVectors(data, result);
+}
+
+TEST_P(PrestoSerializerTest, flatMapUnderNullableRow) {
+  const auto first = makeRowVector({makeRowVector(
+      {makeFlatMapVectorFromJson<int32_t, int64_t>({
+           "{1: 10}",
+           "{9: 90}",
+           "{1: 11, 2: 21}",
+           "null",
+       }),
+       makeFlatVector<int64_t>({1, 2, 3, 4})},
+      [](auto row) { return row == 1; })});
+  const auto second = makeRowVector({makeRowVector(
+      {makeFlatMapVectorFromJson<int32_t, int64_t>({
+           "{8: 80}",
+           "{3: 30}",
+           "{7: 70}",
+           "{}",
+       }),
+       makeFlatVector<int64_t>({5, 6, 7, 8})},
+      [](auto row) { return row == 0 || row == 2; })});
+  const auto expected = makeRowVector({makeRowVector(
+      {makeFlatMapVectorFromJson<int32_t, int64_t>({
+           "{1: 10}",
+           "{}",
+           "{1: 11, 2: 21}",
+           "null",
+           "{}",
+           "{3: 30}",
+           "{}",
+           "{}",
+       }),
+       makeFlatVector<int64_t>({1, 2, 3, 4, 5, 6, 7, 8})},
+      [](auto row) { return row == 1 || row == 4 || row == 6; })});
+  const auto rowType = asRowType(expected->type());
+  const auto flatMapAt = [](const RowVectorPtr& result) {
+    return result->childAt(0)->as<RowVector>()->childAt(0);
+  };
+
+  {
+    const auto page = serializeFlatMapPage({first, second});
+    const auto result = deserializeFlatMapPage(rowType, page);
+    ASSERT_EQ(flatMapAt(result)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+  }
+
+  {
+    const auto options = getParamSerdeOptions(nullptr);
+    RowVectorPtr result;
+    vector_size_t resultOffset{0};
+    for (const auto& batch : {first, second}) {
+      const auto page = serializeFlatMapPage({batch});
+      auto input = toByteStream(page);
+      serde_->deserialize(
+          input.get(), pool(), rowType, &result, resultOffset, &options);
+      resultOffset = result->size();
+    }
+    ASSERT_EQ(flatMapAt(result)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapFailures) {
+  const auto data = makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10}",
+  })});
+  const auto rowType = asRowType(data->type());
+
+  {
+    const auto map = makeRowVector({makeMapVectorFromJson<int32_t, int64_t>({
+        "{1: 10}",
+    })});
+    VELOX_ASSERT_THROW(
+        serializeFlatMapPage({data, map}),
+        "Cannot append a regular map to a stream that holds flat maps: MAP<INTEGER,BIGINT>");
+    VELOX_ASSERT_THROW(
+        serializeFlatMapPage({map, data}),
+        "Cannot append a flat map to a stream that holds regular maps: MAP<INTEGER,BIGINT>");
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapKeyTable) {
+  const std::string firstKey(20, 'a');
+  const std::string secondKey(20, 'b');
+  const std::string thirdKey(20, 'c');
+  const auto numOccurrences = [](const std::string& page,
+                                 const std::string& key) {
+    int32_t count{0};
+    for (auto pos = page.find(key); pos != std::string::npos;
+         pos = page.find(key, pos + key.size())) {
+      ++count;
+    }
+    return count;
+  };
+  const auto compressed = getParamSerdeOptions(nullptr).compressionKind !=
+      common::CompressionKind_NONE;
+
+  {
+    const auto first =
+        makeRowVector({makeFlatMapVectorFromJson<std::string, int64_t>({
+            fmt::format(R"({{"{}": 1, "{}": 2}})", firstKey, secondKey),
+            fmt::format(R"({{"{}": 3}})", firstKey),
+        })});
+    const auto second =
+        makeRowVector({makeFlatMapVectorFromJson<std::string, int64_t>({
+            fmt::format(R"({{"{}": 4}})", secondKey),
+            fmt::format(R"({{"{}": 5}})", thirdKey),
+        })});
+    const auto third =
+        makeRowVector({makeFlatMapVectorFromJson<std::string, int64_t>({
+            fmt::format(R"({{"{}": 6, "{}": 7}})", firstKey, thirdKey),
+            "null",
+            fmt::format(R"({{"{}": 8}})", firstKey),
+        })});
+    const auto expected =
+        makeRowVector({makeFlatMapVectorFromJson<std::string, int64_t>({
+            fmt::format(R"({{"{}": 1, "{}": 2}})", firstKey, secondKey),
+            fmt::format(R"({{"{}": 3}})", firstKey),
+            fmt::format(R"({{"{}": 4}})", secondKey),
+            fmt::format(R"({{"{}": 5}})", thirdKey),
+            fmt::format(R"({{"{}": 6, "{}": 7}})", firstKey, thirdKey),
+            "null",
+            fmt::format(R"({{"{}": 8}})", firstKey),
+        })});
+    const auto page = serializeFlatMapPage({first, second, third});
+    const auto result =
+        deserializeFlatMapPage(asRowType(expected->type()), page);
+    ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    ASSERT_EQ(flatMap->numDistinctKeys(), 3);
+    EXPECT_EQ(
+        flatMap->distinctKeys()->as<SimpleVector<StringView>>()->valueAt(2),
+        StringView(thirdKey));
+    if (!compressed) {
+      EXPECT_EQ(numOccurrences(page, firstKey), 1);
+      EXPECT_EQ(numOccurrences(page, secondKey), 1);
+      EXPECT_EQ(numOccurrences(page, thirdKey), 1);
+    }
+  }
+
+  {
+    const auto data =
+        makeRowVector({makeFlatMapVectorFromJson<std::string, int64_t>({
+            fmt::format(R"({{"{}": 1, "{}": 2}})", firstKey, secondKey),
+            fmt::format(R"({{"{}": 3}})", firstKey),
+        })});
+    const auto page = serializeFlatMapPage({data});
+    const auto result = deserializeFlatMapPage(asRowType(data->type()), page);
+    assertEqualVectors(data, result);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    const auto channel = flatMap->getKeyChannel(StringView(firstKey));
+    ASSERT_TRUE(channel.has_value());
+    EXPECT_EQ(flatMap->rawInMapsAt(channel.value()), nullptr);
+    EXPECT_NE(
+        flatMap->mapValuesAt(channel.value())->encoding(),
+        VectorEncoding::Simple::DICTIONARY);
+    if (!compressed) {
+      EXPECT_EQ(numOccurrences(page, firstKey), 1);
+      EXPECT_EQ(numOccurrences(page, secondKey), 1);
+    }
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapKeyTypes) {
+  const auto makeFlatMap = [&](const VectorPtr& keys) {
+    std::vector<VectorPtr> values;
+    for (auto i = 0; i < keys->size(); ++i) {
+      values.push_back(makeFlatVector<int64_t>({i * 10, i * 10 + 1}));
+    }
+    return std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(keys->type(), BIGINT()),
+        nullptr,
+        2,
+        keys,
+        std::move(values),
+        std::vector<BufferPtr>(keys->size()));
+  };
+  const auto assertKeysRoundTrip = [&](const VectorPtr& firstKeys,
+                                       const VectorPtr& secondKeys) {
+    const auto first = makeFlatMap(firstKeys);
+    const auto second = makeFlatMap(secondKeys);
+    auto expected = BaseVector::createEmptyLike(first.get(), 4, pool());
+    expected->copy(first.get(), 0, 0, 2);
+    expected->copy(second.get(), 2, 0, 2);
+    assertFlatMapRoundTrip(
+        {makeRowVector({first}), makeRowVector({second})},
+        makeRowVector({expected}));
+  };
+
+  assertKeysRoundTrip(
+      makeFlatVector<float>({1.5, 2.5}), makeFlatVector<float>({2.5, 3.5}));
+  assertKeysRoundTrip(
+      makeFlatVector<double>({1.5, 2.5}), makeFlatVector<double>({2.5, 3.5}));
+  assertKeysRoundTrip(
+      makeFlatVector<bool>({true}), makeFlatVector<bool>({false, true}));
+  assertKeysRoundTrip(
+      makeFlatVector<int32_t>({1, 2}, DATE()),
+      makeFlatVector<int32_t>({2, 3}, DATE()));
+  assertKeysRoundTrip(
+      makeFlatVector<int64_t>(
+          {pack(1'000, 0), pack(2'000, 0)}, TIMESTAMP_WITH_TIME_ZONE()),
+      makeFlatVector<int64_t>(
+          {pack(2'000, 0), pack(3'000, 0)}, TIMESTAMP_WITH_TIME_ZONE()));
+  assertKeysRoundTrip(
+      makeArrayVector<int32_t>({{1, 2}, {3}}),
+      makeArrayVector<int32_t>({{3}, {4, 5}}));
+}
+
+TEST_P(PrestoSerializerTest, flatMapFuzz) {
+  VectorFuzzer::Options opts;
+  opts.nullRatio = 0.1;
+  opts.allowFlatMapVector = true;
+  opts.flatMapRatio = 1;
+  VectorFuzzer fuzzer(opts, pool_.get());
+  const auto rowType = ROW(
+      {"a", "b", "c", "d"},
+      {MAP(INTEGER(), BIGINT()),
+       MAP(VARCHAR(), ARRAY(DOUBLE())),
+       MAP(DOUBLE(), BOOLEAN()),
+       ROW({"e", "f"}, {MAP(BIGINT(), VARCHAR()), MAP(TINYINT(), REAL())})});
+
+  for (auto i = 0; i < 40; ++i) {
+    const auto data = fuzzer.fuzzInputRow(rowType);
+    serializer::presto::PrestoVectorSerde::PrestoOptions serdeOptions;
+    serdeOptions.nullsFirst = i % 2 == 0;
+    testRoundTrip(data, &serdeOptions);
+    std::ostringstream out;
+    serializeBatch(data, &out, &serdeOptions);
+    assertEqualVectors(
+        data, deserialize(asRowType(data->type()), out.str(), &serdeOptions));
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapEdgeCases) {
+  const auto type = MAP(INTEGER(), BIGINT());
+  const auto noKeys = std::make_shared<FlatMapVector>(
+      pool(),
+      type,
+      nullptr,
+      4,
+      makeFlatVector<int32_t>(std::vector<int32_t>{}),
+      std::vector<VectorPtr>{},
+      std::vector<BufferPtr>{});
+  const auto withKeys = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10}",
+      "{2: 20}",
+      "{1: 11, 2: 21}",
+      "{}",
+  });
+
+  {
+    const auto data = makeRowVector({noKeys});
+    assertFlatMapRoundTrip({data, data}, repeatFlatMaps(data, 2));
+  }
+
+  {
+    const auto data = makeRowVector({withKeys});
+    const auto rowType = asRowType(data->type());
+    const auto options = getParamSerdeOptions(nullptr);
+    StreamArena arena(pool_.get());
+    auto pageSerializer =
+        serde_->createIterativeSerializer(rowType, 4, &arena, &options);
+    const IndexRange noRows{0, 0};
+    pageSerializer->append(data, folly::Range(&noRows, 1));
+    std::ostringstream out;
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream output(&out, &listener);
+    pageSerializer->flush(&output);
+    const auto result = deserializeFlatMapPage(rowType, out.str());
+    EXPECT_EQ(result->size(), 0);
+  }
+
+  {
+    const auto data = makeRowVector({std::make_shared<FlatMapVector>(
+        pool(),
+        type,
+        allocateNulls(4, pool(), bits::kNull),
+        4,
+        withKeys->distinctKeys(),
+        withKeys->mapValues(),
+        withKeys->inMaps())});
+    assertFlatMapRoundTrip({data, data}, repeatFlatMaps(data, 2));
+    const auto result = deserializeFlatMapPage(
+        asRowType(data->type()), serializeFlatMapPage({data}));
+    for (auto row = 0; row < 4; ++row) {
+      EXPECT_TRUE(result->childAt(0)->isNullAt(row));
+    }
+  }
+
+  {
+    const auto lazy = std::make_shared<LazyVector>(
+        pool(), type, 4, std::make_unique<SimpleVectorLoader>([&](auto) {
+          return withKeys;
+        }));
+    assertFlatMapRoundTrip({makeRowVector({lazy})}, makeRowVector({withKeys}));
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapNullValuesVector) {
+  const auto withValues = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 3: 30}",
+      "{1: 11}",
+      "null",
+      "{3: 33}",
+  });
+  const auto expected = makeRowVector({withValues});
+  for (const auto& nullKeyInMap :
+       {BufferPtr{nullptr}, AlignedBuffer::allocate<bool>(4, pool(), true)}) {
+    SCOPED_TRACE(nullKeyInMap == nullptr ? "no in-map" : "in-map");
+    const auto data = makeRowVector({std::make_shared<FlatMapVector>(
+        pool(),
+        withValues->type(),
+        withValues->nulls(),
+        4,
+        makeFlatVector<int32_t>({1, 2, 3}),
+        std::vector<VectorPtr>{
+            withValues->mapValuesAt(withValues->getKeyChannel(1).value()),
+            nullptr,
+            withValues->mapValuesAt(withValues->getKeyChannel(3).value()),
+        },
+        std::vector<BufferPtr>{
+            withValues->inMapsAt(withValues->getKeyChannel(1).value()),
+            nullKeyInMap,
+            withValues->inMapsAt(withValues->getKeyChannel(3).value()),
+        })});
+    sanityCheckEstimateSerializedSize(data);
+    assertFlatMapRoundTrip({data, data}, repeatFlatMaps(expected, 2));
+
+    std::ostringstream out;
+    serializeBatch(data, &out, nullptr);
+    const auto result =
+        deserializeFlatMapPage(asRowType(data->type()), out.str());
+    assertEqualVectors(expected, result);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    const auto channel = flatMap->getKeyChannel(int32_t{2});
+    if (channel.has_value()) {
+      for (auto row = 0; row < result->size(); ++row) {
+        EXPECT_FALSE(flatMap->isInMap(channel.value(), row)) << row;
+      }
+    }
+  }
 }
 
 TEST_P(PrestoSerializerTest, timestampWithTimeZone) {
@@ -1150,6 +2288,239 @@ TEST_P(PrestoSerializerTest, unknown) {
   }
   testRoundTrip(flatVector);
   testAllNullSerializedAsUnknown(flatVector, BIGINT());
+}
+
+TEST_P(PrestoSerializerTest, flatMapMultiPage) {
+  const auto pageBatches = std::vector<std::vector<RowVectorPtr>>{
+      {
+          makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+              "{1: 10, 2: 20}",
+              "null",
+          })}),
+          makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+              "{3: 30}",
+              "{2: null}",
+          })}),
+      },
+      {
+          makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+              "{4: 40}",
+              "{}",
+              "{5: 50, 4: 41}",
+          })}),
+      },
+      {
+          makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+              "null",
+              "null",
+          })}),
+      },
+      {
+          makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+              "{2: 22, 5: 55}",
+              "{1: 11}",
+          })}),
+          makeRowVector({makeFlatMapVectorFromJson<int32_t, int64_t>({
+              "{6: 60, 1: null}",
+          })}),
+      },
+  };
+  const auto expectedPages = std::vector<MapVectorPtr>{
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20}",
+          "null",
+          "{3: 30}",
+          "{2: null}",
+      }),
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{4: 40}",
+          "{}",
+          "{5: 50, 4: 41}",
+      }),
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "null",
+          "null",
+      }),
+      makeMapVectorFromJson<int32_t, int64_t>({
+          "{2: 22, 5: 55}",
+          "{1: 11}",
+          "{6: 60, 1: null}",
+      }),
+  };
+  const auto rowType = asRowType(pageBatches[0][0]->type());
+  const auto options = getParamSerdeOptions(nullptr);
+
+  std::ostringstream out;
+  StreamArena arena(pool_.get());
+  auto pageSerializer =
+      serde_->createIterativeSerializer(rowType, 4, &arena, &options);
+  facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+  OStreamOutputStream output(&out, &listener);
+  for (const auto& batches : pageBatches) {
+    for (const auto& batch : batches) {
+      pageSerializer->append(batch);
+    }
+    pageSerializer->flush(&output);
+    pageSerializer->clear();
+  }
+
+  const auto bytes = out.str();
+  auto input = toByteStream(bytes);
+  for (const auto& expected : expectedPages) {
+    RowVectorPtr result;
+    serde_->deserialize(input.get(), pool(), rowType, &result, 0, &options);
+    ASSERT_EQ(result->size(), expected->size());
+    ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    const auto* keys = expected->mapKeys()->as<SimpleVector<int32_t>>();
+    const auto& values = expected->mapValues();
+    for (auto row = 0; row < expected->size(); ++row) {
+      ASSERT_EQ(flatMap->isNullAt(row), expected->isNullAt(row)) << row;
+      if (expected->isNullAt(row)) {
+        continue;
+      }
+      ASSERT_EQ(flatMap->sizeAt(row), expected->sizeAt(row)) << row;
+      const auto offset = expected->offsetAt(row);
+      for (auto entry = offset; entry < offset + expected->sizeAt(row);
+           ++entry) {
+        const auto channel = flatMap->getKeyChannel(keys->valueAt(entry));
+        ASSERT_TRUE(channel.has_value()) << row;
+        ASSERT_TRUE(flatMap->isInMap(channel.value(), row)) << row;
+        ASSERT_TRUE(flatMap->mapValuesAt(channel.value())
+                        ->equalValueAt(values.get(), row, entry))
+            << row;
+      }
+    }
+  }
+  ASSERT_TRUE(input->atEnd());
+}
+
+TEST_P(PrestoSerializerTest, flatMapFixedWidthValues) {
+  const auto options = getParamSerdeOptions(nullptr);
+  for (const auto& valueType : std::vector<TypePtr>{
+           TINYINT(),
+           SMALLINT(),
+           INTEGER(),
+           BIGINT(),
+           REAL(),
+           DOUBLE(),
+           DATE(),
+           DECIMAL(10, 2),
+           BOOLEAN(),
+           TIMESTAMP()}) {
+    SCOPED_TRACE(valueType->toString());
+    for (const auto pageNulls : {false, true}) {
+      SCOPED_TRACE(fmt::format("pageNulls {}", pageNulls));
+      const auto data = makeFixedWidthFlatMap(valueType, 130, pageNulls);
+      const auto rowType = ROW("c0", data->type());
+      const auto result = deserializeFlatMapPage(
+          rowType, serializeFlatMapPage({makeRowVector({data})}));
+      ASSERT_EQ(
+          result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+      assertFlatMapKeys(
+          *data, *result->childAt(0)->as<FlatMapVector>(), 0, true);
+    }
+
+    const auto first = makeFixedWidthFlatMap(valueType, 70, false);
+    const auto second = makeFixedWidthFlatMap(valueType, 90, true);
+    const auto rowType = ROW("c0", first->type());
+    std::ostringstream out;
+    StreamArena arena(pool_.get());
+    auto pageSerializer =
+        serde_->createIterativeSerializer(rowType, 90, &arena, &options);
+    facebook::velox::serializer::presto::PrestoOutputStreamListener listener;
+    OStreamOutputStream output(&out, &listener);
+    for (const auto& page : {first, second}) {
+      pageSerializer->append(makeRowVector({page}));
+      pageSerializer->flush(&output);
+      pageSerializer->clear();
+    }
+    const auto bytes = out.str();
+    auto input = toByteStream(bytes);
+    RowVectorPtr result;
+    serde_->deserialize(input.get(), pool(), rowType, &result, 0, &options);
+    serde_->deserialize(
+        input.get(), pool(), rowType, &result, first->size(), &options);
+    ASSERT_TRUE(input->atEnd());
+    ASSERT_EQ(result->size(), first->size() + second->size());
+    ASSERT_EQ(result->childAt(0)->encoding(), VectorEncoding::Simple::FLAT_MAP);
+    const auto* flatMap = result->childAt(0)->as<FlatMapVector>();
+    assertFlatMapKeys(*first, *flatMap, 0, false);
+    assertFlatMapKeys(*second, *flatMap, first->size(), false);
+  }
+}
+
+TEST_P(PrestoSerializerTest, flatMapNestedInCollections) {
+  const auto flatMap = makeNullableFlatMapVector<int32_t, int64_t>({
+      {{{1, 10}, {2, std::nullopt}}},
+      std::nullopt,
+      common::testutil::optionalEmpty,
+      {{{3, 30}}},
+      {{{1, 11}, {3, 31}}},
+  });
+  const auto map = makeNullableMapVector<int32_t, int64_t>({
+      {{{1, 10}, {2, std::nullopt}}},
+      std::nullopt,
+      common::testutil::optionalEmpty,
+      {{{3, 30}}},
+      {{{1, 11}, {3, 31}}},
+  });
+  {
+    SCOPED_TRACE("array elements");
+    const auto data = makeRowVector({makeArrayVector({0, 2, 2}, flatMap, {1})});
+    const auto expected = makeRowVector({makeArrayVector({0, 2, 2}, map, {1})});
+    const auto page = serializeFlatMapPage({data});
+    const auto result = deserializeFlatMapPage(asRowType(data->type()), page);
+    ASSERT_EQ(
+        result->childAt(0)->as<ArrayVector>()->elements()->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+  }
+  {
+    SCOPED_TRACE("map values");
+    const auto keys = makeFlatVector<int32_t>({1, 2, 3, 4, 5});
+    const auto data =
+        makeRowVector({makeMapVector({0, 2, 2}, keys, flatMap, {1})});
+    const auto expected =
+        makeRowVector({makeMapVector({0, 2, 2}, keys, map, {1})});
+    const auto page = serializeFlatMapPage({data});
+    const auto result = deserializeFlatMapPage(asRowType(data->type()), page);
+    ASSERT_EQ(
+        result->childAt(0)->as<MapVector>()->mapValues()->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(expected, result);
+  }
+  {
+    SCOPED_TRACE("flat map values");
+    const auto inner = makeFlatMapVectorFromJson<int32_t, int64_t>({
+        "{1: 10, 2: 20}",
+        "{1: 11}",
+        "{3: 30}",
+    });
+    auto inMap = AlignedBuffer::allocate<bool>(3, pool(), true);
+    bits::clearBit(inMap->asMutable<uint64_t>(), 1);
+    const auto data = makeRowVector({std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), inner->type()),
+        nullptr,
+        3,
+        makeFlatVector<int32_t>({1, 2}),
+        std::vector<VectorPtr>{inner, inner},
+        std::vector<BufferPtr>{nullptr, inMap})});
+    const auto result = deserializeFlatMapPage(
+        asRowType(data->type()), serializeFlatMapPage({data}));
+    const auto* resultMap = result->childAt(0)->as<FlatMapVector>();
+    ASSERT_NE(resultMap, nullptr);
+    EXPECT_EQ(
+        resultMap->mapValuesAt(resultMap->getKeyChannel(int32_t{1}).value())
+            ->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    EXPECT_EQ(
+        resultMap->mapValuesAt(resultMap->getKeyChannel(int32_t{2}).value())
+            ->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    assertEqualVectors(data, result);
+  }
 }
 
 TEST_P(PrestoSerializerTest, multiPage) {
@@ -2168,6 +3539,41 @@ TEST_P(PrestoSerializerTest, lexer) {
   }
 }
 
+TEST_P(PrestoSerializerTest, lexerFlatMap) {
+  const auto options = getParamSerdeOptions(nullptr);
+  if (options.compressionKind != common::CompressionKind_NONE) {
+    GTEST_SKIP() << "The lexer does not support compression";
+  }
+  const auto data = makeRowVector({
+      makeFlatMapVectorFromJson<int32_t, int64_t>({
+          "{1: 10, 2: 20}",
+          "null",
+          "{2: null}",
+      }),
+      makeRowVector(
+          {makeFlatMapVectorFromJson<std::string, std::string>({
+              R"({"a": "x", "b": "y"})",
+              R"({"b": "z"})",
+              "{}",
+          })},
+          [](auto row) { return row == 1; }),
+  });
+  std::ostringstream out;
+  serialize(data, &out, nullptr);
+  validateLexer(out.str(), options);
+
+  std::vector<serializer::presto::Token> tokens;
+  const auto status =
+      serializer::presto::PrestoVectorSerde::lex(out.str(), tokens, &options);
+  ASSERT_TRUE(status.ok()) << status.message();
+  const auto numTokens = [&](serializer::presto::TokenType tokenType) {
+    return std::count_if(tokens.begin(), tokens.end(), [&](const auto& token) {
+      return token.tokenType == tokenType;
+    });
+  };
+  EXPECT_EQ(numTokens(serializer::presto::TokenType::FLAT_MAP_PRESENCE), 4);
+}
+
 TEST_P(PrestoSerializerTest, checksum) {
   std::ostringstream output;
   // The payload (doesn't matter what as long as it's not 0).
@@ -2707,6 +4113,45 @@ TEST_F(PrestoSerializerBatchEstimateSizeTest, map) {
   testEstimateSerializedSize(mapVectorWithNulls, {{0, 8}, {8, 8}}, {209, 209});
   testEstimateSerializedSize(
       mapVectorWithNulls, {{0, 4}, {4, 8}, {12, 4}}, {105, 209, 105});
+}
+
+TEST_F(PrestoSerializerBatchEstimateSizeTest, flatMap) {
+  auto values =
+      makeFlatVector<double>(16, [](vector_size_t row) { return row; });
+  auto inMap = AlignedBuffer::allocate<bool>(16, pool(), false);
+  for (auto row = 0; row < 16; row += 2) {
+    bits::setBit(inMap->asMutable<uint64_t>(), row);
+  }
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(INTEGER(), DOUBLE()),
+      nullptr,
+      16,
+      makeFlatVector<int32_t>({1, 2}),
+      std::vector<VectorPtr>{values, values},
+      std::vector<BufferPtr>{nullptr, inMap});
+
+  // The doubles are 8 bytes each. Each key adds its 4 byte key, a 4 byte
+  // count, a 2 byte bitmap and the 19 byte header of its value column, 29 bytes
+  // spread over its rows and rounded up: 2 bytes per row for the key in all 16
+  // rows, 4 bytes per row for the key in 8 rows.
+  // 16 * (8 + 2) + 8 * (8 + 4) = 256
+  testEstimateSerializedSize(flatMap, 256);
+
+  auto stringKeysFlatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(VARCHAR(), DOUBLE()),
+      nullptr,
+      16,
+      makeFlatVector<std::string>({"first", "second"}),
+      std::vector<VectorPtr>{values, values},
+      std::vector<BufferPtr>{nullptr, inMap});
+
+  // A string key takes 4 bytes for its length plus its bytes, so the keys add
+  // 4 + 5 + 4 + 2 + 19 = 34 and 4 + 6 + 4 + 2 + 19 = 35 bytes spread over their
+  // rows: 3 bytes per row over 16 rows, 5 bytes per row over 8 rows.
+  // 16 * (8 + 3) + 8 * (8 + 5) = 280
+  testEstimateSerializedSize(stringKeysFlatMap, 280);
 }
 
 TEST_F(PrestoSerializerBatchEstimateSizeTest, row) {

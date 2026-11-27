@@ -39,6 +39,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorAssertions.h"
 
@@ -1664,6 +1665,67 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
         .checkSpillStats(false)
         .run();
   }
+}
+
+TEST_P(HashJoinTest, spillFlatMapsOnProbeSide) {
+  std::vector<RowVectorPtr> maps;
+  std::vector<RowVectorPtr> flatMaps;
+  for (auto i = 0; i < 4; ++i) {
+    auto keys = makeFlatVector<int64_t>(
+        1'000, [i](auto row) { return (row + i) % 97; });
+    auto map = makeMapVector<int32_t, int64_t>(
+        1'000,
+        [](auto row) { return row % 5; },
+        [](auto index) { return index % 5; },
+        [i](auto index) { return index * 10 + i; },
+        nullEvery(7));
+    maps.push_back(makeRowVector({keys, map}));
+    flatMaps.push_back(
+        makeRowVector({keys, FlatMapVector::fromMapVector(*map)}));
+  }
+  auto build = makeRowVector(
+      {"u0"}, {makeFlatVector<int64_t>(97, [](auto row) { return row; })});
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+
+  const auto runWithSpill = [&](const std::vector<RowVectorPtr>& input,
+                                std::shared_ptr<Task>& task) {
+    const auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    return AssertQueryBuilder(PlanBuilder(planNodeIdGenerator)
+                                  .values(input)
+                                  .hashJoin(
+                                      {"c0"},
+                                      {"u0"},
+                                      PlanBuilder(planNodeIdGenerator)
+                                          .values({build})
+                                          .planNode(),
+                                      "",
+                                      {"c0", "c1", "u0"})
+                                  .planNode())
+        .spillDirectory(spillDirectory->getPath())
+        .config(core::QueryConfig::kSpillEnabled, true)
+        .config(core::QueryConfig::kJoinSpillEnabled, true)
+        .maxDrivers(1)
+        .results(task);
+  };
+
+  std::shared_ptr<Task> mapTask;
+  const auto expected = runWithSpill(maps, mapTask);
+  std::shared_ptr<Task> flatMapTask;
+  const auto flatMapResults = runWithSpill(flatMaps, flatMapTask);
+  ASSERT_GT(taskSpilledStats(*flatMapTask).second.spilledBytes, 0);
+
+  std::vector<RowVectorPtr> results;
+  for (const auto& batch : flatMapResults) {
+    ASSERT_EQ(
+        batch->childAt(1)->wrappedVector()->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    auto result =
+        BaseVector::create<RowVector>(batch->type(), batch->size(), pool());
+    result->copy(batch.get(), 0, 0, batch->size());
+    results.push_back(std::move(result));
+  }
+  assertEqualResults(expected, results);
 }
 
 TEST_P(HashJoinTest, nullAwareRightAntiJoinIsRejected) {
