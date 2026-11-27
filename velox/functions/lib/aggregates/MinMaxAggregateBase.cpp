@@ -611,21 +611,26 @@ class MinAggregate : public MinMaxAggregateBase {
 };
 
 // The current min or max of a VARCHAR or VARBINARY group. A value that is not
-// inline in the StringView is copied into 'buffer', which is reused while
-// later values fit into it.
+// inline in the StringView is copied into 'buffer'. Small buffers are kept
+// for reuse. Large buffers are released when the current value shrinks enough.
 struct StringMinMaxAccumulator {
   StringView value;
   HashStringAllocator::Header* buffer{nullptr};
 
   void write(StringView newValue, HashStringAllocator* allocator) {
-    if (newValue.isInline()) {
+    const auto size = newValue.isInline() ? 0 : newValue.size();
+    if (buffer != nullptr) {
+      const auto capacity = buffer->size();
+      // Keep at least a fourfold gap between growing and shrinking a large
+      // buffer to avoid reallocating on small changes in string length.
+      if (size > capacity ||
+          (capacity > HashStringAllocator::kMaxAlloc && size <= capacity / 4)) {
+        destroy(allocator);
+      }
+    }
+    if (size == 0) {
       value = newValue;
       return;
-    }
-    const auto size = newValue.size();
-    if (buffer != nullptr && buffer->size() < size) {
-      allocator->free(buffer);
-      buffer = nullptr;
     }
     if (buffer == nullptr) {
       buffer = allocator->allocate(size);

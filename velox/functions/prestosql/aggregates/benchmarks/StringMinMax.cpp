@@ -116,32 +116,35 @@ class StringMinMaxBenchmark : public OperatorTestBase {
   void TestBody() override {}
 
   void run(
+      uint32_t iterations,
       const std::vector<std::string>& keys,
       const std::vector<std::string>& aggregates) {
-    folly::BenchmarkSuspender suspender;
+    for (uint32_t i = 0; i < iterations; ++i) {
+      folly::BenchmarkSuspender suspender;
 
-    auto plan = PlanBuilder()
-                    .values(vectors_)
-                    .partialAggregation(keys, aggregates)
-                    .finalAggregation()
-                    .planFragment();
+      auto plan = PlanBuilder()
+                      .values(vectors_)
+                      .partialAggregation(keys, aggregates)
+                      .finalAggregation()
+                      .planFragment();
 
-    auto task = exec::Task::create(
-        "t",
-        std::move(plan),
-        0,
-        core::QueryCtx::create(executor_.get()),
-        exec::Task::ExecutionMode::kSerial,
-        exec::Consumer{});
+      auto task = exec::Task::create(
+          "t",
+          std::move(plan),
+          0,
+          core::QueryCtx::create(executor_.get()),
+          exec::Task::ExecutionMode::kSerial,
+          exec::Consumer{});
 
-    vector_size_t numResultRows = 0;
-    suspender.dismiss();
+      vector_size_t numResultRows = 0;
+      suspender.dismiss();
 
-    while (auto result = task->next()) {
-      numResultRows += result->size();
+      while (auto result = task->next()) {
+        numResultRows += result->size();
+      }
+
+      folly::doNotOptimizeAway(numResultRows);
     }
-
-    folly::doNotOptimizeAway(numResultRows);
   }
 
  private:
@@ -151,14 +154,15 @@ class StringMinMaxBenchmark : public OperatorTestBase {
 std::unique_ptr<StringMinMaxBenchmark> benchmark;
 
 void runSingle(
-    uint32_t,
+    uint32_t iterations,
     const std::vector<std::string>& keys,
     const std::string& aggregate) {
-  benchmark->run(keys, {aggregate});
+  benchmark->run(iterations, keys, {aggregate});
 }
 
-void runMulti(uint32_t, const std::vector<std::string>& keys) {
+void runMulti(uint32_t iterations, const std::vector<std::string>& keys) {
   benchmark->run(
+      iterations,
       keys,
       {
           "min(s0)",

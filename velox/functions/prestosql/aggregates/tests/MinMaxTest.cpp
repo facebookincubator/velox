@@ -404,8 +404,7 @@ TEST_F(MinMaxTest, constVarchar) {
 }
 
 // Updates the min and max of each group with strings that alternate between
-// inline and out of line, so that the out of line buffer grows, is reused, and
-// is kept while the value is inline.
+// inline and out of line, exercising buffer growth, reuse, and release.
 TEST_F(MinMaxTest, stringSequences) {
   const std::string huge(4'000, 'h');
   const std::string sharedPrefix{"abcdefghijklmnopqrstuvwxyz"};
@@ -516,6 +515,7 @@ TEST_F(MinMaxTest, trackRowSize) {
   };
   // Inline strings live in the row, so nothing should be tracked.
   const std::vector<std::string> inlineStrings{"c", "a", "e", "b", "d"};
+  const std::string largeString(64 << 10, 'm');
 
   // Bound the tracked size rather than just requiring it to be non-zero, so a
   // garbage read fails too. The upper bound allows for allocator headers.
@@ -524,6 +524,12 @@ TEST_F(MinMaxTest, trackRowSize) {
 
   for (const auto& name : {"min", "max"}) {
     SCOPED_TRACE(name);
+    // Both replacements are new extrema, even though they are much shorter.
+    const char replacement = std::string_view(name) == "min" ? 'a' : 'z';
+    const std::vector<std::string> largeToInline{
+        largeString, std::string(1, replacement)};
+    const std::vector<std::string> largeToSmall{
+        largeString, std::string(stringBytes, replacement)};
     for (const auto& type : std::vector<TypePtr>{VARCHAR(), VARBINARY()}) {
       SCOPED_TRACE(type->toString());
       const auto longSize = functions::aggregate::test::aggregateAndReadRowSize(
@@ -535,6 +541,16 @@ TEST_F(MinMaxTest, trackRowSize) {
           functions::aggregate::test::aggregateAndReadRowSize(
               pool(), name, type, {makeFlatVector(inlineStrings, type)}),
           0);
+
+      EXPECT_EQ(
+          functions::aggregate::test::aggregateAndReadRowSize(
+              pool(), name, type, {makeFlatVector(largeToInline, type)}),
+          0);
+
+      const auto shrunkSize = functions::aggregate::test::aggregateAndReadRowSize(
+          pool(), name, type, {makeFlatVector(largeToSmall, type)});
+      EXPECT_GE(shrunkSize, stringBytes);
+      EXPECT_LE(shrunkSize, stringBytes + kAllocatorSlack);
     }
   }
 }
