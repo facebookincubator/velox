@@ -417,11 +417,16 @@ ChannelOutcome UcxOutputQueue::removalOutcomeLocked(
             facts.state,
             facts.error)));
   }
-  // A chunk counts as delivered once a remote server took it from its queue:
-  // the send keeps it alive until it completes. An intra-node chunk counts
-  // once its source read it, since the registry drops it with the task. The
-  // count of a source that has not reported its read yet can only turn a
-  // clean end into an error. A Released destination has no consumer waiting.
+  // Counts only the output that removal destroys: chunks still queued, chunks
+  // kept for broadcast destinations not added yet, and intra-node chunks
+  // published but not read, which the registry drops with the task. The count
+  // of a source that has not reported its read yet can only turn a clean end
+  // into an error. A chunk that a remote server took is not destroyed:
+  // removal ends an Open destination without stopping its server, which keeps
+  // the chunk until its send completes and then gets the end with this
+  // outcome. A send that fails ends the server without an end message, so a
+  // clean end never follows a lost chunk. A Released destination has no
+  // consumer waiting.
   int64_t numUndelivered{0};
   for (const auto& destination : destinations_) {
     if (destination.queue != nullptr) {

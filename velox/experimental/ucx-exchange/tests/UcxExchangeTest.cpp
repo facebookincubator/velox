@@ -22,6 +22,7 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
 #include <folly/ScopeGuard.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
@@ -213,6 +214,9 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
     std::shared_ptr<std::vector<uint8_t>> receiveBuffer;
     // The close message that sendCloseMessage() sent.
     std::shared_ptr<ucxx::Request> closeRequest;
+    // The receives that receive() posted. Used only on the Communicator
+    // thread.
+    std::vector<std::shared_ptr<ucxx::Request>> receiveRequests;
     // -1 until the end message arrives, then 1 for a clean end and 0 for
     // anything else.
     std::atomic<int> receiveResult{-1};
@@ -431,6 +435,37 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
     }));
   }
 
+  // Receives the message with 'tag' that 'session's server sends into 'size'
+  // bytes at 'data', which 'buffer' owns. Returns the receive's status, or
+  // UCS_ERR_TIMED_OUT if it does not complete within 3 seconds. The session's
+  // cleanup cancels a receive still pending.
+  static ucs_status_t receive(
+      const std::shared_ptr<TerminalMetadataSession>& session,
+      uint64_t tag,
+      void* data,
+      size_t size,
+      std::shared_ptr<void> buffer) {
+    auto status = std::make_shared<std::atomic<ucs_status_t>>(UCS_INPROGRESS);
+    EXPECT_TRUE(runOnCommunicator([session, tag, data, size, buffer, status] {
+      session->receiveRequests.push_back(
+          session->endpoint->endpoint_
+              ->tagRecvBuilder(data, size, ucxx::Tag{tag}, ucxx::TagMaskFull)
+              .callbackFunction(
+                  [status](
+                      ucs_status_t completed, std::shared_ptr<void> /*arg*/) {
+                    status->store(completed);
+                  })
+              .callbackData(buffer)
+              .build());
+    }));
+    if (!waitUntil(
+            [&]() { return status->load() != UCS_INPROGRESS; },
+            std::chrono::milliseconds(3'000))) {
+      return UCS_ERR_TIMED_OUT;
+    }
+    return status->load();
+  }
+
   // Waits up to 3 seconds for the output of 'taskId' to finish.
   bool waitForOutputFinished(std::string_view taskId) {
     const auto deadline =
@@ -492,6 +527,12 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
       // Keeps the close message alive until its send completes.
       Communicator::getInstance()->deferRequestCleanup(
           std::move(session->closeRequest));
+      for (auto& request : session->receiveRequests) {
+        if (!request->isCompleted()) {
+          request->cancel();
+        }
+        Communicator::getInstance()->deferRequestCleanup(std::move(request));
+      }
       if (session->endpoint != nullptr) {
         session->endpoint->removeCommElem(session->owner);
       }
@@ -3020,6 +3061,101 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataTaskAbortRemovesUcxOutput) {
   task->requestAbort().wait();
   EXPECT_EQ(task->state(), TaskState::kAborted);
   EXPECT_EQ(queueManager()->stats(taskId), std::nullopt);
+}
+
+// Removing the producer task while the server's send of a chunk it took is
+// pending does not destroy that chunk: removal ends the destination without
+// stopping the server, which completes the send and then sends the end that
+// removal decided. That end is clean once every driver finished, and the
+// producer's error before that.
+TEST_F(
+    UcxExchangeFocusedTest,
+    terminalMetadataRemovalDuringPendingSendDeliversChunkThenEnd) {
+  if (!isRendezvousOnly()) {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  const auto taskPrefix = getUniqueTaskPrefix();
+  for (const bool driversFinished : {true, false}) {
+    SCOPED_TRACE(driversFinished ? "drivers finished" : "drivers running");
+    auto session = std::make_shared<TerminalMetadataSession>();
+    session->taskId = taskPrefix + "removalDuringSend" +
+        (driversFinished ? "AfterNoMoreData" : "BeforeNoMoreData");
+    session->task = makeProducerTask(session->taskId, pool_.get());
+    SCOPE_EXIT {
+      cleanUpTerminalMetadataSession(session);
+    };
+    queueManager()->initializeTask(
+        session->task,
+        core::PartitionedOutputNode::Kind::kPartitioned,
+        /*numDestinations=*/1,
+        /*numDrivers=*/1);
+    queueManager()->enqueue(
+        session->taskId, 0, makePackedColumns(100), /*numRows=*/100);
+    if (driversFinished) {
+      queueManager()->noMoreData(session->taskId);
+    }
+    // The server takes the chunk and posts the sends of its metadata and
+    // data.
+    startServer(session, /*intraNode=*/false);
+    const auto keyHash = fnv1a_32(PartitionKey{session->taskId, 0}.toString());
+
+    auto metadataBuffer =
+        std::make_shared<std::vector<uint8_t>>(kMaxMetaBufSize);
+    ASSERT_EQ(
+        receive(
+            session,
+            getMetadataTag(keyHash, 0),
+            metadataBuffer->data(),
+            metadataBuffer->size(),
+            metadataBuffer),
+        UCS_OK);
+    const auto chunk =
+        decodeProducerMessage(metadataBuffer->data(), metadataBuffer->size());
+    ASSERT_TRUE(std::holds_alternative<MetadataMsg>(chunk));
+    const auto& metadata = std::get<MetadataMsg>(chunk);
+    EXPECT_EQ(metadata.numRows, 100);
+
+    // The data send stays pending until its receive is posted.
+    queueManager()->removeTask(session->taskId);
+    EXPECT_FALSE(session->server.expired());
+
+    cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
+    auto data = std::make_shared<rmm::device_buffer>(
+        metadata.dataSizeBytes,
+        stream,
+        cudf::get_current_device_resource_ref());
+    stream.sync();
+    EXPECT_EQ(
+        receive(
+            session, getDataTag(keyHash, 0), data->data(), data->size(), data),
+        UCS_OK);
+
+    auto endBuffer = std::make_shared<std::vector<uint8_t>>(kMaxMetaBufSize);
+    ASSERT_EQ(
+        receive(
+            session,
+            getMetadataTag(keyHash, 1),
+            endBuffer->data(),
+            endBuffer->size(),
+            endBuffer),
+        UCS_OK);
+    const auto end =
+        decodeProducerMessage(endBuffer->data(), endBuffer->size());
+    ASSERT_TRUE(std::holds_alternative<ChannelOutcome>(end));
+    const auto& outcome = std::get<ChannelOutcome>(end);
+    if (driversFinished) {
+      EXPECT_TRUE(outcome.isClean()) << outcome.error;
+    } else {
+      EXPECT_EQ(outcome.kind, OutcomeKind::kProducerError);
+      EXPECT_THAT(
+          outcome.error,
+          testing::HasSubstr(
+              "Producer task ended before sending all its output. Task: " +
+              session->taskId));
+    }
+    EXPECT_TRUE(waitForServerDestroyed(session->server));
+  }
 }
 
 // A server is bound to the output queue of the task it was created for.
