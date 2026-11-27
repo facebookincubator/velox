@@ -18,6 +18,7 @@
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/paimon/PaimonDeletionVectorReader.h"
+#include "velox/connectors/paimon/PaimonMergeStream.h"
 #include "velox/connectors/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::paimon {
@@ -91,6 +92,12 @@ class PaimonSplitReader : public connector::FileSplitReader {
   virtual const uint64_t* rowSelection() const {
     return nullptr;
   }
+
+  // Opens a merge stream of each data file, in file order, which reads the
+  // merge columns of 'tableHandle' 'batchSize' rows at a time with no filters.
+  std::vector<std::unique_ptr<PaimonMergeStream>> openMergeStreams(
+      const PaimonTableHandle& tableHandle,
+      uint64_t batchSize);
 
  private:
   // Reuses the current reader or lazily prepares the next non-empty file.

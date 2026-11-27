@@ -54,6 +54,7 @@ velox_add_library(
   PaimonDataSource.cpp
   PaimonDeletionVectorReader.cpp
   PaimonMergeSplitReader.cpp
+  PaimonMergeStream.cpp
   PaimonSplitReader.cpp
   HEADERS
   PaimonConfig.h
@@ -61,6 +62,7 @@ velox_add_library(
   PaimonDataSource.h
   PaimonDeletionVectorReader.h
   PaimonMergeSplitReader.h
+  PaimonMergeStream.h
   PaimonSplitReader.h
 )
 
