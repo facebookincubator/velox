@@ -199,6 +199,25 @@ TEST_F(ExprToSubfieldFilterTest, unsupportedCast) {
   }
 }
 
+TEST_F(ExprToSubfieldFilterTest, neqHugeint) {
+  // Not-equal over a long decimal maps to HUGEINT, which cannot be expressed
+  // as a subfield filter. Both the direct and the negated spelling must report
+  // "no filter" rather than failing the query.
+  auto rowType = ROW({"c0"}, {DECIMAL(20, 0)});
+
+  {
+    auto [subfield, filter] = leafCallToSubfieldFilter(
+        parseCallExpr("c0 <> 1::decimal(20, 0)", rowType));
+    EXPECT_FALSE(filter);
+  }
+
+  {
+    auto [subfield, filter] = leafCallToSubfieldFilter(
+        parseCallExpr("c0 = 1::decimal(20, 0)", rowType), /*negated=*/true);
+    EXPECT_FALSE(filter);
+  }
+}
+
 TEST_F(ExprToSubfieldFilterTest, eqSubfield) {
   auto call = parseCallExpr("a.b = 42", ROW("a", ROW("b", BIGINT())));
   auto [subfield, filter] = leafCallToSubfieldFilter(call);
