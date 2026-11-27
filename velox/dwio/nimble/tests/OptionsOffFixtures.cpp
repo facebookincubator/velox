@@ -110,6 +110,28 @@ EncodingLayoutTree columnLayout(
           column}}};
 }
 
+// A layout tree with 'layout' for the column 'fsst'. A tree matches columns by
+// position, so the columns before it get placeholder nodes of their kinds.
+EncodingLayoutTree fsstColumnLayout(EncodingLayout layout) {
+  std::vector<EncodingLayoutTree> columns;
+  const auto addPlaceholders = [&columns](Kind kind, int count) {
+    for (int i = 0; i < count; ++i) {
+      columns.push_back(EncodingLayoutTree{kind, {}, ""});
+    }
+  };
+  addPlaceholders(Kind::Scalar, /*count=*/12);
+  addPlaceholders(Kind::Array, /*count=*/1);
+  addPlaceholders(Kind::Map, /*count=*/1);
+  addPlaceholders(Kind::Scalar, /*count=*/4);
+  columns.push_back(
+      EncodingLayoutTree{
+          Kind::Scalar,
+          {{EncodingLayoutTree::StreamIdentifiers::Scalar::ScalarStream,
+            std::move(layout)}},
+          "fsst"});
+  return EncodingLayoutTree{Kind::Row, {}, "", std::move(columns)};
+}
+
 } // namespace
 
 std::vector<Fixture> allFixtures() {
@@ -327,7 +349,13 @@ WriterOptions fixtureOptions(
       options.encodingSelectionPolicyCreator =
           defaultFactorsCreator(compression);
       options.subIntSplitEncodingSubfields = {"split"};
-      options.fsstEncodingSubfields = {"fsst"};
+      options.encodingLayoutTree.emplace(fsstColumnLayout(
+          EncodingLayout{
+              EncodingType::Fsst,
+              {},
+              compression.compressionType,
+              {std::nullopt, std::nullopt},
+          }));
       // Keeps FSST even where it does not shrink the strings, so that it is
       // written.
       options.fsstCompressionTargetRatio = 10.0;
