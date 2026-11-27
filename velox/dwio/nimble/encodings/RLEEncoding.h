@@ -339,6 +339,13 @@ class RLEEncodingBase
   physicalType currentValue_;
   detail::BufferedEncoding<uint32_t, 32> materializedRunLengths_;
 
+ protected:
+  // Rebinds the run lengths to `data`, the next payload's encoded data, for the
+  // derived rebindImpl().
+  void rebindRunLengths(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory);
+
  private:
   struct RLESliceRuns {
     // Run-length child encoding for the returned RLE slice. This view points
@@ -438,6 +445,26 @@ class RLEEncodingBase
     return result;
   }
 };
+
+template <typename T, typename RLEEncoding>
+void RLEEncodingBase<T, RLEEncoding>::rebindRunLengths(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const auto runLengthsOffset = this->dataOffset() + sizeof(uint32_t);
+  NIMBLE_CHECK_FILE_GE(
+      data.size(), runLengthsOffset, "Truncated run length encoding");
+  const char* pos = data.data() + this->dataOffset();
+  const uint32_t runLengthsBytes = encoding::readUint32(pos);
+  NIMBLE_CHECK_FILE_LE(
+      runLengthsBytes,
+      data.size() - runLengthsOffset,
+      "Truncated run length encoding");
+  materializedRunLengths_ =
+      detail::BufferedEncoding<uint32_t, 32>{this->rebindChild(
+          {pos, runLengthsBytes},
+          stringBufferFactory,
+          materializedRunLengths_.releaseEncoding())};
+}
 
 } // namespace internal
 
@@ -662,6 +689,11 @@ class RLEEncoding final : public internal::RLEEncodingBase<T, RLEEncoding<T>> {
     return outerEncodingSize + runValuesEncodingSize + runLengthsEncodingSize;
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   friend class internal::RLEEncodingBase<T, RLEEncoding<T>>;
 
@@ -864,6 +896,11 @@ class RLEEncoding<bool> final
     return outerEncodingSize + initialValueSize + runLengthsEncodingSize;
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   friend class internal::RLEEncodingBase<bool, RLEEncoding<bool>>;
 
@@ -912,6 +949,37 @@ RLEEncoding<T>::RLEEncoding(
     ensureValues();
   }
   this->reset();
+}
+
+template <typename T>
+bool RLEEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  this->rebindRunLengths(data, stringBufferFactory);
+  std::unique_ptr<Encoding> valuesEncoding;
+  if (dictValues_ != nullptr) {
+    valuesEncoding = dictValues_->releaseEncoding();
+  } else if (values_ != nullptr) {
+    valuesEncoding = values_->releaseEncoding();
+  } else {
+    valuesEncoding = std::move(valuesEncoding_);
+  }
+  values_.reset();
+  dictValues_.reset();
+  alphabet_ = nullptr;
+  pendingSkips_ = 0;
+  currentIndex_ = 0;
+  const char* valuesStart = this->getValuesStart();
+  valuesEncoding_ = this->rebindChild(
+      {valuesStart,
+       static_cast<size_t>(data.data() + data.size() - valuesStart)},
+      stringBufferFactory,
+      std::move(valuesEncoding));
+  if (!isStringType<physicalType>() || !valuesEncoding_->dictionaryEnabled()) {
+    ensureValues();
+  }
+  this->reset();
+  return true;
 }
 
 // Advances to the next run value in flat (non-dict) mode by setting

@@ -53,6 +53,18 @@ RLEEncoding<bool>::RLEEncoding(
   internal::RLEEncodingBase<bool, RLEEncoding<bool>>::reset();
 }
 
+bool RLEEncoding<bool>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  rebindRunLengths(data, stringBufferFactory);
+  NIMBLE_CHECK_FILE(
+      getValuesStart() + 1 == data.data() + data.size(),
+      "Unexpected run length encoding end");
+  initialValue_ = *reinterpret_cast<const bool*>(getValuesStart());
+  internal::RLEEncodingBase<bool, RLEEncoding<bool>>::reset();
+  return true;
+}
+
 bool RLEEncoding<bool>::nextValue() {
   value_ = !value_;
   return !value_;
