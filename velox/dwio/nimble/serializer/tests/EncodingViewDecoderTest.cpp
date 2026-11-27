@@ -302,13 +302,13 @@ class EncodingViewDecoderTest : public ::testing::Test {
   }
 
   // Creates the view of 'encoded' with 'options' and 'inputStringBuffer', as
-  // the factory of a StreamReader creates it. The decoder that calls the
-  // factory keeps 'inputStringBuffer' while the view is bound.
+  // the factory of a StreamReader creates it. The test keeps
+  // 'inputStringBuffer' alive while the view is bound.
   std::shared_ptr<const EncodingView> makeView(
       std::string_view encoded,
-      const velox::BufferPtr& inputStringBuffer,
+      velox::Buffer* inputStringBuffer,
       Encoding::Options options) {
-    options.inputStringBuffer = inputStringBuffer.get();
+    options.inputStringBuffer = inputStringBuffer;
     return createEncodingView(encoded, pool_.get(), options);
   }
 
@@ -330,9 +330,7 @@ class EncodingViewDecoderTest : public ::testing::Test {
         chunkBufferHolders,
         pool_.get(),
         /*bufferPool=*/nullptr,
-        [this](
-            std::string_view encoded,
-            const velox::BufferPtr& inputStringBuffer) {
+        [this](std::string_view encoded, velox::Buffer* inputStringBuffer) {
           return makeView(encoded, inputStringBuffer, Encoding::Options{});
         });
   }
@@ -350,8 +348,7 @@ class EncodingViewDecoderTest : public ::testing::Test {
         pool_.get(),
         /*bufferPool=*/nullptr,
         [this, options, &views](
-            std::string_view encoded,
-            const velox::BufferPtr& inputStringBuffer) {
+            std::string_view encoded, velox::Buffer* inputStringBuffer) {
           auto view = makeView(encoded, inputStringBuffer, options);
           views.push_back(view);
           return view;
@@ -374,8 +371,7 @@ class EncodingViewDecoderTest : public ::testing::Test {
   EncodingViewDecoder::EncodingViewFactory makeTrackingFactory(
       std::vector<std::weak_ptr<const EncodingView>>& views) {
     return [this, &views](
-               std::string_view encoded,
-               const velox::BufferPtr& inputStringBuffer) {
+               std::string_view encoded, velox::Buffer* inputStringBuffer) {
       auto view = makeView(encoded, inputStringBuffer, Encoding::Options{});
       views.push_back(view);
       return view;
@@ -668,8 +664,7 @@ TEST_F(EncodingViewDecoderTest, rebindRecyclesScratchInTheNewBufferPool) {
       /*chunkBufferHolders=*/{},
       pool_.get(),
       &firstPool,
-      [this](
-          std::string_view encoded, const velox::BufferPtr& inputStringBuffer) {
+      [this](std::string_view encoded, velox::Buffer* inputStringBuffer) {
         return makeView(encoded, inputStringBuffer, Encoding::Options{});
       }};
   std::array<int64_t, 5> output{};
@@ -767,7 +762,7 @@ TEST_F(EncodingViewDecoderTest, rebindUsesConstructorFactory) {
       /*chunkBufferHolders=*/{},
       pool_.get(),
       /*bufferPool=*/nullptr,
-      [&](std::string_view encoded, const velox::BufferPtr& inputStringBuffer) {
+      [&](std::string_view encoded, velox::Buffer* inputStringBuffer) {
         ++numViews;
         return makeView(encoded, inputStringBuffer, Encoding::Options{});
       }};
@@ -1389,9 +1384,7 @@ DEBUG_ONLY_TEST_F(
       /*chunkBufferHolders=*/{},
       pool_.get(),
       /*bufferPool=*/nullptr,
-      [this](
-          std::string_view encoded,
-          const velox::BufferPtr& /*inputStringBuffer*/) {
+      [this](std::string_view encoded, velox::Buffer* /*inputStringBuffer*/) {
         return std::make_shared<OutsideBufferView>(encoded, pool_.get());
       }};
   const std::array<RowRange, 1> ranges{{{0, 2}}};

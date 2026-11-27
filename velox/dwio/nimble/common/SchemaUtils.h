@@ -55,8 +55,12 @@ ScalarKind hybridFlatMapKeyKind(
     std::string_view columnName);
 
 /// Returns descriptor offsets in dense projected-stream order.
-/// FlatMap value streams precede their corresponding in-map stream.
-std::vector<uint32_t> projectionStreamOffsets(const Type& type);
+/// FlatMap value streams precede their corresponding in-map stream. When
+/// `stringStreams` is not null, sets it to whether each of those streams, in
+/// the same order, holds strings: the values of a String or Binary scalar.
+std::vector<uint32_t> projectionStreamOffsets(
+    const Type& type,
+    std::vector<bool>* stringStreams);
 
 /// Parses a Velox subfield path used to identify a value stream.
 velox::common::Subfield parseValueStreamSubfield(std::string_view fieldPath);
