@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -380,6 +381,50 @@ TEST_F(EncodingUtilitiesTest, traverseEncodingsPforChildren) {
   EXPECT_EQ(rootType, EncodingType::PFOR);
   const std::vector<std::pair<std::string, uint32_t>> expected{
       {"ExceptionPositions", 1u}, {"ExceptionValues", 1u}};
+  EXPECT_EQ(nestedVisits, expected);
+}
+
+TEST_F(EncodingUtilitiesTest, traverseEncodingsFsstChildren) {
+  std::vector<std::string> storage;
+  storage.reserve(200);
+  for (int i = 0; i < 200; ++i) {
+    storage.push_back("common/prefix/for/fsst/tool/" + std::to_string(i % 8));
+  }
+  Vector<std::string_view> values{pool_.get()};
+  for (const auto& value : storage) {
+    values.emplace_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto stream = nimble::test::Encoder<FsstEncoding>::encode(
+      buffer,
+      values,
+      CompressionType::Uncompressed,
+      {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+
+  EncodingType rootType = EncodingType::Constant; // init to something else
+  std::vector<std::tuple<std::string, uint32_t, uint32_t>>
+      nestedVisits; // name, level, index
+  traverseEncodings(
+      stream,
+      [&](EncodingType encodingType,
+          DataType /* dataType */,
+          uint32_t level,
+          uint32_t index,
+          const std::string& nestedEncodingName,
+          const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+          /* properties */) -> bool {
+        if (level == 0) {
+          rootType = encodingType;
+        } else {
+          nestedVisits.emplace_back(nestedEncodingName, level, index);
+        }
+        return true;
+      });
+
+  EXPECT_EQ(rootType, EncodingType::Fsst);
+  const std::vector<std::tuple<std::string, uint32_t, uint32_t>> expected{
+      {"Lengths", 1u, 0u}, {"DecodedLengths", 1u, 1u}};
   EXPECT_EQ(nestedVisits, expected);
 }
 

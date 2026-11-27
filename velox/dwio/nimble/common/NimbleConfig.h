@@ -90,26 +90,17 @@ class Config : public velox::config::ConfigBase {
   static Entry<uint64_t> CHUNKING_WRITER_WIDE_SCHEMA_MAX_CHUNK_SIZE;
   static Entry<bool> CHUNKING_WRITER_EAGER_CHUNKING;
 
-  /// VARCHAR subfield paths whose value streams prefer FSST, falling back to
-  /// Trivial when FSST misses its compression target. FSST and its fallback use
-  /// the normal encoding compression policy. Paths use Velox subfield syntax:
-  /// nested ROW fields use '.', while ARRAY elements and MAP values use '[*]'.
-  /// Examples: top_level, nested.target, items[*], properties[*], and
-  /// metadata[*].label. Targeting a cluster-index key is rejected; non-key
-  /// paths are resolved against the stored schema. Targeting the same value
-  /// stream with shared dictionary encoding is rejected. This option does not
-  /// change other streams.
-  /// A field whose literal name contains Velox subfield separators such as
-  /// '.', or any path containing ',', cannot be expressed by this
-  /// comma-delimited SerDe option.
-  /// EXPERIMENTAL: Do not enable for production tables without consulting the
-  /// Nimble team (oncall: dwios).
-  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
-  static Entry<const std::vector<std::string>> FSST_COLUMNS;
-
   /// Subfield paths whose INTEGER, BIGINT, REAL or DOUBLE value streams use
-  /// SubIntSplit. Uses the same path syntax and schema filtering as
-  /// FSST_COLUMNS. Explicit encoding layouts take precedence.
+  /// SubIntSplit. Paths use Velox subfield syntax: nested ROW fields use '.',
+  /// while ARRAY elements and MAP values use '[*]'. Examples: top_level,
+  /// nested.target, items[*], properties[*], and metadata[*].label. Paths
+  /// absent from the file's schema are dropped, so delete files and other
+  /// narrower schemas inherit the table's columns. Targeting a cluster-index
+  /// key is rejected; non-key paths are resolved against the stored schema.
+  /// Targeting the same value stream with shared dictionary encoding is
+  /// rejected. A field whose literal name contains Velox subfield separators
+  /// such as '.', or any path containing ',', cannot be expressed by this
+  /// comma-delimited SerDe option. Explicit encoding layouts take precedence.
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<const std::vector<std::string>> SUBINTSPLIT_COLUMNS;
 

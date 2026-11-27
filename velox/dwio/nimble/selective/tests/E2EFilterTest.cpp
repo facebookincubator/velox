@@ -529,9 +529,13 @@ class E2EFilterTest
                       {},
                       CompressionType::Uncompressed,
                       {EncodingLayout{
-                          EncodingType::Trivial,
-                          {},
-                          CompressionType::Uncompressed}}}}},
+                           EncodingType::Trivial,
+                           {},
+                           CompressionType::Uncompressed},
+                       EncodingLayout{
+                           EncodingType::Trivial,
+                           {},
+                           CompressionType::Uncompressed}}}}},
                 std::string(childName)});
       } else {
         children.push_back(

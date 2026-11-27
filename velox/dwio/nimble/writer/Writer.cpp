@@ -95,7 +95,6 @@ class WriterContext : public FieldWriterContext {
   // node IDs owned by the context that consumes them.
   struct Options {
     WriterOptions writerOptions;
-    EncodingNodeIds fsstEncodingNodeIds;
     EncodingNodeIds subIntSplitEncodingNodeIds;
   };
 
@@ -107,7 +106,6 @@ class WriterContext : public FieldWriterContext {
             options.writerOptions.reclaimerFactory(),
             options.writerOptions.vectorDecoderVisitor},
         options_{std::move(options.writerOptions)},
-        fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
         subIntSplitEncodingNodeIds_{std::move(options.subIntSplitEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
         logger_{
@@ -144,10 +142,6 @@ class WriterContext : public FieldWriterContext {
 
   const WriterOptions& options() const {
     return options_;
-  }
-
-  const EncodingNodeIds& fsstEncodingNodeIds() const {
-    return fsstEncodingNodeIds_;
   }
 
   const EncodingNodeIds& subIntSplitEncodingNodeIds() const {
@@ -299,7 +293,6 @@ class WriterContext : public FieldWriterContext {
   }
 
   const WriterOptions options_;
-  const EncodingNodeIds fsstEncodingNodeIds_;
   const EncodingNodeIds subIntSplitEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
   velox::CpuWallTiming encodingTiming_;
@@ -528,19 +521,11 @@ detail::WriterContext::Options prepareWriterContextOptions(
   }
 
   const bool omitsClusterIndexKeys = omitClusterIndexKeyColumnStorage(options);
-  const auto resolveEncodingNodes = [&](const std::vector<std::string>& paths,
-                                        EncodingType encodingType) {
+  const auto resolveEncodingNodes = [&](const std::vector<std::string>& paths) {
     EncodingNodeIds nodeIds;
     if (paths.empty()) {
       return nodeIds;
     }
-    NIMBLE_CHECK(
-        encodingType == EncodingType::Fsst ||
-            encodingType == EncodingType::SubIntSplit,
-        "Unsupported targeted encoding: {}.",
-        toString(encodingType));
-    const std::string_view encodingName =
-        encodingType == EncodingType::Fsst ? "FSST" : "SubIntSplit";
     const auto storedSchema = TypeWithId::create(storedType);
     const index::ClusterIndexConfig* clusterConfig{nullptr};
     if (options.clusterIndexConfig != nullptr) {
@@ -561,45 +546,30 @@ detail::WriterContext::Options prepareWriterContextOptions(
                 clusterConfig->columns.begin(),
                 clusterConfig->columns.end(),
                 subfield.baseName()) == clusterConfig->columns.end(),
-            "{} subfield '{}' cannot target cluster index key column '{}'.",
-            encodingName,
+            "SubIntSplit subfield '{}' cannot target cluster index key column '{}'.",
             fieldPath,
             subfield.baseName());
       }
       const auto& node = resolveValueStreamSubfield(*storedSchema, subfield);
-      if (encodingType == EncodingType::Fsst) {
-        NIMBLE_USER_CHECK(
-            node.type()->isVarchar(),
-            "FSST subfield '{}' must resolve to VARCHAR, got {}.",
-            fieldPath,
-            node.type()->toString());
-      } else {
-        NIMBLE_USER_CHECK(
-            node.type()->isInteger() || node.type()->isBigint() ||
-                node.type()->isReal() || node.type()->isDouble(),
-            "SubIntSplit subfield '{}' must resolve to INTEGER, BIGINT, REAL or DOUBLE, got {}.",
-            fieldPath,
-            node.type()->toString());
-      }
+      NIMBLE_USER_CHECK(
+          node.type()->isInteger() || node.type()->isBigint() ||
+              node.type()->isReal() || node.type()->isDouble(),
+          "SubIntSplit subfield '{}' must resolve to INTEGER, BIGINT, REAL or DOUBLE, got {}.",
+          fieldPath,
+          node.type()->toString());
       NIMBLE_USER_CHECK(
           nodeIds.insert(node.id()).second,
-          "Duplicate {} subfield configuration for schema node {}: '{}'.",
-          encodingName,
+          "Duplicate SubIntSplit subfield configuration for schema node {}: '{}'.",
           node.id(),
           fieldPath);
     }
     return nodeIds;
   };
-  auto fsstEncodingNodeIds =
-      resolveEncodingNodes(options.fsstEncodingSubfields, EncodingType::Fsst);
-  auto subIntSplitEncodingNodeIds = resolveEncodingNodes(
-      options.subIntSplitEncodingSubfields, EncodingType::SubIntSplit);
+  auto subIntSplitEncodingNodeIds =
+      resolveEncodingNodes(options.subIntSplitEncodingSubfields);
 
   if (!omitsClusterIndexKeys) {
-    return {
-        std::move(options),
-        std::move(fsstEncodingNodeIds),
-        std::move(subIntSplitEncodingNodeIds)};
+    return {std::move(options), std::move(subIntSplitEncodingNodeIds)};
   }
 
   if (!options.schemaAttributes.empty()) {
@@ -621,10 +591,7 @@ detail::WriterContext::Options prepareWriterContextOptions(
 
   const bool hasFeatureReordering = options.featureReordering.has_value();
   if (!hasFeatureReordering) {
-    return {
-        std::move(options),
-        std::move(fsstEncodingNodeIds),
-        std::move(subIntSplitEncodingNodeIds)};
+    return {std::move(options), std::move(subIntSplitEncodingNodeIds)};
   }
 
   // Field writers and the layout planner are built from storedDataType().
@@ -651,10 +618,7 @@ detail::WriterContext::Options prepareWriterContextOptions(
   }
   options.featureReordering = std::move(remapped);
 
-  return {
-      std::move(options),
-      std::move(fsstEncodingNodeIds),
-      std::move(subIntSplitEncodingNodeIds)};
+  return {std::move(options), std::move(subIntSplitEncodingNodeIds)};
 }
 
 void writeIndexSection(
@@ -1458,15 +1422,12 @@ DictionaryConfigs collectDictionaryConfigs(
     const TypeWithId& type,
     const detail::WriterContext& context) {
   DictionaryConfigs configs;
-  const auto& fsstEncodingNodeIds = context.fsstEncodingNodeIds();
   const auto& subIntSplitEncodingNodeIds = context.subIntSplitEncodingNodeIds();
   const auto& dictionaryEncodingConfig =
       context.options().experimentalSharedDictionaryEncoding;
   if (dictionaryEncodingConfig.empty()) {
     return configs;
   }
-  // TODO: Define targeted FSST/shared-dictionary coexistence, including
-  // writer-owned alphabet encoding, instead of rejecting exact overlaps.
 
   NIMBLE_USER_CHECK_EQ(
       type.type()->kind(),
@@ -1495,12 +1456,6 @@ DictionaryConfigs collectDictionaryConfigs(
         "scalar, array element, or map value, got {}.",
         columnDictionary.fieldPath,
         valueType.type()->toString());
-    NIMBLE_USER_CHECK(
-        !fsstEncodingNodeIds.contains(valueNodeId),
-        "Targeted FSST and shared dictionary column '{}' resolve to the same "
-        "value stream (schema node {}).",
-        columnDictionary.fieldPath,
-        valueNodeId);
     NIMBLE_USER_CHECK(
         !subIntSplitEncodingNodeIds.contains(valueNodeId),
         "Targeted SubIntSplit and shared dictionary column '{}' resolve to the same "
@@ -1543,7 +1498,7 @@ DictionaryConfigs collectDictionaryConfigs(
     const auto& mapValueType = *fieldType.childAt(1);
     for (const auto& flatMapKey : flatMap.keys) {
       const auto& config = flatMapKey.dictionary;
-      if (!fsstEncodingNodeIds.empty() || !subIntSplitEncodingNodeIds.empty()) {
+      if (!subIntSplitEncodingNodeIds.empty()) {
         const TypeWithId* configuredType = &mapValueType;
         if (!flatMapKey.valueSubfield.empty()) {
           const auto valueSubfield =
@@ -1553,15 +1508,6 @@ DictionaryConfigs collectDictionaryConfigs(
         }
         const auto& valueType =
             resolveDictionaryValueType(*configuredType, flatMap.fieldPath);
-        NIMBLE_USER_CHECK(
-            !fsstEncodingNodeIds.contains(valueType.id()),
-            "Targeted FSST and shared dictionary flat-map column '{}', key "
-            "{}, value subfield '{}' resolve to the same value stream "
-            "(schema node {}).",
-            flatMap.fieldPath,
-            flatMapKey.key,
-            flatMapKey.valueSubfield,
-            valueType.id());
         NIMBLE_USER_CHECK(
             !subIntSplitEncodingNodeIds.contains(valueType.id()),
             "Targeted SubIntSplit and shared dictionary flat-map column '{}', key "
@@ -1779,14 +1725,7 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
             nodeId,
             _dictionaryConfigs,
             _flatMapKeyEncodingLayouts);
-        const bool subIntSplit =
-            context.subIntSplitEncodingNodeIds().contains(nodeId);
-        const bool fsst = context.fsstEncodingNodeIds().contains(nodeId);
-        NIMBLE_CHECK(
-            !(subIntSplit && fsst),
-            "A schema node cannot target both FSST and SubIntSplit: {}.",
-            nodeId);
-        if (subIntSplit) {
+        if (context.subIntSplitEncodingNodeIds().contains(nodeId)) {
           streamContext(type.asScalar().scalarDescriptor())
               .setEncoding(
                   EncodingLayout{
@@ -1797,21 +1736,6 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
                       // requires a slot for every nested section identifier.
                       std::vector<std::optional<const EncodingLayout>>(64),
                   });
-        }
-        if (fsst) {
-          auto& writerStreamContext =
-              streamContext(type.asScalar().scalarDescriptor());
-          // Target only the FSST parent. Its blob, nested streams, and Trivial
-          // fallback use the writer's normal encoding-selection settings. A
-          // caller-provided encodingLayoutTree is applied later and takes
-          // precedence when it configures the same stream.
-          writerStreamContext.setEncoding(
-              EncodingLayout{
-                  EncodingType::Fsst,
-                  {},
-                  context.options().compressionOptions.compressionType,
-                  {std::nullopt},
-              });
         }
       });
 }
