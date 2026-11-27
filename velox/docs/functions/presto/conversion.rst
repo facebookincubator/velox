@@ -27,7 +27,9 @@ Supported Conversions
 
 The supported conversions are listed below, with from-types given at rows and to-types given at columns. Conversions of ARRAY, MAP, and ROW types
 are supported if the conversion of their element types are supported. In addition,
-supported conversions to/from JSON are listed in :doc:`json`.
+supported conversions to/from JSON are listed in :doc:`json`. Conversions to and
+from TIME are not part of the table; they are described in `Cast to TIME`_ and
+`Cast from TIME`_.
 
 .. list-table::
    :widths: 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25 25
@@ -1522,6 +1524,82 @@ Examples:
 
   SELECT cast(ipaddress '1.2.3.4' as ipprefix) -- ipprefix '1.2.3.4/32'
   SELECT cast(ipaddress '2001:db8::ff00:42:8329' as ipprefix) -- ipprefix '2001:db8::ff00:42:8329/128'
+
+Cast to TIME
+------------
+
+Only the millisecond-precision TIME type (see :doc:`../../develop/types`) is
+covered here. Casting to TIME is supported from VARCHAR and TIMESTAMP. Casting
+from any other source type, for example BIGINT, throws.
+
+From VARCHAR
+^^^^^^^^^^^^
+
+Accepted formats are ``H:m``, ``H:m:s`` and ``H:m:s.SSS``, where the
+fractional part has at most three digits (millisecond precision). Hours, minutes and seconds must be in
+range, so ``25:00:00.000`` is invalid. Leading and trailing whitespace, digits
+that are not ASCII and fractions with more than three digits (for example
+``12:30:45.123456``) are rejected. Casting from invalid input values throws, and
+``try_cast`` returns NULL instead.
+
+When `adjust_timestamp_to_session_timezone` is false (the default), or no
+`session_timezone` is set, the string is taken as the time of day as it is.
+When it is true, the string is read as a local time in the session time zone,
+on the day the session started, and converted to a UTC time of day. In that
+case, if the local time is ambiguous because clocks move back, the earlier of
+the two instants is used, and if it does not exist because clocks move forward,
+the cast fails.
+
+Valid examples
+
+::
+
+  SELECT cast('12:30' as time); -- 12:30:00.000
+  SELECT cast('12:30:45' as time); -- 12:30:45.000
+  SELECT cast('12:30:45.123' as time); -- 12:30:45.123
+
+Invalid examples
+
+::
+
+  SELECT cast('25:00:00.000' as time); -- Invalid argument
+  SELECT cast(' 12:30:45.123' as time); -- Invalid argument
+  SELECT cast('12:30:45.123456' as time); -- Invalid argument
+
+From TIMESTAMP
+^^^^^^^^^^^^^^
+
+Returns the time of day of the timestamp, in milliseconds since midnight. No
+time zone adjustment is applied. Timestamps before the epoch are handled, for
+example a timestamp 1 millisecond before the epoch becomes ``23:59:59.999``.
+
+Cast from TIME
+--------------
+
+Casting from TIME is supported to VARCHAR, BIGINT and TIMESTAMP. Other target
+types are not covered here.
+
+To VARCHAR
+^^^^^^^^^^
+
+The result has the form ``HH:MM:SS.mmm``. When
+`adjust_timestamp_to_session_timezone` is false (the default), or no
+`session_timezone` is set, the stored time of day is printed as it is. When it
+is true, the TIME value is treated as a UTC time of day on the day the session
+started, and is rendered in the session time zone. This is the reverse of
+casting VARCHAR to TIME.
+
+To BIGINT
+^^^^^^^^^
+
+Returns the number of milliseconds since midnight, without any time zone
+adjustment.
+
+To TIMESTAMP
+^^^^^^^^^^^^
+
+Returns the timestamp that is the given number of milliseconds after the epoch,
+that is, on 1970-01-01, without any time zone adjustment.
 
 Data Size Functions
 -------------------
