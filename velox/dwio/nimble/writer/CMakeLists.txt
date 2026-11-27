@@ -12,9 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# nimble_index uses these, and nimble_writer links nimble_index, so they are
+# separate libraries that nimble_index can link.
+add_library(nimble_buffer_growth_policy BufferGrowthPolicy.cpp BufferGrowthPolicy.h)
+target_link_libraries(nimble_buffer_growth_policy nimble_common)
+
+add_library(nimble_chunked_stream_writer ChunkedStreamWriter.cpp ChunkedStreamWriter.h)
+target_link_libraries(nimble_chunked_stream_writer nimble_common nimble_compression)
+
 add_library(
   nimble_writer
-  ChunkedStreamWriter.cpp
   BufferPolicy.cpp
   BufferPolicy.h
   EncodingLayoutTree.cpp
@@ -38,6 +45,8 @@ add_library(
 )
 target_link_libraries(
   nimble_writer
+  nimble_buffer_growth_policy
+  nimble_chunked_stream_writer
   nimble_column_stats
   nimble_column_stats_utils
   nimble_common
@@ -69,7 +78,6 @@ target_link_libraries(nimble_velox_layout_planner nimble_velox_schema_reader nim
 
 add_library(
   nimble_velox_field_writer
-  BufferGrowthPolicy.cpp
   DeduplicationUtils.cpp
   FieldWriter.cpp
   VectorAdapters.h
@@ -77,11 +85,10 @@ add_library(
   RawSizeContext.h
   FieldWriter.h
   DeduplicationUtils.h
-  ChunkedStreamWriter.h
-  BufferGrowthPolicy.h
 )
 target_link_libraries(
   nimble_velox_field_writer
+  nimble_buffer_growth_policy
   nimble_velox_common
   nimble_velox_nimble_config
   nimble_column_stats
