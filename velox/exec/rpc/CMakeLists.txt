@@ -26,7 +26,7 @@ velox_link_libraries(
   velox_rpc_types
   velox_common_base
   Folly::folly
-  FBThrift::thriftcpp2
+  thrift::rpc
 )
 
 velox_add_library(

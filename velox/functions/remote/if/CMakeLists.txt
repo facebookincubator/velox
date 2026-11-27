@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(FBThriftCppLibrary)
-
-add_fbthrift_cpp_library(
+add_library(remote_function_thrift)
+thrift_generate(
   remote_function_thrift
   RemoteFunction.thrift
-  SERVICES
-  RemoteFunctionService
+  LANGUAGE cpp2
+  SERVICES RemoteFunctionService
+  INCLUDE_DIRECTORIES ${PROJECT_SOURCE_DIR} ${THRIFT_INCLUDE_DIR}
 )
+target_include_directories(remote_function_thrift PUBLIC ${PROJECT_BINARY_DIR})
+target_link_libraries(remote_function_thrift PUBLIC thrift::rpc)
 
 target_compile_options(remote_function_thrift PRIVATE -Wno-deprecated-declarations)
 

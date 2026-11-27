@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(FBThriftCppLibrary)
-
-add_fbthrift_cpp_library(velox_dwio_parquet_thrift_raw parquet.thrift)
+thrift_add_library(velox_dwio_parquet_thrift_raw parquet.thrift LANGUAGE cpp2)
 add_library(velox_dwio_parquet_thrift INTERFACE)
 target_link_libraries(velox_dwio_parquet_thrift INTERFACE velox_dwio_parquet_thrift_raw)
 velox_add_test_headers(
@@ -28,5 +26,5 @@ endif()
 
 velox_install_library_headers()
 get_target_property(generated_headers velox_dwio_parquet_thrift_raw PUBLIC_HEADER)
-get_target_property(header_install_dir velox_dwio_parquet_thrift_raw HEADER_INSTALL_DIR)
-install(FILES ${generated_headers} DESTINATION ${header_install_dir})
+get_target_property(header_dir velox_dwio_parquet_thrift_raw THRIFT_HEADER_DIR)
+install(FILES ${generated_headers} DESTINATION include/${header_dir})

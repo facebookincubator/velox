@@ -13,10 +13,7 @@
 # limitations under the License.
 
 velox_add_library(velox_functions_remote_thrift_client ThriftClient.cpp HEADERS ThriftClient.h)
-velox_link_libraries(
-  velox_functions_remote_thrift_client
-  PUBLIC remote_function_thrift FBThrift::thriftcpp2
-)
+velox_link_libraries(velox_functions_remote_thrift_client PUBLIC remote_function_thrift thrift::rpc)
 
 velox_add_library(
   velox_functions_remote

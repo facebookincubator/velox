@@ -767,43 +767,17 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(gRPC)
 endif()
 
-# FBThrift is required by remote functions and LocalRunnerService.
+# Thrift is required by remote functions and LocalRunnerService.
 if(VELOX_ENABLE_REMOTE_FUNCTIONS OR VELOX_ENABLE_PARQUET OR VELOX_ENABLE_LOCAL_RUNNER_SERVICE)
-  set(VELOX_NEEDS_FBTHRIFT ON)
+  set(VELOX_NEEDS_THRIFT ON)
 endif()
 
-# TODO: Move this to use resolve_dependency(). For some reason, FBThrift
+# TODO: Move this to use resolve_dependency(). For some reason, Thrift
 # requires clients to explicitly install fizz and wangle.
-if(VELOX_NEEDS_FBTHRIFT)
+if(VELOX_NEEDS_THRIFT)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
-  find_package(FBThrift CONFIG REQUIRED)
-
-  # Workaround for a missing edge in the system-installed FBThrift's
-  # exported CMake graph. At the pinned FB_OS_VERSION, fbthrift's own
-  # `target_link_libraries(thriftmetadata PUBLIC ...)` block does not
-  # declare an xxhash dep on `thriftmetadata` — the conditional
-  # `if(Xxhash_FOUND) target_link_libraries(thriftmetadata PUBLIC
-  # ${Xxhash_LIBRARY})` block was added later in fbthrift mainline.
-  # Meanwhile `libthriftmetadata.a` itself does call XXH3_64bits(),
-  # so the binary needs xxhash but the exported FBThriftTargets.cmake
-  # doesn't declare it. Symptom (only with VELOX_BUILD_SHARED=ON +
-  # VELOX_MONO_LIBRARY=ON, where libvelox.so doesn't drag xxhash in
-  # incidentally): `undefined reference to symbol 'XXH3_64bits'` on
-  # any test executable that links FBThrift through velox.
-  # Tracking: https://github.com/facebook/fbthrift/issues/651,
-  # https://github.com/facebookincubator/velox/issues/13153.
-  # Remove once FB_OS_VERSION is bumped past the commit that adds the
-  # `if(Xxhash_FOUND)` block AND the velox-dev container is rebuilt
-  # against that fixed fbthrift release.
-  if(TARGET FBThrift::thriftmetadata)
-    find_library(VELOX_XXHASH_LIB xxhash REQUIRED)
-    set_property(
-      TARGET FBThrift::thriftmetadata
-      APPEND
-      PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
-    )
-  endif()
+  find_package(thrift CONFIG REQUIRED)
 endif()
 
 if(VELOX_ENABLE_GCS)
