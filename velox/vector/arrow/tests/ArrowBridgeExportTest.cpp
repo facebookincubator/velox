@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Nulls.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -794,6 +795,126 @@ TEST_F(ArrowBridgeExportTest, flatTime) {
 
   arrowArray.release(&arrowArray);
   arrowSchema.release(&arrowSchema);
+}
+
+TEST_F(ArrowBridgeExportTest, calendarIntervalRoundTrip) {
+  auto vector = makeFlatVector<int128_t>(
+      {
+          CalendarInterval(0, 0, 0).pack(),
+          CalendarInterval(14, 30, 3'600'000'000L).pack(),
+          CalendarInterval(-3, -10, -7'200'000'000L).pack(),
+          CalendarInterval(0, 1, 1'500L).pack(),
+          CalendarInterval(
+              120, 365, std::numeric_limits<int64_t>::max() / 1'000)
+              .pack(),
+      },
+      CALENDAR_INTERVAL());
+  for (const bool useDecimalTypeWidth : {false, true}) {
+    SCOPED_TRACE(useDecimalTypeWidth);
+    options_.useDecimalTypeWidth = useDecimalTypeWidth;
+    ArrowSchema schema;
+    ArrowArray data;
+    velox::exportToArrow(vector, schema, options_);
+    velox::exportToArrow(vector, data, pool(), options_);
+
+    EXPECT_STREQ(schema.format, "tin");
+    auto result = importFromArrowAsOwner(schema, data, pool());
+    EXPECT_TRUE(isCalendarIntervalType(result->type()));
+    test::assertEqualVectors(vector, result);
+  }
+}
+
+TEST_F(ArrowBridgeExportTest, calendarIntervalOverflow) {
+  auto vector = makeFlatVector<int128_t>(
+      {
+          CalendarInterval(1, 1, std::numeric_limits<int64_t>::max()).pack(),
+          CalendarInterval(1, 1, std::numeric_limits<int64_t>::min()).pack(),
+      },
+      CALENDAR_INTERVAL());
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vector, schema, options_);
+  velox::exportToArrow(vector, data, pool(), options_);
+
+  auto result = importFromArrowAsOwner(schema, data, pool());
+  auto expected = makeFlatVector<int128_t>(
+      {
+          CalendarInterval(1, 1, std::numeric_limits<int64_t>::max() / 1'000)
+              .pack(),
+          CalendarInterval(1, 1, std::numeric_limits<int64_t>::min() / 1'000)
+              .pack(),
+      },
+      CALENDAR_INTERVAL());
+  test::assertEqualVectors(expected, result);
+}
+
+TEST_F(ArrowBridgeExportTest, calendarIntervalParentNulls) {
+  auto child = makeNullableFlatVector<int128_t>(
+      {
+          CalendarInterval(1, 10, 1'000'000L).pack(),
+          CalendarInterval(2, 20, 2'000'000L).pack(),
+          std::nullopt,
+          CalendarInterval(4, 40, 4'000'000L).pack(),
+          CalendarInterval(5, 50, 5'000'000L).pack(),
+      },
+      CALENDAR_INTERVAL());
+  auto parent = makeRowVector({child});
+  parent->setNull(1, true);
+  parent->setNull(3, true);
+
+  ArrowArray data;
+  velox::exportToArrow(parent, data, pool(), options_);
+  auto* childArrow = data.children[0];
+  ASSERT_NE(childArrow, nullptr);
+  EXPECT_EQ(childArrow->null_count, 3);
+  const auto* nulls = static_cast<const uint64_t*>(childArrow->buffers[0]);
+  ASSERT_NE(nulls, nullptr);
+  EXPECT_FALSE(bits::isBitNull(nulls, 0));
+  EXPECT_TRUE(bits::isBitNull(nulls, 1));
+  EXPECT_TRUE(bits::isBitNull(nulls, 2));
+  EXPECT_TRUE(bits::isBitNull(nulls, 3));
+  EXPECT_FALSE(bits::isBitNull(nulls, 4));
+
+  const auto* values = static_cast<const int128_t*>(childArrow->buffers[1]);
+  EXPECT_EQ(values[0], CalendarInterval(1, 10, 1'000'000'000L).pack());
+  EXPECT_EQ(values[4], CalendarInterval(5, 50, 5'000'000'000L).pack());
+  data.release(&data);
+}
+
+TEST_F(ArrowBridgeExportTest, calendarIntervalArrayGap) {
+  auto elements = makeNullableFlatVector<int128_t>(
+      {
+          CalendarInterval(1, 10, 1'000'000L).pack(),
+          CalendarInterval(2, 20, 2'000'000L).pack(),
+          CalendarInterval(3, 30, 3'000'000L).pack(),
+          std::nullopt,
+          CalendarInterval(5, 50, 5'000'000L).pack(),
+      },
+      CALENDAR_INTERVAL());
+  auto offsets = makeBuffer<vector_size_t>({0, 3});
+  auto sizes = makeBuffer<vector_size_t>({2, 2});
+  auto vector = std::make_shared<ArrayVector>(
+      pool(), ARRAY(elements->type()), nullptr, 2, offsets, sizes, elements);
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vector, schema, options_);
+  velox::exportToArrow(vector, data, pool(), options_);
+
+  EXPECT_STREQ(schema.children[0]->format, "tin");
+  const auto* child = data.children[0];
+  EXPECT_EQ(child->length, 4);
+  const auto* nulls = static_cast<const uint64_t*>(child->buffers[0]);
+  ASSERT_NE(nulls, nullptr);
+  EXPECT_FALSE(bits::isBitNull(nulls, 0));
+  EXPECT_FALSE(bits::isBitNull(nulls, 1));
+  EXPECT_TRUE(bits::isBitNull(nulls, 2));
+  EXPECT_FALSE(bits::isBitNull(nulls, 3));
+  const auto* values = static_cast<const int128_t*>(child->buffers[1]);
+  EXPECT_EQ(values[0], CalendarInterval(1, 10, 1'000'000'000L).pack());
+  EXPECT_EQ(values[1], CalendarInterval(2, 20, 2'000'000'000L).pack());
+  EXPECT_EQ(values[3], CalendarInterval(5, 50, 5'000'000'000L).pack());
+  schema.release(&schema);
+  data.release(&data);
 }
 
 TEST_F(ArrowBridgeExportTest, flatString) {

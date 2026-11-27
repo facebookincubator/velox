@@ -30,6 +30,7 @@
 #include "velox/expression/ScopedVarSetter.h"
 #include "velox/external/tzdb/time_zone.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/CastRegistry.h"
 #include "velox/type/CppToType.h"
 #include "velox/type/Type.h"
@@ -1262,6 +1263,29 @@ void CastExpr::applyPeeled(
         "Cast from {} to {} is not supported",
         fromType->toString(),
         toType->toString());
+  } else if (
+      isCalendarIntervalType(fromType) || isCalendarIntervalType(toType)) {
+    if (isCalendarIntervalType(fromType) &&
+        toType->kind() == TypeKind::VARCHAR) {
+      // CalendarInterval -> VARCHAR: use valueToString.
+      context.ensureWritable(rows, toType, result);
+      auto* flatResult = result->as<FlatVector<StringView>>();
+      auto* inputVector = input.as<SimpleVector<int128_t>>();
+      auto calendarType = CALENDAR_INTERVAL();
+      rows.applyToSelected([&](auto row) {
+        if (inputVector->isNullAt(row)) {
+          flatResult->setNull(row, true);
+        } else {
+          auto str = calendarType->valueToString(inputVector->valueAt(row));
+          flatResult->set(row, StringView(str));
+        }
+      });
+    } else {
+      VELOX_UNSUPPORTED(
+          "Cast from {} to {} is not supported",
+          fromType->toString(),
+          toType->toString());
+    }
   } else if (fromType->isTime()) {
     VELOX_DCHECK(fromType->equivalent(*TIME()));
     result = castFromTime(rows, input, context, toType);

@@ -21,6 +21,7 @@
 #include "velox/expression/DecodedArgs.h"
 #include "velox/functions/lib/Murmur3Hash32Base.h"
 #include "velox/functions/sparksql/XxHash64.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/vector/FlatVector.h"
 
@@ -43,6 +44,9 @@ class RowVectorHasher;
 
 template <typename HashClass>
 class UnknowTypeVectorHasher;
+
+template <typename HashClass>
+class CalendarIntervalVectorHasher;
 
 // Class to compute hashes identical to one produced by Spark.
 // Hashes are computed using the algorithm implemented in HashClass.
@@ -89,6 +93,16 @@ std::shared_ptr<SparkVectorHasher<HashClass>> createVectorHasher(
       return std::make_shared<RowVectorHasher<HashClass>>(decoded);
     case TypeKind::UNKNOWN:
       return std::make_shared<UnknowTypeVectorHasher<HashClass>>(decoded);
+    case TypeKind::HUGEINT:
+      if (isCalendarIntervalType(decoded.base()->type())) {
+        return std::make_shared<CalendarIntervalVectorHasher<HashClass>>(
+            decoded);
+      }
+      return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
+          createPrimitiveVectorHasher,
+          HashClass,
+          decoded.base()->typeKind(),
+          decoded);
     default:
       return VELOX_DYNAMIC_SCALAR_TEMPLATE_TYPE_DISPATCH(
           createPrimitiveVectorHasher,
@@ -127,6 +141,27 @@ class UnknowTypeVectorHasher : public SparkVectorHasher<HashClass> {
   ReturnType hashNotNullAt(vector_size_t /*index*/, SeedType /*seed*/)
       override {
     VELOX_FAIL("hashNotNullAt should not be called for unknown type.");
+  }
+};
+
+// Hashes CalendarInterval matching Spark's Murmur3Hash behavior:
+// hashInt(months, hashInt(days, hashLong(microseconds, seed)))
+template <typename HashClass>
+class CalendarIntervalVectorHasher : public SparkVectorHasher<HashClass> {
+ public:
+  using SeedType = typename HashClass::SeedType;
+  using ReturnType = typename HashClass::ReturnType;
+
+  explicit CalendarIntervalVectorHasher(DecodedVector& decoded)
+      : SparkVectorHasher<HashClass>(decoded) {}
+
+  ReturnType hashNotNullAt(vector_size_t index, SeedType seed) override {
+    auto value = this->decoded_.template valueAt<int128_t>(index);
+    auto ci = CalendarInterval::unpack(value);
+    auto h = HashClass::hashInt64(ci.microseconds, seed);
+    h = HashClass::hashInt32(ci.days, h);
+    h = HashClass::hashInt32(ci.months, h);
+    return h;
   }
 };
 
@@ -314,13 +349,15 @@ void applyWithType(
     }
 
     auto kind = args[i]->typeKind();
+    bool isCalendarInterval =
+        kind == TypeKind::HUGEINT && isCalendarIntervalType(args[i]->type());
     if ((kind == TypeKind::TINYINT || kind == TypeKind::SMALLINT ||
          kind == TypeKind::INTEGER || kind == TypeKind::BIGINT ||
          kind == TypeKind::REAL || kind == TypeKind::DOUBLE ||
          kind == TypeKind::TIMESTAMP || kind == TypeKind::VARCHAR ||
          kind == TypeKind::VARBINARY || kind == TypeKind::HUGEINT ||
          kind == TypeKind::UNKNOWN) &&
-        args[i]->isFlatEncoding()) {
+        args[i]->isFlatEncoding() && !isCalendarInterval) {
       hashSimd<HashClass, ReturnType>(selected, args, result, i);
       continue;
     }

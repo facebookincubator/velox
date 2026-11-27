@@ -32,6 +32,7 @@
 #include <typeindex>
 
 #include "velox/external/tzdb/exception.h"
+#include "velox/functions/sparksql/types/CalendarInterval.h"
 #include "velox/type/CastRegistry.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/Time.h"
@@ -350,6 +351,7 @@ void Type::registerSerDe() {
   registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
   registry.Register("VectorIndexType", VectorIndexType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
+  registry.Register("CalendarIntervalType", CalendarIntervalType::deserialize);
 }
 
 std::string ArrayType::toString() const {
@@ -1515,6 +1517,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"TIMESTAMP UTC", TIMESTAMP_UTC()},
       {"INTERVAL DAY TO SECOND", INTERVAL_DAY_TIME()},
       {"INTERVAL YEAR TO MONTH", INTERVAL_YEAR_MONTH()},
+      {"INTERVAL", CALENDAR_INTERVAL()},
       {"DATE", DATE()},
       {"TIME", TIME()},
       {"TIME MICRO UTC", TIME_MICRO_UTC()},

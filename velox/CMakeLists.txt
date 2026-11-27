@@ -19,6 +19,8 @@ add_subdirectory(common)
 add_subdirectory(core)
 add_subdirectory(serializers)
 add_subdirectory(type)
+# Keep built-in interval registration available when Spark functions are disabled.
+add_subdirectory(functions/sparksql/types)
 add_subdirectory(vector)
 add_subdirectory(row)
 add_subdirectory(flag_definitions)

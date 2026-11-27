@@ -64,6 +64,7 @@ add_executable(
   LeastGreatestTest.cpp
   LuhnCheckTest.cpp
   MakeDecimalTest.cpp
+  MakeIntervalTest.cpp
   MakeTimestampTest.cpp
   MapConcatTest.cpp
   MapFromArraysTest.cpp

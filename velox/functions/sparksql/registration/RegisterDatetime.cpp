@@ -144,6 +144,7 @@ void registerDatetimeFunctions(const std::string& prefix) {
       {prefix + "make_ym_interval"});
   registerFunction<MakeYMIntervalFunction, IntervalYearMonth, int32_t, int32_t>(
       {prefix + "make_ym_interval"});
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_make_interval, prefix + "make_interval");
   {
     // Seconds argument is decimal(precision, 6); precision is left free
     // (any short-decimal precision is accepted), scale is pinned to 6.

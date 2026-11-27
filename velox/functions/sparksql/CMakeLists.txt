@@ -47,6 +47,7 @@ velox_add_library(
   In.cpp
   LastWin.cpp
   LeastGreatest.cpp
+  MakeInterval.cpp
   Map.cpp
   MapFromArrays.cpp
   MapFromEntries.cpp
