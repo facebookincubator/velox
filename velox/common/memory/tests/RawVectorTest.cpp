@@ -86,6 +86,12 @@ TEST_P(RawVectorTest, padding) {
       simd::addBytes(ints.data(), ints.capacity() * sizeof(int32_t)));
 }
 
+TEST_P(RawVectorTest, paddedData) {
+  raw_vector<int32_t> ints =
+      makeRawVector(10, GetParam().useMemoryPool ? pool_.get() : nullptr);
+  EXPECT_EQ(ints.paddedData().get(), ints.data());
+}
+
 TEST_P(RawVectorTest, resize) {
   raw_vector<int32_t> ints =
       makeRawVector(1000, GetParam().useMemoryPool ? pool_.get() : nullptr);
