@@ -42,16 +42,13 @@ template <typename T>
 struct ParseUrlFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  // Every part except a FILE that concatenates the path and query is a
-  // direct slice of the URL argument, so the result reuses its string
-  // buffer instead of copying.
+  // Every part, including FILE (path, '?', and query are contiguous in the
+  // input), is a direct slice of the URL argument, so the result reuses its
+  // string buffer instead of copying.
   static constexpr int32_t reuse_strings_from_arg = 0;
 
   // ASCII input always produces ASCII result.
   static constexpr bool is_default_ascii_behavior = true;
-
-  static constexpr std::string_view kRegexPrefix = "(&|^)";
-  static constexpr std::string_view kRegexSuffix = "=([^&]*)";
 
   ParseUrlFunction() : cache_(0) {}
 
@@ -103,6 +100,7 @@ struct ParseUrlFunction {
     // an invalid key does not fail rows that never use it.
     if (key) {
       constKey_ = std::string(key->data(), key->size());
+      constKeyIsPlain_ = isPlainKey(*constKey_);
     }
   }
 
@@ -137,7 +135,9 @@ struct ParseUrlFunction {
     const std::string_view keyValue = constKey_.has_value()
         ? std::string_view(*constKey_)
         : std::string_view(key.data(), key.size());
-    if (isPlainKey(keyValue)) {
+    const bool plainKey =
+        constKey_.has_value() ? constKeyIsPlain_ : isPlainKey(keyValue);
+    if (plainKey) {
       return extractPlainKey(output, query, keyValue);
     }
     // A constant key compiles into a dedicated pattern once, outside the
@@ -150,7 +150,8 @@ struct ParseUrlFunction {
       // pattern is cached too, so each affected row fails with the error
       // without recompiling, and no row silently degrades to null.
       if (constPattern_ == nullptr) {
-        constPattern_ = std::make_unique<re2::RE2>(buildQueryPattern(keyValue));
+        constPattern_ = std::make_unique<re2::RE2>(
+            buildQueryPattern(keyValue), re2::RE2::Quiet);
       }
       VELOX_USER_CHECK(
           constPattern_->ok(),
@@ -197,23 +198,28 @@ struct ParseUrlFunction {
       &ParsedUrl::userInfo};
   using UrlOffsets = std::array<std::optional<UrlSlice>, kComponents.size()>;
 
+  static constexpr std::string_view kRegexPrefix = "(&|^)";
+  static constexpr std::string_view kRegexSuffix = "=([^&]*)";
+
   // Regex metacharacters; a key containing any of them must go through the
   // regex path. The same set the regexp functions use for their fast paths.
   static constexpr std::string_view kReservedChars = ".$|()[{^?*+\\";
 
   // The extractable parts, keyed once per part string instead of compared
-  // on every row.
-  enum class Part {
-    kProtocol,
-    kHost,
-    kPath,
-    kQuery,
-    kRef,
-    kFile,
-    kAuthority,
-    kUserInfo,
-    kUnknown
+  // on every row. The first seven values index directly into kComponents.
+  enum class Part : uint8_t {
+    kProtocol = 0,
+    kHost = 1,
+    kPath = 2,
+    kQuery = 3,
+    kRef = 4,
+    kAuthority = 5,
+    kUserInfo = 6,
+    kFile = 7,
+    kUnknown = 8
   };
+  static_assert(
+      static_cast<size_t>(Part::kUserInfo) + 1 == kComponents.size());
 
   static Part parsePart(std::string_view part) {
     if (part == "PROTOCOL") {
@@ -331,67 +337,36 @@ struct ParseUrlFunction {
   // Returns the requested part, or false when its optional is unset.
   static bool
   extractPart(out_type<Varchar>& output, const ParsedUrl& parsed, Part part) {
-    switch (part) {
-      case Part::kProtocol:
-        if (!parsed.protocol.has_value()) {
-          return false;
-        }
-        assignOutput(output, *parsed.protocol);
-        return true;
-      case Part::kHost:
-        if (!parsed.host.has_value()) {
-          return false;
-        }
-        assignOutput(output, *parsed.host);
-        return true;
-      case Part::kPath:
-        if (!parsed.path.has_value()) {
-          return false;
-        }
+    if (part == Part::kFile) {
+      if (!parsed.path.has_value()) {
+        return false;
+      }
+      if (!parsed.query.has_value()) {
         assignOutput(output, *parsed.path);
         return true;
-      case Part::kQuery:
-        if (!parsed.query.has_value()) {
-          return false;
-        }
-        assignOutput(output, *parsed.query);
-        return true;
-      case Part::kRef:
-        if (!parsed.ref.has_value()) {
-          return false;
-        }
-        assignOutput(output, *parsed.ref);
-        return true;
-      case Part::kFile: {
-        if (!parsed.path.has_value()) {
-          return false;
-        }
-        // FILE synthesizes a new string that is not a slice of the URL
-        // argument, so it must be copied into the result.
-        std::string outputStr(*parsed.path);
-        if (parsed.query.has_value()) {
-          outputStr += '?';
-          outputStr += *parsed.query;
-        }
-        output = outputStr;
-        return true;
       }
-      case Part::kAuthority:
-        if (!parsed.authority.has_value()) {
-          return false;
-        }
-        assignOutput(output, *parsed.authority);
-        return true;
-      case Part::kUserInfo:
-        if (!parsed.userInfo.has_value()) {
-          return false;
-        }
-        assignOutput(output, *parsed.userInfo);
-        return true;
-      case Part::kUnknown:
-        return false;
+      // In a hierarchical URL, path, '?', and query are contiguous in the
+      // input, so FILE is a direct slice of the URL argument.
+      VELOX_DCHECK_EQ(
+          parsed.path->data() + parsed.path->size() + 1, parsed.query->data());
+      VELOX_DCHECK_EQ(parsed.path->data()[parsed.path->size()], '?');
+      assignOutput(
+          output,
+          std::string_view(
+              parsed.path->data(),
+              parsed.path->size() + 1 + parsed.query->size()));
+      return true;
     }
-    return false;
+    const auto index = static_cast<size_t>(part);
+    if (index >= kComponents.size()) {
+      return false;
+    }
+    const auto& component = parsed.*kComponents[index];
+    if (!component.has_value()) {
+      return false;
+    }
+    assignOutput(output, *component);
+    return true;
   }
 
   // Component offsets for a valid constant URL. Unset for non-constant or
@@ -411,6 +386,9 @@ struct ParseUrlFunction {
   // A constant query key, remembered in initialize(). Its compiled regex
   // is built lazily on first use in call().
   std::optional<std::string> constKey_;
+
+  // Whether constKey_ is a plain string with no regex metacharacters.
+  bool constKeyIsPlain_ = false;
 
   // The compiled regex of a constant query key, outside the regex cache.
   std::unique_ptr<re2::RE2> constPattern_;

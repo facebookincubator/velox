@@ -20,12 +20,6 @@
 #include <cstdint>
 #include <limits>
 
-#include "velox/common/base/SimdUtil.h"
-
-#if XSIMD_WITH_AVX2
-#include <immintrin.h>
-#endif
-
 #include "folly/CPortability.h"
 #include "velox/functions/lib/Utf8Utils.h"
 
@@ -149,7 +143,7 @@ FOLLY_ALWAYS_INLINE constexpr bool isUserInfoChar(char c) {
 // The authority grammar for a non-server authority (one without a
 // recognizable host): free-form text, tolerated but never decomposed.
 FOLLY_ALWAYS_INLINE constexpr bool isRegNameChar(char c) {
-  return isUnreserved(c) || isPcharExtra(c) || c == ';' || c == '$';
+  return isUnreserved(c) || isPcharExtra(c) || c == ';';
 }
 
 // The authority grammar for a server-based authority ("host[:port]"
@@ -237,8 +231,7 @@ FOLLY_ALWAYS_INLINE constexpr bool isSpaceChar(int32_t codePoint) {
 }
 
 // A predicate's ASCII membership packed as 16 bytes: bit (c & 7) of byte
-// (c >> 3) is set iff Pred(c). skipAccepted feeds this table to the
-// vectorized lookup.
+// (c >> 3) is set iff Pred(c).
 template <bool (*Pred)(char)>
 struct AsciiBitmap {
   static constexpr std::array<uint8_t, 16> kValues = [] {
@@ -250,10 +243,14 @@ struct AsciiBitmap {
     }
     return values;
   }();
+
+  static FOLLY_ALWAYS_INLINE bool contains(uint8_t b) {
+    return (kValues[b >> 3] & static_cast<uint8_t>(1 << (b & 7))) != 0;
+  }
 };
 
 // Why a run of accepted characters ended.
-enum class ScanStop {
+enum class ScanStop : uint8_t {
   kEnd, //< The whole input was accepted.
   kRejected, //< A character Pred rejects stopped the scan.
   kEscape, //< A '%' that may start an escape pair stopped the scan.
@@ -261,121 +258,22 @@ enum class ScanStop {
 };
 
 // Advances input past its leading characters accepted by Pred and
-// reports why the scan stopped. Bytes >= 0x80 always stop the bulk scan
+// reports why the scan stopped. Bytes >= 0x80 always stop the scan
 // because multi-byte characters need UTF-8 decoding, which is
 // scanComponent's job. '%' stops the scan only when Pred rejects it
 // (isServerPercentChar accepts it, for IPv6 scope ids); when it does
 // stop there, it is reported as kEscape so scanComponent can validate
-// the pair. Runs of accepted bytes are skipped 32 at a time with a
-// two-shuffle table lookup (byte -> bitmap byte -> bit); the same
-// bitmap drives the scalar tail, so new character sets only need a
-// predicate - never new SIMD code.
+// the pair.
 template <bool (*Pred)(char)>
 FOLLY_ALWAYS_INLINE ScanStop skipAccepted(std::string_view& input) {
-  size_t i = 0;
   const size_t size = input.size();
-// Because no portable SIMD library exposes a data-driven byte shuffle, so we
-// need to fall back on a scalar implementation.
-#if XSIMD_WITH_AVX2
-  for (; i + 32 <= size; i += 32) {
-    // Bulk-scan one 32-byte chunk per iteration. Each byte is classified
-    // by two chained pshufb table lookups, the vectorized spelling of the
-    // scalar test `bitmap[c >> 3] & (1 << (c & 7))`:
-    //
-    //   byte b (e.g. 'a' = 0x61 = 0110 0001)
-    //     | & 0x7F          -> fold into the ASCII table domain
-    //     v
-    //   ascii = 0x61
-    //     | >> 3            -> index of the bitmap byte (0x61 >> 3 = 12)
-    //     v
-    //   bitmapByte = bitmap[12]        (bit 1 set iff Pred(0x61))
-    //     | & (1 << (ascii & 7))       (0x61 & 7 = 1)
-    //     v
-    //   bit = bitmapByte & powerOfTwo[1] = bitmapByte & 0x02
-    //
-    // bit is zero exactly when Pred rejects the byte (or the byte is
-    // non-ASCII, which the sign-bit mask below rejects separately).
-    const __m256i bitmap = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-        reinterpret_cast<const __m128i*>(AsciiBitmap<Pred>::kValues.data())));
-    // The second lookup table: index k yields the one-bit mask 1 << k.
-    const __m256i powerOfTwo = _mm256_setr_epi8(
-        1,
-        2,
-        4,
-        8,
-        16,
-        32,
-        64,
-        -128,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        2,
-        4,
-        8,
-        16,
-        32,
-        64,
-        -128,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0);
-    const __m256i chunk =
-        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input.data() + i));
-    // Fold every byte into 0..127 so the bitmap index stays inside its
-    // 16-byte domain. Without this, pshufb would silently truncate the
-    // index of a >= 0x80 byte to its low 4 bits and look up an unrelated
-    // bitmap entry; non-ASCII bytes are rejected by the sign bits below,
-    // not by this lookup.
-    const __m256i ascii = _mm256_and_si256(chunk, _mm256_set1_epi8(0x7F));
-    // First lookup: byte -> bitmapByte. The shift runs on 16-bit lanes
-    // (AVX2 has no byte-wise shift), which lets one byte's low bits leak
-    // into its neighbor's high bits, so & 0x1F trims every byte back to
-    // a 5-bit index.
-    const __m256i bitmapByte = _mm256_shuffle_epi8(
-        bitmap,
-        _mm256_and_si256(_mm256_srli_epi16(ascii, 3), _mm256_set1_epi8(0x1F)));
-    // Second lookup: extract the bit for (ascii & 7) out of bitmapByte.
-    const __m256i bit = _mm256_and_si256(
-        _mm256_shuffle_epi8(
-            powerOfTwo, _mm256_and_si256(ascii, _mm256_set1_epi8(7))),
-        bitmapByte);
-    // One rejected bit per input byte. The first movemask marks bytes
-    // whose lookup bit is zero; the second ORs in the sign bit of every
-    // raw byte, so any non-ASCII (>= 0x80) byte is rejected here and
-    // re-examined by the classification below, which hands it to UTF-8
-    // decoding.
-    const uint32_t rejected =
-        _mm256_movemask_epi8(_mm256_cmpeq_epi8(bit, _mm256_setzero_si256())) |
-        _mm256_movemask_epi8(chunk);
-    if (rejected != 0) {
-      // ctz picks the first rejected byte; classify it for the caller.
-      input.remove_prefix(i + __builtin_ctz(rejected));
-      const auto b = static_cast<uint8_t>(input.front());
-      return b == '%'
-          ? ScanStop::kEscape
-          : (b >= 0x80 ? ScanStop::kMultibyte : ScanStop::kRejected);
-    }
-  }
-#endif
-  for (; i < size; ++i) {
+  for (size_t i = 0; i < size; ++i) {
     const auto b = static_cast<uint8_t>(input[i]);
     if (b >= 0x80) {
       input.remove_prefix(i);
       return ScanStop::kMultibyte;
     }
-    if (!Pred(b)) {
+    if (!AsciiBitmap<Pred>::contains(b)) {
       input.remove_prefix(i);
       return b == '%' ? ScanStop::kEscape : ScanStop::kRejected;
     }
@@ -392,12 +290,11 @@ enum class ScanResult {
                     //< the URL is invalid as a whole.
 };
 
-// Scans component left to right, consuming Pred-accepted characters,
-// valid "%XX" escape pairs (when allowEscape), and - outside the
-// authority - non-ASCII characters that are neither spaces nor ISO
-// controls. rejectedAt, when non-null, receives the tail starting at
-// the first unconsumed character. The distinction between kRejected
-// and kMalformedEscape only matters to parseAuthority's registry
+// Scans component left to right, consuming Pred-accepted characters, and -
+// when allowEscape is set - valid "%XX" escape pairs and non-ASCII characters
+// that are neither spaces nor ISO controls. rejectedAt, when non-null, receives
+// the tail starting at the first unconsumed character. The distinction between
+// kRejected and kMalformedEscape only matters to parseAuthority's registry
 // fallback; every other caller treats both as an invalid URL.
 template <bool (*Pred)(char)>
 FOLLY_ALWAYS_INLINE ScanResult scanComponent(
@@ -802,14 +699,7 @@ bool parseServer(std::string_view authority, ParsedUrl& parsed) {
     return false;
   }
   hostAndPort.remove_prefix(1);
-  const auto portEnd = hostAndPort.find('/');
-  const auto port = hostAndPort.substr(
-      0, portEnd == std::string_view::npos ? hostAndPort.size() : portEnd);
-  if (!checkComponent<isDigit>(port, false) || !checkPort(port)) {
-    return false;
-  }
-  hostAndPort.remove_prefix(port.size());
-  return hostAndPort.empty();
+  return checkComponent<isDigit>(hostAndPort, false) && checkPort(hostAndPort);
 }
 
 // Parses an authority, preferring the server-based form: try

@@ -43,7 +43,8 @@ struct ParsedUrl {
 // Parses a complete URL into its components. The grammar follows the
 // java.net.URI (JDK 17) rules Spark's parse_url is defined against,
 // including these lenient deviations from RFC 3986:
-// - non-ASCII characters are accepted outside the authority;
+// - unencoded non-ASCII characters (other than Unicode spaces and ISO
+//   controls) are accepted, including in the authority;
 // - '[' and ']' are allowed in queries;
 // - scheme-less relative references and the empty string are valid;
 // - a '#' inside the fragment is rejected;
