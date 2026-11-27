@@ -389,7 +389,10 @@ struct FileRow {
 // Picks the row a merge engine returns for a key from the rows of the key in
 // merge order, as Paimon Java's DeduplicateMergeFunction and
 // FirstRowMergeFunction do. Like Paimon Java, returns the row of a single-row
-// key without merging, and drops a picked DELETE or UPDATE_BEFORE row.
+// key without merging, and drops a picked DELETE or UPDATE_BEFORE row. When
+// compaction looks up keys, deduplicate merges only the rows of level 0 and
+// the first row of the lowest level above 0, as Paimon Java's
+// LookupMergeFunction does.
 class MergeFunction {
  public:
   MergeFunction(
@@ -397,17 +400,33 @@ class MergeFunction {
       const PaimonTableHandle::MergeOptions& options)
       : dataFiles_(dataFiles),
         firstRow_(options.mergeEngine == PaimonMergeEngine::kFirstRow),
-        ignoreDelete_(options.ignoreDelete) {}
+        ignoreDelete_(options.ignoreDelete),
+        // Paimon Java does not wrap the first-row merge function.
+        lookup_(options.needLookup && !firstRow_) {}
 
   void add(const KeyStream& stream) {
     ++numRows_;
     const bool retract = stream.isRetract();
+    if (lookup_) {
+      const auto level = dataFiles_[stream.fileIndex()].level;
+      if (level > 0) {
+        if (!highLevelRow_.has_value() || level < highLevelRow_->level) {
+          highLevelRow_ = HighLevelRow{
+              FileRow{stream.fileIndex(), stream.fileRow()},
+              level,
+              retract,
+              numRows_};
+        }
+        return;
+      }
+    }
     if (retract && ignoreDelete_) {
       return;
     }
     if (!firstRow_) {
       picked_ = FileRow{stream.fileIndex(), stream.fileRow()};
       pickedRetract_ = retract;
+      pickedPosition_ = numRows_;
       return;
     }
     if (retract) {
@@ -425,6 +444,15 @@ class MergeFunction {
           "UPDATE_BEFORE row unless 'ignore-delete' is true: {}",
           dataFiles_[*retractFileIndex_].path);
     }
+    // Paimon Java passes the high-level row to deduplicate at its position in
+    // merge order among the level-0 rows, so the row wins if it sorts after
+    // the last kept level-0 row or no level-0 row is kept.
+    if (highLevelRow_.has_value() &&
+        !(highLevelRow_->retract && ignoreDelete_) &&
+        (!picked_.has_value() || highLevelRow_->position > pickedPosition_)) {
+      picked_ = highLevelRow_->row;
+      pickedRetract_ = highLevelRow_->retract;
+    }
     std::optional<FileRow> result;
     if (!pickedRetract_) {
       result = picked_;
@@ -432,17 +460,36 @@ class MergeFunction {
     numRows_ = 0;
     picked_.reset();
     pickedRetract_ = false;
+    pickedPosition_ = 0;
     retractFileIndex_.reset();
+    highLevelRow_.reset();
     return result;
   }
 
  private:
-  // Data files of the split, named in error messages.
+  // The first row of the lowest level above 0 of a key.
+  struct HighLevelRow {
+    FileRow row;
+    int32_t level;
+    bool retract;
+    // 1-based position of the row among the rows of the key in merge order.
+    // E.g. with 'sequence.field' = 'ts' and the rows (level 0, ts 5),
+    // (level 1, ts 25) and (level 0, ts 30), the level-1 row is at 2, so
+    // finish() returns the level-0 row at 3. Without that row, it would
+    // return the level-1 row, which sorts after the level-0 row at 1.
+    uint64_t position;
+  };
+
+  // Data files of the split, whose levels lookup merges read and whose paths
+  // error messages name.
   const std::vector<PaimonDataFile>& dataFiles_;
   // True for the first-row merge engine, false for deduplicate.
   const bool firstRow_;
   // True to skip DELETE and UPDATE_BEFORE rows, as 'ignore-delete' asks.
   const bool ignoreDelete_;
+  // True to merge only the rows of level 0 and the first row of the lowest
+  // level above 0, as Paimon Java's LookupMergeFunction does.
+  const bool lookup_;
   // Number of rows of the current key added so far.
   uint64_t numRows_{0};
   // Row the current key returns so far: the last row for deduplicate, the
@@ -451,8 +498,12 @@ class MergeFunction {
   // True if picked_ is a DELETE or UPDATE_BEFORE row, so the key returns
   // nothing.
   bool pickedRetract_{false};
+  // 1-based position of the picked row among the rows of the key.
+  uint64_t pickedPosition_{0};
   // File of a first-row retract, which Paimon Java rejects when it merges.
   std::optional<size_t> retractFileIndex_;
+  // Set only for lookup merges.
+  std::optional<HighLevelRow> highLevelRow_;
 };
 
 } // namespace
