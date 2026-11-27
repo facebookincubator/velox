@@ -34,6 +34,7 @@ add_library(
   FsstEncoding.cpp
   HuffmanEncoding.h
   MainlyConstantEncoding.cpp
+  MainlyIntegerEncoding.cpp
   PrefixEncoding.cpp
   RLEEncoding.cpp
   SharedDictionaryCatalog.cpp
@@ -132,6 +133,7 @@ add_library(
   PrefixEncoding.h
   PFOREncoding.h
   NullableEncoding.h
+  MainlyIntegerEncoding.h
   MainlyConstantEncoding.h
   FsstEncoding.h
   FrequencyPartitionEncoding.h
@@ -189,6 +191,7 @@ target_link_libraries(
   nimble_shared_dictionary_fb
   velox_common_base
   velox_fastpforlib
+  velox_test_util
   fsst
   Folly::folly
   absl::flat_hash_map

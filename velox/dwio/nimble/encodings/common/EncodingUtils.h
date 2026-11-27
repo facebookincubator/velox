@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyIntegerEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
@@ -114,6 +115,8 @@ auto encodingTypeDispatchString(Encoding& encoding, F f) {
       return f(static_cast<PrefixEncoding&>(encoding));
     case EncodingType::Fsst:
       return f(static_cast<FsstEncoding&>(encoding));
+    case EncodingType::MainlyInteger:
+      return f(static_cast<MainlyIntegerEncoding&>(encoding));
     default:
       NIMBLE_UNSUPPORTED("{}", encoding.encodingType());
   }

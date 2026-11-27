@@ -205,6 +205,13 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   Reversed = 30,
+  /// Stores strings that mostly spell integers (string -> int64) as those
+  /// integers, the other strings as strings (the exceptions) and a bool
+  /// is-integer stream between them. See
+  /// MainlyIntegerEncoding.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  MainlyInteger = 31,
 };
 
 /// Serialized value of the removed BitRangeSplit encoding. It stays reserved so

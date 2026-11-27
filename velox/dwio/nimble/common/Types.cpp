@@ -55,6 +55,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::EliasFano, "EliasFano"},
         {EncodingType::Sequence, "Sequence"},
         {EncodingType::Reversed, "Reversed"},
+        {EncodingType::MainlyInteger, "MainlyInteger"},
     });
 
 constexpr auto kReadOnlyEncodingTypes = std::to_array<EncodingType>({
