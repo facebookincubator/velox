@@ -253,9 +253,9 @@ class Communicator {
   // on this worker. Called by run() only.
   void postCloseReceive();
 
-  // Hands each close message that 'closeReceive_' received to the entry of its
-  // task, and posts the receive again unless the Communicator is stopping.
-  // Called by run() only, outside every UCX callback.
+  // Hands each close message that 'closeReceive_' received to the output queue
+  // of its task, and posts the receive again unless the Communicator is
+  // stopping. Called by run() only, outside every UCX callback.
   void handleCloseReceives();
 
   // Cancels 'closeReceive_' and progresses the worker until the receive

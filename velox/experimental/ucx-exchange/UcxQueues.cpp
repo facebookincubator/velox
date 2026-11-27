@@ -208,7 +208,7 @@ bool UcxOutputQueue::initialize(
     core::PartitionedOutputNode::Kind kind,
     std::vector<UcxDataAvailable>& notifications) {
   // Checked before any member changes, so that a failed initialization leaves
-  // the entry Pending for removeTask() to find.
+  // the output queue Pending for removeTask() to find.
   VELOX_CHECK_GE(
       numDestinations, 0, "Number of destinations must be non-negative");
   VELOX_CHECK_NOT_NULL(task);
@@ -218,7 +218,7 @@ bool UcxOutputQueue::initialize(
   Deferred deferred;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (state_ != TaskEntryState::kPending) {
+    if (state_ != OutputQueueState::kPending) {
       return false;
     }
     kind_ = kind;
@@ -227,12 +227,12 @@ bool UcxOutputQueue::initialize(
     removedTask_.reset();
     maxSize_ = maxSize;
     continueSize_ = (maxSize_ * kContinuePct) / 100;
-    state_.store(TaskEntryState::kActive, std::memory_order_release);
-    // Publish task metadata before destination queue expansion. Acceptor only
+    state_.store(OutputQueueState::kActive, std::memory_order_release);
+    // Publish task metadata before destination expansion. Acceptor only
     // needs task/kind to choose the intra-node path; getData() takes mutex_
-    // and waits for any queue expansion in this function to finish.
+    // and waits for any destination expansion in this function to finish.
     initialized_.store(true, std::memory_order_release);
-    addDestinationQueuesLocked(numDestinations, deferred);
+    addDestinationsLocked(numDestinations, deferred);
     if (kind_ == core::PartitionedOutputNode::Kind::kPartitioned) {
       clearPendingReadersLocked(deferred);
     }
@@ -251,7 +251,7 @@ bool UcxOutputQueue::initialize(
 std::shared_ptr<exec::Task> UcxOutputQueue::task() {
   std::lock_guard<std::mutex> l(mutex_);
   // task_ is only set while Active; the check states the contract.
-  return state_ == TaskEntryState::kActive ? task_ : nullptr;
+  return state_ == OutputQueueState::kActive ? task_ : nullptr;
 }
 
 void UcxOutputQueue::addBoundReader() {
@@ -275,12 +275,12 @@ bool UcxOutputQueue::removeBoundReader(int destination) {
     onReleased = std::move(it->second);
     onReleased_.erase(it);
   }
-  return state_ == TaskEntryState::kPending && numBoundReaders_ == 0 &&
+  return state_ == OutputQueueState::kPending && numBoundReaders_ == 0 &&
       !failedInitialization_ && !hasReleasedDestinationLocked();
 }
 
 bool UcxOutputQueue::hasReleasedDestinationLocked() const {
-  for (const auto& [index, destination] : pendingQueues_) {
+  for (const auto& [index, destination] : unpublishedDestinations_) {
     if (destination.state == DestinationState::kReleased) {
       return true;
     }
@@ -297,7 +297,7 @@ void UcxOutputQueue::recordFailedInitialization(
 
 bool UcxOutputQueue::isDroppable() {
   std::lock_guard<std::mutex> l(mutex_);
-  return state_ == TaskEntryState::kRemoved && removedTask_.expired() &&
+  return state_ == OutputQueueState::kRemoved && removedTask_.expired() &&
       numBoundReaders_ == 0;
 }
 
@@ -385,11 +385,11 @@ UcxOutputQueue::Destination* UcxOutputQueue::findDestinationLocked(int index) {
   if (index < 0) {
     return nullptr;
   }
-  if (static_cast<size_t>(index) < queues_.size()) {
-    return &queues_[index];
+  if (static_cast<size_t>(index) < destinations_.size()) {
+    return &destinations_[index];
   }
-  auto it = pendingQueues_.find(index);
-  return it != pendingQueues_.end() ? &it->second : nullptr;
+  auto it = unpublishedDestinations_.find(index);
+  return it != unpublishedDestinations_.end() ? &it->second : nullptr;
 }
 
 std::shared_ptr<const ChannelOutcome> UcxOutputQueue::discardedOutcome() const {
@@ -405,7 +405,7 @@ std::shared_ptr<const ChannelOutcome> UcxOutputQueue::discardedOutcome() const {
 
 ChannelOutcome UcxOutputQueue::removalOutcomeLocked(
     const RemovalFacts& facts) const {
-  if (state_ == TaskEntryState::kPending) {
+  if (state_ == OutputQueueState::kPending) {
     return ChannelOutcome::producerError(
         truncateProducerError(std::string{kProducerNotInitializedError}));
   }
@@ -423,7 +423,7 @@ ChannelOutcome UcxOutputQueue::removalOutcomeLocked(
   // count of a source that has not reported its read yet can only turn a
   // clean end into an error. A Released destination has no consumer waiting.
   int64_t numUndelivered{0};
-  for (const auto& destination : queues_) {
+  for (const auto& destination : destinations_) {
     if (destination.queue != nullptr) {
       numUndelivered += destination.queue->stats().packedColumnsQueued;
     }
@@ -455,20 +455,20 @@ ChannelOutcome UcxOutputQueue::remove(const RemovalFacts& facts) {
   std::shared_ptr<const ChannelOutcome> outcome;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (state_ == TaskEntryState::kRemoved) {
+    if (state_ == OutputQueueState::kRemoved) {
       return *removedOutcome_;
     }
     removedOutcome_ =
         std::make_shared<const ChannelOutcome>(removalOutcomeLocked(facts));
-    for (size_t index = 0; index < queues_.size(); ++index) {
+    for (size_t index = 0; index < destinations_.size(); ++index) {
       applyLocked(
-          queues_[index],
+          destinations_[index],
           index,
           DestinationEvent::kRemoved,
           removedOutcome_,
           deferred);
     }
-    for (auto& [index, destination] : pendingQueues_) {
+    for (auto& [index, destination] : unpublishedDestinations_) {
       applyLocked(
           destination,
           index,
@@ -490,7 +490,7 @@ ChannelOutcome UcxOutputQueue::remove(const RemovalFacts& facts) {
       removedTask_ = task_;
     }
     task = std::move(task_);
-    state_.store(TaskEntryState::kRemoved, std::memory_order_release);
+    state_.store(OutputQueueState::kRemoved, std::memory_order_release);
     outcome = removedOutcome_;
   }
   deferred.run();
@@ -508,11 +508,11 @@ void UcxOutputQueue::consumerGone(int destination) {
     if (slot == nullptr) {
       // Once the count is final, the reader of a destination beyond it already
       // ended.
-      if (state_ == TaskEntryState::kRemoved ||
+      if (state_ == OutputQueueState::kRemoved ||
           isDestinationCountFinalLocked()) {
         return;
       }
-      slot = &pendingQueues_[destination];
+      slot = &unpublishedDestinations_[destination];
     }
     const auto previous = slot->state;
     const auto decision = applyLocked(
@@ -594,13 +594,14 @@ void UcxOutputQueue::enqueue(
   Deferred deferred;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    // The entry's state tells, since no Task method may run under mutex_.
+    // The output queue's state tells, since no Task method may run under
+    // mutex_.
     VELOX_CHECK(
-        state_ != TaskEntryState::kPending,
+        state_ != OutputQueueState::kPending,
         "Cannot add data to output that is not initialized.");
     // removeTask() ends the output of a task that failed or was aborted.
     VELOX_CHECK(
-        state_ != TaskEntryState::kRemoved,
+        state_ != OutputQueueState::kRemoved,
         "Task is terminated, cannot add data to output.");
     auto numBytes = data->gpu_data->size();
     auto sharedData = std::shared_ptr<cudf::packed_columns>(std::move(data));
@@ -611,8 +612,8 @@ void UcxOutputQueue::enqueue(
       // destination's dequeue symmetrically decrements it. The total sent
       // stats count the logical data once.
       int numOpen{0};
-      for (size_t index = 0; index < queues_.size(); ++index) {
-        auto& slot = queues_[index];
+      for (size_t index = 0; index < destinations_.size(); ++index) {
+        auto& slot = destinations_[index];
         if (slot.state == DestinationState::kOpen) {
           slot.queue->enqueueBack(sharedData, numRows);
           notifyReadyReaderLocked(slot, index, deferred);
@@ -632,8 +633,8 @@ void UcxOutputQueue::enqueue(
         deferred.freedChunks.push_back(std::move(sharedData));
       }
     } else {
-      VELOX_CHECK_LT(destination, queues_.size());
-      auto& slot = queues_[destination];
+      VELOX_CHECK_LT(destination, destinations_.size());
+      auto& slot = destinations_[destination];
       if (slot.state == DestinationState::kOpen) {
         slot.queue->enqueueBack(std::move(sharedData), numRows);
         notifyReadyReaderLocked(slot, destination, deferred);
@@ -681,8 +682,8 @@ void UcxOutputQueue::intraNodeChunkRetrieved(int destination) {
 }
 
 bool UcxOutputQueue::isDestinationCountFinalLocked() const {
-  return state_ == TaskEntryState::kRemoved || noMoreQueues_ ||
-      (state_ == TaskEntryState::kActive &&
+  return state_ == OutputQueueState::kRemoved || noMoreQueues_ ||
+      (state_ == OutputQueueState::kActive &&
        kind_ == core::PartitionedOutputNode::Kind::kPartitioned);
 }
 
@@ -694,28 +695,29 @@ void UcxOutputQueue::getData(
   Deferred deferred;
   {
     std::unique_lock<std::mutex> l(mutex_);
-    if (state_ == TaskEntryState::kRemoved && destination >= 0) {
+    if (state_ == OutputQueueState::kRemoved && destination >= 0) {
       const auto* slot = findDestinationLocked(destination);
       step = slot != nullptr && hasEnded(slot->state)
           ? endedStep(*slot)
           : ReaderStep::end(*removedOutcome_);
     } else if (
         destination < 0 ||
-        (static_cast<size_t>(destination) >= queues_.size() &&
+        (static_cast<size_t>(destination) >= destinations_.size() &&
          isDestinationCountFinalLocked())) {
       // No rows are ever produced for such a destination.
       VLOG(1) << "UCX reader outside published destinations: task=" << taskId_
-              << " destination=" << destination << " queues=" << queues_.size()
-              << " kind=" << kind_ << " noMoreQueues=" << noMoreQueues_;
+              << " destination=" << destination
+              << " destinations=" << destinations_.size() << " kind=" << kind_
+              << " noMoreQueues=" << noMoreQueues_;
       step = ReaderStep::end(ChannelOutcome::clean());
     } else {
       Destination* slot{nullptr};
-      if (static_cast<size_t>(destination) < queues_.size()) {
-        slot = &queues_[destination];
+      if (static_cast<size_t>(destination) < destinations_.size()) {
+        slot = &destinations_[destination];
       } else {
         // A reader's ID is not authority to allocate or backfill intermediate
         // destinations. Wait for initialize() or updateOutputBuffers().
-        slot = &pendingQueues_[destination];
+        slot = &unpublishedDestinations_[destination];
         if (slot->state == DestinationState::kUnpublished &&
             slot->queue == nullptr) {
           slot->queue = std::make_unique<UcxDestinationQueue>();
@@ -736,7 +738,7 @@ void UcxOutputQueue::getData(
           if (bytes >= 0L) {
             auto self = weakSelf.lock();
             if (!self) {
-              // The entry is gone, safe to skip the stats update.
+              // The output queue is gone, safe to skip the stats update.
               return;
             }
             std::lock_guard<std::mutex> l(self->mutex_);
@@ -812,8 +814,8 @@ void UcxOutputQueue::checkIfDone(bool oneDriverFinished) {
               << " avgRowsPerChunk=" << avgRows
               << " totalBytes=" << totalBytesSent_;
     }
-    for (size_t index = 0; index < queues_.size(); ++index) {
-      auto& slot = queues_[index];
+    for (size_t index = 0; index < destinations_.size(); ++index) {
+      auto& slot = destinations_[index];
       if (slot.state == DestinationState::kOpen) {
         slot.queue->enqueueBack(nullptr, /*numRows=*/0);
         notifyReadyReaderLocked(slot, index, deferred);
@@ -837,10 +839,10 @@ bool UcxOutputQueue::isFinished() {
 }
 
 bool UcxOutputQueue::isFinishedLocked() {
-  if (state_ != TaskEntryState::kActive) {
+  if (state_ != OutputQueueState::kActive) {
     return false;
   }
-  for (const auto& [index, destination] : pendingQueues_) {
+  for (const auto& [index, destination] : unpublishedDestinations_) {
     if (destination.state == DestinationState::kUnpublished) {
       return false;
     }
@@ -851,7 +853,7 @@ bool UcxOutputQueue::isFinishedLocked() {
       !noMoreQueues_) {
     return false;
   }
-  for (const auto& destination : queues_) {
+  for (const auto& destination : destinations_) {
     if (destination.state != DestinationState::kReleased) {
       return false;
     }
@@ -859,12 +861,12 @@ bool UcxOutputQueue::isFinishedLocked() {
   return true;
 }
 
-void UcxOutputQueue::addDestinationQueuesLocked(
+void UcxOutputQueue::addDestinationsLocked(
     int32_t numDestinations,
     Deferred& deferred) {
   VELOX_CHECK_GE(
       numDestinations, 0, "Number of destinations must be non-negative");
-  if (static_cast<size_t>(numDestinations) <= queues_.size()) {
+  if (static_cast<size_t>(numDestinations) <= destinations_.size()) {
     return;
   }
 
@@ -877,14 +879,14 @@ void UcxOutputQueue::addDestinationQueuesLocked(
   if (isBroadcast && !dataToBroadcast_.empty()) {
     updateTotalQueuedBytesMsLocked();
   }
-  queues_.reserve(numDestinations);
-  while (queues_.size() < static_cast<size_t>(numDestinations)) {
-    const int index = queues_.size();
+  destinations_.reserve(numDestinations);
+  while (destinations_.size() < static_cast<size_t>(numDestinations)) {
+    const int index = destinations_.size();
     Destination destination;
-    auto it = pendingQueues_.find(index);
-    if (it != pendingQueues_.end()) {
+    auto it = unpublishedDestinations_.find(index);
+    if (it != unpublishedDestinations_.end()) {
       destination = std::move(it->second);
-      pendingQueues_.erase(it);
+      unpublishedDestinations_.erase(it);
     }
     if (destination.state == DestinationState::kUnpublished &&
         destination.queue == nullptr) {
@@ -909,12 +911,12 @@ void UcxOutputQueue::addDestinationQueuesLocked(
       }
       notifyReadyReaderLocked(destination, index, deferred);
     }
-    queues_.emplace_back(std::move(destination));
+    destinations_.emplace_back(std::move(destination));
   }
 }
 
 void UcxOutputQueue::clearPendingReadersLocked(Deferred& deferred) {
-  for (auto& [index, destination] : pendingQueues_) {
+  for (auto& [index, destination] : unpublishedDestinations_) {
     if (destination.state != DestinationState::kUnpublished) {
       continue;
     }
@@ -929,7 +931,7 @@ void UcxOutputQueue::clearPendingReadersLocked(Deferred& deferred) {
               std::move(reader), ReaderStep::end(ChannelOutcome::clean())});
     }
   }
-  pendingQueues_.clear();
+  unpublishedDestinations_.clear();
 }
 
 void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
@@ -938,18 +940,18 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
   size_t numRejected{0};
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (state_ == TaskEntryState::kRemoved) {
+    if (state_ == OutputQueueState::kRemoved) {
       return;
     }
     if (kind_ == Kind::kPartitioned) {
-      VELOX_CHECK_EQ(queues_.size(), numBuffers);
+      VELOX_CHECK_EQ(destinations_.size(), numBuffers);
       VELOX_CHECK(noMoreBuffers);
       noMoreQueues_ = true;
       return;
     }
 
     VELOX_CHECK_EQ(kind_, Kind::kBroadcast);
-    addDestinationQueuesLocked(numBuffers, deferred);
+    addDestinationsLocked(numBuffers, deferred);
 
     if (noMoreBuffers) {
       noMoreQueues_ = true;
@@ -984,12 +986,12 @@ void UcxOutputQueue::deleteResults(int destination) {
     if (slot == nullptr) {
       // Once the count is final, the reader of a destination beyond it already
       // ended, and a slot for it would wedge isFinishedLocked().
-      if (state_ == TaskEntryState::kRemoved ||
+      if (state_ == OutputQueueState::kRemoved ||
           isDestinationCountFinalLocked()) {
         return;
       }
       // Kept, so that publication cannot resurrect deleted results.
-      slot = &pendingQueues_[destination];
+      slot = &unpublishedDestinations_[destination];
     }
     const auto previous = slot->state;
     const auto decision = applyLocked(

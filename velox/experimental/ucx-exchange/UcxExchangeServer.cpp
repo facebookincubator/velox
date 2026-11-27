@@ -124,8 +124,8 @@ std::shared_ptr<UcxExchangeServer> UcxExchangeServer::create(
       communicator, endpointRef, key, isIntraNodeTransfer));
   std::weak_ptr<UcxExchangeServer> weakServer = ptr;
   // Runs on any thread, possibly before bindReader() returns, so it only marks
-  // the server and never touches 'entry_'. process() acts on the mark.
-  ptr->entry_ =
+  // the server and never touches 'outputQueue_'. process() acts on the mark.
+  ptr->outputQueue_ =
       ptr->queueMgr_->bindReader(key.taskId, key.destination, [weakServer]() {
         if (auto self = weakServer.lock()) {
           self->released_.store(true, std::memory_order_release);
@@ -155,10 +155,9 @@ void UcxExchangeServer::process() {
       // Fetch the data from UcxQueueManager and store it in the dataPtr_;
       setState(ServerState::WaitingForDataFromQueue);
       // Register the callback with the destination queue to get data. If the
-      // task's entry is still Pending, the callback is triggered once the
-      // source task has initialized it and added data to it.
-      // Use weak_ptr to prevent use-after-free if close() is called during
-      // callback
+      // task's output queue is still Pending, the callback is triggered once
+      // the source task has initialized it and added data to it. Use weak_ptr
+      // to prevent use-after-free if close() is called during callback
       std::weak_ptr<UcxExchangeServer> weakQueue = weak_from_this();
       auto onStep = [weakQueue](ReaderStep step) {
         auto self = weakQueue.lock();
@@ -197,7 +196,7 @@ void UcxExchangeServer::process() {
         }
         self->communicator_->addToWorkQueue(self);
       };
-      entry_->getData(
+      outputQueue_->getData(
           partitionKey_.destination, std::move(onStep), isIntraNodeTransfer_);
       this->communicator_->addToWorkQueue(getSelfPtr());
     } break;
@@ -227,7 +226,7 @@ void UcxExchangeServer::process() {
           // the count again. cancelTransfer() runs only in close(), which drops
           // the future without a report.
           if (!intraNodeAtEndPublished_) {
-            entry_->intraNodeChunkRetrieved(partitionKey_.destination);
+            outputQueue_->intraNodeChunkRetrieved(partitionKey_.destination);
           }
           onIntraNodeRetrieveComplete();
         } else {
@@ -251,7 +250,7 @@ void UcxExchangeServer::process() {
 
 void UcxExchangeServer::onEndpointClosed(std::string_view reason) {
   VLOG(1) << toString() << " " << reason;
-  entry_->consumerGone(partitionKey_.destination);
+  outputQueue_->consumerGone(partitionKey_.destination);
   close();
 }
 
@@ -303,7 +302,7 @@ void UcxExchangeServer::close() {
     intraNodeRetrieveFuture_ = {};
   }
 
-  queueMgr_->releaseReader(entry_, partitionKey_.destination);
+  queueMgr_->releaseReader(outputQueue_, partitionKey_.destination);
 
   if (endpointRef_) {
     endpointRef_->removeCommElem(getSelfPtr());
@@ -556,7 +555,7 @@ void UcxExchangeServer::onSendsCompleted() {
             << " Finished transferring partition for task "
             << partitionKey_.toString();
     metaContext_.reset();
-    entry_->deleteResults(partitionKey_.destination);
+    outputQueue_->deleteResults(partitionKey_.destination);
     setState(ServerState::Done);
     communicator_->addToWorkQueue(getSelfPtr());
     return;
@@ -600,7 +599,7 @@ void UcxExchangeServer::onSendFailed(ucs_status_t status) {
     case SendFailureCause::kNone:
       break;
     case SendFailureCause::kConsumerGone:
-      entry_->consumerGone(partitionKey_.destination);
+      outputQueue_->consumerGone(partitionKey_.destination);
       break;
     case SendFailureCause::kSendFailed:
       failProducer(ucs_status_string(status));
@@ -611,9 +610,10 @@ void UcxExchangeServer::onSendFailed(ucs_status_t status) {
 }
 
 void UcxExchangeServer::failProducer(std::string_view reason) {
-  if (auto error = entry_->sendFailed(partitionKey_.destination, reason)) {
+  if (auto error =
+          outputQueue_->sendFailed(partitionKey_.destination, reason)) {
     LOG(ERROR) << *error;
-    if (auto task = entry_->task()) {
+    if (auto task = outputQueue_->task()) {
       task->setError(*error);
     }
   }
@@ -647,7 +647,7 @@ void UcxExchangeServer::onIntraNodeRetrieveComplete() {
     // This was the final atEnd marker, we're done
     VLOG(3) << "@" << partitionKey_.taskId
             << " Intra-node transfer: atEnd acknowledged, finishing";
-    entry_->deleteResults(partitionKey_.destination);
+    outputQueue_->deleteResults(partitionKey_.destination);
     setState(ServerState::Done);
   } else {
     // More data may be coming, continue transfer loop

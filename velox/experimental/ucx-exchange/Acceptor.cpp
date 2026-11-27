@@ -150,7 +150,7 @@ void Acceptor::handleHandshake(
       (handshake.workerId == communicator->getWorkerId());
 
   // Disable intra-node when the task is not yet initialized (a Pending
-  // entry from sinks connecting before initializeTask) or when the task
+  // output queue from sinks connecting before initializeTask) or when the task
   // uses broadcast mode (all destination servers share the same
   // packed_columns — the intra-node source's destructive move would
   // corrupt it for other servers).

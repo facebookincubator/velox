@@ -99,8 +99,8 @@ inline constexpr std::string_view kProducerNotInitializedError{
     "Producer task ended before initializing its output"};
 
 /// What UcxOutputQueue::remove() needs to know about the removed task. The
-/// caller reads it from the task before it takes any entry lock: no Task method
-/// may run under one.
+/// caller reads it from the task before it takes any output queue lock: no Task
+/// method may run under one.
 struct RemovalFacts {
   /// The ID of the removed task.
   std::string taskId;
@@ -183,8 +183,8 @@ class UcxDestinationQueue {
   Stats stats_;
 };
 
-/// The state of a task's entry in UcxOutputQueueManager.
-enum class TaskEntryState : uint8_t {
+/// The state of a task's output queue in UcxOutputQueueManager.
+enum class OutputQueueState : uint8_t {
   /// A server asked for the task before initializeTask().
   kPending,
   /// initializeTask() succeeded.
@@ -203,29 +203,30 @@ enum class TaskEntryState : uint8_t {
 /// - noMoreData is called by each driver when the driver is done and has no
 /// more data will be added.
 ///
-/// The output queue is also the task's entry in UcxOutputQueueManager, from the
-/// first contact for the task ID to its erasure. It starts Pending, becomes
-/// Active at initialize() and Removed at remove(), and stays the same object
-/// throughout, so that a server bound to it reads every change.
+/// UcxOutputQueueManager keeps one output queue per task, from the first
+/// contact for the task ID to its erasure. An output queue mirrors the per-task
+/// exec::OutputBuffer of Velox. It starts Pending, becomes Active at
+/// initialize() and Removed at remove(), and stays the same object throughout,
+/// so that a server bound to it reads every change.
 ///
 /// Each destination has a DestinationState, and every event that can end it
-/// goes through decideDestination() under the entry's lock. The first decision
-/// for a destination wins. A reader of a destination that has ended gets the
-/// decided outcome; a reader of a Released destination gets that outcome if it
-/// is an error, and ReaderStep::stop() otherwise.
+/// goes through decideDestination() under the output queue's lock. The first
+/// decision for a destination wins. A reader of a destination that has ended
+/// gets the decided outcome; a reader of a Released destination gets that
+/// outcome if it is an error, and ReaderStep::stop() otherwise.
 class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
  public:
-  /// @brief Creates the Pending entry of task 'taskId'. initialize() supplies
-  /// the task, its destinations and its drivers.
+  /// @brief Creates the Pending output queue of task 'taskId'. initialize()
+  /// supplies the task, its destinations and its drivers.
   explicit UcxOutputQueue(std::string taskId);
 
-  /// @brief Initializes a Pending entry, which a server may have created for
-  /// its reader before the producer task initialized its output. The readers
-  /// waiting on it are kept, and get their data once it is enqueued.
+  /// @brief Initializes a Pending output queue, which a server may have created
+  /// for its reader before the producer task initialized its output. The
+  /// readers waiting on it are kept, and get their data once it is enqueued.
   /// Appends ready notifications for the caller to invoke outside manager
-  /// locks. Throws, and leaves the entry Pending and unchanged, if
+  /// locks. Throws, and leaves the output queue Pending and unchanged, if
   /// 'numDestinations' is negative.
-  /// @return True, if initialization was successful, i.e. the entry was
+  /// @return True, if initialization was successful, i.e. the output queue was
   /// Pending.
   bool initialize(
       std::shared_ptr<exec::Task> task,
@@ -234,37 +235,38 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       core::PartitionedOutputNode::Kind kind,
       std::vector<UcxDataAvailable>& notifications);
 
-  /// Returns the ID of the task this entry belongs to.
+  /// Returns the ID of the task this output queue belongs to.
   const std::string& taskId() const {
     return taskId_;
   }
 
-  /// Returns the state of this entry.
-  TaskEntryState state() const {
+  /// Returns the state of this output queue.
+  OutputQueueState state() const {
     return state_.load(std::memory_order_acquire);
   }
 
-  /// Counts a server bound to this entry. Called under the manager's lock.
+  /// Counts a server bound to this output queue. Called under the manager's
+  /// lock.
   void addBoundReader();
 
   /// Unbinds the server of 'destination' and drops its release callback.
-  /// Called under the manager's lock. Returns true if the entry is Pending, has
-  /// no bound reader, and no destination is Released, so that the manager can
-  /// erase it.
+  /// Called under the manager's lock. Returns true if the output queue is
+  /// Pending, has no bound reader, and no destination is Released, so that the
+  /// manager can erase it.
   bool removeBoundReader(int destination);
 
-  /// Records the task of a failed initializeTask(). The entry stays Pending,
-  /// and once Removed lives as long as 'task'.
+  /// Records the task of a failed initializeTask(). The output queue stays
+  /// Pending, and once Removed lives as long as 'task'.
   void recordFailedInitialization(std::weak_ptr<exec::Task> task);
 
-  /// Makes the entry Removed and decides every destination at once: clean if
-  /// every driver called noMoreData() and no chunk is undelivered, a producer
-  /// error otherwise. A chunk is undelivered while it is queued, kept for a
-  /// broadcast destination not added yet, or in flight on the intra-node path
-  /// to a destination that is not Released. Frees the chunks, wakes blocked
-  /// producers, and keeps only a weak pointer to the task and the outcome,
-  /// which later readers get. The caller reads 'facts' before taking any entry
-  /// lock. A second call decides nothing.
+  /// Makes the output queue Removed and decides every destination at once:
+  /// clean if every driver called noMoreData() and no chunk is undelivered, a
+  /// producer error otherwise. A chunk is undelivered while it is queued, kept
+  /// for a broadcast destination not added yet, or in flight on the intra-node
+  /// path to a destination that is not Released. Frees the chunks, wakes
+  /// blocked producers, and keeps only a weak pointer to the task and the
+  /// outcome, which later readers get. The caller reads 'facts' before taking
+  /// any output queue lock. A second call decides nothing.
   /// @return The outcome of the removal, also for a second call.
   ChannelOutcome remove(const RemovalFacts& facts);
 
@@ -285,8 +287,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// called once, outside the lock, when the destination becomes Released.
   void setOnReleased(int destination, std::function<void()> onReleased);
 
-  /// Returns the state of 'destination'. A destination the entry has not seen
-  /// is Unpublished. For tests.
+  /// Returns the state of 'destination'. A destination the output queue has not
+  /// seen is Unpublished. For tests.
   DestinationState destinationState(int destination);
 
   /// True once Removed, its Task is gone (the weak pointer expired), and no
@@ -298,16 +300,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   }
 
   /// Returns true once task metadata has been published via initializeTask(),
-  /// that is, the entry is no longer a Pending entry created by an early
+  /// that is, the output queue is no longer a Pending one created by an early
   /// server. Stays true once Removed.
-  /// This is published before destination queue expansion completes so local
+  /// This is published before destination expansion completes so local
   /// UCX handshakes do not permanently fall back to the remote path.
   bool isInitialized() const {
     return initialized_.load(std::memory_order_acquire);
   }
 
-  /// Returns the task that initialize() supplied while the entry is Active, or
-  /// null.
+  /// Returns the task that initialize() supplied while the output queue is
+  /// Active, or null.
   std::shared_ptr<exec::Task> task();
 
   /// @brief When we understand the final number of split groups (for grouped
@@ -319,7 +321,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// fixed. Is is an error to provide a destination larger than the initial
   /// number of destinations. This will change in the future and if destination
   /// > numDestinations, then this will be dynamically adapted like it is done
-  /// in OutputQueue.
+  /// in Velox's OutputBuffer.
   /// @param destination The destination, must be < numDestinations.
   /// @param data The data.
   /// @param numRows The number of rows in the data. Supplied by the producer
@@ -343,7 +345,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// Invokes 'notify' with a clean kEnd step when the final count excludes the
   /// reader, and for negative destinations. A destination that has ended or
   /// was released gets its decided outcome, and a destination of a Removed
-  /// entry that was never published gets the removal's outcome.
+  /// output queue that was never published gets the removal's outcome.
   /// @param intraNode True if the reader hands the chunk over through
   /// IntraNodeTransferRegistry. The chunk it takes is then in flight until the
   /// reader calls intraNodeChunkRetrieved(): a removal meanwhile counts it as
@@ -390,17 +392,17 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// @brief Queued bytes over this queue's byte capacity, the task's configured
   /// maxOutputBufferSize. Producers are only blocked after adding data (see
   /// checkBlocked), so the ratio can exceed 1.0. Returns nullopt while the
-  /// capacity is still unknown, which is the case for a Pending entry created
-  /// by a server that arrived before initializeTask() supplied the task's query
-  /// config.
+  /// capacity is still unknown, which is the case for a Pending output queue
+  /// created by a server that arrived before initializeTask() supplied the
+  /// task's query config.
   std::optional<double> getUtilization();
 
   /// @brief Whether enough is queued to risk back-pressuring producers soon, or
   /// the last data has been seen. Half the capacity is the threshold, matching
   /// exec::OutputBuffer. Returns nullopt while the capacity is unknown, for the
   /// same reason as getUtilization(): without a capacity there is no ratio to
-  /// compare against, and reporting `false` there would let a Pending entry
-  /// masquerade as having spare room.
+  /// compare against, and reporting `false` there would let a Pending output
+  /// queue masquerade as having spare room.
   std::optional<bool> isOverutilized();
 
  private:
@@ -501,8 +503,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // Returns true when no more destinations can be published. Requires mutex_.
   bool isDestinationCountFinalLocked() const;
 
-  // Adds destination queues and restores broadcast data and end markers.
-  void addDestinationQueuesLocked(int32_t numDestinations, Deferred& deferred);
+  // Adds destinations and restores broadcast data and end markers.
+  void addDestinationsLocked(int32_t numDestinations, Deferred& deferred);
 
   // Ends unpublished readers once the destination count is final: their
   // destination will never be published, so no rows are lost. Drops the
@@ -516,22 +518,22 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   const std::string taskId_;
 
   // Written under mutex_. Read without it by the manager, which must not see
-  // a Removed entry.
-  std::atomic<TaskEntryState> state_{TaskEntryState::kPending};
+  // a Removed output queue.
+  std::atomic<OutputQueueState> state_{OutputQueueState::kPending};
 
-  // Reference to the task that owns this UcxQueue while the entry is Active.
+  // Reference to the task that owns this UcxOutputQueue while it is Active.
   std::shared_ptr<exec::Task> task_{nullptr};
 
-  // The task of a Removed entry, or of a failed initialize(). Expires when the
-  // host destroys the task, after which no server is expected.
+  // The task of a Removed output queue, or of a failed initialize(). Expires
+  // when the host destroys the task, after which no server is expected.
   std::weak_ptr<exec::Task> removedTask_;
 
-  // The servers bound to this entry.
+  // The servers bound to this output queue.
   int32_t numBoundReaders_{0};
 
-  // Set by recordFailedInitialization(). Keeps the Pending entry when its last
-  // server is released, so that its removal can tie the Removed entry to the
-  // Task.
+  // Set by recordFailedInitialization(). Keeps the Pending output queue when
+  // its last server is released, so that its removal can tie the Removed output
+  // queue to the Task.
   bool failedInitialization_{false};
 
   // The output mode (partitioned, broadcast, etc.)
@@ -570,16 +572,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   std::mutex mutex_;
 
   // The published destinations. Only control-plane updates grow it.
-  std::vector<Destination> queues_;
+  std::vector<Destination> destinations_;
 
   // The destinations that are not published yet: Unpublished ones, whose
   // early reader waits in their queue, and Released ones, which publication
   // keeps Released. Cleared once the destination count is final; a removal
   // ends them instead.
-  std::unordered_map<int, Destination> pendingQueues_;
+  std::unordered_map<int, Destination> unpublishedDestinations_;
 
-  // The outcome remove() decided. Readers of a Removed entry's destinations
-  // that were never published get it.
+  // The outcome remove() decided. Readers of a Removed output queue's
+  // destinations that were never published get it.
   std::shared_ptr<const ChannelOutcome> removedOutcome_;
 
   // The release callbacks of the bound readers, by destination.
@@ -593,7 +595,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // promises when buffer reached capacity and blocked further enqueueing.
   std::vector<ContinuePromise> promises_;
 
-  // actual data in 'queues_'
+  // actual data in 'destinations_'
   int64_t queuedBytes_{0};
   int64_t queuedPackedColumns_{0};
 

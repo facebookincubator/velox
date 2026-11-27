@@ -270,7 +270,7 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
   }
 
   // Starts a server for destination 0 of producer task 'taskId', whose output
-  // is not initialized, so that the server waits on a Pending entry.
+  // is not initialized, so that the server waits on a Pending output queue.
   std::shared_ptr<TerminalMetadataSession> startPendingSession(
       const std::string& taskId) {
     auto session = std::make_shared<TerminalMetadataSession>();
@@ -282,8 +282,8 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
 
   // Starts a server for destination 0 of 'session's task, sending to this
   // worker's own listener, and advances it until it posts its first send or,
-  // for a Pending entry, waits for data. With 'intraNode', the server hands its
-  // chunks over through IntraNodeTransferRegistry.
+  // for a Pending output queue, waits for data. With 'intraNode', the server
+  // hands its chunks over through IntraNodeTransferRegistry.
   static void startServer(
       const std::shared_ptr<TerminalMetadataSession>& session,
       bool intraNode) {
@@ -469,9 +469,10 @@ class UcxExchangeFocusedTest : public UcxExchangeTestBase {
   // Returns the state of destination 0 of 'taskId'. Binds a reader for the
   // lookup, so call it only once the session's server is done.
   DestinationState destinationState(std::string_view taskId) {
-    auto entry = queueManager()->bindReader(taskId, 0, /*onReleased=*/nullptr);
-    const auto state = entry->destinationState(0);
-    queueManager()->releaseReader(entry, 0);
+    auto outputQueue =
+        queueManager()->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    const auto state = outputQueue->destinationState(0);
+    queueManager()->releaseReader(outputQueue, 0);
     return state;
   }
 
@@ -1790,10 +1791,11 @@ TEST_F(UcxExchangeFocusedTest, closedSourceWithUnreachableProducerEndsQuietly) {
 }
 
 // A consumer can connect to a producer task that is not yet created on the
-// worker. Its server then waits on a Pending entry. When the consumer closes,
-// its close message Releases the destination, and the entry keeps it: the
-// producer that initializes later finishes without waiting for a reader.
-TEST_F(UcxExchangeFocusedTest, closedExchangeKeepsReleasedPendingEntry) {
+// worker. Its server then waits on a Pending output queue. When the consumer
+// closes, its close message Releases the destination, and the output queue
+// keeps it: the producer that initializes later finishes without waiting for a
+// reader.
+TEST_F(UcxExchangeFocusedTest, closedExchangeKeepsReleasedPendingOutputQueue) {
   const std::string srcTaskId =
       getUniqueTaskPrefix() + "closedConsumerOfPendingSrc";
   // Initialized only after the consumer is gone.
@@ -1805,7 +1807,7 @@ TEST_F(UcxExchangeFocusedTest, closedExchangeKeepsReleasedPendingEntry) {
       "closedConsumer", /*destination=*/0, /*numberOfConsumers=*/1);
   client->addRemoteTaskId(remoteTaskUrl(srcTaskId));
   client->noMoreRemoteTasks();
-  // The server asked for data and left a Pending entry.
+  // The server asked for data and left a Pending output queue.
   ASSERT_TRUE(waitUntil(
       [&]() { return queueManager()->stats(srcTaskId).has_value(); },
       std::chrono::milliseconds(3'000)));
@@ -1828,10 +1830,10 @@ TEST_F(UcxExchangeFocusedTest, closedExchangeKeepsReleasedPendingEntry) {
           *srcTask, TaskState::kFinished, 3'000'000));
 }
 
-// A consumer of a Pending entry whose connection fails Releases its
-// destination through its server's closed endpoint. The entry keeps the
+// A consumer of a Pending output queue whose connection fails Releases its
+// destination through its server's closed endpoint. The output queue keeps the
 // Released destination, and the producer that initializes later finishes.
-TEST_F(UcxExchangeFocusedTest, endpointFailureKeepsReleasedPendingEntry) {
+TEST_F(UcxExchangeFocusedTest, endpointFailureKeepsReleasedPendingOutputQueue) {
   const std::string srcTaskId =
       getUniqueTaskPrefix() + "failedConsumerOfPendingSrc";
   // Initialized only after the consumer is gone.
@@ -2129,7 +2131,7 @@ TEST_F(UcxExchangeFocusedTest, closedIntraNodeExchangeReleasesProducer) {
 
 // An intra-node server publishes the end and keeps the output alive until its
 // source reads that end, as a remote server does until its end message is
-// received. The end carries the outcome its entry decided.
+// received. The end carries the outcome its output queue decided.
 TEST_F(UcxExchangeFocusedTest, intraNodeEndKeepsOutputUntilRetrieved) {
   auto session = startTerminalMetadataSend(
       getUniqueTaskPrefix() + "intraNodeEndRetrieved",
@@ -2188,9 +2190,9 @@ TEST_F(UcxExchangeFocusedTest, intraNodeRemovalAfterLastChunkReadEndsCleanly) {
   EXPECT_TRUE(end->outcome.isClean()) << end->outcome.error;
 }
 
-// The close message of an intra-node consumer reaches the producer's entry,
-// which Releases the destination. The server then drops the chunk it published
-// and stops, and the producer finishes rather than fails.
+// The close message of an intra-node consumer reaches the producer's output
+// queue, which Releases the destination. The server then drops the chunk it
+// published and stops, and the producer finishes rather than fails.
 TEST_F(
     UcxExchangeFocusedTest,
     terminalMetadataCancellationAfterIntraNodePublish) {
@@ -2845,8 +2847,8 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataPeerFailureReleasesDestination) {
   EXPECT_EQ(destinationState(session->taskId), DestinationState::kReleased);
 }
 
-// A server that closes without a decision from its entry, as at shutdown,
-// leaves the output for result deletion or task cleanup.
+// A server that closes without a decision from its output queue, as at
+// shutdown, leaves the output for result deletion or task cleanup.
 TEST_F(UcxExchangeFocusedTest, terminalMetadataCloseLeavesOutputPending) {
   if (std::getenv("UCX_RNDV_THRESH") == nullptr ||
       std::string_view(std::getenv("UCX_RNDV_THRESH")) != "0") {
@@ -2935,9 +2937,9 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataTaskAbortRemovesUcxOutput) {
   EXPECT_EQ(queueManager()->stats(taskId), std::nullopt);
 }
 
-// A server is bound to the entry of the task it was created for. Completing
-// its end send after that task was removed, and a new task reuses the ID, does
-// not finish the new task's output.
+// A server is bound to the output queue of the task it was created for.
+// Completing its end send after that task was removed, and a new task reuses
+// the ID, does not finish the new task's output.
 TEST_F(UcxExchangeFocusedTest, terminalMetadataCallbackStaysWithOriginalTask) {
   if (std::getenv("UCX_RNDV_THRESH") == nullptr ||
       std::string_view(std::getenv("UCX_RNDV_THRESH")) != "0") {
@@ -2978,7 +2980,8 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCallbackStaysWithOriginalTask) {
 }
 
 // A consumer that goes away while the end send is unmatched Releases the
-// destination. The entry tells the server, which cancels the send and stops.
+// destination. The output queue tells the server, which cancels the send and
+// stops.
 TEST_F(
     UcxExchangeFocusedTest,
     terminalMetadataReleasedDestinationCancelsPendingSend) {
@@ -3400,8 +3403,8 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCloseBeforeRemoteTaskAdded) {
 }
 
 // A close message that arrives before the producer initializes its output
-// Releases the destination of the Pending entry. The server stops, and the
-// producer finishes once it initializes and its drivers finish.
+// Releases the destination of the Pending output queue. The server stops, and
+// the producer finishes once it initializes and its drivers finish.
 TEST_F(UcxExchangeFocusedTest, terminalMetadataCancellationBeforeTaskInit) {
   if (!isRendezvousOnly()) {
     GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
@@ -3430,9 +3433,9 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCancellationBeforeTaskInit) {
 }
 
 // The Communicator receives every close message on its worker, also one for a
-// task it has no entry for, as after the task's server ended and its entry was
-// erased. It drops the message and creates no entry. With rendezvous, the
-// send completes only if the message was received.
+// task it has no output queue for, as after the task's server ended and its
+// output queue was erased. It drops the message and creates no output queue.
+// With rendezvous, the send completes only if the message was received.
 TEST_F(UcxExchangeFocusedTest, terminalMetadataCloseAfterServerEndedIsDropped) {
   if (!isRendezvousOnly()) {
     GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";

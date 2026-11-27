@@ -238,17 +238,18 @@ TEST_F(CommunicatorStallTest, closeMessageHandledWhileAnElementRequeuesItself) {
   ASSERT_GE(element->numProcessed(), 1'000)
       << "The element never started spinning";
 
-  // Binding a reader creates a Pending entry for a task that has not started.
+  // Binding a reader creates a Pending output queue for a task that has not
+  // started.
   const PartitionKey key{getUniqueTaskPrefix() + "closeWhileSpinning", 0};
-  auto entry = queueManager()->bindReader(
+  auto outputQueue = queueManager()->bindReader(
       key.taskId, key.destination, /*onReleased=*/nullptr);
   SCOPE_EXIT {
-    queueManager()->releaseReader(entry, key.destination);
-    // A Released destination keeps the Pending entry, so remove the task to
-    // drop it.
+    queueManager()->releaseReader(outputQueue, key.destination);
+    // A Released destination keeps the Pending output queue, so remove the
+    // task to drop it.
     queueManager()->removeTask(key.taskId);
   };
-  ASSERT_EQ(entry->destinationState(0), DestinationState::kUnpublished);
+  ASSERT_EQ(outputQueue->destinationState(0), DestinationState::kUnpublished);
 
   auto peer =
       FakeUcxPeer::connect("127.0.0.1", communicator->getListenerPort());
@@ -263,11 +264,11 @@ TEST_F(CommunicatorStallTest, closeMessageHandledWhileAnElementRequeuesItself) {
 
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  while (entry->destinationState(0) != DestinationState::kReleased &&
+  while (outputQueue->destinationState(0) != DestinationState::kReleased &&
          std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased)
+  EXPECT_EQ(outputQueue->destinationState(0), DestinationState::kReleased)
       << "The close message was not handled within 2 s while an element "
          "requeued itself";
 }

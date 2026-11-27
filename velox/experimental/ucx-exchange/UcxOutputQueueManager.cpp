@@ -42,22 +42,23 @@ void UcxOutputQueueManager::initializeTask(
   const std::string taskId = task->taskId();
   std::vector<UcxDataAvailable> notifications;
   // Destroyed after the manager's lock is released.
-  std::shared_ptr<UcxOutputQueue> replacedEntry;
-  entries_.withLock([&](auto& entries) {
-    auto& entry = entries[taskId];
-    if (entry != nullptr && entry->state() == TaskEntryState::kRemoved) {
-      // The ID is reused. Servers bound to the Removed entry keep it.
-      replacedEntry = std::move(entry);
+  std::shared_ptr<UcxOutputQueue> replacedOutputQueue;
+  outputQueues_.withLock([&](auto& outputQueues) {
+    auto& outputQueue = outputQueues[taskId];
+    if (outputQueue != nullptr &&
+        outputQueue->state() == OutputQueueState::kRemoved) {
+      // The ID is reused. Servers bound to the Removed output queue keep it.
+      replacedOutputQueue = std::move(outputQueue);
     }
-    if (entry == nullptr) {
-      entry = std::make_shared<UcxOutputQueue>(taskId);
+    if (outputQueue == nullptr) {
+      outputQueue = std::make_shared<UcxOutputQueue>(taskId);
     }
     bool initialized{false};
     try {
-      initialized = entry->initialize(
+      initialized = outputQueue->initialize(
           task, numDestinations, numDrivers, kind, notifications);
     } catch (...) {
-      entry->recordFailedInitialization(task);
+      outputQueue->recordFailedInitialization(task);
       throw;
     }
     if (!initialized) {
@@ -130,55 +131,56 @@ std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::bindReader(
     std::string_view taskId,
     int destination,
     std::function<void()> onReleased) {
-  return entries_.withLock([&](auto& entries) {
-    auto& entry = entries[std::string{taskId}];
-    if (entry == nullptr) {
+  return outputQueues_.withLock([&](auto& outputQueues) {
+    auto& outputQueue = outputQueues[std::string{taskId}];
+    if (outputQueue == nullptr) {
       VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
-              << " creating Pending entry (server arrived before task init)";
-      entry = std::make_shared<UcxOutputQueue>(std::string{taskId});
+              << " creating Pending output queue (server arrived before task "
+                 "init)";
+      outputQueue = std::make_shared<UcxOutputQueue>(std::string{taskId});
     }
-    entry->addBoundReader();
+    outputQueue->addBoundReader();
     if (onReleased != nullptr) {
-      entry->setOnReleased(destination, std::move(onReleased));
+      outputQueue->setOnReleased(destination, std::move(onReleased));
     }
-    return entry;
+    return outputQueue;
   });
 }
 
 void UcxOutputQueueManager::consumerGone(
     std::string_view taskId,
     int destination) {
-  auto entry =
-      entries_.withLock([&](auto& entries) -> std::shared_ptr<UcxOutputQueue> {
-        auto it = entries.find(std::string{taskId});
-        return it != entries.end() ? it->second : nullptr;
+  auto outputQueue = outputQueues_.withLock(
+      [&](auto& outputQueues) -> std::shared_ptr<UcxOutputQueue> {
+        auto it = outputQueues.find(std::string{taskId});
+        return it != outputQueues.end() ? it->second : nullptr;
       });
-  if (entry == nullptr) {
+  if (outputQueue == nullptr) {
     VLOG(1) << "Dropping a close for unknown UCX producer task " << taskId
             << ", destination " << destination;
     return;
   }
-  // Outside the manager's lock: the entry calls its release callback.
-  entry->consumerGone(destination);
+  // Outside the manager's lock: the output queue calls its release callback.
+  outputQueue->consumerGone(destination);
 }
 
 void UcxOutputQueueManager::releaseReader(
-    const std::shared_ptr<UcxOutputQueue>& entry,
+    const std::shared_ptr<UcxOutputQueue>& outputQueue,
     int destination) {
   // Destroyed after the manager's lock is released.
-  std::shared_ptr<UcxOutputQueue> erasedEntry;
-  entries_.withLock([&](auto& entries) {
-    if (!entry->removeBoundReader(destination)) {
+  std::shared_ptr<UcxOutputQueue> erasedOutputQueue;
+  outputQueues_.withLock([&](auto& outputQueues) {
+    if (!outputQueue->removeBoundReader(destination)) {
       return;
     }
-    auto it = entries.find(entry->taskId());
-    // The map may hold a newer entry for the same ID.
-    if (it != entries.end() && it->second == entry) {
-      VLOG(2) << "[QUEUE-MGR] task=" << entry->taskId()
+    auto it = outputQueues.find(outputQueue->taskId());
+    // The map may hold a newer output queue for the same ID.
+    if (it != outputQueues.end() && it->second == outputQueue) {
+      VLOG(2) << "[QUEUE-MGR] task=" << outputQueue->taskId()
               << " dest=" << destination
-              << " erasing Pending entry with no bound reader";
-      erasedEntry = std::move(it->second);
-      entries.erase(it);
+              << " erasing Pending output queue with no bound reader";
+      erasedOutputQueue = std::move(it->second);
+      outputQueues.erase(it);
     }
   });
 }
@@ -193,7 +195,7 @@ void UcxOutputQueueManager::failTask(
     std::string_view taskId,
     std::string_view error) {
   auto queue = getQueueIfExists(taskId);
-  // Null unless the entry is Active.
+  // Null unless the output queue is Active.
   auto task = queue != nullptr ? queue->task() : nullptr;
   if (task == nullptr) {
     LOG(ERROR) << "Cannot fail UCX producer task " << taskId
@@ -225,63 +227,64 @@ std::string taskErrorMessage(const exec::Task& task) {
 
 void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   // Destroyed after the manager's lock is released.
-  std::vector<std::shared_ptr<UcxOutputQueue>> droppedEntries;
-  auto entry = entries_.withLock([&](auto& entries) {
-    auto& slot = entries[taskId];
+  std::vector<std::shared_ptr<UcxOutputQueue>> droppedOutputQueues;
+  auto outputQueue = outputQueues_.withLock([&](auto& outputQueues) {
+    auto& slot = outputQueues[taskId];
     if (slot == nullptr) {
       slot = std::make_shared<UcxOutputQueue>(taskId);
     }
-    auto removedEntry = slot;
-    for (auto it = entries.begin(); it != entries.end();) {
-      // The lock-free state check first, so that live entries are never
+    auto removedOutputQueue = slot;
+    for (auto it = outputQueues.begin(); it != outputQueues.end();) {
+      // The lock-free state check first, so that live output queues are never
       // locked here.
-      if (it->second != removedEntry &&
-          it->second->state() == TaskEntryState::kRemoved &&
+      if (it->second != removedOutputQueue &&
+          it->second->state() == OutputQueueState::kRemoved &&
           it->second->isDroppable()) {
-        droppedEntries.push_back(std::move(it->second));
-        it = entries.erase(it);
+        droppedOutputQueues.push_back(std::move(it->second));
+        it = outputQueues.erase(it);
       } else {
         ++it;
       }
     }
-    return removedEntry;
+    return removedOutputQueue;
   });
   VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
-          << " droppedEntries=" << droppedEntries.size();
-  // Read with no entry lock held, since no Task method may run under one.
-  // Task::terminate() sets the final state before it removes the task, so the
-  // facts are final. They could race with an initialize() of a Pending entry,
-  // but Velox never initializes a task's output while it terminates the task.
+          << " droppedOutputQueues=" << droppedOutputQueues.size();
+  // Read with no output queue lock held, since no Task method may run under
+  // one. Task::terminate() sets the final state before it removes the task, so
+  // the facts are final. They could race with an initialize() of a Pending
+  // output queue, but Velox never initializes a task's output while it
+  // terminates the task.
   RemovalFacts facts;
   facts.taskId = taskId;
-  if (auto task = entry->task()) {
+  if (auto task = outputQueue->task()) {
     facts.state = task->state();
     facts.error = taskErrorMessage(*task);
   }
-  auto outcome = entry->remove(facts);
-  // Without the entry's lock, which is never held together with the
+  auto outcome = outputQueue->remove(facts);
+  // Without the output queue's lock, which is never held together with the
   // registry's. Sources polling for this task then end with the removal's
   // outcome instead of spinning forever.
   auto registry = IntraNodeTransferRegistry::getInstance();
   registry->cancelTask(taskId, std::move(outcome));
-  // A dropped entry had no bound reader and its Task is gone, so no server
-  // publishes for it any more. Its cancellation goes with it, so that the
-  // registry keeps no record per removed task for the life of the worker. A
+  // A dropped output queue had no bound reader and its Task is gone, so no
+  // server publishes for it any more. Its cancellation goes with it, so that
+  // the registry keeps no record per removed task for the life of the worker. A
   // source that has not yet read the cancellation is closed by its consumer's
   // abort.
-  for (const auto& droppedEntry : droppedEntries) {
-    registry->clearCancelledTask(droppedEntry->taskId());
+  for (const auto& droppedOutputQueue : droppedOutputQueues) {
+    registry->clearCancelledTask(droppedOutputQueue->taskId());
   }
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
     std::string_view taskId) {
   std::string taskIdStr{taskId};
-  return entries_.withLock(
-      [&](auto& entries) -> std::shared_ptr<UcxOutputQueue> {
-        auto it = entries.find(taskIdStr);
-        if (it == entries.end() ||
-            it->second->state() == TaskEntryState::kRemoved) {
+  return outputQueues_.withLock(
+      [&](auto& outputQueues) -> std::shared_ptr<UcxOutputQueue> {
+        auto it = outputQueues.find(taskIdStr);
+        if (it == outputQueues.end() ||
+            it->second->state() == OutputQueueState::kRemoved) {
           return nullptr;
         }
         return it->second;

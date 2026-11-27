@@ -71,7 +71,7 @@ class UcxExchangeServer
   void onEndpointClosed(std::string_view reason) override;
 
   /// Cancels the outstanding requests and the intra-node transfer that no
-  /// source read, unbinds from the producer task's entry
+  /// source read, unbinds from the producer task's output queue
   /// and unregisters from the Communicator and the endpoint. Decides nothing
   /// about the destination. Called on the Communicator thread. A second call
   /// does nothing.
@@ -109,14 +109,14 @@ class UcxExchangeServer
   // Called by process() in WaitingForSendComplete, with no lock held.
   void onSendsCompleted();
 
-  // Reports a send that did not complete with UCS_OK to the entry, by its
-  // cause, and fails the producer task if the entry says so. Called by
-  // process() with no lock held.
+  // Reports a send that did not complete with UCS_OK to the output queue, by
+  // its cause, and fails the producer task if the output queue says so. Called
+  // by process() with no lock held.
   void onSendFailed(ucs_status_t status);
 
   // Releases the destination as for a send that failed while the endpoint
   // stayed open, and fails the producer task with an error that names
-  // 'reason' if the entry decides one. Called with no lock held.
+  // 'reason' if the output queue decides one. Called with no lock held.
   void failProducer(std::string_view reason);
 
   // @brief Completion handler for intra-node transfer after source retrieves
@@ -156,9 +156,9 @@ class UcxExchangeServer
   std::mutex dataMutex_;
   std::atomic<bool> closed_{false};
 
-  // Set when the destination was Released, by a kStop step or the entry's
-  // onReleased callback, either of which may run on any thread. process()
-  // then cancels the outstanding requests and stops.
+  // Set when the destination was Released, by a kStop step or the output
+  // queue's onReleased callback, either of which may run on any thread.
+  // process() then cancels the outstanding requests and stops.
   std::atomic<bool> released_{false};
 
   // The current sends: the metadata or end message, and the chunk's data. A
@@ -198,10 +198,10 @@ class UcxExchangeServer
 
   std::shared_ptr<UcxOutputQueueManager> queueMgr_;
 
-  // The entry of the producer task, bound once in create(). Every call for
-  // the task's data goes to it, so that a task that reuses the ID is never
+  // The output queue of the producer task, bound once in create(). Every call
+  // for the task's data goes to it, so that a task that reuses the ID is never
   // reached.
-  std::shared_ptr<UcxOutputQueue> entry_;
+  std::shared_ptr<UcxOutputQueue> outputQueue_;
 };
 
 } // namespace facebook::velox::ucx_exchange

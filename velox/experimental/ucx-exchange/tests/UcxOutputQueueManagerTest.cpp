@@ -561,7 +561,7 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
   int destination = 0;
 
   // A manager with no state from prior tests, so that getData() below creates
-  // a Pending entry for a task it has not seen.
+  // a Pending output queue for a task it has not seen.
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
 
   // Fetch data from a non-existing task.
@@ -643,11 +643,12 @@ TEST_F(UcxOutputQueueManagerTest, pendingReadersBeforeInitialization) {
   }
 }
 
-// A server that closes while it waits on a Pending entry leaves nothing that
-// would ever erase the entry if its producer never arrives. Releasing the last
-// reader erases it, and the task can still be initialized later.
-TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPendingEntry) {
-  const std::string taskId = "pendingEntryWithClosedReaders";
+// A server that closes while it waits on a Pending output queue leaves nothing
+// that would ever erase the output queue if its producer never arrives.
+// Releasing the last reader erases it, and the task can still be initialized
+// later.
+TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPendingOutputQueue) {
+  const std::string taskId = "pendingOutputQueueWithClosedReaders";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   bool fired{false};
   auto receive = [&fired](ReaderStep /*step*/) { fired = true; };
@@ -675,10 +676,11 @@ TEST_F(UcxOutputQueueManagerTest, releasingLastReaderDropsPendingEntry) {
   queueManager_->removeTask(taskId);
 }
 
-// Releasing one reader of a Pending entry keeps the entry for the readers that
-// are still bound, so that the producer finds them when it initializes.
-TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsPendingEntry) {
-  const std::string taskId = "pendingEntryWithBoundReader";
+// Releasing one reader of a Pending output queue keeps the output queue for the
+// readers that are still bound, so that the producer finds them when it
+// initializes.
+TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsPendingOutputQueue) {
+  const std::string taskId = "pendingOutputQueueWithBoundReader";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   bool receivedData{false};
   auto reader0 = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
@@ -686,11 +688,11 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsPendingEntry) {
   auto reader1 = queueManager_->bindReader(taskId, 1, /*onReleased=*/nullptr);
   queueManager_->releaseReader(reader1, 1);
   ASSERT_TRUE(queueManager_->stats(taskId).has_value());
-  EXPECT_EQ(reader0->state(), TaskEntryState::kPending);
+  EXPECT_EQ(reader0->state(), OutputQueueState::kPending);
 
   auto task = initializeTask(
       taskId, /*numDestinations=*/1, /*numDrivers=*/1, /*cleanup=*/false);
-  EXPECT_EQ(reader0->state(), TaskEntryState::kActive);
+  EXPECT_EQ(reader0->state(), OutputQueueState::kActive);
   enqueue(taskId, /*size=*/10);
   EXPECT_TRUE(receivedData);
   noMoreData(taskId);
@@ -700,41 +702,46 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsPendingEntry) {
   queueManager_->removeTask(taskId);
 }
 
-// A caller that holds a Pending entry for another reason must not keep it in
-// the map once its last reader is released: nothing would erase it later.
-TEST_F(UcxOutputQueueManagerTest, pendingEntryHeldElsewhereIsStillErased) {
-  const std::string taskId = "pendingEntryHeldElsewhere";
+// A caller that holds a Pending output queue for another reason must not keep
+// it in the map once its last reader is released: nothing would erase it later.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    pendingOutputQueueHeldElsewhereIsStillErased) {
+  const std::string taskId = "pendingOutputQueueHeldElsewhere";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   auto held = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   ASSERT_TRUE(queueManager_->stats(taskId).has_value());
   queueManager_->releaseReader(held, 0);
   EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
-  EXPECT_EQ(held->state(), TaskEntryState::kPending);
+  EXPECT_EQ(held->state(), OutputQueueState::kPending);
 
-  // The next reader gets a new entry, not the one still held.
+  // The next reader gets a new output queue, not the one still held.
   auto next = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   EXPECT_NE(next, held);
   queueManager_->releaseReader(next, 0);
 }
 
-// A reader that arrives after a removal is bound to the Removed entry, which
-// ends it at once with the removal's outcome, rather than to a new Pending
-// entry that no producer fills.
-TEST_F(UcxOutputQueueManagerTest, readerBoundDuringRemovalFindsRemovedEntry) {
+// A reader that arrives after a removal is bound to the Removed output queue,
+// which ends it at once with the removal's outcome, rather than to a new
+// Pending output queue that no producer fills.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    readerBoundDuringRemovalFindsRemovedOutputQueue) {
   const std::string taskId = "readerAfterRemoval";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   queueManager_->removeTask(taskId);
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(outputQueue->state(), OutputQueueState::kRemoved);
   EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
 
   std::optional<ReaderStep> step;
-  entry->getData(0, storeStep(step), /*intraNode=*/false);
+  outputQueue->getData(0, storeStep(step), /*intraNode=*/false);
   EXPECT_THAT(
       step,
       testing::Optional(isProducerError(
           testing::StrEq(std::string{kProducerNotInitializedError}))));
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
 }
 
@@ -761,32 +768,32 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskIsInvisibleToVelox) {
       "Output cudf queue for task not found");
 }
 
-// A server keeps the entry it was bound to. When the task ID is initialized
-// again, the old server's calls must not reach the new task.
+// A server keeps the output queue it was bound to. When the task ID is
+// initialized again, the old server's calls must not reach the new task.
 TEST_F(UcxOutputQueueManagerTest, queueHandleDoesNotFollowReusedTaskId) {
   const std::string taskId = "reusedTaskId";
   auto oldTask = initializeTask(taskId, 1, 1);
-  auto oldEntry = queueManager_->bindReader(
+  auto oldOutputQueue = queueManager_->bindReader(
       taskId, /*destination=*/0, /*onReleased=*/nullptr);
 
   oldTask->requestAbort().wait();
   queueManager_->removeTask(taskId);
   auto newTask = initializeTask(taskId, 1, 1);
 
-  oldEntry->deleteResults(0);
+  oldOutputQueue->deleteResults(0);
 
   EXPECT_EQ(oldTask->state(), TaskState::kAborted);
   EXPECT_EQ(newTask->state(), TaskState::kRunning);
   EXPECT_FALSE(queueManager_->isFinished(taskId));
-  EXPECT_EQ(oldEntry->state(), TaskEntryState::kRemoved);
-  queueManager_->releaseReader(oldEntry, 0);
+  EXPECT_EQ(oldOutputQueue->state(), OutputQueueState::kRemoved);
+  queueManager_->releaseReader(oldOutputQueue, 0);
   newTask->requestAbort().wait();
   queueManager_->removeTask(taskId);
 }
 
-// A Removed entry lives as long as its Task, so that a consumer that connects
-// late still finds the removal. The next removal after the Task is destroyed
-// erases it.
+// A Removed output queue lives as long as its Task, so that a consumer that
+// connects late still finds the removal. The next removal after the Task is
+// destroyed erases it.
 TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
   const std::string taskId = "recordedWhileTaskLives";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
@@ -794,11 +801,12 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
 
-  // Other removals keep the entry while the Task is alive.
+  // Other removals keep the output queue while the Task is alive.
   queueManager_->removeTask("otherRemovedTask");
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
-  queueManager_->releaseReader(entry, 0);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(outputQueue->state(), OutputQueueState::kRemoved);
+  queueManager_->releaseReader(outputQueue, 0);
 
   std::weak_ptr<Task> weakTask = task;
   task.reset();
@@ -806,10 +814,11 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
   queueManager_->removeTask("removalAfterTaskDestroyed");
 
   // A consumer that arrives now is treated like one of a task not created yet.
-  auto lateEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_NE(lateEntry, entry);
-  EXPECT_EQ(lateEntry->state(), TaskEntryState::kPending);
-  queueManager_->releaseReader(lateEntry, 0);
+  auto lateOutputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_NE(lateOutputQueue, outputQueue);
+  EXPECT_EQ(lateOutputQueue->state(), OutputQueueState::kPending);
+  queueManager_->releaseReader(lateOutputQueue, 0);
   for (const auto& removedTaskId :
        {taskId,
         std::string{"otherRemovedTask"},
@@ -819,8 +828,8 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLivesAsLongAsItsTask) {
 }
 
 // The cancellation of a removed task in IntraNodeTransferRegistry lives as long
-// as its Removed entry, so that the registry keeps no record per removed task
-// for the life of the worker.
+// as its Removed output queue, so that the registry keeps no record per removed
+// task for the life of the worker.
 TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLeavesIntraNodeRegistry) {
   const std::string taskId = "removedIntraNodeRecord";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
@@ -856,28 +865,31 @@ TEST_F(UcxOutputQueueManagerTest, removedTaskRecordLeavesIntraNodeRegistry) {
   registry->clearCancelledTask("removalAfterIntraNodeTaskDestroyed");
 }
 
-// A server bound to a Removed entry keeps it, even after its Task is destroyed.
-TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedEntry) {
-  const std::string taskId = "removedEntryWithBoundReader";
+// A server bound to a Removed output queue keeps it, even after its Task is
+// destroyed.
+TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedOutputQueue) {
+  const std::string taskId = "removedOutputQueueWithBoundReader";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
 
   queueManager_->removeTask("otherRemovedTask");
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(outputQueue->state(), OutputQueueState::kRemoved);
 
   std::weak_ptr<Task> weakTask = task;
   task.reset();
   ASSERT_TRUE(weakTask.expired());
   queueManager_->removeTask("removalAfterTaskDestroyed");
 
-  auto sameEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(sameEntry, entry);
-  EXPECT_EQ(sameEntry->state(), TaskEntryState::kRemoved);
-  queueManager_->releaseReader(sameEntry, 0);
-  queueManager_->releaseReader(entry, 0);
+  auto sameOutputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(sameOutputQueue, outputQueue);
+  EXPECT_EQ(sameOutputQueue->state(), OutputQueueState::kRemoved);
+  queueManager_->releaseReader(sameOutputQueue, 0);
+  queueManager_->releaseReader(outputQueue, 0);
   for (const auto& removedTaskId :
        {taskId,
         std::string{"otherRemovedTask"},
@@ -886,16 +898,17 @@ TEST_F(UcxOutputQueueManagerTest, boundReaderKeepsRemovedEntry) {
   }
 }
 
-// A Removed entry outlives its removal while a server is bound to it or its
-// Task lives, but its chunks are unreachable from then on. The removal frees
-// them rather than keeping them for the entry's lifetime.
-TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
+// A Removed output queue outlives its removal while a server is bound to it or
+// its Task lives, but its chunks are unreachable from then on. The removal
+// frees them rather than keeping them for the output queue's lifetime.
+TEST_F(UcxOutputQueueManagerTest, removedOutputQueueReleasesQueuedData) {
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   {
     SCOPED_TRACE("partitioned");
     const std::string taskId = "removedReleasesPartitionedData";
     auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
-    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    auto outputQueue =
+        queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
     enqueue(taskId, 0, /*size=*/10);
     enqueue(taskId, 1, /*size=*/10);
     const auto before = queueManager_->stats(taskId);
@@ -905,7 +918,7 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
 
     task->requestAbort().wait();
     queueManager_->removeTask(taskId);
-    const auto after = entry->stats();
+    const auto after = outputQueue->stats();
     EXPECT_EQ(after.bufferedBytes, 0);
     EXPECT_EQ(after.bufferedPages, 0);
     EXPECT_EQ(after.totalBytesSent, before->totalBytesSent);
@@ -913,13 +926,13 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
 
     // The freed chunks were never delivered.
     std::optional<ReaderStep> step;
-    entry->getData(0, storeStep(step), /*intraNode=*/false);
+    outputQueue->getData(0, storeStep(step), /*intraNode=*/false);
     EXPECT_THAT(
         step,
         testing::Optional(isProducerError(
             testing::HasSubstr(
                 "Producer task ended before sending all its output"))));
-    queueManager_->releaseReader(entry, 0);
+    queueManager_->releaseReader(outputQueue, 0);
   }
   {
     SCOPED_TRACE("broadcast");
@@ -933,10 +946,11 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
         /*numDrivers=*/1,
         /*cleanup=*/true,
         core::PartitionedOutputNode::Kind::kBroadcast);
-    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    auto outputQueue =
+        queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
     enqueue(taskId, 0, /*size=*/10);
     std::weak_ptr<cudf::packed_columns> chunk;
-    entry->getData(
+    outputQueue->getData(
         0,
         [&chunk](ReaderStep step) { chunk = step.data; },
         /*intraNode=*/false);
@@ -944,16 +958,16 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryReleasesQueuedData) {
 
     task->requestAbort().wait();
     queueManager_->removeTask(taskId);
-    EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+    EXPECT_EQ(outputQueue->state(), OutputQueueState::kRemoved);
     EXPECT_TRUE(chunk.expired());
-    EXPECT_EQ(entry->stats().bufferedBytes, 0);
-    queueManager_->releaseReader(entry, 0);
+    EXPECT_EQ(outputQueue->stats().bufferedBytes, 0);
+    queueManager_->releaseReader(outputQueue, 0);
   }
 }
 
-// A task whose initializeTask() threw is removed with its entry still Pending,
-// so only the failed initialization knew its Task. The Removed entry must still
-// live as long as the Task rather than until the next removal.
+// A task whose initializeTask() threw is removed with its output queue still
+// Pending, so only the failed initialization knew its Task. The Removed output
+// queue must still live as long as the Task rather than until the next removal.
 TEST_F(
     UcxOutputQueueManagerTest,
     recordOfFailedInitializationLivesAsLongAsItsTask) {
@@ -967,8 +981,8 @@ TEST_F(
           /*numDestinations=*/-1,
           /*numDrivers=*/1),
       "Number of destinations must be non-negative");
-  // The failed initialization left the entry Pending and untouched: it has no
-  // capacity yet and cannot use the intra-node path.
+  // The failed initialization left the output queue Pending and untouched: it
+  // has no capacity yet and cannot use the intra-node path.
   ASSERT_TRUE(queueManager_->stats(taskId).has_value());
   EXPECT_EQ(queueManager_->getUtilization(taskId), std::nullopt);
   EXPECT_FALSE(queueManager_->canUseIntraNode(taskId));
@@ -976,17 +990,19 @@ TEST_F(
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
   queueManager_->removeTask("removalAfterFailedInitialization");
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
-  queueManager_->releaseReader(entry, 0);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(outputQueue->state(), OutputQueueState::kRemoved);
+  queueManager_->releaseReader(outputQueue, 0);
 
   std::weak_ptr<Task> weakTask = task;
   task.reset();
   ASSERT_TRUE(weakTask.expired());
   queueManager_->removeTask("removalAfterTaskDestroyed");
-  auto lateEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(lateEntry->state(), TaskEntryState::kPending);
-  queueManager_->releaseReader(lateEntry, 0);
+  auto lateOutputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(lateOutputQueue->state(), OutputQueueState::kPending);
+  queueManager_->releaseReader(lateOutputQueue, 0);
   for (const auto& removedTaskId :
        {taskId,
         std::string{"removalAfterFailedInitialization"},
@@ -995,12 +1011,14 @@ TEST_F(
   }
 }
 
-// The entry keeps a failed initializeTask() even when its last server closes
-// before the removal, so that the Removed entry lives as long as the Task.
+// The output queue keeps a failed initializeTask() even when its last server
+// closes before the removal, so that the Removed output queue lives as long as
+// the Task.
 TEST_F(UcxOutputQueueManagerTest, releasedReaderKeepsFailedInitialization) {
   const std::string taskId = "failedInitializationWithReader";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   auto task = createSourceTask(taskId, pool_, UcxTestData::kTestRowType);
   VELOX_ASSERT_THROW(
       queueManager_->initializeTask(
@@ -1009,22 +1027,22 @@ TEST_F(UcxOutputQueueManagerTest, releasedReaderKeepsFailedInitialization) {
           /*numDestinations=*/-1,
           /*numDrivers=*/1),
       "Number of destinations must be non-negative");
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
 
-  auto pendingEntry =
+  auto pendingOutputQueue =
       queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(pendingEntry, entry);
-  EXPECT_EQ(pendingEntry->state(), TaskEntryState::kPending);
-  queueManager_->releaseReader(pendingEntry, 0);
+  EXPECT_EQ(pendingOutputQueue, outputQueue);
+  EXPECT_EQ(pendingOutputQueue->state(), OutputQueueState::kPending);
+  queueManager_->releaseReader(pendingOutputQueue, 0);
 
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
   queueManager_->removeTask("removalAfterFailedInitialization");
-  auto removedEntry =
+  auto removedOutputQueue =
       queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(removedEntry, entry);
-  EXPECT_EQ(removedEntry->state(), TaskEntryState::kRemoved);
-  queueManager_->releaseReader(removedEntry, 0);
+  EXPECT_EQ(removedOutputQueue, outputQueue);
+  EXPECT_EQ(removedOutputQueue->state(), OutputQueueState::kRemoved);
+  queueManager_->releaseReader(removedOutputQueue, 0);
   for (const auto& removedTaskId :
        {taskId, std::string{"removalAfterFailedInitialization"}}) {
     IntraNodeTransferRegistry::getInstance()->clearCancelledTask(removedTaskId);
@@ -1091,7 +1109,8 @@ TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
   const std::string taskId = "orphanTest";
   // A manager that has not seen the task, so the reader below waits on a
-  // Pending entry. A removal leaves a Removed entry that ends readers at once.
+  // Pending output queue. A removal leaves a Removed output queue that ends
+  // readers at once.
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
 
   std::optional<ReaderStep> step;
@@ -1267,15 +1286,15 @@ TEST_F(
 }
 
 // A task whose output initialization failed is removed with no initialized
-// entry. A consumer that arrives after the removal learns that the producer
-// never initialized its output, rather than wait on an entry that no task
-// will initialize or remove.
+// output queue. A consumer that arrives after the removal learns that the
+// producer never initialized its output, rather than wait on an output queue
+// that no task will initialize or remove.
 TEST_F(
     UcxOutputQueueManagerTest,
     consumerAfterRemoveTaskWithoutQueueReportsProducerError) {
   const std::string taskId = "consumerAfterRemovalWithoutQueue";
   // A manager that has not seen the task, as after an initializeTask() that
-  // threw before it created an entry.
+  // threw before it created an output queue.
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
 
   queueManager_->removeTask(taskId);
@@ -1343,9 +1362,9 @@ TEST_F(UcxOutputQueueManagerTest, truncatedProducerErrorKeepsWholeCharacters) {
   }
 }
 
-// A Removed entry keeps its outcome for every reader that arrives later, not
-// only for the first.
-TEST_F(UcxOutputQueueManagerTest, removedEntryServesStoredOutcome) {
+// A Removed output queue keeps its outcome for every reader that arrives later,
+// not only for the first.
+TEST_F(UcxOutputQueueManagerTest, removedOutputQueueServesStoredOutcome) {
   const std::string taskId = "removedServesOutcome";
   auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
   task->setError("Injected producer failure");
@@ -1354,10 +1373,11 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryServesStoredOutcome) {
   std::vector<ReaderStep> steps;
   for (int reader = 0; reader < 2; ++reader) {
     SCOPED_TRACE(fmt::format("reader {}", reader));
-    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-    EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+    auto outputQueue =
+        queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    EXPECT_EQ(outputQueue->state(), OutputQueueState::kRemoved);
     std::optional<ReaderStep> step;
-    entry->getData(0, storeStep(step), /*intraNode=*/false);
+    outputQueue->getData(0, storeStep(step), /*intraNode=*/false);
     ASSERT_THAT(
         step,
         testing::Optional(isProducerError(
@@ -1366,7 +1386,7 @@ TEST_F(UcxOutputQueueManagerTest, removedEntryServesStoredOutcome) {
                     "Producer task ended before sending all its output"),
                 testing::HasSubstr("Injected producer failure")))));
     steps.push_back(std::move(*step));
-    queueManager_->releaseReader(entry, 0);
+    queueManager_->releaseReader(outputQueue, 0);
   }
   EXPECT_EQ(steps[0].outcome, steps[1].outcome);
 }
@@ -1390,9 +1410,10 @@ TEST_F(
       enqueue(taskId, /*size=*/100);
       noMoreData(taskId);
     }
-    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    auto outputQueue =
+        queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
     std::optional<ReaderStep> chunk;
-    entry->getData(0, storeStep(chunk), /*intraNode=*/true);
+    outputQueue->getData(0, storeStep(chunk), /*intraNode=*/true);
     if (!queuedBeforeRequest) {
       enqueue(taskId, /*size=*/100);
       noMoreData(taskId);
@@ -1409,7 +1430,7 @@ TEST_F(
             "Producer task ended before its consumers received all its output"),
         testing::HasSubstr("undelivered packed tables: 1"));
     std::optional<ReaderStep> end;
-    entry->getData(0, storeStep(end), /*intraNode=*/true);
+    outputQueue->getData(0, storeStep(end), /*intraNode=*/true);
     EXPECT_THAT(end, testing::Optional(isProducerError(lostChunk)));
     const auto polled =
         IntraNodeTransferRegistry::getInstance()->poll({taskId, 0, 0});
@@ -1417,7 +1438,7 @@ TEST_F(
     EXPECT_TRUE(polled->atEnd);
     EXPECT_EQ(polled->outcome.kind, OutcomeKind::kProducerError);
     EXPECT_THAT(polled->outcome.error, lostChunk);
-    queueManager_->releaseReader(entry, 0);
+    queueManager_->releaseReader(outputQueue, 0);
     IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
   }
 }
@@ -1431,18 +1452,19 @@ TEST_F(
   auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
   enqueue(taskId, /*size=*/100);
   noMoreData(taskId);
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   std::optional<ReaderStep> chunk;
-  entry->getData(0, storeStep(chunk), /*intraNode=*/true);
+  outputQueue->getData(0, storeStep(chunk), /*intraNode=*/true);
   ASSERT_TRUE(chunk.has_value());
   ASSERT_EQ(chunk->kind, ReaderStep::Kind::kChunk);
-  entry->intraNodeChunkRetrieved(0);
+  outputQueue->intraNodeChunkRetrieved(0);
 
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
 
   std::optional<ReaderStep> end;
-  entry->getData(0, storeStep(end), /*intraNode=*/true);
+  outputQueue->getData(0, storeStep(end), /*intraNode=*/true);
   ASSERT_TRUE(end.has_value());
   EXPECT_TRUE(isCleanEnd(*end));
   const auto polled =
@@ -1450,7 +1472,7 @@ TEST_F(
   ASSERT_TRUE(polled.has_value());
   EXPECT_TRUE(polled->atEnd);
   EXPECT_EQ(polled->outcome, ChannelOutcome::clean());
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
 }
 
@@ -1464,9 +1486,10 @@ TEST_F(
   auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
   enqueue(taskId, /*size=*/100);
   noMoreData(taskId);
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   std::optional<ReaderStep> chunk;
-  entry->getData(0, storeStep(chunk), /*intraNode=*/true);
+  outputQueue->getData(0, storeStep(chunk), /*intraNode=*/true);
   ASSERT_TRUE(chunk.has_value());
   ASSERT_EQ(chunk->kind, ReaderStep::Kind::kChunk);
 
@@ -1494,7 +1517,7 @@ TEST_F(
       polled->outcome.error,
       testing::HasSubstr(
           "Producer task ended before its consumers received all its output"));
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
   registry->clearCancelledTask(taskId);
 }
 
@@ -1509,26 +1532,27 @@ TEST_F(
   auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
   enqueue(taskId, /*destination=*/0, /*size=*/100);
   noMoreData(taskId);
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   std::optional<ReaderStep> chunk;
-  entry->getData(0, storeStep(chunk), /*intraNode=*/true);
+  outputQueue->getData(0, storeStep(chunk), /*intraNode=*/true);
   ASSERT_TRUE(chunk.has_value());
   ASSERT_EQ(chunk->kind, ReaderStep::Kind::kChunk);
   queueManager_->consumerGone(taskId, 0);
-  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased);
+  EXPECT_EQ(outputQueue->destinationState(0), DestinationState::kReleased);
 
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
 
   std::optional<ReaderStep> end;
-  entry->getData(1, storeStep(end), /*intraNode=*/true);
+  outputQueue->getData(1, storeStep(end), /*intraNode=*/true);
   ASSERT_TRUE(end.has_value());
   EXPECT_TRUE(isCleanEnd(*end));
   const auto polled =
       IntraNodeTransferRegistry::getInstance()->poll({taskId, 1, 0});
   ASSERT_TRUE(polled.has_value());
   EXPECT_EQ(polled->outcome, ChannelOutcome::clean());
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
 }
 
@@ -1562,23 +1586,24 @@ TEST_F(UcxOutputQueueManagerTest, removalEndsUnpublishedReaderWithError) {
               "Producer task ended before sending all its output"))));
 }
 
-// A removal frees what the entry retains: its queued chunks, the broadcast
-// chunks kept for later destinations, the blocked producers and the Task. A
-// chunk that a reader took stays alive until that reader lets go.
+// A removal frees what the output queue retains: its queued chunks, the
+// broadcast chunks kept for later destinations, the blocked producers and the
+// Task. A chunk that a reader took stays alive until that reader lets go.
 TEST_F(UcxOutputQueueManagerTest, terminateReleasesRetainedQueueResources) {
   using Kind = core::PartitionedOutputNode::Kind;
   for (auto kind : {Kind::kPartitioned, Kind::kBroadcast}) {
     SCOPED_TRACE(kind);
     const std::string taskId = "terminateRetainedQueue";
     auto task = initializeTask(taskId, 2, 1, true, kind, 64);
-    auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+    auto outputQueue =
+        queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
     enqueue(taskId, 0, 100);
     enqueue(taskId, 0, 100);
     ContinueFuture blocked;
-    ASSERT_TRUE(entry->checkBlocked(&blocked));
+    ASSERT_TRUE(outputQueue->checkBlocked(&blocked));
     ASSERT_FALSE(blocked.isReady());
     std::shared_ptr<cudf::packed_columns> inFlightData;
-    entry->getData(
+    outputQueue->getData(
         0,
         [&](ReaderStep step) { inFlightData = std::move(step.data); },
         /*intraNode=*/false);
@@ -1593,7 +1618,7 @@ TEST_F(UcxOutputQueueManagerTest, terminateReleasesRetainedQueueResources) {
     EXPECT_TRUE(taskReference.expired());
     EXPECT_TRUE(blocked.isReady());
     EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
-    EXPECT_EQ(entry->stats().bufferedBytes, 0);
+    EXPECT_EQ(outputQueue->stats().bufferedBytes, 0);
     // The reader may still use the chunk it took. Once it lets go, neither
     // the destinations nor the broadcast backfill may retain the chunk.
     EXPECT_FALSE(dataReference.expired());
@@ -1604,7 +1629,7 @@ TEST_F(UcxOutputQueueManagerTest, terminateReleasesRetainedQueueResources) {
     // for one never published.
     for (int destination : {0, 1, 2}) {
       std::optional<ReaderStep> step;
-      entry->getData(destination, storeStep(step), /*intraNode=*/false);
+      outputQueue->getData(destination, storeStep(step), /*intraNode=*/false);
       EXPECT_THAT(
           step,
           testing::Optional(isProducerError(
@@ -1614,8 +1639,8 @@ TEST_F(UcxOutputQueueManagerTest, terminateReleasesRetainedQueueResources) {
     }
     // Repeated removal must not re-create queues or retain callbacks.
     queueManager_->removeTask(taskId);
-    EXPECT_FALSE(entry->checkBlocked(&blocked));
-    queueManager_->releaseReader(entry, 0);
+    EXPECT_FALSE(outputQueue->checkBlocked(&blocked));
+    queueManager_->releaseReader(outputQueue, 0);
   }
 }
 
@@ -1638,18 +1663,20 @@ TEST_F(UcxOutputQueueManagerTest, releasingGoneConsumerDeletesItsResults) {
   queueManager_->removeTask(taskId);
 }
 
-// A close for a task this worker has not seen is dropped: it creates no entry
-// that nothing would erase.
+// A close for a task this worker has not seen is dropped: it creates no output
+// queue that nothing would erase.
 TEST_F(UcxOutputQueueManagerTest, consumerGoneForUnknownTaskIsDropped) {
   const std::string taskId = "unknownTaskOfGoneConsumer";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   queueManager_->consumerGone(taskId, 0);
   EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
-  // A later reader gets a new Pending entry, with destination 0 Unpublished.
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(entry->state(), TaskEntryState::kPending);
-  EXPECT_EQ(entry->destinationState(0), DestinationState::kUnpublished);
-  queueManager_->releaseReader(entry, 0);
+  // A later reader gets a new Pending output queue, with destination 0
+  // Unpublished.
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(outputQueue->state(), OutputQueueState::kPending);
+  EXPECT_EQ(outputQueue->destinationState(0), DestinationState::kUnpublished);
+  queueManager_->releaseReader(outputQueue, 0);
   EXPECT_EQ(queueManager_->stats(taskId), std::nullopt);
 }
 
@@ -1670,18 +1697,20 @@ TEST_F(UcxOutputQueueManagerTest, consumerGoneBeforePublicationStaysReleased) {
   fetchEndMarker(taskId, 0);
 
   EXPECT_TRUE(queueManager_->isFinished(taskId));
-  auto entry = queueManager_->bindReader(taskId, 1, /*onReleased=*/nullptr);
-  EXPECT_EQ(entry->destinationState(1), DestinationState::kReleased);
-  queueManager_->releaseReader(entry, 1);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 1, /*onReleased=*/nullptr);
+  EXPECT_EQ(outputQueue->destinationState(1), DestinationState::kReleased);
+  queueManager_->releaseReader(outputQueue, 1);
   queueManager_->removeTask(taskId);
 }
 
 // A consumer that goes away while its producer has not initialized its output
-// leaves its destination Released in the Pending entry, which is kept for the
-// producer. The producer then finishes without waiting for that consumer.
+// leaves its destination Released in the Pending output queue, which is kept
+// for the producer. The producer then finishes without waiting for that
+// consumer.
 TEST_F(
     UcxOutputQueueManagerTest,
-    consumerGoneOnPendingEntryFinishesProducerAtInit) {
+    consumerGoneOnPendingOutputQueueFinishesProducerAtInit) {
   const std::string taskId = "consumerGoneBeforeInit";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
   auto reader = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
@@ -1698,25 +1727,26 @@ TEST_F(
   queueManager_->removeTask(taskId);
 }
 
-// The Pending entry that a gone consumer leaves holds neither a reader nor a
-// chunk, only the Released destination, whose next reader stops at once.
-TEST_F(UcxOutputQueueManagerTest, releasedPendingEntryHoldsNoReader) {
-  const std::string taskId = "releasedPendingEntry";
+// The Pending output queue that a gone consumer leaves holds neither a reader
+// nor a chunk, only the Released destination, whose next reader stops at once.
+TEST_F(UcxOutputQueueManagerTest, releasedPendingOutputQueueHoldsNoReader) {
+  const std::string taskId = "releasedPendingOutputQueue";
   queueManager_ = std::make_shared<UcxOutputQueueManager>();
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   std::optional<ReaderStep> waiting;
-  entry->getData(0, storeStep(waiting), /*intraNode=*/false);
+  outputQueue->getData(0, storeStep(waiting), /*intraNode=*/false);
   EXPECT_FALSE(waiting.has_value());
   queueManager_->consumerGone(taskId, 0);
   ASSERT_TRUE(waiting.has_value());
   EXPECT_EQ(waiting->kind, ReaderStep::Kind::kStop);
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
 
-  // The map and this test hold the entry; no reader callback does.
-  EXPECT_LE(entry.use_count(), 2);
+  // The map and this test hold the output queue; no reader callback does.
+  EXPECT_LE(outputQueue.use_count(), 2);
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedPages, 0);
   auto again = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(again, entry);
+  EXPECT_EQ(again, outputQueue);
   std::optional<ReaderStep> step;
   again->getData(0, storeStep(step), /*intraNode=*/false);
   ASSERT_TRUE(step.has_value());
@@ -1727,14 +1757,15 @@ TEST_F(UcxOutputQueueManagerTest, releasedPendingEntryHoldsNoReader) {
 }
 
 // A failed send releases the destination and returns the error for the caller
-// to fail the task with. The entry calls no Task method itself.
+// to fail the task with. The output queue calls no Task method itself.
 TEST_F(UcxOutputQueueManagerTest, sendFailedFailsProducerTask) {
   const std::string taskId = "sendFailed";
   auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   enqueue(taskId, 0, 10);
 
-  auto error = entry->sendFailed(0, "Connection reset");
+  auto error = outputQueue->sendFailed(0, "Connection reset");
   ASSERT_TRUE(error.has_value());
   EXPECT_THAT(
       *error,
@@ -1743,34 +1774,34 @@ TEST_F(UcxOutputQueueManagerTest, sendFailedFailsProducerTask) {
           testing::HasSubstr(taskId),
           testing::HasSubstr("Connection reset")));
   EXPECT_EQ(task->state(), TaskState::kRunning);
-  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased);
-  EXPECT_EQ(entry->stats().bufferedPages, 0);
+  EXPECT_EQ(outputQueue->destinationState(0), DestinationState::kReleased);
+  EXPECT_EQ(outputQueue->stats().bufferedPages, 0);
   // The first decision wins.
-  EXPECT_EQ(entry->sendFailed(0, "Connection reset"), std::nullopt);
+  EXPECT_EQ(outputQueue->sendFailed(0, "Connection reset"), std::nullopt);
 
   task->setError(*error);
   EXPECT_EQ(task->state(), TaskState::kFailed);
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
   queueManager_->removeTask(taskId);
 }
 
-// The release callback runs outside the manager's and the entry's locks, so
-// that it may call back into them.
+// The release callback runs outside the manager's and the output queue's locks,
+// so that it may call back into them.
 TEST_F(UcxOutputQueueManagerTest, onReleasedFiresOutsideLock) {
   const std::string taskId = "onReleasedOutsideLock";
   auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
   int numReleased{0};
-  auto entry = queueManager_->bindReader(taskId, 0, [&]() {
+  auto outputQueue = queueManager_->bindReader(taskId, 0, [&]() {
     EXPECT_TRUE(queueManager_->stats(taskId).has_value());
     ++numReleased;
   });
   queueManager_->consumerGone(taskId, 0);
   EXPECT_EQ(numReleased, 1);
-  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased);
+  EXPECT_EQ(outputQueue->destinationState(0), DestinationState::kReleased);
   // The callback fires once.
   queueManager_->consumerGone(taskId, 0);
   EXPECT_EQ(numReleased, 1);
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(outputQueue, 0);
   queueManager_->removeTask(taskId);
 }
 
@@ -1786,17 +1817,18 @@ TEST_F(UcxOutputQueueManagerTest, readerAfterDiscardedOutputFails) {
   const auto discarded = isProducerError(
       testing::HasSubstr(
           "Producer task discarded its output before sending all of it"));
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(entry->destinationState(0), DestinationState::kEnded);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(outputQueue->destinationState(0), DestinationState::kEnded);
   {
     std::optional<ReaderStep> step;
-    entry->getData(0, storeStep(step), /*intraNode=*/false);
+    outputQueue->getData(0, storeStep(step), /*intraNode=*/false);
     EXPECT_THAT(step, testing::Optional(discarded));
   }
   // The server deletes the results after it sent the end.
   deleteResults(taskId, 0);
-  EXPECT_EQ(entry->destinationState(0), DestinationState::kReleased);
-  queueManager_->releaseReader(entry, 0);
+  EXPECT_EQ(outputQueue->destinationState(0), DestinationState::kReleased);
+  queueManager_->releaseReader(outputQueue, 0);
 
   auto late = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   std::optional<ReaderStep> step;
@@ -1807,44 +1839,47 @@ TEST_F(UcxOutputQueueManagerTest, readerAfterDiscardedOutputFails) {
   queueManager_->removeTask(taskId);
 }
 
-// A second removal keeps the Removed entry and the outcome of the first, even
-// though the task's state changed in between. Only initialization replaces
-// the entry.
+// A second removal keeps the Removed output queue and the outcome of the
+// first, even though the task's state changed in between. Only initialization
+// replaces the output queue.
 TEST_F(UcxOutputQueueManagerTest, removeTaskTombstoneIsIdempotent) {
   const std::string taskId = "idempotentTombstone";
   auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
   queueManager_->removeTask(taskId);
-  auto entry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
-  auto sameEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_EQ(sameEntry, entry);
-  EXPECT_EQ(entry->state(), TaskEntryState::kRemoved);
+  auto sameOutputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_EQ(sameOutputQueue, outputQueue);
+  EXPECT_EQ(outputQueue->state(), OutputQueueState::kRemoved);
 
   std::optional<ReaderStep> stale;
-  entry->getData(0, storeStep(stale), /*intraNode=*/false);
+  outputQueue->getData(0, storeStep(stale), /*intraNode=*/false);
   EXPECT_THAT(
       stale,
       testing::Optional(isProducerError(
           testing::AllOf(
               testing::HasSubstr("state: Running"),
               testing::Not(testing::HasSubstr("Aborted"))))));
-  queueManager_->releaseReader(sameEntry, 0);
-  queueManager_->releaseReader(entry, 0);
+  queueManager_->releaseReader(sameOutputQueue, 0);
+  queueManager_->releaseReader(outputQueue, 0);
 
-  // Initialization replaces the Removed entry with a new one.
+  // Initialization replaces the Removed output queue with a new one.
   auto newTask = initializeTask(taskId, 1, 1, /*cleanup=*/false);
-  auto liveEntry = queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
-  EXPECT_NE(liveEntry, entry);
+  auto liveOutputQueue =
+      queueManager_->bindReader(taskId, 0, /*onReleased=*/nullptr);
+  EXPECT_NE(liveOutputQueue, outputQueue);
   std::optional<ReaderStep> live;
-  liveEntry->getData(0, storeStep(live), /*intraNode=*/false);
+  liveOutputQueue->getData(0, storeStep(live), /*intraNode=*/false);
   EXPECT_FALSE(live.has_value());
 
   newTask->requestAbort().wait();
   queueManager_->removeTask(taskId);
   EXPECT_THAT(
       live, testing::Optional(isProducerError(testing::HasSubstr("Aborted"))));
-  queueManager_->releaseReader(liveEntry, 0);
+  queueManager_->releaseReader(liveOutputQueue, 0);
 }
 
 // A reader waiting on an open destination whose results the producer deletes
@@ -1877,17 +1912,18 @@ TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
   const std::string taskId = "terminatedPendingReader";
   auto task = initializeTask(
       taskId, 1, 1, true, core::PartitionedOutputNode::Kind::kBroadcast);
-  auto entry = queueManager_->bindReader(taskId, 5, /*onReleased=*/nullptr);
+  auto outputQueue =
+      queueManager_->bindReader(taskId, 5, /*onReleased=*/nullptr);
   const auto removedEarly = isProducerError(
       testing::HasSubstr("Producer task ended before sending all its output"));
   int endCount{0};
-  entry->getData(
+  outputQueue->getData(
       5,
       [&](ReaderStep step) {
         EXPECT_THAT(step, removedEarly);
         // A racing reader must not register another pending callback.
         std::optional<ReaderStep> racing;
-        entry->getData(10, storeStep(racing), /*intraNode=*/false);
+        outputQueue->getData(10, storeStep(racing), /*intraNode=*/false);
         EXPECT_THAT(racing, testing::Optional(removedEarly));
         ++endCount;
       },
@@ -1896,12 +1932,12 @@ TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
   queueManager_->removeTask(taskId);
   queueManager_->removeTask(taskId);
   EXPECT_EQ(endCount, 1);
-  entry->updateOutputBuffers(3, true);
-  EXPECT_FALSE(entry->stats().noMoreBuffers);
+  outputQueue->updateOutputBuffers(3, true);
+  EXPECT_FALSE(outputQueue->stats().noMoreBuffers);
   std::optional<ReaderStep> step;
-  entry->getData(0, storeStep(step), /*intraNode=*/false);
+  outputQueue->getData(0, storeStep(step), /*intraNode=*/false);
   EXPECT_THAT(step, testing::Optional(removedEarly));
-  queueManager_->releaseReader(entry, 5);
+  queueManager_->releaseReader(outputQueue, 5);
 }
 
 // --- Broadcast tests ---

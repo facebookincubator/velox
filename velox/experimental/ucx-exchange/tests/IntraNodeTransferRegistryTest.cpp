@@ -63,7 +63,7 @@ TEST(IntraNodeTransferRegistryTest, cancelledFinishedTaskEndsCleanly) {
   registry->clearCancelledTask(taskId);
 }
 
-// The end a server publishes carries the outcome its entry decided.
+// The end a server publishes carries the outcome its output queue decided.
 TEST(IntraNodeTransferRegistryTest, publishedEndCarriesOutcome) {
   auto registry = IntraNodeTransferRegistry::getInstance();
   const IntraNodeTransferKey key{
