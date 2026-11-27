@@ -47,6 +47,7 @@ class IExpr {
     kWindow = 9,
     /// A value bound after the expression is built (see PlaceholderExpr).
     kPlaceholder = 10,
+    kAtTimeZone = 11,
   };
 
   VELOX_DECLARE_EMBEDDED_ENUM_NAME(Kind)
