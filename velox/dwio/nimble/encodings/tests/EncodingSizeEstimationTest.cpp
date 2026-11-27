@@ -710,9 +710,9 @@ TEST_F(
            {
                .name = "FSST compressed lengths",
                .exactSize = FsstEncoding::estimateSize(
-                   stringViews.size(), stringStats, exactOptions),
+                   stringViews, stringStats, exactOptions),
                .roundedSize = FsstEncoding::estimateSize(
-                   stringViews.size(), stringStats, roundedOptions),
+                   stringViews, stringStats, roundedOptions),
            },
        }) {
     SCOPED_TRACE(testCase.name);

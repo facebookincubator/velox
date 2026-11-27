@@ -226,6 +226,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::Dictionary,
       EncodingType::RLE,
       EncodingType::Varint,
+      EncodingType::Fsst,
       // EXPERIMENTAL: The following encodings are not production-ready. Do not
       // enable for production tables without consulting the Nimble team
       // (oncall: dwios).
@@ -240,7 +241,6 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::EliasFano,
       EncodingType::PartitionedEliasFano,
       EncodingType::Sequence,
-      EncodingType::Fsst,
       EncodingType::Huffman,
       EncodingType::Reversed,
   };

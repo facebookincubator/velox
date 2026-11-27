@@ -47,6 +47,13 @@ class Config : public velox::config::ConfigBase {
   static Entry<bool> ENABLE_DEFAULT_ENCODING_EXECUTOR;
   static Entry<bool> ENABLE_STREAM_DEDUPLICATION;
   static Entry<bool> DISABLE_SHARED_STRING_BUFFERS;
+
+  /// Configures writer candidates through alpha.encodingselection.read.factors,
+  /// in "<Encoding>=<factor>;..." format. An explicit list replaces the
+  /// defaults; ENCODING_SELECTION_CONFIG with read_factors takes precedence.
+  /// The compiled default includes FSST at factor 1.0 for eligible string
+  /// streams. Omitting FSST from an explicit list disables automatic FSST
+  /// selection; FSST_COLUMNS controls targeted streams separately.
   static Entry<const std::vector<std::pair<EncodingType, float>>>
       MANUAL_ENCODING_SELECTION_READ_FACTORS;
   static Entry<float> ENCODING_SELECTION_COMPRESSION_ACCEPT_RATIO;
@@ -102,8 +109,6 @@ class Config : public velox::config::ConfigBase {
   /// A field whose literal name contains Velox subfield separators such as
   /// '.', or any path containing ',', cannot be expressed by this
   /// comma-delimited SerDe option.
-  /// EXPERIMENTAL: Do not enable for production tables without consulting the
-  /// Nimble team (oncall: dwios).
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<const std::vector<std::string>> FSST_COLUMNS;
 

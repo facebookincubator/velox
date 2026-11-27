@@ -22,7 +22,7 @@
 
 DEFINE_string(
     nimble_selection_read_factors,
-    "Constant=1.0;Trivial=0.5;FixedBitWidth=0.8;MainlyConstant=1.0;SparseBool=1.0;Dictionary=1.0;RLE=1.0",
+    "Constant=1.0;Trivial=0.5;FixedBitWidth=0.8;MainlyConstant=1.0;SparseBool=1.0;Dictionary=1.0;RLE=1.0;Fsst=1.0",
     "Encoding selection read factors, in the format: "
     "<EncodingName>=<FactorFloatValue>;<EncodingName>=<FactorFloatValue>;...");
 
