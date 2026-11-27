@@ -945,7 +945,7 @@ class WorkerTest(unittest.TestCase):
                 # functions read the stored value.
                 Spec(
                     "inverse_or_seven",
-                    lambda x: 1 // x if x != 2 else 7,
+                    lambda x: 1 / x if x != 2 else 7,
                     [0],
                     pa.float64(),
                     output=False,
