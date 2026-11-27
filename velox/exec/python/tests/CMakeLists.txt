@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_exec_python_call_test PythonCallTest.cpp)
-target_link_libraries(
+# The operator test needs folly::Init, which the main of the exec tests calls.
+add_executable(
   velox_exec_python_call_test
-  velox_exec
-  velox_exec_test_lib
-  GTest::gtest
-  GTest::gtest_main
+  PythonCallTest.cpp
+  ${PROJECT_SOURCE_DIR}/velox/exec/tests/Main.cpp
 )
+target_link_libraries(velox_exec_python_call_test velox_exec velox_exec_test_lib GTest::gtest)
 
 # The tests run only if Python 3.10 or later can import pyarrow, which the
 # worker imports, and pyspark, which the worker tests use to pickle functions
