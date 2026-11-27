@@ -46,8 +46,10 @@ namespace facebook::nimble {
 namespace {
 
 namespace options_off = test::options_off;
+using options_off::fixedBitWidthLevelWithoutLanes;
 using options_off::OffForm;
 using options_off::offForms;
+using options_off::sampleRateWithoutLanes;
 
 // Captures the metrics the writer logs when it closes a file.
 class CapturingLogger final : public MetricsLogger {
@@ -116,7 +118,8 @@ class OptionsOffGoldenTest : public ::testing::Test,
 // Every off form writes the file the untouched options write, on every
 // fixture.
 TEST_F(OptionsOffGoldenTest, offFormsWriteTheSameFile) {
-  const auto forms = offForms();
+  auto forms = offForms();
+  forms.push_back(sampleRateWithoutLanes());
   for (const auto& fixture : options_off::allFixtures()) {
     const auto untouched = write(fixture, forms[0]);
     for (size_t form = 1; form < forms.size(); ++form) {
@@ -157,7 +160,8 @@ TEST_F(OptionsOffGoldenTest, offFormsWriteTheSameFileWithZstd) {
 }
 
 // With the options off, the writer publishes the same runtime statistics and
-// file-close metrics as before the typed-lanes options existed.
+// file-close metrics as before the typed-lanes options existed: no encoding
+// counters.
 TEST_F(OptionsOffGoldenTest, publishedStatisticsMatchPreStack) {
   using Keys = Writer::RuntimeStats;
   const std::vector<std::string> preStackRuntimeStats{
@@ -208,6 +212,27 @@ TEST_F(OptionsOffGoldenTest, publishedStatisticsMatchPreStack) {
         closeMetrics,
         ::testing::UnorderedElementsAreArray(preStackCloseMetrics));
   }
+}
+
+// The off forms set no option that reports encoding counters; a sample rate,
+// a typed-lanes level or typed lanes each does.
+TEST(OptionsOffNeedsEncodingStatsTest, onlyWithACounterOption) {
+  for (const auto& form : offForms()) {
+    SCOPED_TRACE(form.name);
+    WriterOptions options;
+    form.apply(options);
+    EXPECT_FALSE(options.needsEncodingStats());
+  }
+  for (const auto& form :
+       {sampleRateWithoutLanes(), fixedBitWidthLevelWithoutLanes()}) {
+    SCOPED_TRACE(form.name);
+    WriterOptions options;
+    form.apply(options);
+    EXPECT_TRUE(options.needsEncodingStats());
+  }
+  WriterOptions lanes;
+  lanes.fixedBitWidthTypedLanes = true;
+  EXPECT_TRUE(lanes.needsEncodingStats());
 }
 
 } // namespace

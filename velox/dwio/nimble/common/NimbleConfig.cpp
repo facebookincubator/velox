@@ -436,6 +436,22 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.stats.enable",
     true);
 
+/* static */ Config::Entry<uint32_t> Config::SHADOW_ENCODE_SAMPLE_RATE(
+    "nimble.stats.shadow_sample_rate",
+    0,
+    [](const uint32_t& rate) { return folly::to<std::string>(rate); },
+    [](const std::string& key, const std::string& str) {
+      const auto rate = folly::tryTo<int64_t>(folly::trimWhitespace(str));
+      NIMBLE_USER_CHECK(
+          rate.hasValue(), "{} must be an integer, got '{}'.", key, str);
+      NIMBLE_USER_CHECK(
+          rate.value() >= 0 && rate.value() <= 1'000'000,
+          "{} must be between 0 and 1000000, got '{}'.",
+          key,
+          str);
+      return static_cast<uint32_t>(rate.value());
+    });
+
 /* static */ Config::Entry<bool> Config::ENABLE_VECTORIZED_STATS(
     "nimble.stats.enable_vectorized",
     true);

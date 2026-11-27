@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
+#include "velox/dwio/nimble/compression/CompressionPolicy.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
@@ -196,6 +197,25 @@ class Encoding {
     /// other encodings and other compressors are unaffected. Unset (the
     /// default) changes nothing. Levels must be in [1, 9]; the writer checks.
     std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
+
+    /// Writer encoding counters, set only by writers that collect them; null
+    /// otherwise. CompressionEncoder counts each payload in them.
+    EncodingStats* encodingStats{nullptr};
+
+    /// The encode task's tally, which counts payloads for 'encodingStats'
+    /// without a lock. Only used with 'encodingStats' set, so clearing
+    /// 'encodingStats' stops all counting.
+    PayloadTally* payloadTally{nullptr};
+
+    /// Returns what an encoding of 'encodingType' passes to CompressionEncoder
+    /// with each payload, for the counters.
+    PayloadCompressionOptions payloadCompressionOptions(
+        EncodingType encodingType) const {
+      PayloadCompressionOptions payloadOptions{encodingType};
+      payloadOptions.stats = encodingStats;
+      payloadOptions.tally = encodingStats != nullptr ? payloadTally : nullptr;
+      return payloadOptions;
+    }
 
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.

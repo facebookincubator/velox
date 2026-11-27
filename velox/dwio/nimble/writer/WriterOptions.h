@@ -356,6 +356,29 @@ struct WriterOptions {
   /// MetaInternal; the writer rejects anything else. Unset by default.
   std::optional<int32_t> fixedBitWidthTypedLanesOpenzlLevel{};
 
+  /// Samples about 1 in N chunks and encodes each FixedBitWidth typed-lane
+  /// payload of a sampled chunk a second time, into scratch memory, with
+  /// typed lanes and the typed-lanes level off. The writer's encoding counters
+  /// report what the two settings changed (see EncodingStats). Chunks are
+  /// sampled by a hash of their stream, their chunk index and a random seed
+  /// drawn once per writer, so the same chunks are sampled under serial and
+  /// parallel encoding, and each file samples its own; shared-dictionary
+  /// streams are not sampled. The file's bytes do not change. 0 (the default)
+  /// disables it.
+  uint32_t shadowEncodeSampleRate{0};
+
+  /// For tests: the shadow sampling seed (see shadowEncodeSampleRate), in
+  /// place of the random one the writer draws. Not a table setting.
+  std::optional<uint64_t> shadowSampleSeed{};
+
+  /// True when an option that reports encoding counters is set. The writer
+  /// keeps encoding counters (EncodingStats) only then.
+  bool needsEncodingStats() const {
+    return fixedBitWidthTypedLanes ||
+        fixedBitWidthTypedLanesOpenzlLevel.has_value() ||
+        shadowEncodeSampleRate > 0;
+  }
+
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};

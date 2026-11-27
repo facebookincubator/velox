@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "folly/Random.h"
 #include "folly/ScopeGuard.h"
 #include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
@@ -49,6 +50,7 @@
 #include "velox/dwio/nimble/common/SchemaTypes.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/compression/EncodingStats.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -85,6 +87,29 @@ namespace {
 
 using EncodingNodeIds = folly::F14FastSet<uint32_t>;
 
+// Returns the writer's shadow sampling seed: WriterOptions::shadowSampleSeed
+// when a test sets it, or else a random value drawn once for this writer, so
+// that each file samples its own chunks. A drawn seed has 63 bits, so that it
+// is published unchanged as a signed 64-bit counter.
+uint64_t shadowSampleSeed(const WriterOptions& options) {
+  if (options.shadowSampleSeed.has_value()) {
+    return *options.shadowSampleSeed;
+  }
+  return folly::Random::rand64() >> 1;
+}
+
+// Returns the writer's encoding counters, only when an option that reports
+// encoding counters is set (WriterOptions::needsEncodingStats()), so other
+// writers count nothing and publish nothing new.
+std::unique_ptr<EncodingStats> makeEncodingStats(const WriterOptions& options) {
+  if (!options.needsEncodingStats()) {
+    return nullptr;
+  }
+  const uint32_t rate = options.shadowEncodeSampleRate;
+  return std::make_unique<EncodingStats>(
+      rate, rate > 0 ? shadowSampleSeed(options) : 0);
+}
+
 } // namespace
 
 namespace detail {
@@ -110,6 +135,7 @@ class WriterContext : public FieldWriterContext {
         fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
         subIntSplitEncodingNodeIds_{std::move(options.subIntSplitEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
+        encodingStats_{makeEncodingStats(options_)},
         logger_{
             this->options_.metricsLogger == nullptr
                 ? std::make_shared<MetricsLogger>()
@@ -148,6 +174,54 @@ class WriterContext : public FieldWriterContext {
 
   const EncodingNodeIds& fsstEncodingNodeIds() const {
     return fsstEncodingNodeIds_;
+  }
+
+  // The encoding counters; null unless an option that needs them is set.
+  EncodingStats* encodingStats() const {
+    return encodingStats_.get();
+  }
+
+  // Makes a payload tally for each of 'taskCount' encode tasks, when the
+  // writer counts payloads. On the writer thread, before an encode round.
+  void ensurePayloadTallies(uint32_t taskCount) {
+    if (encodingStats_ == nullptr) {
+      return;
+    }
+    while (payloadTallies_.size() < taskCount) {
+      payloadTallies_.emplace_back(*encodingStats_);
+    }
+  }
+
+  // The payload tally of encode task 'taskId'; null when the writer doesn't
+  // count payloads.
+  PayloadTally* payloadTally(uint32_t taskId) {
+    return taskId < payloadTallies_.size() ? &payloadTallies_[taskId] : nullptr;
+  }
+
+  // Folds every task's tally into the encoding counters. On the writer
+  // thread, once an encode round's tasks are joined.
+  void foldPayloadTallies() {
+    for (auto& tally : payloadTallies_) {
+      tally.fold();
+    }
+  }
+
+  // Sizes the shadow sampling chunk indices for the stream offsets below
+  // 'nodeCount', when chunks are sampled. On the writer thread, before an
+  // encode round.
+  void ensureShadowChunkIndices(size_t nodeCount) {
+    if (encodingStats_ != nullptr && encodingStats_->shadowSampleRate() > 0 &&
+        shadowChunkIndices_.size() < nodeCount) {
+      shadowChunkIndices_.resize(nodeCount);
+    }
+  }
+
+  // Returns the next chunk index of the stream at 'streamOffset', for the
+  // shadow sampling key. Only the task encoding the stream calls it, one
+  // chunk at a time, so it needs no lock.
+  uint64_t nextShadowChunkIndex(uint32_t streamOffset) {
+    NIMBLE_DCHECK_LT(streamOffset, shadowChunkIndices_.size());
+    return shadowChunkIndices_[streamOffset]++;
   }
 
   const EncodingNodeIds& subIntSplitEncodingNodeIds() const {
@@ -302,6 +376,11 @@ class WriterContext : public FieldWriterContext {
   const EncodingNodeIds fsstEncodingNodeIds_;
   const EncodingNodeIds subIntSplitEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
+  const std::unique_ptr<EncodingStats> encodingStats_;
+  // One per encode task.
+  std::vector<PayloadTally> payloadTallies_;
+  // The next chunk index of each stream, by stream offset.
+  std::vector<uint64_t> shadowChunkIndices_;
   velox::CpuWallTiming encodingTiming_;
   velox::CpuWallTiming writeTiming_;
   velox::CpuWallTiming ingestionTiming_;
@@ -947,6 +1026,7 @@ TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
   const auto& writerOptions = context.options();
   auto encodingOptions = makeEncodingOptions(
       writerOptions, encodingScratchBufferPool, encodingBufferPool);
+  encodingOptions.encodingStats = context.encodingStats();
   SharedDictionaryWriter::Options dictionaryOptions{
       .scope = config->scope,
       .dictionaryId = config->dictionaryId,
@@ -1117,6 +1197,28 @@ const TypeWithId& resolveDictionaryValueType(
   VELOX_UNREACHABLE();
 }
 
+// Whether the chunk being encoded is sampled for a re-encode (see
+// EncodingStats::ShadowChunk): sampling is on, the stream has no shared
+// dictionary, and the chunk's key (EncodingStats::shadowSampleKey()), from the
+// chunk scope (EncodingChunkScope) and the writer's seed, is sampled.
+// encodeStreamTyped() opens the scope whenever sampling is on; a chunk outside
+// one isn't sampled.
+bool shadowSampled(
+    const detail::WriterContext& context,
+    const StreamData& streamData) {
+  const auto* encodingStats = context.encodingStats();
+  if (encodingStats == nullptr || encodingStats->shadowSampleRate() == 0 ||
+      hasDictionaryConfig(streamData)) {
+    return false;
+  }
+  const auto chunk = EncodingChunkScope::current();
+  if (!chunk.has_value()) {
+    return false;
+  }
+  return encodingStats->sampleShadow(
+      encodingStats->shadowSampleKey(chunk->streamOffset, chunk->chunkIndex));
+}
+
 template <typename T>
 std::string_view encode(
     std::optional<EncodingLayout> encodingLayout,
@@ -1143,6 +1245,8 @@ std::string_view encode(
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::encode", const_cast<bool*>(&hasEncodingLayout));
 
+  const bool sampled = shadowSampled(context, streamData);
+
   auto policy = makeEncodingPolicy<T>(
       hasEncodingLayout,
       std::move(encodingLayout),
@@ -1154,17 +1258,31 @@ std::string_view encode(
 
   auto encodingOptions = makeEncodingOptions(
       context.options(), encodingScratchBufferPool, encodingBufferPool);
+  encodingOptions.encodingStats = context.encodingStats();
+  encodingOptions.payloadTally = PayloadTally::current();
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::Writer::encode", &encodingOptions);
 
+  std::optional<EncodingStats::ShadowChunk> shadowChunk;
+  if (sampled) {
+    shadowChunk.emplace();
+  }
+  std::string_view encoded;
   if (streamData.hasNulls()) {
     std::span<const bool> notNulls = streamData.nonNulls();
-    return EncodingFactory::encodeNullable(
+    encoded = EncodingFactory::encodeNullable(
         std::move(policy), data, notNulls, buffer, encodingOptions);
   } else {
-    return EncodingFactory::encode(
+    encoded = EncodingFactory::encode(
         std::move(policy), data, buffer, encodingOptions);
   }
+  if (hasEncodingLayout && context.encodingStats() != nullptr) {
+    context.encodingStats()->addReplayedChunk();
+  }
+  if (sampled) {
+    context.encodingStats()->shadowEncode(data.size(), *shadowChunk);
+  }
+  return encoded;
 }
 
 // Encodes streamData by replaying a saved layout -- either an external
@@ -1196,6 +1314,9 @@ std::string_view encodeWithFallback(
     // A saved layout can fail to apply to this chunk's data in ways beyond a
     // clean IncompatibleEncoding, so retry on any error rather than keying
     // off a specific (unreliable) error code.
+    if (auto* encodingStats = context.encodingStats()) {
+      encodingStats->addReplayFallback();
+    }
     return encode<T>(
         std::nullopt,
         context,
@@ -1246,6 +1367,15 @@ std::string_view encodeStreamTyped(
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool,
     const StreamData& streamData) {
+  // Keys this chunk for the sampled re-encode, so that the same chunks are
+  // sampled under serial and parallel encoding.
+  std::optional<EncodingChunkScope> encodingChunkScope;
+  if (auto* encodingStats = context.encodingStats();
+      encodingStats != nullptr && encodingStats->shadowSampleRate() > 0) {
+    const auto streamOffset = streamData.descriptor().offset();
+    encodingChunkScope.emplace(
+        streamOffset, context.nextShadowChunkIndex(streamOffset));
+  }
   const auto* writerStreamContext =
       streamData.descriptor().context<WriterStreamContext>();
   const bool hasDictionary = hasDictionaryConfig(streamData);
@@ -2774,6 +2904,12 @@ std::unique_ptr<velox::dwio::common::FileMetadata> Writer::close() {
         .fileSize = context_->bytesWritten(),
         .encodingCpuNs = context_->encodingTiming().cpuNanos,
         .encodingWallNs = context_->encodingTiming().wallNanos};
+    if (const auto* encodingStats = context_->encodingStats()) {
+      for (auto& counter : encodingStats->counters()) {
+        metrics.encodingCounters.emplace_back(
+            std::move(counter.name), counter.value);
+      }
+    }
     context_->logger()->logFileClose(metrics);
     file_ = nullptr;
 
@@ -3174,6 +3310,7 @@ void Writer::ensureWriteStreams() {
   ensureEncodingBuffer();
   const auto schemaNodeCount = context_->schemaBuilder().nodeCount();
   encodedStreams_.resize(schemaNodeCount);
+  context_->ensureShadowChunkIndices(schemaNodeCount);
 }
 
 void Writer::resetFieldWriter() {
@@ -3195,6 +3332,12 @@ void Writer::writeStreams() {
     const auto concurrency = encodingConcurrency(streamCount);
     ensureEncodingScratchBufferPools(concurrency);
     ensureEncodingBufferPools(concurrency);
+    context_->ensurePayloadTallies(concurrency);
+    // Counts the round's payloads once its tasks are joined; the barrier
+    // waits for them even when one throws.
+    SCOPE_EXIT {
+      context_->foldPayloadTallies();
+    };
 
     if (concurrency > 1) {
       const auto& encodingExecutor = context_->options().encodingExecutor;
@@ -3216,6 +3359,8 @@ void Writer::writeStreams() {
                      encodingBufferPool]() {
           const auto scopedDriverContext =
               maybeSetupScopedDriverContext(driverCtx);
+          const PayloadTally::Scope payloadTallyScope{
+              context_->payloadTally(taskId)};
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
@@ -3252,6 +3397,8 @@ void Writer::writeStreams() {
     } else {
       auto* encodingScratchBufferPool = this->encodingScratchBufferPool();
       auto* encodingBufferPool = this->encodingBufferPool();
+      const PayloadTally::Scope payloadTallyScope{
+          context_->payloadTally(/*taskId=*/0)};
       for (auto& [nodeId, streamData] : streams) {
         auto statsCollector = context_->getStatsCollector(nodeId);
         uint64_t startCpuNs = velox::process::threadCpuNanos();
@@ -3609,6 +3756,12 @@ bool Writer::writeChunks(
     const auto concurrency = encodingConcurrency(streamCount);
     ensureEncodingScratchBufferPools(concurrency);
     ensureEncodingBufferPools(concurrency);
+    context_->ensurePayloadTallies(concurrency);
+    // Counts the round's payloads once its tasks are joined; the barrier
+    // waits for them even when one throws.
+    SCOPE_EXIT {
+      context_->foldPayloadTallies();
+    };
 
     if (concurrency > 1) {
       const auto& encodingExecutor = context_->options().encodingExecutor;
@@ -3630,6 +3783,8 @@ bool Writer::writeChunks(
                      encodingBufferPool] {
           const auto scopedDriverContext =
               maybeSetupScopedDriverContext(driverCtx);
+          const PayloadTally::Scope payloadTallyScope{
+              context_->payloadTally(taskId)};
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
@@ -3675,6 +3830,8 @@ bool Writer::writeChunks(
     } else {
       auto* encodingScratchBufferPool = this->encodingScratchBufferPool();
       auto* encodingBufferPool = this->encodingBufferPool();
+      const PayloadTally::Scope payloadTallyScope{
+          context_->payloadTally(/*taskId=*/0)};
       for (auto streamIndex : streamIndices) {
         auto& [nodeId, streamData] = streams[streamIndex];
         const auto offset = streamData->descriptor().offset();
@@ -3924,7 +4081,7 @@ folly::F14FastMap<std::string, velox::RuntimeMetric> Writer::runtimeStats()
     const {
   using Keys = Writer::RuntimeStats;
   const auto& tabletStats = tabletWriter_->stats();
-  return {
+  folly::F14FastMap<std::string, velox::RuntimeMetric> stats{
       {std::string{Keys::kWrittenBytes}, bytesMetric(context_->bytesWritten())},
       {std::string{Keys::kInputBytes}, bytesMetric(context_->fileRawSize())},
       {std::string{Keys::kWriteCpuNanos},
@@ -3951,6 +4108,24 @@ folly::F14FastMap<std::string, velox::RuntimeMetric> Writer::runtimeStats()
       {std::string{Keys::kDuplicateStreamBytes},
        bytesMetric(tabletStats.duplicateStreamBytes)},
   };
+  if (const auto* encodingStats = context_->encodingStats()) {
+    for (const auto& counter : encodingStats->counters()) {
+      velox::RuntimeMetric metric;
+      switch (counter.unit) {
+        case EncodingStats::Unit::kNone:
+          metric = countMetric(counter.value);
+          break;
+        case EncodingStats::Unit::kBytes:
+          metric = bytesMetric(counter.value);
+          break;
+        case EncodingStats::Unit::kNanos:
+          metric = nanosMetric(counter.value);
+          break;
+      }
+      stats.emplace(fmt::format("nimble.{}", counter.name), std::move(metric));
+    }
+  }
+  return stats;
 }
 
 std::vector<ColumnStatistics*> Writer::columnStats() const {

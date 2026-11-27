@@ -17,6 +17,11 @@
 
 #include <folly/json/dynamic.h>
 
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace facebook::nimble {
 
 struct StripeLoadMetrics {
@@ -69,6 +74,12 @@ struct FileCloseMetrics {
   uint64_t encodingCpuNs;
   uint64_t encodingWallNs;
   // Add IOStatistics when we have finished WS api consolidations.
+
+  // Writer encoding counters, serialized as fields of their own: field
+  // "encoding.X" is the writer's runtime stat "nimble.encoding.X". Empty, and
+  // so absent from serialize(), unless the writer collects them (see
+  // EncodingStats).
+  std::vector<std::pair<std::string, uint64_t>> encodingCounters{};
 
   folly::dynamic serialize() const;
 };

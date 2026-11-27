@@ -16,6 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include "velox/dwio/nimble/common/MetricsLogger.h"
 
 namespace facebook::nimble::test {
@@ -90,6 +94,36 @@ TEST(MetricsLoggerTest, fileCloseMetricsSerialize) {
   EXPECT_EQ(obj["fileSize"].asInt(), 300000);
   EXPECT_EQ(obj["encodingCpuNs"].asInt(), 2000000);
   EXPECT_EQ(obj["encodingWallNs"].asInt(), 3000000);
+}
+
+// Without encoding counters, serialize() emits exactly the six fixed fields.
+TEST(MetricsLoggerTest, fileCloseMetricsWithoutEncodingCounters) {
+  FileCloseMetrics metrics{};
+  const auto obj = metrics.serialize();
+  std::vector<std::string> keys;
+  for (const auto& key : obj.keys()) {
+    keys.push_back(key.asString());
+  }
+  std::sort(keys.begin(), keys.end());
+  EXPECT_EQ(
+      keys,
+      (std::vector<std::string>{
+          "encodingCpuNs",
+          "encodingWallNs",
+          "fileSize",
+          "inputSize",
+          "rowCount",
+          "stripeCount"}));
+}
+
+TEST(MetricsLoggerTest, fileCloseMetricsWithEncodingCounters) {
+  FileCloseMetrics metrics{};
+  metrics.encodingCounters = {
+      {"encoding.replayedChunks", 0}, {"encoding.typedLanes.full.chunks", 7}};
+  const auto obj = metrics.serialize();
+  EXPECT_EQ(obj.size(), 8);
+  EXPECT_EQ(obj["encoding.replayedChunks"].asInt(), 0);
+  EXPECT_EQ(obj["encoding.typedLanes.full.chunks"].asInt(), 7);
 }
 
 // --- LoggingScope ---

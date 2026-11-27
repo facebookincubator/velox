@@ -43,6 +43,11 @@ struct OffForm {
 /// the floor has no effect.
 std::vector<OffForm> offForms();
 
+/// Returns lanes off with a shadow sample rate of 1. The rate creates the
+/// writer's encoding counters, so new statistics are published, but no chunk
+/// takes lanes and nothing is re-encoded: the file must not change.
+OffForm sampleRateWithoutLanes();
+
 /// Returns lanes off with a typed compression level for FixedBitWidth. Without
 /// lanes no FixedBitWidth payload is typed, so the level reaches nothing: the
 /// compress calls must not change. Valid with MetaInternal compression only.

@@ -28,6 +28,7 @@ std::vector<OffForm> offForms() {
          options.fixedBitWidthTypedLanes = false;
          options.fixedBitWidthTypedLanesMinValues = 256;
          options.fixedBitWidthTypedLanesOpenzlLevel = std::nullopt;
+         options.shadowEncodeSampleRate = 0;
        }},
       {"floorOneWithoutLanes",
        [](WriterOptions& options) {
@@ -41,6 +42,13 @@ std::vector<OffForm> offForms() {
              std::numeric_limits<uint64_t>::max();
        }},
   };
+}
+
+OffForm sampleRateWithoutLanes() {
+  return {"sampleRateWithoutLanes", [](WriterOptions& options) {
+            options.fixedBitWidthTypedLanes = false;
+            options.shadowEncodeSampleRate = 1;
+          }};
 }
 
 OffForm fixedBitWidthLevelWithoutLanes() {
