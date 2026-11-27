@@ -221,6 +221,7 @@ velox_add_library(
   PlanNodeStats.h
   PrefixSort.h
   ProbeOperatorState.h
+  PythonCall.h
   PythonCallStatNames.h
   RoundRobinPartitionFunction.h
   RowContainer.h
