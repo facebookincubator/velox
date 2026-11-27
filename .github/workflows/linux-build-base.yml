@@ -437,6 +437,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Status jobs must run only trusted base-branch scripts: the PR
+          # merge ref is attacker-controlled, and these jobs author the
+          # failure.json artifact that feeds the CI failure analysis prompt.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -463,6 +467,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Status jobs must run only trusted base-branch scripts: the PR
+          # merge ref is attacker-controlled, and these jobs author the
+          # failure.json artifact that feeds the CI failure analysis prompt.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -814,6 +822,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Status jobs must run only trusted base-branch scripts: the PR
+          # merge ref is attacker-controlled, and these jobs author the
+          # failure.json artifact that feeds the CI failure analysis prompt.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -840,6 +852,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Status jobs must run only trusted base-branch scripts: the PR
+          # merge ref is attacker-controlled, and these jobs author the
+          # failure.json artifact that feeds the CI failure analysis prompt.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1174,6 +1190,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Status jobs must run only trusted base-branch scripts: the PR
+          # merge ref is attacker-controlled, and these jobs author the
+          # failure.json artifact that feeds the CI failure analysis prompt.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
 
@@ -1200,6 +1220,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Status jobs must run only trusted base-branch scripts: the PR
+          # merge ref is attacker-controlled, and these jobs author the
+          # failure.json artifact that feeds the CI failure analysis prompt.
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github/scripts
           persist-credentials: false
 
