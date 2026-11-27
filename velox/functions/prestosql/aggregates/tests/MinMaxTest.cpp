@@ -547,8 +547,9 @@ TEST_F(MinMaxTest, trackRowSize) {
               pool(), name, type, {makeFlatVector(largeToInline, type)}),
           0);
 
-      const auto shrunkSize = functions::aggregate::test::aggregateAndReadRowSize(
-          pool(), name, type, {makeFlatVector(largeToSmall, type)});
+      const auto shrunkSize =
+          functions::aggregate::test::aggregateAndReadRowSize(
+              pool(), name, type, {makeFlatVector(largeToSmall, type)});
       EXPECT_GE(shrunkSize, stringBytes);
       EXPECT_LE(shrunkSize, stringBytes + kAllocatorSlack);
     }
