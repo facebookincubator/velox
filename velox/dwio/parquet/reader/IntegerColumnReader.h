@@ -75,7 +75,7 @@ class IntegerColumnReader : public dwio::common::SelectiveIntegerColumnReader {
     const auto& logicalType = fileType.logicalType_;
     if (logicalType &&
         logicalType->getType() == thrift::LogicalType::Type::INTEGER &&
-        !*logicalType->get_INTEGER().isSigned()) {
+        !*logicalType->INTEGER()->isSigned()) {
       getUnsignedIntValues(rows, requestedType_, result);
     } else {
       getIntValues(rows, requestedType_, result);
