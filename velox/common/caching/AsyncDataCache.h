@@ -841,20 +841,27 @@ class AsyncDataCache : public memory::Cache {
     uint64_t ssdFlushThresholdBytes;
   };
 
+  AsyncDataCache(const Options& options, memory::MemoryAllocator* allocator);
+
   AsyncDataCache(
       const Options& options,
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr);
+      std::unique_ptr<SsdCache> ssdCache);
+
+  explicit AsyncDataCache(memory::MemoryAllocator* allocator);
 
   AsyncDataCache(
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr);
+      std::unique_ptr<SsdCache> ssdCache);
 
   ~AsyncDataCache() override;
 
   static std::shared_ptr<AsyncDataCache> create(
+      memory::MemoryAllocator* allocator);
+
+  static std::shared_ptr<AsyncDataCache> create(
       memory::MemoryAllocator* allocator,
-      std::unique_ptr<SsdCache> ssdCache = nullptr,
+      std::unique_ptr<SsdCache> ssdCache,
       const AsyncDataCache::Options& = {});
 
   static AsyncDataCache* getInstance();
