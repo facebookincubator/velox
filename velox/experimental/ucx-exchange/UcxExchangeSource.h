@@ -102,8 +102,8 @@ class UcxExchangeSource
   /// rows it needs. UcxExchangeClient calls it only for a source whose server
   /// the exchange queue says to tell. Marks the source closed and requeues it;
   /// on the Communicator thread, process() then sends the close message, once
-  /// the handshake response has arrived, and cleans up. Safe to call from any
-  /// thread.
+  /// the handshake response has arrived or kCloseTimeout has passed, and
+  /// cleans up. Safe to call from any thread.
   void close();
 
   /// Ends the source with a transport error that names the endpoint's close
@@ -117,8 +117,9 @@ class UcxExchangeSource
   void resumeFromBackpressure();
 
   /// How long a source that closes during the handshake waits for the
-  /// handshake response, which tells it whether its server exists. A source
-  /// that gets no response in time ends without sending the close message.
+  /// handshake response, which tells it whether the producer accepted the
+  /// handshake. A source whose handshake was sent but that gets no response in
+  /// time sends the close message anyway, and then ends.
   static constexpr std::chrono::seconds kCloseTimeout{1};
 
   // Backpressure thresholds. Public so UcxExchangeClient can use them.
@@ -307,8 +308,8 @@ class UcxExchangeSource
   // The id of this source's entry in 'queue_'.
   const UcxExchangeQueue::SourceId sourceId_;
   std::atomic<bool> closed_{false};
-  // Set kCloseTimeout after close(): a source still waiting for the handshake
-  // response then ends without the close message.
+  // Set kCloseTimeout after close(): a source still in the handshake then
+  // ends, and sends the close message if its handshake was sent.
   std::atomic<bool> closeDeadlineExpired_{false};
 
   // True if the server detected that this source is on the same node.

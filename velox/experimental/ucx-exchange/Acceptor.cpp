@@ -31,8 +31,10 @@ namespace facebook::velox::ucx_exchange {
 namespace {
 
 // Sends 'response' to the source of 'key' over 'epRef'. Does not wait for the
-// send to complete.
+// send to complete. A send that is lost reports the destination's consumer
+// gone through 'communicator'.
 void sendHandshakeResponse(
+    const std::shared_ptr<Communicator>& communicator,
     const std::shared_ptr<EndpointRef>& epRef,
     const PartitionKey& key,
     std::shared_ptr<HandshakeResponse> response) {
@@ -47,16 +49,28 @@ void sendHandshakeResponse(
       epRef->endpoint_
           ->tagSendBuilder(
               response.get(), sizeof(*response), ucxx::Tag{responseTag})
-          .callbackFunction([keyStr = key.toString()](
-                                ucs_status_t status,
-                                std::shared_ptr<void> /*arg*/) {
-            if (status == UCS_OK) {
-              VLOG(3) << "HandshakeResponse sent successfully to " << keyStr;
-            } else {
-              VLOG(0) << "Failed to send HandshakeResponse to " << keyStr
-                      << ": " << ucs_status_string(status);
-            }
-          })
+          .callbackFunction(
+              [weakCommunicator = std::weak_ptr<Communicator>(communicator),
+               key](ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+                // Runs inside UCX progress, so it throws nothing and leaves the
+                // output queue to the Communicator loop: releasing a
+                // destination can finish the producer's Task.
+                try {
+                  if (!Acceptor::isResponseLost(status, key)) {
+                    return;
+                  }
+                  if (auto locked = weakCommunicator.lock()) {
+                    locked->postToLoop([key] {
+                      UcxOutputQueueManager::getInstanceRef()->consumerGone(
+                          key.taskId, static_cast<int>(key.destination));
+                    });
+                  }
+                } catch (const std::exception& e) {
+                  LOG(ERROR) << "Cannot report the consumer of a lost "
+                                "HandshakeResponse gone: "
+                             << e.what();
+                }
+              })
           .callbackData(response)
           .build();
 }
@@ -122,7 +136,7 @@ void Acceptor::handleHandshake(
   if (peerVersion != kProtocolVersion) {
     auto response = std::make_shared<HandshakeResponse>();
     response->status = HandshakeStatus::kVersionMismatch;
-    sendHandshakeResponse(epRef, key, std::move(response));
+    sendHandshakeResponse(communicator, epRef, key, std::move(response));
     std::string error = fmt::format(
         "UCX exchange peers must run the same protocol version: this worker "
         "runs {}, consumer worker {} runs {}",
@@ -180,7 +194,7 @@ void Acceptor::handleHandshake(
   auto response = std::make_shared<HandshakeResponse>();
   response->status = HandshakeStatus::kAccepted;
   response->isIntraNodeTransfer = exchangeServer->isIntraNodeTransfer();
-  sendHandshakeResponse(epRef, key, std::move(response));
+  sendHandshakeResponse(communicator, epRef, key, std::move(response));
 }
 
 void Acceptor::registerEndpointRef(
@@ -206,5 +220,20 @@ void Acceptor::unregisterEndpointRef(
 std::shared_ptr<EndpointRef> Acceptor::findEndpointRef(ucp_ep_h handle) const {
   auto it = handleToEndpointRef_.find(handle);
   return it != handleToEndpointRef_.end() ? it->second : nullptr;
+}
+
+/*static*/
+bool Acceptor::isResponseLost(ucs_status_t status, const PartitionKey& key) {
+  if (status == UCS_OK) {
+    VLOG(3) << "HandshakeResponse sent successfully to " << key.toString();
+    return false;
+  }
+  if (status == UCS_ERR_CANCELED) {
+    VLOG(1) << "HandshakeResponse to " << key.toString() << " cancelled";
+    return false;
+  }
+  VLOG(0) << "Failed to send HandshakeResponse to " << key.toString() << ": "
+          << ucs_status_string(status) << ", releasing the destination";
+  return true;
 }
 } // namespace facebook::velox::ucx_exchange

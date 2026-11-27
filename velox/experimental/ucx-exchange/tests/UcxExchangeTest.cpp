@@ -35,6 +35,8 @@
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -3404,10 +3406,11 @@ TEST_F(UcxExchangeFocusedTest, oversizedChunkMetadataFailsProducer) {
   EXPECT_NE(task->state(), TaskState::kFailed);
 }
 
-// A source that closes before the handshake response arrives does not know
-// whether its server exists. It waits for the response, then sends the close
-// message. If no response arrives within kCloseTimeout, it ends and sends
-// nothing.
+// A source that closes before the handshake response arrives waits for the
+// response, then sends the close message. If no response arrives within
+// kCloseTimeout, it sends the close message anyway: its handshake was sent, so
+// the producer's worker may have created a server, and the close releases the
+// destination whether or not that server exists.
 TEST_F(UcxExchangeFocusedTest, closeDuringHandshakeWaitsForResponse) {
   for (const bool reply : {true, false}) {
     SCOPED_TRACE(reply ? "late response" : "no response");
@@ -3419,6 +3422,7 @@ TEST_F(UcxExchangeFocusedTest, closeDuringHandshakeWaitsForResponse) {
     const auto sourceId = addSource(*queue);
     queue->noMoreSources();
     std::weak_ptr<UcxExchangeSource> source;
+    std::chrono::steady_clock::time_point closeStart;
     {
       auto created = UcxExchangeSource::create(
           "closedConsumer",
@@ -3434,6 +3438,7 @@ TEST_F(UcxExchangeFocusedTest, closeDuringHandshakeWaitsForResponse) {
           sizeof(HandshakeMsg));
       // As UcxExchangeClient::close() does.
       ASSERT_THAT(queue->close(), testing::ElementsAre(sourceId));
+      closeStart = std::chrono::steady_clock::now();
       created->close();
     }
 
@@ -3459,14 +3464,22 @@ TEST_F(UcxExchangeFocusedTest, closeDuringHandshakeWaitsForResponse) {
           [&]() { return source.expired(); },
           std::chrono::milliseconds(3'000)));
     } else {
+      const auto [status, bytes] = peer->receiveTag(
+          closeTag,
+          sizeof(CloseMsg),
+          UcxExchangeSource::kCloseTimeout + std::chrono::seconds(2));
+      ASSERT_EQ(status, UCS_OK);
+      // The timer may fire a little early.
+      EXPECT_GE(
+          std::chrono::steady_clock::now() - closeStart,
+          UcxExchangeSource::kCloseTimeout - std::chrono::milliseconds(100));
+      ASSERT_EQ(bytes.size(), sizeof(CloseMsg));
+      CloseMsg message;
+      std::memcpy(&message, bytes.data(), sizeof(message));
+      EXPECT_EQ(decodeCloseMsg(message), key);
       EXPECT_TRUE(waitUntil(
           [&]() { return source.expired(); },
-          UcxExchangeSource::kCloseTimeout + std::chrono::seconds(1)));
-      EXPECT_EQ(
-          peer->receiveTag(
-                  closeTag, sizeof(CloseMsg), std::chrono::milliseconds(1'500))
-              .first,
-          UCS_ERR_TIMED_OUT);
+          std::chrono::milliseconds(3'000)));
     }
     EXPECT_EQ(queue->sourceState(sourceId), SourceState::kReleased);
   }
@@ -3651,6 +3664,68 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCancellationBeforeTaskInit) {
   EXPECT_TRUE(
       exec::test::TaskMonitor::waitForStateChange(
           *session->task, TaskState::kFinished, 3'000'000));
+}
+
+// A close message that follows the handshake at once Releases the destination
+// of an Active output queue, whether it arrives before or after the server
+// binds to the destination. The server stops without sending anything, and the
+// producer finishes once its drivers do.
+TEST_F(UcxExchangeFocusedTest, closeRightAfterHandshakeStopsServer) {
+  const auto taskId = getUniqueTaskPrefix() + "closeAfterHandshake";
+  const PartitionKey key{taskId, 0};
+  const auto keyHash = fnv1a_32(key.toString());
+  auto task = makeProducerTask(taskId, pool_.get());
+  queueManager()->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  SCOPE_EXIT {
+    queueManager()->removeTask(taskId);
+  };
+
+  auto peer = FakeUcxPeer::connect(
+      "127.0.0.1", Communicator::getInstance()->getListenerPort());
+  HandshakeMsg handshake{};
+  std::memcpy(
+      handshake.taskId,
+      taskId.data(),
+      std::min(taskId.size(), sizeof(handshake.taskId) - 1));
+  handshake.destination = 0;
+  peer->sendAm(&handshake, sizeof(handshake));
+  const auto message = makeCloseMsg(key);
+  ASSERT_EQ(
+      peer->sendTag(
+          getCloseTag(keyHash),
+          &message,
+          sizeof(message),
+          std::chrono::seconds(3)),
+      UCS_OK);
+  const auto [status, bytes] = peer->receiveTag(
+      getHandshakeResponseTag(keyHash),
+      sizeof(HandshakeResponse),
+      std::chrono::seconds(3));
+  ASSERT_EQ(status, UCS_OK);
+  std::array<uint8_t, sizeof(HandshakeResponse)> responseBytes{};
+  std::memcpy(responseBytes.data(), bytes.data(), responseBytes.size());
+  EXPECT_EQ(
+      decodeHandshakeResponse(responseBytes).status,
+      HandshakeStatus::kAccepted);
+
+  EXPECT_TRUE(waitForOutputFinished(taskId));
+  queueManager()->noMoreData(taskId);
+  EXPECT_TRUE(
+      exec::test::TaskMonitor::waitForStateChange(
+          *task, TaskState::kFinished, 3'000'000));
+  // A server that got its destination's end, rather than kStop, would send it
+  // now.
+  EXPECT_EQ(
+      peer->receiveTag(
+              getMetadataTag(keyHash, 0),
+              kMaxMetaBufSize,
+              std::chrono::milliseconds(500))
+          .first,
+      UCS_ERR_TIMED_OUT);
 }
 
 // The Communicator receives every close message on its worker, also one for a

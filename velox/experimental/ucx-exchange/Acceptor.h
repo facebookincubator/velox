@@ -18,6 +18,7 @@
 #include <ucxx/api.h>
 #include <map>
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
+#include "velox/experimental/ucx-exchange/PartitionKey.h"
 
 namespace facebook::velox::ucx_exchange {
 
@@ -48,6 +49,14 @@ class Acceptor {
 
   /// Returns the endpoint reference mapped to 'handle', or nullptr.
   std::shared_ptr<EndpointRef> findEndpointRef(ucp_ep_h handle) const;
+
+  /// Returns true if the send of a HandshakeResponse to the source of 'key',
+  /// which completed with 'status', may not have reached the source. That
+  /// source then neither reads from its server nor sends the close message,
+  /// so the Acceptor reports the destination's consumer gone. A cancelled send
+  /// is not lost: UCX cancels sends when the endpoint closes, which tells the
+  /// endpoint's servers, or when the worker shuts down. Logs the outcome.
+  static bool isResponseLost(ucs_status_t status, const PartitionKey& key);
 
  private:
   // Creates a server for a handshake of this protocol version, or refuses a

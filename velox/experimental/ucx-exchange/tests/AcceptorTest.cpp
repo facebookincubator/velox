@@ -21,6 +21,7 @@
 
 #include "velox/experimental/ucx-exchange/Acceptor.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
+#include "velox/experimental/ucx-exchange/PartitionKey.h"
 
 namespace facebook::velox::ucx_exchange {
 namespace {
@@ -66,6 +67,24 @@ TEST(AcceptorTest, unregisterKeepsMappingOfReusedHandle) {
   acceptor.registerEndpointRef(fakeHandle(0x10), reconnected);
   acceptor.unregisterEndpointRef(closed);
   EXPECT_EQ(acceptor.findEndpointRef(fakeHandle(0x10)), reconnected);
+}
+
+// A HandshakeResponse send that failed may never have reached its source,
+// which then neither reads from its server nor sends the close message, so the
+// Acceptor reports the consumer gone. A send that completed or was cancelled
+// needs no report.
+TEST(AcceptorTest, lostResponseIsReported) {
+  const PartitionKey key{"producer.0.0.0", 0};
+  for (const auto status :
+       {UCS_ERR_CONNECTION_RESET,
+        UCS_ERR_ENDPOINT_TIMEOUT,
+        UCS_ERR_UNREACHABLE,
+        UCS_ERR_IO_ERROR}) {
+    EXPECT_TRUE(Acceptor::isResponseLost(status, key))
+        << ucs_status_string(status);
+  }
+  EXPECT_FALSE(Acceptor::isResponseLost(UCS_OK, key));
+  EXPECT_FALSE(Acceptor::isResponseLost(UCS_ERR_CANCELED, key));
 }
 
 } // namespace

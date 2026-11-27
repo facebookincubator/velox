@@ -242,17 +242,27 @@ bool UcxExchangeSource::processClosed() {
       return false;
     case ReceiverState::WaitingForHandshakeComplete:
     case ReceiverState::WaitingForHandshakeResponse:
-      // Until the response arrives, the source does not know whether its
-      // server exists. The handshake callbacks, the endpoint's close and the
-      // close deadline requeue the source.
+      // Until the response arrives, the source does not know whether the
+      // producer accepted the handshake. The handshake callbacks, the
+      // endpoint's close and the close deadline requeue the source.
       if (!closeDeadlineExpired_.load(std::memory_order_acquire)) {
         if (getState() == ReceiverState::WaitingForHandshakeResponse) {
           receiveHandshakeResponse();
         }
         return true;
       }
-      VLOG(1) << toString()
-              << " closed without a handshake response, sending no close";
+      if (getState() == ReceiverState::WaitingForHandshakeResponse) {
+        // The handshake was sent, so the producer's worker may have created a
+        // server whose response is lost or late. The close goes to the
+        // producer task's output queue, if there is one, which releases the
+        // destination whether or not that server exists.
+        VLOG(1) << toString()
+                << " closed without a handshake response, sending the close";
+        sendClose();
+      } else {
+        VLOG(1) << toString()
+                << " closed before its handshake was sent, sending no close";
+      }
       setState(ReceiverState::Done);
       cleanUp();
       return true;
@@ -554,7 +564,7 @@ void UcxExchangeSource::onHandshake(
   // handle; letting it go out of scope releases the send buffer.
 
   // A closed source completes the handshake too: it sends the close message
-  // once the response arrives.
+  // once the response arrives or the close deadline passes.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeComplete) {
     VLOG(2) << toString() << " onHandshake called in state "
