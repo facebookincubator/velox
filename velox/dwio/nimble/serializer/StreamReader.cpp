@@ -357,6 +357,12 @@ void StreamReader::reset() {
   loadedChunkBufferHolders_.clear();
   streamBufferHolders_.clear();
 
+  // Keeps the decoded string buffers, so that the strings of the next stripe
+  // go on after those of this one, which its outputs may hold.
+  if (readerOptions_.keepDecodedStringBuffersAcrossStripes) {
+    return;
+  }
+
   // Clears the decoded string buffers of the stripe, whose views are gone, for
   // the next stripe.
   for (const auto streamIndex : stringBufferStreams_) {
