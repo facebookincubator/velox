@@ -6606,7 +6606,7 @@ TEST_F(TableScanTest, footerIOCount) {
           .assertResults(
               BaseVector::create<RowVector>(vector->type(), 0, pool()));
   const auto stats = PlanNodeStats::extract(task->taskStats(), plan->id());
-  ASSERT_EQ(stats.customStat(io::kStorageReadBytes).count, 1);
+  ASSERT_EQ(stats.customCount(io::kStorageReadBytes), 1);
   ASSERT_GT(stats.customSum(dwio::common::kFooterBufferOverread), 0);
 }
 
@@ -6695,7 +6695,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
           PlanNodeStats::extract(task->taskStats(), plan->id());
       ASSERT_TRUE(tableScanStats.hasCustomStat(io::kStorageReadBytes));
       ASSERT_GT(tableScanStats.customSum(io::kStorageReadBytes), 0);
-      ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).count, 0);
+      ASSERT_GT(tableScanStats.customCount(io::kStorageReadBytes), 0);
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
 
@@ -6738,7 +6738,7 @@ TEST_F(TableScanTest, statsBasedFilterReorderBothEnabledAndDisabled) {
         // Cache miss, should behave like first time run
         ASSERT_TRUE(tableScanStats.hasCustomStat(io::kStorageReadBytes));
         ASSERT_GT(tableScanStats.customSum(io::kStorageReadBytes), 0);
-        ASSERT_GT(tableScanStats.customStat(io::kStorageReadBytes).count, 0);
+        ASSERT_GT(tableScanStats.customCount(io::kStorageReadBytes), 0);
       }
       ASSERT_EQ(tableScanStats.numSplits, numSplits);
     }
@@ -6781,9 +6781,7 @@ TEST_F(TableScanTest, prevBatchEmptyAdaptivity) {
     const auto scanStats =
         PlanNodeStats::extract(task->taskStats(), plan->id());
     const auto numBatchesRead =
-        scanStats.customStat(TableScanStatNames::kDataSourceReadWallNanos)
-            .count -
-        1;
+        scanStats.customCount(TableScanStatNames::kDataSourceReadWallNanos) - 1;
     const auto batchSizeWithoutAdaptivity =
         QueryConfig({}).preferredOutputBatchBytes() /
         (sizeof(int64_t) + stringBytes + sizeof(StringView));

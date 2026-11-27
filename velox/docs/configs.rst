@@ -276,6 +276,11 @@ Generic Configuration
      - bool
      - false
      - If true, map functions that support it build a flat map when every key is constant. Today only Spark `CreateMap` supports it.
+   * - python_call_max_pending_batches
+     - integer
+     - 2
+     - The max number of input batches a Python call operator sends to its Python worker ahead of their
+       results, so the worker computes one batch while the next is sent. Must be at least 1.
    * - index_lookup_join_max_prefetch_batches
      - integer
      - 0

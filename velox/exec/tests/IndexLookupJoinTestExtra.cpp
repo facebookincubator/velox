@@ -364,27 +364,24 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, runtimeStats) {
 
   // Check runtime stats are present on IndexSource.
   ASSERT_EQ(
-      indexSourceStats
-          .customStat(IndexLookupJoinStatNames::kConnectorLookupWallTime)
-          .count,
+      indexSourceStats.customCount(
+          IndexLookupJoinStatNames::kConnectorLookupWallTime),
       numProbeBatches);
   ASSERT_GT(
       indexSourceStats.customSum(
           IndexLookupJoinStatNames::kConnectorLookupWallTime),
       0);
   ASSERT_EQ(
-      indexSourceStats
-          .customStat(IndexLookupJoinStatNames::kClientLookupWaitWallTime)
-          .count,
+      indexSourceStats.customCount(
+          IndexLookupJoinStatNames::kClientLookupWaitWallTime),
       numProbeBatches);
   ASSERT_GT(
       indexSourceStats.customSum(
           IndexLookupJoinStatNames::kClientLookupWaitWallTime),
       0);
   ASSERT_EQ(
-      indexSourceStats
-          .customStat(IndexLookupJoinStatNames::kConnectorResultPrepareTime)
-          .count,
+      indexSourceStats.customCount(
+          IndexLookupJoinStatNames::kConnectorResultPrepareTime),
       numProbeBatches);
   ASSERT_GT(
       indexSourceStats.customSum(

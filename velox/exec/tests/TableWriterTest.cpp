@@ -279,7 +279,7 @@ TEST_F(BasicTableWriterTest, flatMapConversionRuntimeStats) {
   ASSERT_EQ(
       stats.customSum(FlatMapVector::kNumMapConversionEntries), numEntries);
   ASSERT_EQ(
-      stats.customStat(FlatMapVector::kMapConversionWallNanos).count,
+      stats.customCount(FlatMapVector::kMapConversionWallNanos),
       batches.size());
 }
 
@@ -3175,8 +3175,7 @@ DEBUG_ONLY_TEST_F(TableWriterArbitrationTest, reclaimFromTableWriter) {
         const auto& tableWriteStats = planStats.operatorStatsFor("TableWrite");
         if (writerSpillEnabled) {
           ASSERT_GT(
-              tableWriteStats.customStat(HiveDataSink::kEarlyFlushedRawBytes)
-                  .count,
+              tableWriteStats.customCount(HiveDataSink::kEarlyFlushedRawBytes),
               0);
           ASSERT_GT(
               tableWriteStats.customSum(HiveDataSink::kEarlyFlushedRawBytes),

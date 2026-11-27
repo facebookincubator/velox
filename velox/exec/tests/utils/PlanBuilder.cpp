@@ -1582,6 +1582,124 @@ PlanBuilder& PlanBuilder::rpc(
 }
 
 namespace {
+// Types 'expr', a call of a function in 'registry' with input columns of
+// 'inputType' or other such calls as arguments. Adds the pickled code of each
+// function called to 'called'.
+core::CallTypedExprPtr typePythonCall(
+    const core::ExprPtr& expr,
+    const RowTypePtr& inputType,
+    const folly::F14FastMap<std::string, PlanBuilder::PythonFunction>& registry,
+    folly::F14FastMap<std::string, std::string>& called) {
+  const auto* call = expr->as<core::CallExpr>();
+  VELOX_USER_CHECK_NOT_NULL(
+      call, "Python call must be a function call: {}", expr->toString());
+  VELOX_USER_CHECK_NE(
+      call->name(),
+      "try",
+      "TRY must wrap a whole Python call, not an argument: {}",
+      expr->toString());
+  std::vector<core::TypedExprPtr> inputs;
+  for (const auto& input : call->inputs()) {
+    if (const auto* field = input->as<core::FieldAccessExpr>()) {
+      inputs.push_back(
+          std::make_shared<core::FieldAccessTypedExpr>(
+              inputType->findChild(field->name()), field->name()));
+    } else {
+      inputs.push_back(typePythonCall(input, inputType, registry, called));
+    }
+  }
+  const auto function = registry.find(call->name());
+  VELOX_USER_CHECK(
+      function != registry.end(),
+      "Python function is not in the registry: {}",
+      call->name());
+  called.emplace(call->name(), function->second.pickledFunction);
+  return std::make_shared<core::CallTypedExpr>(
+      function->second.resultType, std::move(inputs), call->name());
+}
+} // namespace
+
+PlanBuilder& PlanBuilder::setPythonEnvironment(
+    std::string environmentUri,
+    std::string pythonVersion) {
+  pythonEnvironmentUri_ = std::move(environmentUri);
+  pythonVersion_ = std::move(pythonVersion);
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::pythonCall(
+    const folly::F14FastMap<std::string, PythonFunction>& registry,
+    const std::vector<std::string>& calls) {
+  VELOX_CHECK_NOT_NULL(planNode_, "Python calls cannot be the source node");
+  auto outputColumns = planNode_->outputType()->names();
+  for (size_t i = 0; i < calls.size(); ++i) {
+    outputColumns.push_back(
+        parse::DuckSqlExpressionsParser(options_)
+            .parseExpr(calls[i])
+            ->alias()
+            .value_or(fmt::format("p{}", i)));
+  }
+  return pythonCall(registry, calls, outputColumns);
+}
+
+PlanBuilder& PlanBuilder::pythonCall(
+    const folly::F14FastMap<std::string, PythonFunction>& registry,
+    const std::vector<std::string>& calls,
+    const std::vector<std::string>& outputColumns) {
+  VELOX_CHECK_NOT_NULL(planNode_, "Python calls cannot be the source node");
+  VELOX_CHECK(
+      !pythonEnvironmentUri_.empty(),
+      "setPythonEnvironment() must come before Python calls");
+  const auto& inputType = planNode_->outputType();
+  std::vector<std::string> names;
+  std::vector<core::CallTypedExprPtr> typedCalls;
+  folly::F14FastMap<std::string, TypePtr> callTypes;
+  folly::F14FastMap<std::string, std::string> pickledFunctions;
+  for (size_t i = 0; i < calls.size(); ++i) {
+    const auto untyped =
+        parse::DuckSqlExpressionsParser(options_).parseExpr(calls[i]);
+    names.push_back(untyped->alias().value_or(fmt::format("p{}", i)));
+    // TRY may wrap a whole call.
+    const auto* tryCall = untyped->as<core::CallExpr>();
+    if (tryCall != nullptr && tryCall->name() == "try") {
+      VELOX_USER_CHECK_EQ(
+          tryCall->inputs().size(),
+          1,
+          "try() must have one argument: {}",
+          calls[i]);
+      auto pythonCall = typePythonCall(
+          tryCall->inputs()[0], inputType, registry, pickledFunctions);
+      typedCalls.push_back(
+          std::make_shared<core::CallTypedExpr>(
+              pythonCall->type(), "try", std::move(pythonCall)));
+    } else {
+      typedCalls.push_back(
+          typePythonCall(untyped, inputType, registry, pickledFunctions));
+    }
+    callTypes.emplace(names.back(), typedCalls.back()->type());
+  }
+
+  std::vector<TypePtr> outputTypes;
+  for (const auto& column : outputColumns) {
+    const auto callType = callTypes.find(column);
+    outputTypes.push_back(
+        callType != callTypes.end() ? callType->second
+                                    : inputType->findChild(column));
+  }
+
+  planNode_ = std::make_shared<core::PythonCallNode>(
+      nextPlanNodeId(),
+      pythonEnvironmentUri_,
+      pythonVersion_,
+      std::move(pickledFunctions),
+      std::move(names),
+      std::move(typedCalls),
+      ROW(std::vector<std::string>(outputColumns), std::move(outputTypes)),
+      planNode_);
+  return *this;
+}
+
+namespace {
 core::PartitionFunctionSpecPtr createPartitionFunctionSpec(
     const RowTypePtr& inputType,
     const std::vector<core::TypedExprPtr>& keys,

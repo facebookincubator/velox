@@ -161,7 +161,11 @@ class Connection:
 
     def end(self) -> None:
         self.send(worker.END, b"")
-        self.test.assertEqual(self.receive(), (worker.END, b""))
+        message_type, payload = self.receive()
+        self.test.assertEqual(message_type, worker.END)
+        stats = json.loads(payload)
+        self.test.assertGreater(stats["cpuSeconds"], 0)
+        self.test.assertGreater(stats["peakMemoryBytes"], 0)
         self.thread.join(timeout=10)
         self.test.assertEqual(self.status, 0)
 
@@ -1276,7 +1280,7 @@ class WorkerTest(unittest.TestCase):
         )
         self.assertEqual(worker.read_message(stream)[0], worker.READY)
         worker.write_message(stream, worker.END, b"")
-        self.assertEqual(worker.read_message(stream), (worker.END, b""))
+        self.assertEqual(worker.read_message(stream)[0], worker.END)
         thread.join(timeout=10)
         self.assertEqual(status, [0])
         stream.close()

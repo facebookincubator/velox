@@ -16,6 +16,7 @@
 #pragma once
 
 #include <fmt/format.h>
+#include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 
 #include <utility>
@@ -6998,6 +6999,118 @@ class RPCNode : public PlanNode {
 };
 
 using RPCNodePtr = std::shared_ptr<RPCNode>;
+
+/// Evaluates Python functions, such as Python UDFs, on its input. The calls
+/// run in a Python worker process, one per driver, started in the node's
+/// Python environment; each output row carries the call results next to the
+/// input columns it passes through. velox/exec/python/README.md defines how
+/// Velox values map to Python values.
+///
+/// Each call is a CallTypedExpr that names a function in 'functions', which
+/// holds the function's pickled code. A call under TRY is wrapped in a 'try'
+/// CallTypedExpr: a row whose call fails gets NULL instead of failing the
+/// query. A call's arguments are columns of the
+/// source or other Python calls: for f(g(c0), c1), the call is CallTypedExpr f
+/// whose inputs are CallTypedExpr g, itself reading FieldAccessTypedExpr c0,
+/// and FieldAccessTypedExpr c1, and 'functions' holds f and g. The nested call
+/// g runs in the same worker, its results reach f without a round trip
+/// through Velox, and it produces no column.
+///
+/// Invariants:
+/// - at least one call;
+/// - 'try' wraps a whole call, never an argument;
+/// - each input of a call, at any depth, is a FieldAccessTypedExpr of a
+///   source column or a CallTypedExpr of a Python call;
+/// - every call, at any depth, names a function in 'functions', and every
+///   function is called; calls of one function have one result type;
+/// - names are unique and differ from the source's column names;
+/// - the output type has each call's column and any source columns needed
+///   above, so that columns only the calls read can be pruned.
+class PythonCallNode : public PlanNode {
+ public:
+  /// @param environmentUri URI of the Python environment workers run in, such
+  /// as file://<interpreter path>. Resolved by the environment resolver
+  /// registered for its scheme.
+  /// @param pythonVersion The Python major.minor version the functions were
+  /// pickled with, such as 3.12. The environment's interpreter must run the
+  /// same version.
+  /// @param functions The pickled code of each function the calls name: a
+  /// pickle of a callable, or of a tuple whose first item is the callable, as
+  /// cloudpickle writes.
+  /// @param names Names of the calls' output columns, one per call.
+  /// @param calls The calls: Python calls, each possibly wrapped in 'try'.
+  /// Never compiled as expressions: names are keys into 'functions', not a
+  /// function registry.
+  /// @param outputType Each call's column, and the source columns passed
+  /// through, in any order.
+  PythonCallNode(
+      const PlanNodeId& id,
+      std::string environmentUri,
+      std::string pythonVersion,
+      folly::F14FastMap<std::string, std::string> functions,
+      std::vector<std::string> names,
+      std::vector<CallTypedExprPtr> calls,
+      RowTypePtr outputType,
+      PlanNodePtr source);
+
+  const PlanNodePtr& source() const {
+    return sources_[0];
+  }
+
+  const std::string& environmentUri() const {
+    return environmentUri_;
+  }
+
+  const std::string& pythonVersion() const {
+    return pythonVersion_;
+  }
+
+  /// The pickled code of each function, by the name calls use.
+  const folly::F14FastMap<std::string, std::string>& functions() const {
+    return functions_;
+  }
+
+  const std::vector<std::string>& names() const {
+    return names_;
+  }
+
+  const std::vector<CallTypedExprPtr>& calls() const {
+    return calls_;
+  }
+
+  /// Returns true if 'call', one of calls(), is a 'try' wrapping a Python
+  /// call.
+  static bool isTry(const CallTypedExpr& call);
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  std::string_view name() const override {
+    return "PythonCall";
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const std::string environmentUri_;
+  const std::string pythonVersion_;
+  const folly::F14FastMap<std::string, std::string> functions_;
+  const std::vector<std::string> names_;
+  const std::vector<CallTypedExprPtr> calls_;
+  const RowTypePtr outputType_;
+  const std::vector<PlanNodePtr> sources_;
+};
+
+using PythonCallNodePtr = std::shared_ptr<const PythonCallNode>;
 
 } // namespace facebook::velox::core
 

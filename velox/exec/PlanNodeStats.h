@@ -129,6 +129,12 @@ struct PlanNodeStats {
     return customStat(name).sum;
   }
 
+  /// Returns how many values were added to the operator-specific counter
+  /// 'name'. Throws if there is none.
+  uint64_t customCount(std::string_view name) const {
+    return customStat(name).count;
+  }
+
   /// Returns true if there is an operator-specific counter 'name'.
   bool hasCustomStat(std::string_view name) const;
 

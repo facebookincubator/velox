@@ -45,6 +45,9 @@
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/ParallelProject.h"
 #include "velox/exec/PartitionedOutput.h"
+#ifdef VELOX_ENABLE_PYTHON_CALL
+#include "velox/exec/PythonCall.h"
+#endif
 #include "velox/exec/RoundRobinPartitionFunction.h"
 #include "velox/exec/RowNumber.h"
 #include "velox/exec/ScaleWriterLocalPartition.h"
@@ -684,6 +687,16 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
                 planNode)) {
       operators.push_back(
           std::make_unique<IndexLookupJoin>(id, ctx.get(), joinNode));
+    } else if (
+        auto pythonCallNode =
+            std::dynamic_pointer_cast<const core::PythonCallNode>(planNode)) {
+#ifdef VELOX_ENABLE_PYTHON_CALL
+      operators.push_back(
+          std::make_unique<PythonCall>(id, ctx.get(), pythonCallNode));
+#else
+      VELOX_UNSUPPORTED(
+          "Python calls require Velox built with VELOX_ENABLE_PYTHON_CALL");
+#endif
     } else if (
         auto aggregationNode =
             std::dynamic_pointer_cast<const core::AggregationNode>(planNode)) {

@@ -98,6 +98,7 @@ ubuntu-debug | ubuntu-bundled-deps)
     -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_MONO_LIBRARY=ON
     -DVELOX_ENABLE_FAISS=ON
+    -DVELOX_ENABLE_PYTHON_CALL=ON
   )
   if [[ $BUILD_PROFILE == "ubuntu-debug" ]]; then
     # libnuma is baked into the velox-dev:ubuntu-22.04 image. ubuntu-bundled-deps
