@@ -193,6 +193,7 @@ option(
 )
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
+option(VELOX_ENABLE_PYTHON_CALL "Build the operator that runs Python functions" OFF)
 option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
 option(VELOX_ENABLE_CXL "Build CXL experimental memory subsystem (Linux only)." OFF)
 
@@ -435,6 +436,11 @@ endif()
 if(VELOX_ENABLE_HDFS)
   add_definitions(-DVELOX_ENABLE_HDFS)
   # JVM libhdfs requires arrow dependency.
+  set(VELOX_ENABLE_ARROW ON)
+endif()
+
+if(VELOX_ENABLE_PYTHON_CALL)
+  # The Python worker exchanges Arrow IPC streams.
   set(VELOX_ENABLE_ARROW ON)
 endif()
 

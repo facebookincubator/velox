@@ -12,28 +12,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The worker needs Python 3.10 and pyarrow; the tests also use pyspark to
-# pickle functions and build ROW values.
-find_package(Python3 3.10 COMPONENTS Interpreter)
+# The operator test needs folly::Init, which the main of the exec tests calls.
+add_executable(
+  velox_exec_python_call_test
+  PythonCallTest.cpp
+  ${PROJECT_SOURCE_DIR}/velox/exec/tests/Main.cpp
+)
+target_link_libraries(velox_exec_python_call_test velox_exec velox_exec_test_lib GTest::gtest)
 
+# The tests run only if Python 3.10 or later can import pyarrow, which the
+# worker imports, and pyspark, which the worker tests use to pickle functions
+# and build ROW values.
+find_package(Python3 3.10 COMPONENTS Interpreter)
 if(Python3_FOUND)
   execute_process(
     COMMAND "${Python3_EXECUTABLE}" -c "import pyarrow, pyspark"
-    RESULT_VARIABLE _python_worker_test_modules
+    RESULT_VARIABLE _python_test_modules
     OUTPUT_QUIET
     ERROR_QUIET
   )
 endif()
 
-if(Python3_FOUND AND _python_worker_test_modules EQUAL 0)
-  add_test(
-    NAME velox_exec_python_worker_test
-    COMMAND "${Python3_EXECUTABLE}" -m unittest -v velox.exec.python.tests.test_worker
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-  )
-else()
+if(NOT Python3_FOUND OR NOT _python_test_modules EQUAL 0)
   message(
     STATUS
-    "Skipping velox_exec_python_worker_test: needs Python 3.10 or later with pyarrow and pyspark"
+    "Skipping the Python tests: they need Python 3.10 or later with pyarrow and pyspark"
   )
+  return()
 endif()
+
+add_test(
+  NAME velox_exec_python_worker_test
+  COMMAND "${Python3_EXECUTABLE}" -m unittest -v velox.exec.python.tests.test_worker
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+)
+
+add_test(NAME velox_exec_python_call_test COMMAND velox_exec_python_call_test)
+set_tests_properties(
+  velox_exec_python_call_test
+  PROPERTIES ENVIRONMENT "PYTHON_INTERPRETER=${Python3_EXECUTABLE}"
+)

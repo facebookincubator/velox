@@ -260,6 +260,9 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kThrowExceptionOnDuplicateMapKeys);
     VELOX_REGISTER_QUERY_CONFIG(kGenerateConstantMapsAsFlatMaps);
 
+    // Python calls.
+    VELOX_REGISTER_QUERY_CONFIG(kPythonCallMaxPendingBatches);
+
     // Index lookup join.
     VELOX_REGISTER_QUERY_CONFIG(kIndexLookupJoinMaxPrefetchBatches);
     VELOX_REGISTER_QUERY_CONFIG(kIndexLookupJoinSplitOutput);

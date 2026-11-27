@@ -32,6 +32,7 @@ import json
 import math
 import pickle
 import re
+import resource
 import socket
 import struct
 import sys
@@ -1055,6 +1056,17 @@ def _result_batch(functions: list[Function], outcomes: list[Outcome]) -> pa.Reco
 # Serving.
 
 
+def _process_stats() -> dict[str, float | int]:
+    """Returns the worker process's CPU time and peak resident memory."""
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    # ru_maxrss is in kilobytes on Linux and in bytes on macOS.
+    scale = 1 if sys.platform == "darwin" else 1024
+    return {
+        "cpuSeconds": usage.ru_utime + usage.ru_stime,
+        "peakMemoryBytes": usage.ru_maxrss * scale,
+    }
+
+
 def serve(stream: io.BufferedIOBase) -> None:
     """Serves one session: SETUP, then BATCH messages until END."""
     message_type, payload = read_message(stream)
@@ -1071,7 +1083,7 @@ def serve(stream: io.BufferedIOBase) -> None:
         if message_type == BATCH:
             write_message(stream, RESULT, run_batch(session, payload))
         elif message_type == END:
-            write_message(stream, END, b"")
+            write_message(stream, END, json.dumps(_process_stats()).encode())
             return
         else:
             raise ProtocolError(f"Message must be BATCH or END: {message_type}")

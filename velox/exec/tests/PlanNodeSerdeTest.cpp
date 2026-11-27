@@ -1587,6 +1587,29 @@ TEST_F(PlanNodeSerdeTest, fixedPointDistributed) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, pythonCall) {
+  const auto plan = PlanBuilder()
+                        .values(data_)
+                        .setPythonEnvironment("file:///usr/bin/python3", "3.12")
+                        .pythonCall(
+                            {
+                                {"len", {"cbuiltins\nlen\n.", BIGINT()}},
+                                {"str", {"cbuiltins\nstr\n.", VARCHAR()}},
+                            },
+                            {"str(c0) AS s", "try(len(str(c1))) AS n"},
+                            {"s", "n", "c4"})
+                        .planNode();
+  testSerde(plan);
+
+  // toString() leaves out the pickled code.
+  const auto copy = std::dynamic_pointer_cast<const core::PythonCallNode>(
+      velox::ISerializable::deserialize<core::PlanNode>(
+          plan->serialize(), pool()));
+  EXPECT_EQ(
+      copy->functions(),
+      std::dynamic_pointer_cast<const core::PythonCallNode>(plan)->functions());
+}
+
 TEST_F(PlanNodeSerdeTest, rpcNode) {
   auto source = PlanBuilder()
                     .values({makeRowVector(

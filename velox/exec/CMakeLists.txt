@@ -221,6 +221,8 @@ velox_add_library(
   PlanNodeStats.h
   PrefixSort.h
   ProbeOperatorState.h
+  PythonCall.h
+  PythonCallStatNames.h
   RoundRobinPartitionFunction.h
   RowContainer.h
   RowNumber.h
@@ -307,6 +309,12 @@ if(VELOX_ENABLE_FAISS)
   velox_link_libraries(velox_exec velox_vector_index)
 endif()
 
+if(VELOX_ENABLE_PYTHON_CALL)
+  velox_sources(velox_exec PRIVATE PythonCall.cpp)
+  velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_PYTHON_CALL)
+  velox_link_libraries(velox_exec velox_exec_python)
+endif()
+
 if(VELOX_ENABLE_GEO)
   velox_compile_definitions(velox_exec PRIVATE VELOX_ENABLE_GEO)
   velox_link_libraries(velox_exec velox_common_geospatial_serde)
@@ -328,7 +336,9 @@ if(${VELOX_ENABLE_BENCHMARKS})
 endif()
 
 add_subdirectory(prefixsort)
-add_subdirectory(python)
+if(VELOX_ENABLE_PYTHON_CALL)
+  add_subdirectory(python)
+endif()
 add_subdirectory(rpc)
 add_subdirectory(trace)
 add_subdirectory(window)

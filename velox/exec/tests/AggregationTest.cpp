@@ -1209,7 +1209,7 @@ TEST_F(AggregationTest, largeValueRangeArray) {
   // The partial agg is expected to exceed max size after the first batch and
   // see that it has an oversize range based array with just 2 entries. It is
   // then expected to change hash mode and rehash.
-  EXPECT_EQ(1, partialStats.customStat("hashtable.numRehashes").count);
+  EXPECT_EQ(1, partialStats.customCount("hashtable.numRehashes"));
 
   // The partial agg is expected to flush just once. The final agg gets one
   // batch.
@@ -1276,7 +1276,7 @@ TEST_F(AggregationTest, partialAggregationMemoryLimitIncrease) {
                     .assertResults("SELECT distinct c0 FROM tmp");
     const auto aggStats = PlanNodeStats::extract(task->taskStats(), aggNodeId);
     if (testData.expectedPartialOutputFlush > 0) {
-      EXPECT_LT(0, aggStats.customStat("flushRowCount").count);
+      EXPECT_LT(0, aggStats.customCount("flushRowCount"));
       EXPECT_LT(0, aggStats.customStat("flushRowCount").max);
       EXPECT_LT(0, aggStats.customStat("partialAggregationPct").max);
     } else {

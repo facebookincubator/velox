@@ -130,7 +130,7 @@ class MultiFragmentTest : public HiveConnectorTestBase,
 
   // Verifies 'stats' report the serde kind under test 'count' times.
   static void verifySerdeKind(const PlanNodeStats& stats, int64_t count) {
-    ASSERT_EQ(stats.customStat(Operator::kShuffleSerdeKind).count, count);
+    ASSERT_EQ(stats.customCount(Operator::kShuffleSerdeKind), count);
 
     const auto& serdeKindStat = stats.customStat(Operator::kShuffleSerdeKind);
     ASSERT_EQ(serdeKindStat.min, serdeKindStat.max);
@@ -328,10 +328,10 @@ class MultiFragmentTest : public HiveConnectorTestBase,
     ASSERT_GT(stats.rawInputRows, 0);
     ASSERT_EQ(
         expectedNumPagesCount,
-        stats.customStat("localExchangeSource.numPages").count);
+        stats.customCount("localExchangeSource.numPages"));
     ASSERT_EQ(
         expectedBackgroundCpuCount,
-        stats.customStat(Operator::kBackgroundCpuTimeNanos).count);
+        stats.customCount(Operator::kBackgroundCpuTimeNanos));
     ASSERT_EQ(expectedBackgroundCpuCount, stats.backgroundTiming.count);
   }
 
@@ -1044,7 +1044,7 @@ TEST_P(MultiFragmentTest, noHashPartitionSkew) {
         consumerTask->taskStats(), partialAggregationNodeId);
     const auto& partialAggregationNodeStats = consumerTaskStats;
     ASSERT_EQ(
-        partialAggregationNodeStats.customStat("hashtable.numDistinct").count,
+        partialAggregationNodeStats.customCount("hashtable.numDistinct"),
         numConsumerDriverThreads);
     ASSERT_GT(
         partialAggregationNodeStats.customStat("hashtable.numDistinct").min, 0);
@@ -1121,7 +1121,7 @@ TEST_P(MultiFragmentTest, noHivePartitionSkew) {
         consumerTask->taskStats(), partialAggregationNodeId);
     const auto& partialAggregationNodeStats = consumerTaskStats;
     ASSERT_EQ(
-        partialAggregationNodeStats.customStat("hashtable.numDistinct").count,
+        partialAggregationNodeStats.customCount("hashtable.numDistinct"),
         numConsumerDriverThreads);
     ASSERT_GT(
         partialAggregationNodeStats.customStat("hashtable.numDistinct").min, 0);

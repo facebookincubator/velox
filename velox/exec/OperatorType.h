@@ -58,6 +58,7 @@ struct OperatorType {
   static constexpr std::string_view kParallelProject = "ParallelProject";
   static constexpr std::string_view kPartialAggregation = "PartialAggregation";
   static constexpr std::string_view kPartitionedOutput = "PartitionedOutput";
+  static constexpr std::string_view kPythonCall = "PythonCall";
   static constexpr std::string_view kRowNumber = "RowNumber";
   static constexpr std::string_view kSpatialJoinBuild = "SpatialJoinBuild";
   static constexpr std::string_view kSpatialJoinProbe = "SpatialJoinProbe";

@@ -36,7 +36,7 @@ URI: a Python interpreter, version 3.10 or later, or a program that acts as
 one. It must run `worker.py` as `__main__` with pyarrow importable (the tests
 run pyarrow 18), and pyspark for ROW arguments (see PySpark functions). The
 socket closes when the worker exits. User code's stdout and stderr are
-separate from the socket; the executor logs them.
+separate from the socket: the worker inherits the host process's.
 
 ## Messages
 
@@ -50,14 +50,15 @@ the payload.
 | `BATCH` | 3 | to worker | an Arrow IPC stream with one record batch: the argument columns |
 | `RESULT` | 4 | to executor | an Arrow IPC stream with one record batch: the results |
 | `ERROR` | 5 | to executor | JSON: `{"message": ..., "traceback": ...}` |
-| `END` | 6 | both | empty |
+| `END` | 6 | both | to the worker, empty; to the executor, JSON: `{"cpuSeconds": ..., "peakMemoryBytes": ...}` |
 
 The executor sends `SETUP`, and the worker answers `READY`. Then each `BATCH`
 is answered by one `RESULT`, in order. The executor may send the next `BATCH`
 before reading the previous `RESULT`, but must keep reading while it writes:
 the worker writes each `RESULT` before it reads the next `BATCH`, so an
 executor that only writes deadlocks once both sockets' buffers fill. The
-executor sends `END`; the worker answers `END` and exits with status 0.
+executor sends `END`; the worker answers `END` with the CPU time and peak
+resident memory it used, and exits with status 0.
 
 ```mermaid
 sequenceDiagram
@@ -73,7 +74,7 @@ sequenceDiagram
     W->>E: RESULT 1 (per output function: results, errors)
     W->>E: RESULT 2
     E->>W: END
-    W->>E: END
+    W->>E: END (cpuSeconds, peakMemoryBytes)
     Note over W: exit 0
     Note over E,W: on a failure outside a row, at any point:
     W->>E: ERROR (message, traceback)

@@ -39,6 +39,7 @@ const auto& blockingReasonNames() {
       {BlockingReason::kWaitForIndexLookup, "kWaitForIndexLookup"},
       {BlockingReason::kWaitForIndexSplits, "kWaitForIndexSplits"},
       {BlockingReason::kWaitForRPC, "kWaitForRPC"},
+      {BlockingReason::kWaitForPythonWorker, "kWaitForPythonWorker"},
       {BlockingReason::kWaitForAggregationPeers, "kWaitForAggregationPeers"},
   };
   return kNames;
