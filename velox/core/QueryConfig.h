@@ -147,17 +147,6 @@ class QueryConfig {
   /// value when the new property is absent.
   bool ignoreTimeZoneLabel() const;
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Deprecated config key retained while downstream callers migrate.
-  static constexpr const char* kUseSessionTimezoneForTimestampWithTimezone =
-      "use_session_timezone_for_timestamp_with_timezone";
-
-  /// Legacy API. Prefer ignoreTimeZoneLabel().
-  bool useSessionTimezoneForTimestampWithTimezone() const {
-    return ignoreTimeZoneLabel();
-  }
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
-
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
   VELOX_QUERY_CONFIG(
@@ -1802,12 +1791,6 @@ class QueryConfig {
     kExcludeDeltaSplits = 1,
     /// Every table scan tracks row size.
     kEnabledForAll = 2,
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-    // TODO: Remove once Prestissimo migrates.
-    DISABLED = kDisabled,
-    EXCLUDE_DELTA_SPLITS = kExcludeDeltaSplits,
-    ENABLED_FOR_ALL = kEnabledForAll,
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
   };
 
   RowSizeTrackingMode rowSizeTrackingMode() const {

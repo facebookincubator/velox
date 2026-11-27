@@ -25,11 +25,6 @@
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-// TODO: Remove once Prestissimo migrates.
-#include "velox/exec/HashProbe.h"
-#endif
-
 namespace facebook::velox::exec::test {
 class OperatorTestBase : public virtual testing::Test,
                          public velox::test::VectorTestBase {

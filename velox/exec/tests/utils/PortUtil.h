@@ -15,17 +15,3 @@
  */
 
 #pragma once
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-#include "velox/exec/tests/utils/Ports.h"
-
-namespace facebook::velox::exec::test {
-
-/// Legacy API. Prefer Ports::findFreePort(). Removed once Prestissimo
-/// migrates.
-inline int getFreePort() {
-  return Ports::findFreePort();
-}
-
-} // namespace facebook::velox::exec::test
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
