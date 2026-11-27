@@ -1,0 +1,25 @@
+{
+  "schemaId" : 0,
+  "columns" : [ {
+    "name" : "id",
+    "type" : "bigint",
+    "id" : 0
+  }, {
+    "name" : "ts",
+    "type" : "bigint",
+    "id" : 1
+  }, {
+    "name" : "name",
+    "type" : "string",
+    "id" : 2
+  } ],
+  "primaryKeys" : [ "id" ],
+  "partitionKeys" : [ ],
+  "options" : {
+    "bucket" : "1",
+    "sequence.field" : "ts",
+    "write-only" : "true",
+    "manifest.format" : "parquet",
+    "file.format" : "nimble"
+  }
+}
