@@ -384,7 +384,7 @@ String Functions
     Returns the byte length of the specified string or binary value.
     For strings, this is the UTF-8 encoded byte count (not character count).
     See the `Spark documentation
-    <https://spark.apache.org/docs/3.5.0/api/sql/index.html#octet_length>`_. ::
+    <https://spark.apache.org/docs/latest/api/sql/index.html#octet_length>`_. ::
 
         SELECT octet_length('hello'); -- 5
         SELECT octet_length('€'); -- 3
