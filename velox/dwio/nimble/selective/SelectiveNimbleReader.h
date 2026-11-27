@@ -28,14 +28,19 @@ class SelectiveNimbleReaderFactory : public velox::dwio::common::ReaderFactory {
  public:
   /// With 'tabletReaderCache' set, the readers that load the cluster index,
   /// such as index lookups, share one TabletReader per file from the cache.
-  /// The shared tablet keeps the file metadata and the cluster index parsed in
-  /// memory, so a lookup on a file the cache holds reads and parses no
-  /// metadata. Readers that do not load the cluster index are unaffected.
+  /// The shared tablet keeps the file footer and the cluster index root parsed
+  /// in memory, so a lookup on a file the cache holds does not read them again.
+  /// Readers that do not load the cluster index are unaffected.
   ///
   /// The cache keys tablets by file name and builds each one with the options
-  /// of the first reader of its file. A file name must therefore always refer
-  /// to the same contents, and the readers of one file must use compatible
-  /// options. The cache must outlive every reader this factory creates.
+  /// of the first reader of its file. Those options also decide how the tablet
+  /// keeps the rest of the metadata and the cluster index between lookups:
+  /// ReaderOptions::pinMetadata() and pinIndex() keep them parsed in memory,
+  /// and cacheMetadata() and cacheIndex() cache them in the reader's data
+  /// cache. A file name must therefore always refer to the same contents, and
+  /// the readers of one file must use compatible options. The cache must
+  /// outlive every reader this factory creates, and a data cache the tablets
+  /// use must outlive the cache.
   explicit SelectiveNimbleReaderFactory(
       TabletReaderCache* tabletReaderCache = nullptr)
       : ReaderFactory(velox::dwio::common::FileFormat::NIMBLE),

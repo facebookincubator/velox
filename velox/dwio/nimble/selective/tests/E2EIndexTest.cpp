@@ -26,6 +26,7 @@
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/AsyncDataCache.h"
+#include "velox/common/caching/FileHandle.h"
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/ScanTracker.h"
 #include "velox/common/io/IoStatistics.h"
@@ -44,6 +45,7 @@
 #include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleIndexReader.h"
 #include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
@@ -5120,79 +5122,175 @@ TEST_F(E2EIndexTestBase, indexReadersShareCachedTablet) {
   writer.write(batch);
   writer.close();
 
-  const CachedTabletReader* tablet{nullptr};
-  int32_t numTablets{0};
-  TabletReaderCache::Options cacheOptions;
-  cacheOptions.numShards = 1;
-  cacheOptions.maxEntries = 1;
-  cacheOptions.executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
-  cacheOptions.onCreate = [&](const CachedTabletReader& created) {
-    tablet = &created;
-    ++numTablets;
-  };
-  cacheOptions.onRelease = [](const CachedTabletReader& /*released*/) {};
-  TabletReaderCache tabletReaderCache(cacheOptions);
-  unregisterSelectiveNimbleReaderFactory();
-  registerSelectiveNimbleReaderFactory(&tabletReaderCache);
+  // getBlockCache() keeps one BlockCache per data cache, which must not outlive
+  // the data cache.
+  setUpCache();
+  testingResetBlockCache();
   SCOPE_EXIT {
+    testingResetBlockCache();
+  };
+
+  // The options of the first reader decide how the shared tablet keeps the
+  // file metadata and the cluster index between lookups.
+  struct TestParam {
+    // ReaderOptions::pinMetadata().
+    bool pinMetadata;
+    // ReaderOptions::pinIndex().
+    bool pinIndex;
+    // ReaderOptions::cacheMetadata(), with a data cache and a file handle.
+    bool cacheMetadata;
+    // ReaderOptions::cacheIndex(), with a data cache and a file handle.
+    bool cacheIndex;
+
+    bool cache() const {
+      return cacheMetadata || cacheIndex;
+    }
+
+    std::string debugString() const {
+      return fmt::format(
+          "pinMetadata {}, pinIndex {}, cacheMetadata {}, cacheIndex {}",
+          pinMetadata,
+          pinIndex,
+          cacheMetadata,
+          cacheIndex);
+    }
+  };
+  std::vector<TestParam> testSettings;
+  for (const bool pinMetadata : {false, true}) {
+    for (const bool pinIndex : {false, true}) {
+      for (const bool cacheMetadata : {false, true}) {
+        for (const bool cacheIndex : {false, true}) {
+          testSettings.emplace_back(
+              pinMetadata, pinIndex, cacheMetadata, cacheIndex);
+        }
+      }
+    }
+  }
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    const CachedTabletReader* tablet{nullptr};
+    int32_t numTablets{0};
+    TabletReaderCache::Options cacheOptions;
+    cacheOptions.numShards = 1;
+    cacheOptions.maxEntries = 1;
+    cacheOptions.executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
+    cacheOptions.onCreate = [&](const CachedTabletReader& created) {
+      tablet = &created;
+      ++numTablets;
+    };
+    cacheOptions.onRelease = [](const CachedTabletReader& /*released*/) {};
+    TabletReaderCache tabletReaderCache(cacheOptions);
     unregisterSelectiveNimbleReaderFactory();
-    registerSelectiveNimbleReaderFactory();
-  };
+    registerSelectiveNimbleReaderFactory(&tabletReaderCache);
+    SCOPE_EXIT {
+      unregisterSelectiveNimbleReaderFactory();
+      registerSelectiveNimbleReaderFactory();
+    };
 
-  // Looks up 'key' through a new reader.
-  const auto expectLookup = [&](int64_t key, int32_t expectedValue) {
-    SCOPED_TRACE(fmt::format("key {}", key));
-    auto reader = createReader();
-    RowReaderOptions rowReaderOpts;
-    rowReaderOpts.setRequestedType(rowType);
-    rowReaderOpts.setScanSpec(createScanSpec(rowType, {}));
-    auto indexReader = reader->createIndexReader(rowReaderOpts);
-    ASSERT_NE(indexReader, nullptr);
+    // The data cache outlives each case, so each case reads the file under its
+    // own name, which keeps it from hitting the entries of an earlier case.
+    const auto fileName =
+        fmt::format("sharedTabletFile {}", testData.debugString());
 
-    auto bound = vectorMaker_->rowVector(
-        {"key"}, {vectorMaker_->flatVector<int64_t>({key})});
-    serializer::IndexBounds bounds;
-    bounds.indexColumns = {"key"};
-    bounds.set(
-        serializer::IndexBound{bound, /*inclusive=*/true},
-        serializer::IndexBound{bound, /*inclusive=*/true});
-    indexReader->startLookup(bounds, {});
-    ASSERT_TRUE(indexReader->hasNext());
-    auto result = indexReader->next(10);
-    ASSERT_NE(result, nullptr);
-    ASSERT_EQ(result->output->size(), 1);
+    // Looks up 'key' through a new reader. The reader's file handle goes away
+    // with the reader, while the shared tablet stays.
+    const auto expectLookup = [&](int64_t key, int32_t expectedValue) {
+      SCOPED_TRACE(fmt::format("key {}", key));
+      auto readFile =
+          std::make_shared<InMemoryReadFile>(std::string_view(sinkData_));
+      const FileHandle fileHandle{
+          readFile,
+          StringIdLease(fileIds(), fileName),
+          StringIdLease(fileIds(), "sharedTabletGroup")};
+      dwio::common::ReaderOptions readerOptions(leafPool_.get());
+      readerOptions.setFileFormat(FileFormat::NIMBLE);
+      readerOptions.setLoadClusterIndex(true);
+      // Reads only the footer at open. A larger read would also hold the only
+      // stripe group, which the tablet then pins whatever the options say.
+      readerOptions.setFooterSpeculativeIoSize(0);
+      readerOptions.setPinMetadata(testData.pinMetadata);
+      readerOptions.setPinIndex(testData.pinIndex);
+      readerOptions.setCacheMetadata(testData.cacheMetadata);
+      readerOptions.setCacheIndex(testData.cacheIndex);
+      if (testData.cache()) {
+        readerOptions.setFileHandle(&fileHandle);
+        readerOptions.setCache(cache_.get());
+      }
+      auto reader =
+          getReaderFactory(FileFormat::NIMBLE)
+              ->createReader(
+                  std::make_unique<BufferedInput>(
+                      readFile, velox::FileIoContext{.pool = leafPool_.get()}),
+                  readerOptions);
+      RowReaderOptions rowReaderOpts;
+      rowReaderOpts.setRequestedType(rowType);
+      rowReaderOpts.setScanSpec(createScanSpec(rowType, {}));
+      auto indexReader = reader->createIndexReader(rowReaderOpts);
+      ASSERT_NE(indexReader, nullptr);
+
+      auto bound = vectorMaker_->rowVector(
+          {"key"}, {vectorMaker_->flatVector<int64_t>({key})});
+      serializer::IndexBounds bounds;
+      bounds.indexColumns = {"key"};
+      bounds.set(
+          serializer::IndexBound{bound, /*inclusive=*/true},
+          serializer::IndexBound{bound, /*inclusive=*/true});
+      indexReader->startLookup(bounds, {});
+      ASSERT_TRUE(indexReader->hasNext());
+      auto result = indexReader->next(10);
+      ASSERT_NE(result, nullptr);
+      ASSERT_EQ(result->output->size(), 1);
+      EXPECT_EQ(
+          result->output->childAt(1)->asFlatVector<int32_t>()->valueAt(0),
+          expectedValue);
+      EXPECT_FALSE(indexReader->hasNext());
+    };
+
+    const auto numNewEntries = cache_->refreshStats().numNew;
+    expectLookup(/*key=*/2, /*expectedValue=*/20);
+    ASSERT_EQ(numTablets, 1);
+    const auto metadataBytes = tablet->metadataIoStats().rawBytesRead();
+    const auto indexBytes = tablet->indexIoStats().rawBytesRead();
+    EXPECT_GT(metadataBytes, 0);
+    const auto cacheStats = cache_->refreshStats();
+    // Only a tablet that caches metadata or the index adds entries to the data
+    // cache: the stripe group that the lookup loads, or the index partition and
+    // the key chunk that it reads.
+    EXPECT_EQ(cacheStats.numNew > numNewEntries, testData.cache());
+
+    // A second reader shares the tablet. Its cluster index keeps the loaded
+    // partition, and the last decoded key chunk of the partition even when it
+    // does not pin the index. The second lookup needs the same chunk of this
+    // one-chunk file, so it reads no index data. Unless the tablet pins
+    // metadata, the lookup loads the stripe group again, from the data cache
+    // when the tablet caches metadata. A load from the data cache counts as
+    // read bytes too.
+    expectLookup(/*key=*/3, /*expectedValue=*/30);
+    EXPECT_EQ(numTablets, 1);
+    EXPECT_EQ(tablet->indexIoStats().rawBytesRead(), indexBytes);
+    if (testData.pinMetadata) {
+      EXPECT_EQ(tablet->metadataIoStats().rawBytesRead(), metadataBytes);
+    } else {
+      EXPECT_GT(tablet->metadataIoStats().rawBytesRead(), metadataBytes);
+    }
     EXPECT_EQ(
-        result->output->childAt(1)->asFlatVector<int32_t>()->valueAt(0),
-        expectedValue);
-    EXPECT_FALSE(indexReader->hasNext());
-  };
+        cache_->refreshStats().numHit > cacheStats.numHit,
+        testData.cacheMetadata && !testData.pinMetadata);
 
-  expectLookup(/*key=*/2, /*expectedValue=*/20);
-  ASSERT_EQ(numTablets, 1);
-  const auto metadataBytes = tablet->metadataIoStats().rawBytesRead();
-  const auto indexBytes = tablet->indexIoStats().rawBytesRead();
-  EXPECT_GT(metadataBytes, 0);
-
-  // A second reader shares the tablet, so its lookup reads neither metadata
-  // nor the index.
-  expectLookup(/*key=*/3, /*expectedValue=*/30);
-  EXPECT_EQ(numTablets, 1);
-  EXPECT_EQ(tablet->metadataIoStats().rawBytesRead(), metadataBytes);
-  EXPECT_EQ(tablet->indexIoStats().rawBytesRead(), indexBytes);
-
-  // A reader that does not load the cluster index builds its own tablet.
-  const auto numLookups = tabletReaderCache.stats().numLookups;
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
-  readerOptions.setFileFormat(FileFormat::NIMBLE);
-  auto reader = getReaderFactory(FileFormat::NIMBLE)
-                    ->createReader(
-                        std::make_unique<BufferedInput>(
-                            std::make_shared<InMemoryReadFile>(
-                                std::string_view(sinkData_)),
-                            velox::FileIoContext{.pool = leafPool_.get()}),
-                        readerOptions);
-  EXPECT_EQ(reader->numberOfRows().value(), 3);
-  EXPECT_EQ(tabletReaderCache.stats().numLookups, numLookups);
+    // A reader that does not load the cluster index builds its own tablet.
+    const auto numLookups = tabletReaderCache.stats().numLookups;
+    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    readerOptions.setFileFormat(FileFormat::NIMBLE);
+    auto reader = getReaderFactory(FileFormat::NIMBLE)
+                      ->createReader(
+                          std::make_unique<BufferedInput>(
+                              std::make_shared<InMemoryReadFile>(
+                                  std::string_view(sinkData_)),
+                              velox::FileIoContext{.pool = leafPool_.get()}),
+                          readerOptions);
+    EXPECT_EQ(reader->numberOfRows().value(), 3);
+    EXPECT_EQ(tabletReaderCache.stats().numLookups, numLookups);
+  }
 }
 
 namespace {
