@@ -15,8 +15,12 @@
  */
 
 #include <limits>
+#include <memory>
 #include <random>
+#include <span>
 #include <string_view>
+#include <type_traits>
+#include <unordered_map>
 
 #include <gtest/gtest.h>
 #include <lz4.h>
@@ -26,6 +30,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
@@ -34,6 +39,7 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
@@ -43,6 +49,8 @@
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/legacy/TrailerReader.h"
+#include "velox/dwio/nimble/writer/BufferGrowthPolicy.h"
+#include "velox/dwio/nimble/writer/StreamData.h"
 
 using namespace facebook::nimble;
 using namespace facebook::nimble::serde;
@@ -1277,6 +1285,232 @@ std::vector<std::string_view> parseStreams(
 }
 
 } // namespace
+
+class StreamDataWriterSharedDictionaryTest : public ::testing::Test {
+ protected:
+  using IndicesMap = std::unordered_map<uint32_t, std::span<const uint32_t>>;
+
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+  }
+
+  void SetUp() override {
+    pool_ = memory::memoryManager()->addLeafPool(
+        "stream_data_writer_shared_dictionary_test");
+  }
+
+  // A content stream of `kind` at stream offset `offset` holding `values`.
+  template <typename T>
+  std::unique_ptr<ContentStreamData<T>> contentStream(
+      uint32_t offset,
+      ScalarKind kind,
+      const std::vector<T>& values) {
+    const auto& descriptor = *descriptors_.emplace_back(
+        std::make_unique<StreamDescriptorBuilder>(offset, kind));
+    auto stream = std::make_unique<ContentStreamData<T>>(
+        *pool_, descriptor, *growthPolicy_);
+    for (const auto& value : values) {
+      stream->mutableData().push_back(value);
+    }
+    return stream;
+  }
+
+  // A payload of `rowCount` rows holding `streams`, each stream that
+  // `sharedDictionaryIndicesMap` names written as SharedDictionary indices.
+  std::string write(
+      const std::vector<const facebook::nimble::StreamData*>& streams,
+      const IndicesMap& sharedDictionaryIndicesMap,
+      uint32_t rowCount = 1) {
+    std::string payload;
+    serde::StreamDataWriter<std::string> writer{
+        options_,
+        payload,
+        rowCount,
+        pool_.get(),
+        /*streamEncodingLayouts=*/nullptr,
+        &sharedDictionaryIndicesMap};
+    for (const auto* stream : streams) {
+      writer.writeData(*stream);
+    }
+    writer.close();
+    return payload;
+  }
+
+  // The bytes of stream `offset` of `payload`.
+  std::string_view streamBytes(std::string_view payload, uint32_t offset) {
+    serde::StreamDataParser parser{pool_.get()};
+    parser.initialize(payload);
+    std::string_view bytes;
+    parser.iterateStreams([&](uint32_t streamOffset, std::string_view data) {
+      if (streamOffset == offset) {
+        bytes = data;
+      }
+    });
+    NIMBLE_CHECK(!bytes.empty(), "No stream {} in the payload", offset);
+    return bytes;
+  }
+
+  // The encoding of stream `offset` of `payload`.
+  EncodingType streamEncoding(std::string_view payload, uint32_t offset) {
+    return EncodingPrefix::encodingType(streamBytes(payload, offset));
+  }
+
+  // The `count` values of stream `offset` of `payload`, decoded against
+  // `alphabet`.
+  template <typename T>
+  std::vector<T> decodeStream(
+      std::string_view payload,
+      uint32_t offset,
+      uint32_t count,
+      std::shared_ptr<const SharedDictionaryAlphabet> alphabet) {
+    serde::StreamData stream{stringBuffers_, pool_.get()};
+    stream.reset(
+        streamBytes(payload, offset),
+        {.useVarintRowCount = true,
+         .sharedDictionaryAlphabet = std::move(alphabet)});
+    std::vector<T> values(count);
+    if constexpr (std::is_same_v<T, std::string_view>) {
+      stream.decodeStrings(count, values.data());
+    } else {
+      stream.decode(values.data(), count);
+    }
+    return values;
+  }
+
+  // Writes `values` of `kind` against the dictionary `entries` with
+  // `indices`, and reads them back with the dictionary's alphabet.
+  template <typename T>
+  void expectRoundTrip(
+      ScalarKind kind,
+      const std::vector<T>& entries,
+      const std::vector<uint32_t>& indices) {
+    SCOPED_TRACE(fmt::format("{}", kind));
+    std::vector<T> values;
+    for (const auto index : indices) {
+      values.push_back(entries[index]);
+    }
+    const auto stream = contentStream<T>(/*offset=*/0, kind, values);
+    const auto payload = write({stream.get()}, {{0, indices}});
+
+    EXPECT_EQ(streamEncoding(payload, 0), EncodingType::SharedDictionary);
+    const auto alphabet = test::createSharedDictionaryAlphabet<T>(
+        entries, /*candidateEncodings=*/{}, pool_.get());
+    EXPECT_EQ(decodeStream<T>(payload, 0, values.size(), alphabet), values);
+  }
+
+  std::shared_ptr<memory::MemoryPool> pool_;
+  // The writer keeps a reference to its options.
+  const SerializerOptions options_;
+  const std::unique_ptr<InputBufferGrowthPolicy> growthPolicy_{
+      DefaultInputBufferGrowthPolicy::withDefaultRanges()};
+  // The streams' descriptors, which the streams reference.
+  std::vector<std::unique_ptr<StreamDescriptorBuilder>> descriptors_;
+  std::vector<BufferPtr> stringBuffers_;
+};
+
+TEST_F(StreamDataWriterSharedDictionaryTest, indicesStreamsOnly) {
+  // Stream 0 is written as indices into the dictionary [7, 40]; stream 1,
+  // which the map does not name, is encoded as usual.
+  const auto shared =
+      contentStream<int32_t>(/*offset=*/0, ScalarKind::Int32, {40, 7, 40});
+  const auto plain =
+      contentStream<int32_t>(/*offset=*/1, ScalarKind::Int32, {1, 2});
+  const std::vector<uint32_t> indices{1, 0, 1};
+  const auto payload = write({shared.get(), plain.get()}, {{0, indices}});
+
+  EXPECT_EQ(streamEncoding(payload, 0), EncodingType::SharedDictionary);
+  EXPECT_NE(streamEncoding(payload, 1), EncodingType::SharedDictionary);
+  const auto alphabet = test::createSharedDictionaryAlphabet<int32_t>(
+      std::vector<int32_t>{7, 40}, /*candidateEncodings=*/{}, pool_.get());
+  EXPECT_EQ(
+      decodeStream<int32_t>(payload, 0, 3, alphabet),
+      (std::vector<int32_t>{40, 7, 40}));
+  EXPECT_EQ(
+      decodeStream<int32_t>(payload, 1, 2, nullptr),
+      (std::vector<int32_t>{1, 2}));
+}
+
+TEST_F(StreamDataWriterSharedDictionaryTest, multipleRows) {
+  // A payload of 3 rows: the stream holds every row's values, 2 + 1 + 2, as
+  // one run of indices.
+  const std::vector<std::string_view> values{"ca", "us", "ca", "mx", "us"};
+  const auto stream =
+      contentStream<std::string_view>(/*offset=*/0, ScalarKind::String, values);
+  const std::vector<uint32_t> indices{1, 0, 1, 2, 0};
+  const auto payload = write({stream.get()}, {{0, indices}}, /*rowCount=*/3);
+
+  serde::StreamDataParser parser{pool_.get()};
+  EXPECT_EQ(parser.initialize(payload), 3);
+  const std::vector<std::string_view> entries{"us", "ca", "mx"};
+  const auto alphabet = test::createSharedDictionaryAlphabet<std::string_view>(
+      entries, /*candidateEncodings=*/{}, pool_.get());
+  EXPECT_EQ(
+      decodeStream<std::string_view>(payload, 0, values.size(), alphabet),
+      values);
+}
+
+TEST_F(StreamDataWriterSharedDictionaryTest, eachScalarKind) {
+  expectRoundTrip<int8_t>(ScalarKind::Int8, {-1, 5}, {1, 0, 1});
+  expectRoundTrip<uint8_t>(ScalarKind::UInt8, {200, 5}, {1, 0, 0});
+  expectRoundTrip<int16_t>(ScalarKind::Int16, {-300, 7}, {0, 1});
+  expectRoundTrip<uint16_t>(ScalarKind::UInt16, {60'000, 1}, {0, 0, 1});
+  expectRoundTrip<int32_t>(ScalarKind::Int32, {-70'000, 3}, {1, 0});
+  expectRoundTrip<uint32_t>(ScalarKind::UInt32, {4'000'000'000, 2}, {0, 1});
+  expectRoundTrip<int64_t>(
+      ScalarKind::Int64, {-(int64_t{1} << 40), 9}, {0, 1, 0});
+  expectRoundTrip<uint64_t>(ScalarKind::UInt64, {uint64_t{1} << 63, 4}, {1, 0});
+  expectRoundTrip<std::string_view>(
+      ScalarKind::String, {"us", "ca"}, {1, 1, 0});
+  expectRoundTrip<std::string_view>(
+      ScalarKind::Binary, {std::string_view{"\0\1", 2}, "b"}, {0, 1});
+}
+
+TEST_F(StreamDataWriterSharedDictionaryTest, unsupportedKindThrows) {
+  const std::vector<uint32_t> indices{0};
+  {
+    const auto stream =
+        contentStream<float>(/*offset=*/0, ScalarKind::Float, {1.5});
+    NIMBLE_ASSERT_USER_THROW(
+        write({stream.get()}, {{0, indices}}),
+        "A shared dictionary holds integers or strings, not");
+  }
+  {
+    const auto stream =
+        contentStream<double>(/*offset=*/0, ScalarKind::Double, {1.5});
+    NIMBLE_ASSERT_USER_THROW(
+        write({stream.get()}, {{0, indices}}),
+        "A shared dictionary holds integers or strings, not");
+  }
+  {
+    const auto stream =
+        contentStream<bool>(/*offset=*/0, ScalarKind::Bool, {true});
+    NIMBLE_ASSERT_USER_THROW(
+        write({stream.get()}, {{0, indices}}),
+        "A shared dictionary holds integers or strings, not");
+  }
+}
+
+TEST_F(StreamDataWriterSharedDictionaryTest, indexCountMismatchThrows) {
+  const auto stream =
+      contentStream<int32_t>(/*offset=*/0, ScalarKind::Int32, {1, 2});
+  const std::vector<uint32_t> indices{0};
+  NIMBLE_ASSERT_THROW(
+      write({stream.get()}, {{0, indices}}),
+      "Shared dictionary index count differs from value count");
+}
+
+TEST_F(StreamDataWriterSharedDictionaryTest, nullableStreamThrows) {
+  const auto& descriptor = *descriptors_.emplace_back(
+      std::make_unique<StreamDescriptorBuilder>(0, ScalarKind::Int32));
+  NullableContentStreamData<int32_t> stream{*pool_, descriptor, *growthPolicy_};
+  stream.mutableData().push_back(5);
+  stream.mutableNonNulls().push_back(true);
+  stream.mutableNonNulls().push_back(false);
+  const std::vector<uint32_t> indices{0};
+  NIMBLE_ASSERT_USER_THROW(
+      write({&stream}, {{0, indices}}),
+      "A shared dictionary stream may hold no nulls");
+}
 
 class WriteHeaderTest : public ::testing::Test {
  protected:
