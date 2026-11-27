@@ -676,6 +676,12 @@ jobs:
           install_mvfst
           install_fbthrift
 
+      # CMake registers the Python tests only if python3 can import their
+      # modules, so install them before configuring.
+      - name: Install Python Test Dependencies
+        run: |
+          python3 -m pip install -q "pyarrow==18.*" "pyspark==4.0.*"
+
       - name: Clear CCache Statistics
         run: |
           ccache -sz
