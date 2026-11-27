@@ -98,19 +98,32 @@ uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
 }
 
 const uint64_t* PaimonSplitReader::deletedRows(uint64_t numRows) {
-  if (deletionVectorReader_ == nullptr || deletionVectorReader_->noMoreData()) {
+  const auto* selection = rowSelection();
+  if (selection == nullptr &&
+      (deletionVectorReader_ == nullptr ||
+       deletionVectorReader_->noMoreData())) {
     return nullptr;
   }
 
-  // The bitmap is reused across batches and files, so clear every word this
-  // batch reads before setting its deletes.
+  // The bitmap is reused across batches and files, so set every word this
+  // batch reads.
   const auto numBytes = bits::nwords(numRows) * sizeof(uint64_t);
   dwio::common::ensureCapacity<int8_t>(
       deleteBitmap_, numBytes, connectorQueryCtx_->memoryPool());
   auto* deleted = deleteBitmap_->asMutable<uint64_t>();
+  const auto rowNumber = baseRowReader_->nextRowNumber();
+  if (selection != nullptr) {
+    // The selection covers the whole file and marks the rows to return, while
+    // 'deleted' covers the batch and marks the rows to skip. The selection
+    // already leaves out the rows the deletion vector deletes, so the file has
+    // no deletion vector reader.
+    VELOX_CHECK_NULL(deletionVectorReader_);
+    bits::copyBits(selection, rowNumber, deleted, 0, numRows);
+    bits::negate(deleted, static_cast<int32_t>(numRows));
+    return deleted;
+  }
   std::memset(deleted, 0, numBytes);
-  deletionVectorReader_->readDeletePositions(
-      baseRowReader_->nextRowNumber(), numRows, deleteBitmap_);
+  deletionVectorReader_->readDeletePositions(rowNumber, numRows, deleteBitmap_);
   return deleted;
 }
 
@@ -152,7 +165,7 @@ void PaimonSplitReader::maybeCreateDeletionVectorReader() {
   VELOX_CHECK_NULL(deletionVectorReader_);
   const auto& deletionFile =
       paimonSplit_->dataFiles()[currentFileIndex_].deletionFile;
-  if (!deletionFile.has_value()) {
+  if (!deletionFile.has_value() || rowSelection() != nullptr) {
     return;
   }
   deletionVectorReader_ = std::make_unique<PaimonDeletionVectorReader>(

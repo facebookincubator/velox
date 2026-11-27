@@ -1932,8 +1932,9 @@ TEST_F(StreamReaderTest, keepsStringsInStreamBufferHolders) {
 }
 
 TEST_F(StreamReaderTest, keepsStringsOfStreamChunksInOneBuffer) {
-  // Three FSST chunks, which cached views decode chunks of rows of. Their
-  // strings fit in the first buffer, of 32 KB.
+  // Three FSST chunks, whose views decode their strings into the buffers that
+  // the reader gives the stream, cached or not. Their strings fit in the first
+  // buffer, of 32 KB.
   constexpr uint32_t kChunkRows{200};
   constexpr uint32_t kNumRows{3 * kChunkRows};
   std::vector<std::string> storage;
@@ -1959,17 +1960,30 @@ TEST_F(StreamReaderTest, keepsStringsOfStreamChunksInOneBuffer) {
   const std::array<std::string_view, 1> streams{stream};
   const std::array<RowRange, 1> ranges{{{0, kNumRows}}};
 
-  // Reads every row of the stream in two stripes. The strings of the three
-  // chunks of each lie in one buffer, which the output alone keeps alive.
-  for (int stripe{0}; stripe < 2; ++stripe) {
-    SCOPED_TRACE(fmt::format("stripe {}", stripe));
+  struct TestParam {
+    std::string debugString() const {
+      return fmt::format(
+          "cacheEncodingView {}, stripe {}", cacheEncodingView, stripe);
+    }
+
+    bool cacheEncodingView;
+    int stripe;
+  };
+
+  // Reads every row of the stream in two stripes, with cached views and
+  // without. The strings of the three chunks of each stripe lie in one buffer,
+  // which the output alone keeps alive.
+  const std::vector<TestParam> testSettings{
+      {true, 0}, {true, 1}, {false, 0}, {false, 1}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
     auto output =
         velox::BaseVector::create(velox::VARCHAR(), kNumRows, pool_.get());
     reader.setStreams(
         streams,
         /*streamBufferHolders=*/{},
         /*alphabets=*/{},
-        {.cacheEncodingView = true});
+        {.cacheEncodingView = testData.cacheEncodingView});
     runRead(reader, ranges, /*outputOffset=*/0, output);
     reader.reset();
 

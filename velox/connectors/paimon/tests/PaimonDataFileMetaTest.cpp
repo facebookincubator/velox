@@ -122,6 +122,19 @@ TEST(PaimonDataFileTest, serializeFileFormat) {
   }
 }
 
+// Files of old Paimon versions do not record deleteRowCount.
+TEST(PaimonDataFileTest, serializeUnknownDeleteRowCount) {
+  PaimonDataFile file;
+  file.path = "data.orc";
+  file.fileFormat = dwio::common::FileFormat::ORC;
+  file.deleteRowCount = std::nullopt;
+  auto serialized = file.serialize();
+  EXPECT_EQ(serialized.count("deleteRowCount"), 0);
+  EXPECT_FALSE(PaimonDataFile::create(serialized).deleteRowCount.has_value());
+  serialized["deleteRowCount"] = nullptr;
+  EXPECT_FALSE(PaimonDataFile::create(serialized).deleteRowCount.has_value());
+}
+
 TEST(PaimonDataFileTest, toString) {
   PaimonDataFile file;
   file.path = "data.orc";

@@ -77,13 +77,16 @@ std::vector<SortOrder> getSortOrders(const ClusterIndexConfig& config) {
 }
 
 // Candidate encodings of every key sequence. PartitionedEliasFano stores a
-// level's concatenated runs, which are no longer monotone as a whole.
-constexpr std::array<EncodingType, 5> kLevelEncodings{
+// level's concatenated runs, which are no longer monotone as a whole. Sequence
+// stores a sequence that grows by a constant step, such as the child offsets of
+// a level whose values each have one child.
+constexpr std::array<EncodingType, 6> kLevelEncodings{
     EncodingType::Constant,
     EncodingType::EliasFano,
     EncodingType::FixedBitWidth,
     EncodingType::Trivial,
     EncodingType::PartitionedEliasFano,
+    EncodingType::Sequence,
 };
 
 // Returns kLevelEncodings, each at read factor 1.0.

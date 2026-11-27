@@ -534,11 +534,39 @@ class SelectiveColumnReader {
     VELOX_UNREACHABLE("Only struct reader supports this method");
   }
 
+  /// Rebinds this reader to the unit of its file that 'params' reads, such as
+  /// another stripe, instead of the caller building a new reader for it, and
+  /// keeps the reader's buffers. Returns false if this reader cannot read that
+  /// unit, in which case it enqueues no stream. Readers that do not support
+  /// rebinding return false, the default.
+  virtual bool rebind(FormatParams& /*params*/) {
+    return false;
+  }
+
+  /// Returns true if rebind() can rebind this reader and every reader under
+  /// it. False by default.
+  virtual bool rebindable() const {
+    return false;
+  }
+
+  /// Drops the streams of the unit of its file that this reader read, and keeps
+  /// its buffers, so that a reader kept for a later rebind() keeps none of that
+  /// unit's data alive. Only rebindable() readers support it.
+  virtual void unbind() {
+    VELOX_UNREACHABLE("Unbinding a reader that cannot rebind.");
+  }
+
   memory::MemoryPool* memoryPool() const {
     return pool_;
   }
 
  protected:
+  // Resets the read position, the counts of parent nulls and the state of the
+  // last read, so that the next read starts at the first row of another
+  // stripe. Called by a reader that moves to another stripe instead of being
+  // replaced.
+  virtual void resetReadState();
+
   template <typename T>
   void prepareRead(
       int64_t offset,

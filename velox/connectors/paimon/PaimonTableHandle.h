@@ -17,6 +17,7 @@
 
 #include "velox/connectors/common/FileTableHandle.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonMergeEngine.h"
 
 namespace facebook::velox::connector::paimon {
 
@@ -27,9 +28,71 @@ class PaimonTableHandle final : public connector::FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
 
+  /// Merge-on-read settings of a primary-key table, parsed from the table
+  /// options as Paimon Java's CoreOptions does. Merge-on-read sorts the rows
+  /// of a key by the sequence fields and then by _SEQUENCE_NUMBER, and picks
+  /// the last row for deduplicate and the first for first-row.
+  struct MergeOptions {
+    /// The 'merge-engine' option.
+    PaimonMergeEngine mergeEngine{PaimonMergeEngine::kDeduplicate};
+
+    /// Whether merge-on-read skips DELETE and UPDATE_BEFORE rows, as if the
+    /// files did not have them. With deduplicate, a key whose latest row is a
+    /// DELETE then returns its latest INSERT or UPDATE_AFTER row instead of
+    /// nothing. With first-row, such a row in a key with other rows no longer
+    /// fails the query. A key with only such rows returns nothing either way.
+    /// For example, with deduplicate and these (id, value, row kind) rows:
+    ///
+    ///   older file: (1, 10, INSERT), (2, 20, INSERT)
+    ///   newer file: (2, 21, DELETE), (3, 30, DELETE)
+    ///
+    /// the merge returns (1, 10), and with the option set (1, 10) and (2, 20).
+    ///
+    /// Paimon Java's writer drops such rows when the option is set, so they
+    /// come from Paimon 0.7 and earlier, which wrote them anyway, or from
+    /// writes before the option was set. Set by 'ignore-delete', or else by the
+    /// first of 'first-row.ignore-delete', 'deduplicate.ignore-delete' and
+    /// 'partial-update.ignore-delete' that is set, whatever the merge engine.
+    bool ignoreDelete{false};
+
+    /// Columns from the 'sequence.field' option, which order the rows of a key
+    /// before their sequence numbers do. The row with the largest values is
+    /// then the latest whatever the write order, which suits an event time
+    /// column: a late write of an older event does not replace a newer one.
+    /// Several comma-separated columns compare in order. Not supported with
+    /// first-row, as in Paimon Java. For example, with 'sequence.field' = 'ts'
+    /// and these (id, ts, value) rows:
+    ///
+    ///   older file: (1, 5, 10)
+    ///   newer file: (1, 3, 11)
+    ///
+    /// deduplicate returns (1, 5, 10), while without the option it returns the
+    /// later write, (1, 3, 11). Rows with equal values fall back to sequence
+    /// numbers.
+    std::vector<std::string> sequenceFields;
+
+    /// Whether the 'sequence.field.sort-order' option is ascending, so the
+    /// largest sequence field values are the latest. When descending, the
+    /// smallest are, so the example above returns (1, 3, 11). Nulls sort first
+    /// in either order, so a null value is older than any other.
+    bool sequenceFieldsAscending{true};
+
+    /// Whether the 'sequence.snapshot-ordering' option, which Paimon Java
+    /// added after 1.4.1, is true. It orders the rows of a key by the snapshot
+    /// that committed them rather than by writer sequence numbers, which can
+    /// overlap: Paimon Java gives every row of a file that a commit wrote the
+    /// minimum sequence number of the file, which is the snapshot ID, while
+    /// rows of compacted files keep their own. For example, a row with
+    /// sequence number 100 from snapshot 10 is then older than one with
+    /// sequence number 2 from snapshot 11. Merge-on-read does not support it.
+    bool sequenceSnapshotOrdering{false};
+  };
+
   /// rowType includes partition columns; fieldIds follow its column order.
   /// dataColumns() is the complete rowType because Paimon data files store
-  /// partition columns too. options are resolved by the caller.
+  /// partition columns too. options are resolved by the caller. primaryKeys
+  /// are the primary key columns of a primary-key table, which merge-on-read
+  /// needs.
   PaimonTableHandle(
       std::string connectorId,
       std::string tableName,
@@ -43,7 +106,8 @@ class PaimonTableHandle final : public connector::FileTableHandle {
       core::TypedExprPtr remainingFilter = nullptr,
       std::vector<connector::FileColumnHandlePtr> filterColumnHandles = {},
       double sampleRate = 1.0,
-      std::string dbName = "");
+      std::string dbName = "",
+      std::vector<std::string> primaryKeys = {});
 
   /// Identifier of the fixed table schema, distinct from a snapshot ID.
   int64_t schemaId() const {
@@ -75,6 +139,24 @@ class PaimonTableHandle final : public connector::FileTableHandle {
     return options_;
   }
 
+  /// Primary key columns of a primary-key table.
+  const std::vector<std::string>& primaryKeys() const {
+    return primaryKeys_;
+  }
+
+  /// Primary key columns that are not partition columns, which Paimon Java
+  /// calls the trimmed primary keys. Rows of one split share their partition,
+  /// so merge-on-read compares only these, and Paimon copies them into data
+  /// files as the _KEY_ columns.
+  const std::vector<std::string>& nonPartitionPrimaryKeys() const {
+    return nonPartitionPrimaryKeys_;
+  }
+
+  /// Merge-on-read settings, which keep their defaults for append-only tables.
+  const MergeOptions& mergeOptions() const {
+    return mergeOptions_;
+  }
+
   std::vector<connector::FileColumnHandlePtr> filterColumnHandles()
       const override {
     return filterColumnHandles_;
@@ -95,6 +177,9 @@ class PaimonTableHandle final : public connector::FileTableHandle {
   const std::vector<std::string> partitionKeys_;
   const std::unordered_map<std::string, std::string> options_;
   const std::vector<connector::FileColumnHandlePtr> filterColumnHandles_;
+  const std::vector<std::string> primaryKeys_;
+  const std::vector<std::string> nonPartitionPrimaryKeys_;
+  const MergeOptions mergeOptions_;
 };
 
 } // namespace facebook::velox::connector::paimon

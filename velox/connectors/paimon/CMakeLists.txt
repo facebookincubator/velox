@@ -31,7 +31,14 @@ velox_add_library(velox_paimon_column_handle PaimonColumnHandle.cpp HEADERS Paim
 
 velox_link_libraries(velox_paimon_column_handle velox_file_connector velox_type)
 
-velox_add_library(velox_paimon_table_handle PaimonTableHandle.cpp HEADERS PaimonTableHandle.h)
+velox_add_library(
+  velox_paimon_table_handle
+  PaimonMergeEngine.cpp
+  PaimonTableHandle.cpp
+  HEADERS
+  PaimonMergeEngine.h
+  PaimonTableHandle.h
+)
 
 velox_link_libraries(
   velox_paimon_table_handle
@@ -46,12 +53,14 @@ velox_add_library(
   PaimonConnector.cpp
   PaimonDataSource.cpp
   PaimonDeletionVectorReader.cpp
+  PaimonMergeSplitReader.cpp
   PaimonSplitReader.cpp
   HEADERS
   PaimonConfig.h
   PaimonConnector.h
   PaimonDataSource.h
   PaimonDeletionVectorReader.h
+  PaimonMergeSplitReader.h
   PaimonSplitReader.h
 )
 

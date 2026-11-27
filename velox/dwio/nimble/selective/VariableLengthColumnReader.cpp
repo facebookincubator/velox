@@ -367,6 +367,31 @@ bool ListColumnReader::estimateMaterializedSize(
       formatData(), children(), byteSize, rowCount);
 }
 
+bool ListColumnReader::rebind(velox::dwio::common::FormatParams& params) {
+  if (child_ != nullptr) {
+    // The Nimble readers are built, and so rebound, with NimbleParams.
+    auto& nimbleParams = static_cast<NimbleParams&>(params);
+    auto childParams = nimbleParams.makeChildParams(
+        nimbleParams.nimbleType()->asArray().elements());
+    if (!rebindColumnReader(*child_, childParams)) {
+      return false;
+    }
+  }
+
+  // Rebinds the lengths, which cannot fail, after the elements, since a rebind
+  // that fails must enqueue no stream.
+  formatData().as<NimbleData>().rebindNullsDecoder();
+  resetReadState();
+  return true;
+}
+
+void ListColumnReader::unbind() {
+  formatData().as<NimbleData>().unbindNullsDecoder();
+  if (child_ != nullptr) {
+    child_->unbind();
+  }
+}
+
 namespace {
 
 /// Returns true if the MAP extraction type needs the key child reader.

@@ -160,4 +160,20 @@ std::unique_ptr<dwio::common::SelectiveColumnReader> buildColumnReader(
   }
 }
 
+bool rebindColumnReader(
+    dwio::common::SelectiveColumnReader& reader,
+    NimbleParams& params) {
+  // The readers rebind through the StripeStreams that they share with
+  // 'params', which the caller moved to the new stripe. Compares the addresses
+  // as 'const void*', which fmt prints.
+  const void* const readerStreams =
+      &reader.formatData().as<NimbleData>().streams();
+  const void* const paramsStreams = &params.streams();
+  NIMBLE_CHECK_EQ(
+      readerStreams,
+      paramsStreams,
+      "A reader must rebind with the StripeStreams it was built with.");
+  return reader.rebind(params);
+}
+
 } // namespace facebook::nimble

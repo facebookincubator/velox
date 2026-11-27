@@ -17,10 +17,44 @@
 
 #include "velox/common/Casts.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonMergeSplitReader.h"
 #include "velox/connectors/paimon/PaimonSplitReader.h"
 #include "velox/connectors/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::paimon {
+namespace {
+
+// Returns whether 'split' needs merge-on-read, which only splits of primary-key
+// tables do.
+bool needsMerge(const PaimonConnectorSplit& split) {
+  if (split.tableType() != PaimonTableType::kPrimaryKey) {
+    return false;
+  }
+  if (!split.rawConvertible()) {
+    return true;
+  }
+  // Paimon's split planning makes a split rawConvertible only if no file has
+  // DELETE or UPDATE_BEFORE rows, so a file that records its number of them
+  // must record 0. Older Paimon versions do not record the number, and the
+  // planning treats a missing number as zero. Paimon Java still merges a split
+  // with such a file, since it may hold those rows, and the merge drops them.
+  bool missingDeleteRowCount{false};
+  for (const auto& file : split.dataFiles()) {
+    if (!file.deleteRowCount.has_value()) {
+      missingDeleteRowCount = true;
+      continue;
+    }
+    VELOX_USER_CHECK_EQ(
+        *file.deleteRowCount,
+        0,
+        "Paimon rawConvertible split must not have DELETE or UPDATE_BEFORE "
+        "rows: {}",
+        file.path);
+  }
+  return missingDeleteRowCount;
+}
+
+} // namespace
 
 PaimonDataSource::PaimonDataSource(
     const RowTypePtr& outputType,
@@ -54,10 +88,33 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         "Paimon reader does not support changelog files: {}",
         file.path);
   }
-  VELOX_USER_CHECK(
-      paimonSplit->rawConvertible(),
-      "Paimon same-schema append reader requires rawConvertible=true; "
-      "merge-on-read and data-evolution column merging are not implemented yet");
+
+  // Append-only splits that are not raw convertible come from data evolution,
+  // whose files must be merged by column.
+  if (paimonSplit->tableType() == PaimonTableType::kAppendOnly &&
+      !paimonSplit->rawConvertible()) {
+    VELOX_NYI(
+        "Paimon data-evolution column merging is not implemented yet: {}",
+        paimonTableHandle_->tableName());
+  }
+  if (needsMerge(*paimonSplit)) {
+    VELOX_USER_CHECK(
+        !paimonTableHandle_->nonPartitionPrimaryKeys().empty(),
+        "Paimon table handle must have primary keys for merge-on-read: {}",
+        paimonTableHandle_->tableName());
+    const auto mergeEngine = paimonTableHandle_->mergeOptions().mergeEngine;
+    if (mergeEngine == PaimonMergeEngine::kPartialUpdate ||
+        mergeEngine == PaimonMergeEngine::kAggregation) {
+      VELOX_NYI(
+          "Paimon merge-on-read does not support the merge engine: {}",
+          mergeEngine);
+    }
+    if (paimonTableHandle_->mergeOptions().sequenceSnapshotOrdering) {
+      VELOX_NYI(
+          "Paimon merge-on-read does not support the table option: "
+          "sequence.snapshot-ordering");
+    }
+  }
   paimonSplit_ = std::move(paimonSplit);
 
   // Use the first file to enter the FileDataSource scan pipeline;
@@ -69,6 +126,23 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
 std::unique_ptr<connector::FileSplitReader>
 PaimonDataSource::createSplitReader() {
+  if (needsMerge(*paimonSplit_)) {
+    return std::make_unique<PaimonMergeSplitReader>(
+        split_,
+        paimonSplit_,
+        paimonTableHandle_,
+        &partitionKeys_,
+        connectorQueryCtx_,
+        fileConfig_,
+        readerOutputType_,
+        dataIoStats_,
+        metadataIoStats_,
+        ioStats_,
+        fileHandleFactory_,
+        ioExecutor_,
+        fileScanState_->scanSpec);
+  }
+
   return std::make_unique<PaimonSplitReader>(
       split_,
       paimonSplit_,
