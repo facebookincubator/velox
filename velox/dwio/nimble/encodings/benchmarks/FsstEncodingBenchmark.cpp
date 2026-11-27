@@ -187,6 +187,10 @@ class BenchmarkStringVisitor {
     return rowAt(rowIndex_);
   }
 
+  vector_size_t rowIndex() const {
+    return rowIndex_;
+  }
+
   // Records one decoded value and advances to the next selected row.
   void process(std::string_view value, bool& atEnd) {
     values_.push_back(value);
@@ -952,6 +956,10 @@ class RangeBenchmarkVisitor {
   }
   auto currentRow() const {
     return rows_[rowIndex_];
+  }
+
+  vector_size_t rowIndex() const {
+    return static_cast<vector_size_t>(rowIndex_);
   }
   bool allowNulls() const {
     return false;

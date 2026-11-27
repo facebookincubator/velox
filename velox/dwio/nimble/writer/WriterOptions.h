@@ -292,20 +292,12 @@ struct WriterOptions {
   /// encodings, based on history data.
   std::optional<EncodingLayoutTree> encodingLayoutTree{};
 
-  /// Velox subfield paths whose stored VARCHAR value streams prefer FSST.
-  /// Paths identify fields in the input schema and are resolved to the matching
-  /// stored data streams during construction; nested ROW fields use '.', while
-  /// ARRAY elements and MAP values use '[*]'. Targeting a cluster-index key is
-  /// rejected; non-key paths are resolved against the stored schema. A chunk
-  /// that misses FSST's compression target safely falls back to Trivial. FSST
-  /// and its fallback use the writer's normal encoding compression policy.
-  /// Targeting the same value stream with shared dictionary encoding is
-  /// rejected. Field names containing Velox subfield separators such as '.'
-  /// are not addressable as literal names through this interface.
-  std::vector<std::string> fsstEncodingSubfields{};
-
-  /// INTEGER, BIGINT, REAL and DOUBLE value streams pinned to SubIntSplit.
-  /// Paths use the same syntax as fsstEncodingSubfields. Cluster-index keys,
+  /// Velox subfield paths whose INTEGER, BIGINT, REAL and DOUBLE value streams
+  /// are pinned to SubIntSplit. Paths identify fields in the input schema and
+  /// are resolved to the matching stored data streams during construction;
+  /// nested ROW fields use '.', while ARRAY elements and MAP values use '[*]'.
+  /// Field names containing Velox subfield separators such as '.' are not
+  /// addressable as literal names through this interface. Cluster-index keys,
   /// duplicate targets and shared dictionary collisions are rejected.
   /// Explicit encodingLayoutTree entries take precedence.
   std::vector<std::string> subIntSplitEncodingSubfields{};

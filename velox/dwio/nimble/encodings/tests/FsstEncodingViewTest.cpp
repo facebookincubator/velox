@@ -84,6 +84,7 @@ class FsstEncodingViewTest : public EncodingViewTest {
     CompressionType compressionType;
     std::string_view symbolTable;
     std::string_view lengths;
+    std::string_view decodedLengths;
     std::string_view blob;
   };
 
@@ -109,11 +110,17 @@ class FsstEncodingViewTest : public EncodingViewTest {
     remaining.remove_prefix(cursor - remaining.data());
     const auto lengths = remaining.substr(0, lengthsSize);
     remaining.remove_prefix(lengthsSize);
+    cursor = remaining.data();
+    const auto decodedLengthsSize = varint::readVarint32(&cursor);
+    remaining.remove_prefix(cursor - remaining.data());
+    const auto decodedLengths = remaining.substr(0, decodedLengthsSize);
+    remaining.remove_prefix(decodedLengthsSize);
     return {
         .prefix = encoded.substr(0, prefixSize),
         .compressionType = compressionType,
         .symbolTable = symbolTable,
         .lengths = lengths,
+        .decodedLengths = decodedLengths,
         .blob = remaining,
     };
   }
@@ -135,7 +142,27 @@ class FsstEncodingViewTest : public EncodingViewTest {
     rebuilt.push_back(static_cast<char>(sections.compressionType));
     appendSection(symbolTable);
     appendSection(lengths);
+    appendSection(sections.decodedLengths);
     rebuilt.append(blob);
+    return rebuilt;
+  }
+
+  // The layout written before decoded lengths existed: no decoded lengths
+  // section and no flag in the compression type byte.
+  std::string rebuildWithoutDecodedLengths(const FsstSections& sections) {
+    std::string rebuilt{sections.prefix};
+    rebuilt.push_back(
+        static_cast<char>(
+            static_cast<uint8_t>(sections.compressionType) &
+            ~FsstEncoding::kDecodedLengthsFlag));
+    for (const auto section : {sections.symbolTable, sections.lengths}) {
+      char encodedSize[5];
+      char* cursor = encodedSize;
+      varint::writeVarint(static_cast<uint32_t>(section.size()), &cursor);
+      rebuilt.append(encodedSize, cursor);
+      rebuilt.append(section);
+    }
+    rebuilt.append(sections.blob);
     return rebuilt;
   }
 
@@ -187,25 +214,32 @@ class FsstEncodingViewTest : public EncodingViewTest {
     return rebuildFsst(sections, sections.symbolTable, sections.lengths, blob);
   }
 
-  // Rejects at construction, with or without caching.
+  // Rejects at construction without caching, and in the first read with it.
   void expectMalformedView(
       std::string_view malformed,
       const char* expectedMessage) {
     NIMBLE_ASSERT_THROW(
-        createEncodingView(
-            malformed, pool_.get(), {.cacheEncodingView = cacheEncodingView()}),
+        readFirstRow(createEncodingView(
+            malformed,
+            pool_.get(),
+            {.cacheEncodingView = cacheEncodingView()})),
         expectedMessage);
   }
 
-  // A cached view validates the whole blob when the view is created. A view
-  // without caching validates each string when a read reaches it.
+  static void readFirstRow(const std::unique_ptr<EncodingView>& view) {
+    std::string_view value;
+    view->readAt(0, &value);
+  }
+
+  // A cached view validates the whole blob in its first read. A view without
+  // caching validates each string when a read reaches it.
   void expectMalformedBlob(
       std::string_view malformed,
       const char* expectedMessage) {
     if (cacheEncodingView()) {
       NIMBLE_ASSERT_THROW(
-          createEncodingView(
-              malformed, pool_.get(), {.cacheEncodingView = true}),
+          readFirstRow(createEncodingView(
+              malformed, pool_.get(), {.cacheEncodingView = true})),
           expectedMessage);
       return;
     }
@@ -267,6 +301,20 @@ TEST_P(FsstEncodingViewTest, readsAcrossLazyChunkBoundaries) {
   expectReads<FsstEncoding>(values, positions, forceFsstOptions());
   expectReads<FsstEncoding>(
       values, positions, forceFsstOptions(), CompressionType::Lz4);
+}
+
+TEST_P(FsstEncodingViewTest, readsEncodingsWithoutDecodedLengths) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 2'051);
+  const std::vector<uint32_t> positions{
+      0, 1, 2, 1'022, 1'023, 1'024, 1'025, 2'047, 2'048, 2'050};
+  auto options = forceFsstOptions();
+  options.cacheEncodingView = cacheEncodingView();
+
+  const auto older =
+      rebuildWithoutDecodedLengths(splitFsst(encodeFsst(values)));
+  EXPECT_TRUE(FsstEncoding::decodedLengthsEncoding(older, {}).empty());
+  expectEncodedReads(older, values, positions, options);
 }
 
 TEST_P(FsstEncodingViewTest, decodedChunksUseMemoryPool) {
@@ -934,7 +982,7 @@ TEST_P(FsstEncodingViewTest, readsScatteredAndRepeatedIndices) {
   }
 }
 
-TEST_P(FsstEncodingViewTest, readsLongStringsAlone) {
+TEST_P(FsstEncodingViewTest, readsLongStrings) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 2'048);
   // Each of these rows decodes to more bytes than all the short rows of the
@@ -961,12 +1009,20 @@ TEST_P(FsstEncodingViewTest, readsLongStringsAlone) {
   for (size_t i = 0; i < indices.size(); ++i) {
     EXPECT_EQ(output[i], values[indices[i]]) << "index " << indices[i];
   }
+
+  // Reads every row, which decodes the chunks that hold the long strings.
+  std::vector<std::string_view> all(values.size());
+  view->read(0, view->rowCount(), all.data());
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    EXPECT_EQ(all[row], values[row]) << "row " << row;
+  }
 }
 
 TEST_P(FsstEncodingViewTest, readsStringsThatExpandBeyondTheChunkEstimate) {
   // FSST encodes each run of eight repeated bytes as one code, so these
   // strings decode to about eight times their compressed size, more than a
-  // cached view first allocates for a chunk.
+  // cached view of an encoding without decoded lengths first allocates for a
+  // chunk.
   std::vector<std::string> storage;
   storage.reserve(2'048);
   Vector<std::string_view> values{pool_.get()};
@@ -976,12 +1032,144 @@ TEST_P(FsstEncodingViewTest, readsStringsThatExpandBeyondTheChunkEstimate) {
     values.push_back(storage.back());
   }
   const auto encoded = encodeFsst(values);
-  const auto view = createEncodingView(
-      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
-  std::vector<std::string_view> output(values.size());
-  view->read(0, view->rowCount(), output.data());
-  for (uint32_t row = 0; row < values.size(); ++row) {
-    EXPECT_EQ(output[row], values[row]) << "row " << row;
+  const auto older = rebuildWithoutDecodedLengths(splitFsst(encoded));
+  for (const auto& layout : {encoded, older}) {
+    const auto view = createEncodingView(
+        layout, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+    std::vector<std::string_view> output(values.size());
+    view->read(0, view->rowCount(), output.data());
+    for (uint32_t row = 0; row < values.size(); ++row) {
+      EXPECT_EQ(output[row], values[row]) << "row " << row;
+    }
+  }
+}
+
+TEST_P(FsstEncodingViewTest, readsChunksOfEmptyStrings) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 3'000);
+  for (uint32_t row = 1'024; row < 2'048; ++row) {
+    storage[row].clear();
+    values[row] = storage[row];
+  }
+  const auto encoded = encodeFsst(values);
+  const auto older = rebuildWithoutDecodedLengths(splitFsst(encoded));
+  for (const auto& layout : {encoded, older}) {
+    const auto view = createEncodingView(
+        layout, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+    std::vector<std::string_view> output(values.size());
+    view->read(0, view->rowCount(), output.data());
+    for (uint32_t row = 0; row < values.size(); ++row) {
+      EXPECT_EQ(output[row], values[row]) << "row " << row;
+    }
+  }
+}
+
+TEST_P(FsstEncodingViewTest, readsRangesGivenAnAddStringBuffer) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 5'000);
+  const auto encoded = encodeFsst(values);
+  const auto older = rebuildWithoutDecodedLengths(splitFsst(encoded));
+
+  // Reads 'ranges' with an addStringBuffer, and checks the strings and that the
+  // buffers that the read passes hold them.
+  const auto expectRanges = [&](const EncodingView& view,
+                                std::span<const RowRange> ranges) {
+    uint32_t numRows{0};
+    for (const auto& range : ranges) {
+      numRows += range.numRows();
+    }
+    std::vector<std::string_view> output(numRows);
+    std::vector<velox::BufferPtr> buffers;
+    EXPECT_EQ(
+        view.read(
+            ranges, [](uint32_t) {}, appendTo(buffers), output.data()),
+        numRows);
+    uint32_t index{0};
+    for (const auto& range : ranges) {
+      for (auto row = range.startRow; row < range.endRow; ++row, ++index) {
+        EXPECT_EQ(output[index], values[row]) << "row " << row;
+      }
+    }
+    EXPECT_TRUE(liesIn(output, buffers));
+  };
+
+  for (const auto& layout : {encoded, older}) {
+    const auto view = createEncodingView(
+        layout, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+    // A few rows, which a cached view decodes one string at a time.
+    expectRanges(*view, std::array<RowRange, 1>{RowRange{7, 11}});
+
+    // Every row, and ranges that start and end inside chunks, and cross chunk
+    // boundaries.
+    expectRanges(*view, std::array<RowRange, 1>{RowRange{0, 5'000}});
+    expectRanges(
+        *view,
+        std::array<RowRange, 4>{
+            RowRange{10, 1'030},
+            RowRange{1'100, 1'104},
+            RowRange{2'000, 4'100},
+            RowRange{4'990, 5'000}});
+
+    // Chunk 1 is decoded, so a read takes its rows from the chunk and decodes
+    // the rows of the other chunks.
+    std::vector<std::string_view> chunk(1'024);
+    view->read(1'024, 1'024, chunk.data());
+    expectRanges(*view, std::array<RowRange, 1>{RowRange{0, 5'000}});
+    expectRanges(
+        *view,
+        std::array<RowRange, 2>{RowRange{500, 1'500}, RowRange{3'000, 3'600}});
+  }
+}
+
+TEST_P(FsstEncodingViewTest, readsFewRowsWithoutDecodedLengths) {
+  if (!cacheEncodingView()) {
+    GTEST_SKIP() << "A view without caching does not read decoded lengths.";
+  }
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 256);
+  const auto encoded = encodeFsst(values);
+  const auto sections = splitFsst(encoded);
+  auto decodedLengths = decodeLengths(sections.decodedLengths);
+  ASSERT_GT(values[0].size(), 0);
+
+  // A decoded length that fits its compressed string, but not what the string
+  // decodes to.
+  ++decodedLengths[0];
+  auto replaced = sections;
+  const auto encodedDecodedLengths =
+      encodeTrivialChild<uint32_t>(decodedLengths);
+  replaced.decodedLengths = encodedDecodedLengths;
+  const auto malformed = rebuildFsst(
+      replaced, sections.symbolTable, sections.lengths, sections.blob);
+  const auto view =
+      createEncodingView(malformed, pool_.get(), {.cacheEncodingView = true});
+
+  // Keeps the buffers that hold the strings that reads return.
+  std::vector<velox::BufferPtr> buffers;
+  const auto read = [&](RowRange range) {
+    std::vector<std::string_view> output(range.numRows());
+    view->read(
+        std::array<RowRange, 1>{range},
+        [](uint32_t) {},
+        appendTo(buffers),
+        output.data());
+    return output;
+  };
+
+  // A read of a few rows decodes them one string at a time, and does not read
+  // the decoded lengths, so it returns the strings.
+  const auto few = read(RowRange{0, 4});
+  for (uint32_t row = 0; row < few.size(); ++row) {
+    EXPECT_EQ(few[row], values[row]) << "row " << row;
+  }
+
+  // A read of more rows decodes them with the decoded lengths, which do not
+  // match the strings.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    NIMBLE_ASSERT_FILE_THROW(
+        read(RowRange{0, 128}),
+        "FSST decoded size does not match the decoded lengths.");
   }
 }
 
@@ -1118,6 +1306,92 @@ TEST_P(FsstEncodingViewTest, rejectsMalformedMetadata) {
       nullableEncoding, "FSST lengths encoding must not be nullable: Nullable");
 }
 
+TEST_P(FsstEncodingViewTest, rejectsMalformedDecodedLengths) {
+  if (!cacheEncodingView()) {
+    GTEST_SKIP() << "A view without caching does not read decoded lengths.";
+  }
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 256);
+  const auto encoded = encodeFsst(values);
+  const auto sections = splitFsst(encoded);
+  const auto lengths = decodeLengths(sections.lengths);
+  const auto decodedLengths = decodeLengths(sections.decodedLengths);
+  ASSERT_EQ(decodedLengths.size(), values.size());
+  ASSERT_GT(lengths[0], 0);
+
+  // A view reads the decoded lengths when it first decodes a chunk, so the
+  // view is created and the read of every row fails.
+  const auto expectMalformed = [&](std::string_view encodedDecodedLengths,
+                                   const char* expectedMessage) {
+    auto replaced = sections;
+    replaced.decodedLengths = encodedDecodedLengths;
+    const auto malformed = rebuildFsst(
+        replaced, sections.symbolTable, sections.lengths, sections.blob);
+    const auto view =
+        createEncodingView(malformed, pool_.get(), {.cacheEncodingView = true});
+    std::vector<std::string_view> output(values.size());
+
+    // A read that fails fails again.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      NIMBLE_ASSERT_FILE_THROW(
+          view->read(0, view->rowCount(), output.data()), expectedMessage);
+    }
+  };
+
+  std::vector<uint64_t> uint64DecodedLengths(
+      decodedLengths.begin(), decodedLengths.end());
+  expectMalformed(
+      encodeTrivialChild<uint64_t>(uint64DecodedLengths),
+      "FSST decoded lengths encoding must contain Uint32 values.");
+
+  expectMalformed(
+      encodeTrivialChild<uint32_t>(
+          std::span<const uint32_t>{decodedLengths}.first(
+              decodedLengths.size() - 1)),
+      "FSST decoded lengths row count does not match the parent encoding.");
+
+  expectMalformed(
+      encodeNullableLengths(decodedLengths),
+      "FSST decoded lengths encoding must not be nullable: Nullable");
+
+  std::vector<std::string> text;
+  text.reserve(decodedLengths.size());
+  for (const auto length : decodedLengths) {
+    text.push_back(std::to_string(length));
+  }
+  expectMalformed(
+      encodeTrivialChild<std::string_view>(
+          std::vector<std::string_view>(text.begin(), text.end())),
+      "FSST decoded lengths encoding must contain Uint32 values.");
+
+  {
+    SCOPED_TRACE("a non-empty compressed string decodes to an empty one");
+    auto replaced = decodedLengths;
+    replaced[0] = 0;
+    expectMalformed(
+        encodeTrivialChild<uint32_t>(replaced),
+        "FSST compressed length is too long for its decoded length.");
+  }
+  {
+    SCOPED_TRACE("a code decodes to more than eight bytes");
+    auto replaced = decodedLengths;
+    replaced[0] = lengths[0] * 8 + 1;
+    expectMalformed(
+        encodeTrivialChild<uint32_t>(replaced),
+        "FSST decoded length is too long for its compressed length.");
+  }
+
+  // A length that fits its compressed string but not what the string decodes
+  // to.
+  for (const uint32_t wrong : {decodedLengths[0] - 1, decodedLengths[0] + 1}) {
+    auto replaced = decodedLengths;
+    replaced[0] = wrong;
+    expectMalformed(
+        encodeTrivialChild<uint32_t>(replaced),
+        "FSST decoded size does not match the decoded lengths.");
+  }
+}
+
 TEST_P(FsstEncodingViewTest, rejectsMalformedBlob) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 256);
@@ -1142,8 +1416,8 @@ TEST_P(FsstEncodingViewTest, rejectsMalformedBlob) {
   // Only a cached view checks every length against the blob size.
   if (cacheEncodingView()) {
     NIMBLE_ASSERT_THROW(
-        createEncodingView(
-            trailingBlobEncoding, pool_.get(), {.cacheEncodingView = true}),
+        readFirstRow(createEncodingView(
+            trailingBlobEncoding, pool_.get(), {.cacheEncodingView = true})),
         "FSST compressed lengths do not match the blob size.");
   }
 }
