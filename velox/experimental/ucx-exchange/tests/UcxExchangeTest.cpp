@@ -2878,6 +2878,91 @@ TEST_F(UcxExchangeFocusedTest, terminalMetadataCloseLeavesOutputPending) {
           *session->task, TaskState::kFinished, 3'000'000));
 }
 
+// A close message goes to the task's output queue, not to a server, so one
+// that arrives after the server closed locally still Releases the destination
+// whose end send was pending. The producer then finishes.
+TEST_F(
+    UcxExchangeFocusedTest,
+    terminalMetadataLateCloseReleasesResultsOfClosedServer) {
+  if (!isRendezvousOnly()) {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = startTerminalMetadataSend(
+      getUniqueTaskPrefix() + "lateCloseAfterEnd",
+      /*numChunkRows=*/0,
+      /*intraNode=*/false);
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+
+  ASSERT_TRUE(runOnCommunicator([session] {
+    if (auto server = session->server.lock()) {
+      server->close();
+    }
+  }));
+  ASSERT_TRUE(waitForServerDestroyed(session->server));
+  ASSERT_FALSE(queueManager()->isFinished(session->taskId));
+
+  sendCloseMessage(session);
+  EXPECT_TRUE(waitForOutputFinished(session->taskId));
+  EXPECT_EQ(destinationState(session->taskId), DestinationState::kReleased);
+  EXPECT_TRUE(
+      exec::test::TaskMonitor::waitForStateChange(
+          *session->task, TaskState::kFinished, 3'000'000));
+}
+
+// A close message that arrives after the server closed locally frees the chunks
+// still queued for the destination and Releases it. The producer's output is
+// then consumed, and the producer finishes once its drivers do.
+TEST_F(
+    UcxExchangeFocusedTest,
+    terminalMetadataLateCloseFreesChunksOfClosedServer) {
+  if (!isRendezvousOnly()) {
+    GTEST_SKIP() << "Requires UCX_RNDV_THRESH=0";
+  }
+
+  auto session = std::make_shared<TerminalMetadataSession>();
+  session->taskId = getUniqueTaskPrefix() + "lateCloseWithChunks";
+  session->task = makeProducerTask(session->taskId, pool_.get());
+  SCOPE_EXIT {
+    cleanUpTerminalMetadataSession(session);
+  };
+  queueManager()->initializeTask(
+      session->task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  // The server takes the first chunk and posts its send; the second stays
+  // queued.
+  for (int32_t i = 0; i < 2; ++i) {
+    queueManager()->enqueue(
+        session->taskId, 0, makePackedColumns(100), /*numRows=*/100);
+  }
+  startServer(session, /*intraNode=*/false);
+  ASSERT_EQ(queueManager()->stats(session->taskId)->bufferedPages, 1);
+
+  ASSERT_TRUE(runOnCommunicator([session] {
+    if (auto server = session->server.lock()) {
+      server->close();
+    }
+  }));
+  ASSERT_TRUE(waitForServerDestroyed(session->server));
+
+  sendCloseMessage(session);
+  EXPECT_TRUE(waitForOutputFinished(session->taskId));
+  const auto stats = queueManager()->stats(session->taskId);
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->bufferedPages, 0);
+  EXPECT_EQ(stats->bufferedBytes, 0);
+  EXPECT_EQ(destinationState(session->taskId), DestinationState::kReleased);
+
+  queueManager()->noMoreData(session->taskId);
+  EXPECT_TRUE(
+      exec::test::TaskMonitor::waitForStateChange(
+          *session->task, TaskState::kFinished, 3'000'000));
+}
+
 // Aborting a task whose UCX output has not been fetched removes that output
 // through the manager the Task looked up in the query's transport registry.
 TEST_F(UcxExchangeFocusedTest, terminalMetadataTaskAbortRemovesUcxOutput) {
