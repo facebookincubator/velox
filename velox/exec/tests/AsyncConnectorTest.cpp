@@ -210,19 +210,24 @@ TEST_F(AsyncConnectorTest, basic) {
                   .singleAggregation({}, {"min(a)"})
                   .planNode();
 
-  // Run without a delay and verify blocked time for table scan is zero.
+  // The table scan can also block waiting for its split, which the task gets
+  // after it starts, so check only the time it waits for the connector.
+  const std::string connectorWaitStat{"blockedWaitForConnectorWallNanos"};
+
+  // Run without a delay and verify the table scan does not wait for the
+  // connector.
   {
     auto task = assertQuery(plan, {std::make_shared<TestSplit>(0)}, "SELECT 0");
     const auto scanStats = PlanNodeStats::extract(task->taskStats(), scanId);
-    ASSERT_EQ(scanStats.blockedWallNanos, 0);
+    ASSERT_EQ(scanStats.customStats.count(connectorWaitStat), 0);
   }
 
-  // Run with a delay and verify blocked time for table scan is non-zero.
+  // Run with a delay and verify the table scan waits for the connector.
   {
     auto task =
         assertQuery(plan, {std::make_shared<TestSplit>(100)}, "SELECT 0");
     const auto scanStats = PlanNodeStats::extract(task->taskStats(), scanId);
-    ASSERT_GT(scanStats.blockedWallNanos, 0);
+    ASSERT_GT(scanStats.customStats.at(connectorWaitStat).sum, 0);
   }
 }
 
