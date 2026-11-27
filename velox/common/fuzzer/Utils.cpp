@@ -229,26 +229,6 @@ int16_t generateRandomTimezoneOffset(
   }
 }
 
-std::string timezoneOffsetToString(int16_t offsetMinutes) {
-  // Validate range [-840, 840]
-  VELOX_USER_CHECK(
-      offsetMinutes >= -util::kTimeZoneBias &&
-          offsetMinutes <= util::kTimeZoneBias,
-      "Timezone offset {} minutes is out of range [-840, 840]",
-      offsetMinutes);
-
-  // Determine sign
-  char sign = (offsetMinutes >= 0) ? '+' : '-';
-
-  // Calculate hours and minutes using absolute value
-  int16_t absOffset = std::abs(offsetMinutes);
-  int16_t hours = absOffset / util::kMinutesInHour;
-  int16_t minutes = absOffset % util::kMinutesInHour;
-
-  // Format as "+HH:mm" or "-HH:mm" with zero-padding
-  return fmt::format("{}{:02d}:{:02d}", sign, hours, minutes);
-}
-
 namespace {
 
 template <typename T>
