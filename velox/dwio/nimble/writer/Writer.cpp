@@ -805,29 +805,47 @@ class WriterStreamContext : public StreamContext {
     sharedDictionaryConfig_ = config;
   }
 
-  // Returns the shared dictionary configuration, if this stream is configured
-  // to use one.
-  const std::optional<SharedDictionaryConfig>& sharedDictionaryConfig() const {
-    return sharedDictionaryConfig_;
-  }
-
   SharedDictionaryWriter* sharedDictionaryWriter() const {
     return sharedDictionaryWriter_.get();
   }
 
-  void setSharedDictionaryWriter(
-      std::unique_ptr<SharedDictionaryWriter> writer) const {
-    NIMBLE_CHECK_NULL(
-        sharedDictionaryWriter_, "Shared dictionary writer already exists.");
-    sharedDictionaryWriter_ = std::move(writer);
+  // Returns whether a shared dictionary owns this value stream's encoding
+  // selection.
+  bool usesSharedDictionary() const {
+    // A shared dictionary owns the entire selection for its value stream: the
+    // indices it emits are meaningful only against its own alphabet, so a
+    // replayed layout can neither be applied to nor captured from this stream.
+    return sharedDictionaryConfig_.has_value();
   }
 
+  // Creates the encoding selection policy for one chunk of this stream. A
+  // shared dictionary config, if set, takes over selection. Otherwise
+  // |encodingLayout| is replayed, or nullopt runs a fresh selection; callers
+  // pass nullopt to retry a failed replay.
+  template <typename T>
+  std::unique_ptr<EncodingSelectionPolicy<T>> createEncodingPolicy(
+      std::optional<EncodingLayout> encodingLayout,
+      detail::WriterContext& context,
+      Buffer& buffer,
+      velox::BufferPool* encodingScratchBufferPool,
+      EncodingBufferPool* encodingBufferPool);
+
  private:
+  // Returns this stream's shared dictionary writer, creating it on first use.
+  // Chunked writes revisit the same value stream, so the writer outlives the
+  // per-chunk policies built over it.
+  template <typename T>
+  TypedSharedDictionaryWriter<T>& ensureSharedDictionaryWriter(
+      detail::WriterContext& context,
+      Buffer& buffer,
+      velox::BufferPool* encodingScratchBufferPool,
+      EncodingBufferPool* encodingBufferPool);
+
   bool isNullStream_{false};
   std::vector<offset_size> flatMapValueStreamOffsets_;
   std::optional<EncodingLayout> encoding_;
   std::optional<SharedDictionaryConfig> sharedDictionaryConfig_;
-  mutable std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
+  std::unique_ptr<SharedDictionaryWriter> sharedDictionaryWriter_;
 };
 
 // Context attached to one FlatMap TypeBuilder node. It carries the per-key
@@ -873,11 +891,22 @@ Encoding::Options makeEncodingOptions(
   return encodingOptions;
 }
 
-bool hasDictionaryConfig(const StreamData& streamData) {
-  const auto* streamContext =
-      streamData.descriptor().context<WriterStreamContext>();
-  return streamContext != nullptr &&
-      streamContext->sharedDictionaryConfig().has_value();
+// Creates the encoding selection policy for a stream that carries no
+// state of its own beyond an optional layout to replay.
+template <typename T>
+std::unique_ptr<EncodingSelectionPolicy<T>> createReplayedOrDefaultPolicy(
+    std::optional<EncodingLayout> encodingLayout,
+    const WriterOptions& options) {
+  if (encodingLayout.has_value()) {
+    return std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+        std::move(encodingLayout.value()),
+        options.compressionOptions,
+        options.encodingSelectionPolicyCreator);
+  }
+  return std::unique_ptr<EncodingSelectionPolicy<T>>(
+      static_cast<EncodingSelectionPolicy<T>*>(
+          options.encodingSelectionPolicyCreator(TypeTraits<T>::dataType)
+              .release()));
 }
 
 bool isSharedDictionaryScalarKind(ScalarKind scalarKind) {
@@ -916,42 +945,37 @@ bool isSharedDictionaryLogicalType(const velox::Type& type) {
 }
 
 template <typename T>
-// NOLINTNEXTLINE(facebook-hte-NullableReturn)
-TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
-    const StreamData& streamData,
+TypedSharedDictionaryWriter<T>&
+WriterStreamContext::ensureSharedDictionaryWriter(
     detail::WriterContext& context,
     Buffer& buffer,
     velox::BufferPool* encodingScratchBufferPool,
     EncodingBufferPool* encodingBufferPool) {
-  auto* streamContext = streamData.descriptor().context<WriterStreamContext>();
-  if (streamContext == nullptr) {
-    return nullptr;
-  }
-
-  // Chunked writes revisit the same value stream, so the writer is cached in
-  // the stream context. The type check guards against reusing that state with
-  // a different physical value type.
-  if (auto* dictionaryWriter = streamContext->sharedDictionaryWriter()) {
+  // Chunked writes revisit the same value stream, so the writer is cached here
+  // rather than rebuilt per chunk. The type check guards against reusing that
+  // state with a different physical value type.
+  if (auto* dictionaryWriter = sharedDictionaryWriter_.get()) {
     NIMBLE_CHECK_EQ(
         dictionaryWriter->dataType(),
         TypeTraits<T>::dataType,
         "Shared dictionary writer has unexpected value type.");
-    return velox::checkedPointerCast<TypedSharedDictionaryWriter<T>>(
+    return *velox::checkedPointerCast<TypedSharedDictionaryWriter<T>>(
         dictionaryWriter);
   }
 
-  const auto& config = streamContext->sharedDictionaryConfig();
-  if (!config.has_value()) {
-    return nullptr;
-  }
+  NIMBLE_CHECK(
+      sharedDictionaryConfig_.has_value(),
+      "Shared dictionary writer requested for a stream with no shared "
+      "dictionary config.");
+  const auto& config = sharedDictionaryConfig_.value();
   const auto& writerOptions = context.options();
   auto encodingOptions = makeEncodingOptions(
       writerOptions, encodingScratchBufferPool, encodingBufferPool);
   SharedDictionaryWriter::Options dictionaryOptions{
-      .scope = config->scope,
-      .dictionaryId = config->dictionaryId,
-      .useExternalAlphabet = config->useExternalAlphabet,
-      .alphabetEncodings = config->alphabetEncodings,
+      .scope = config.scope,
+      .dictionaryId = config.dictionaryId,
+      .useExternalAlphabet = config.useExternalAlphabet,
+      .alphabetEncodings = config.alphabetEncodings,
       .encodingSelectionPolicyCreator =
           writerOptions.encodingSelectionPolicyCreator,
       .encodingOptions = std::move(encodingOptions),
@@ -960,52 +984,37 @@ TypedSharedDictionaryWriter<T>* sharedDictionaryWriter(
   };
   auto writer = std::make_unique<TypedSharedDictionaryWriter<T>>(
       &buffer.getMemoryPool(), dictionaryOptions);
-  auto* writerPtr = writer.get();
-  streamContext->setSharedDictionaryWriter(std::move(writer));
-  return writerPtr;
+  auto& writerRef = *writer;
+  sharedDictionaryWriter_ = std::move(writer);
+  return writerRef;
 }
 
 template <typename T>
-std::unique_ptr<EncodingSelectionPolicy<T>> makeEncodingPolicy(
-    bool hasEncodingLayout,
+std::unique_ptr<EncodingSelectionPolicy<T>>
+WriterStreamContext::createEncodingPolicy(
     std::optional<EncodingLayout> encodingLayout,
     detail::WriterContext& context,
     Buffer& buffer,
     velox::BufferPool* encodingScratchBufferPool,
-    EncodingBufferPool* encodingBufferPool,
-    const StreamData& streamData) {
-  if (hasDictionaryConfig(streamData)) {
+    EncodingBufferPool* encodingBufferPool) {
+  if (usesSharedDictionary()) {
     NIMBLE_USER_CHECK(
         isSharedDictionaryType(TypeTraits<T>::dataType),
         "Shared dictionary encoding only supports integer or string streams, "
         "got {}.",
         TypeTraits<T>::dataType);
     if constexpr (isSharedDictionaryType<T>()) {
-      auto* dictionaryWriter = sharedDictionaryWriter<T>(
-          streamData,
-          context,
-          buffer,
-          encodingScratchBufferPool,
-          encodingBufferPool);
-      NIMBLE_CHECK_NOT_NULL(dictionaryWriter);
-      return dictionaryWriter->createEncodingPolicy(context.getStripeIndex());
+      return ensureSharedDictionaryWriter<T>(
+                 context, buffer, encodingScratchBufferPool, encodingBufferPool)
+          .createEncodingPolicy(context.getStripeIndex());
     } else {
       NIMBLE_UNREACHABLE(
           "Shared dictionary type validation accepted unsupported {}.",
           TypeTraits<T>::dataType);
     }
   }
-  if (hasEncodingLayout) {
-    return std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
-        std::move(encodingLayout.value()),
-        context.options().compressionOptions,
-        context.options().encodingSelectionPolicyCreator);
-  }
-  return std::unique_ptr<EncodingSelectionPolicy<T>>(
-      static_cast<EncodingSelectionPolicy<T>*>(
-          context.options()
-              .encodingSelectionPolicyCreator(TypeTraits<T>::dataType)
-              .release()));
+  return createReplayedOrDefaultPolicy<T>(
+      std::move(encodingLayout), context.options());
 }
 
 void configureDictionary(
@@ -1143,14 +1152,17 @@ std::string_view encode(
   velox::common::testutil::TestValue::adjust(
       "facebook::nimble::encode", const_cast<bool*>(&hasEncodingLayout));
 
-  auto policy = makeEncodingPolicy<T>(
-      hasEncodingLayout,
-      std::move(encodingLayout),
-      context,
-      buffer,
-      encodingScratchBufferPool,
-      encodingBufferPool,
-      streamData);
+  auto* writerStreamContext =
+      streamData.descriptor().context<WriterStreamContext>();
+  auto policy = writerStreamContext != nullptr
+      ? writerStreamContext->createEncodingPolicy<T>(
+            std::move(encodingLayout),
+            context,
+            buffer,
+            encodingScratchBufferPool,
+            encodingBufferPool)
+      : createReplayedOrDefaultPolicy<T>(
+            std::move(encodingLayout), context.options());
 
   auto encodingOptions = makeEncodingOptions(
       context.options(), encodingScratchBufferPool, encodingBufferPool);
@@ -1248,14 +1260,16 @@ std::string_view encodeStreamTyped(
     const StreamData& streamData) {
   const auto* writerStreamContext =
       streamData.descriptor().context<WriterStreamContext>();
-  const bool hasDictionary = hasDictionaryConfig(streamData);
+  // Streams with no context of their own carry no state to select over.
+  const bool usesSharedDictionary = writerStreamContext != nullptr &&
+      writerStreamContext->usesSharedDictionary();
 
   // Replay an externally provided (EncodingLayoutTree) or previously captured
   // layout, falling back to a fresh selection if it no longer fits the data.
   // TODO: Replace the exception-based best-effort replay in encodeWithFallback
   // with a non-throwing compatibility check before the replay attempt.
-  if (!hasDictionary && writerStreamContext &&
-      writerStreamContext->encoding()) {
+  if (!usesSharedDictionary && writerStreamContext != nullptr &&
+      writerStreamContext->encoding() != nullptr) {
     return encodeWithFallback<T>(
         writerStreamContext->encoding(),
         context,
@@ -1279,7 +1293,7 @@ std::string_view encodeStreamTyped(
   // already strips any Nullable/Sentinel wrapper, so the cached layout is the
   // data encoding alone — Nimble re-applies per-chunk nullability at encode
   // time, so it stays valid regardless of a later chunk's nulls.
-  if (!hasDictionary && context.options().enableEncodingSelectionCache) {
+  if (!usesSharedDictionary && context.options().enableEncodingSelectionCache) {
     streamContext(streamData.descriptor())
         .setEncoding(
             cacheEncodingLayout<T>(EncodingLayoutCapture::capture(
