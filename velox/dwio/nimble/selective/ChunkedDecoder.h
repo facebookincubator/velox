@@ -827,11 +827,15 @@ class ChunkedDecoder {
           EncodingTrait::callReadWithVisitor(*encoding_, visitor, params);
           // Some encodings (e.g., Constant via readWithVisitorSlow) do not
           // update numValues when DropValues (filter-only) is used. Sync
-          // numValues with outputRows so that subsequent chunks whose
-          // encodings (e.g., RLE bulkScan) use numValues as a base for
-          // setNumRows do not truncate outputRows.
+          // numValues with numRows(), the recorded output rows, so that
+          // subsequent chunks whose encodings (e.g., RLE bulkScan) use
+          // numValues as a base for setNumRows do not truncate outputRows.
+          // The next chunk also decodes its scratch values at numValues, so
+          // numValues must stay within the rows read so far. Without a row
+          // filter (e.g., AlwaysTrue), no output rows are recorded and
+          // numValues is 0.
           if constexpr (V::kFilterOnly) {
-            visitor.reader().setNumValues(visitor.reader().outputRows().size());
+            visitor.reader().setNumValues(visitor.reader().numRows());
           }
         } else if (!visitor.allowNulls()) {
           visitor.setRowIndex(endRowIndex);
