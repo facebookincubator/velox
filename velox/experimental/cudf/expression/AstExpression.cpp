@@ -93,13 +93,15 @@ ColumnOrView ASTExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr,
-    bool finalize) {
+    bool finalize,
+    gpu_sfi::GpuSfiErrors* errors) {
   auto precomputedColumns = precomputeSubexpressions(
       inputColumnViews,
       precomputeInstructions_,
       scalars_,
       inputRowSchema_,
-      stream);
+      stream,
+      errors);
 
   // Make table_view from input columns and precomputed columns
   std::vector<cudf::column_view> allColumnViews(inputColumnViews);
