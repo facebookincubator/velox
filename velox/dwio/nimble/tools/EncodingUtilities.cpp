@@ -343,11 +343,19 @@ void traverseEncodings(
       break;
     }
     case EncodingType::Fsst: {
+      const Encoding::Options options{.useVarintRowCount = useVarintRowCount};
       traverseEncodings(
-          FsstEncoding::lengthsEncoding(stream),
+          FsstEncoding::lengthsEncoding(stream, options),
           level + 1,
           0,
           "Lengths",
+          useVarintRowCount,
+          visitor);
+      traverseEncodings(
+          FsstEncoding::decodedLengthsEncoding(stream, options),
+          level + 1,
+          1,
+          "DecodedLengths",
           useVarintRowCount,
           visitor);
       break;

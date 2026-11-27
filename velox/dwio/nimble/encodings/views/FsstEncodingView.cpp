@@ -30,6 +30,50 @@
 
 namespace facebook::nimble {
 
+namespace {
+
+// Reads the lengths of all 'rowCount' rows from 'encoded', which must hold
+// non-null Uint32 values. 'name' names the lengths in the errors.
+std::vector<uint32_t> readLengths(
+    std::string_view encoded,
+    std::string_view name,
+    uint32_t rowCount,
+    velox::memory::MemoryPool& pool,
+    const Encoding::Options& options) {
+  // Checks the data type in the prefix before the encoding is created: a string
+  // encoding would write through the factory, which returns no buffer.
+  auto prefixData = encoded;
+  const auto prefix =
+      EncodingPrefix::consume(prefixData, options.useVarintRowCount);
+  NIMBLE_CHECK_FILE_EQ(
+      EncodingPrefix::dataType(prefix),
+      DataType::Uint32,
+      "{} encoding must contain Uint32 values.",
+      name);
+  auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
+  const auto encoding =
+      EncodingFactory().create(pool, encoded, noStringBufferFactory, options);
+  NIMBLE_CHECK_NOT_NULL(encoding);
+  NIMBLE_CHECK_FILE(
+      !encoding->isNullable(),
+      "{} encoding must not be nullable: {}",
+      name,
+      encoding->encodingType());
+  NIMBLE_CHECK_FILE_EQ(
+      encoding->rowCount(),
+      rowCount,
+      "{} row count does not match the parent encoding.",
+      name);
+
+  std::vector<uint32_t> lengths(rowCount);
+  if (!lengths.empty()) {
+    encoding->materialize(rowCount, lengths.data());
+  }
+  return lengths;
+}
+
+} // namespace
+
 struct FsstEncodingView::DecodedChunk {
   // Pool-owned decompressed strings of this chunk remain valid until every
   // holder of the buffer releases it. The other chunks that one read decoded
@@ -75,7 +119,8 @@ FsstEncodingView::FsstEncodingView(
   }
 
   if (options.cacheEncodingView) {
-    initializeCached(header.lengths);
+    encodedLengths_ = header.lengths;
+    encodedDecodedLengths_ = header.decodedLengths;
   } else {
     initializeUncached(header.lengths);
   }
@@ -100,44 +145,41 @@ void FsstEncodingView::initializeUncached(std::string_view encodedLengths) {
       "FSST lengths row count does not match the parent encoding.");
 }
 
-void FsstEncodingView::initializeCached(std::string_view encodedLengths) {
-  auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-  auto lengthsEncoding = EncodingFactory().create(
-      *this->pool_, encodedLengths, noStringBufferFactory, this->options_);
-  NIMBLE_CHECK_NOT_NULL(lengthsEncoding);
-  NIMBLE_CHECK_FILE_EQ(
-      lengthsEncoding->dataType(),
-      DataType::Uint32,
-      "FSST lengths encoding must contain Uint32 values.");
-  NIMBLE_CHECK_FILE(
-      !lengthsEncoding->isNullable(),
-      "FSST lengths encoding must not be nullable: {}",
-      lengthsEncoding->encodingType());
-  NIMBLE_CHECK_FILE_EQ(
-      lengthsEncoding->rowCount(),
-      this->rowCount_,
-      "FSST lengths row count does not match the parent encoding.");
+void FsstEncodingView::ensureCompressedLengths() const {
+  folly::call_once(compressedLengthsRead_, [&] {
+    const auto lengths = readLengths(
+        encodedLengths_,
+        "FSST lengths",
+        this->rowCount_,
+        *this->pool_,
+        this->options_);
+    const auto compressedBytes = FsstEncoding::validateCompressedLengths(
+        lengths, blob_, /*blobOffset=*/0);
+    NIMBLE_CHECK_FILE_EQ(
+        compressedBytes,
+        blob_.size(),
+        "FSST compressed lengths do not match the blob size.");
 
-  std::vector<uint32_t> lengths(this->rowCount_);
-  if (!lengths.empty()) {
-    lengthsEncoding->materialize(
-        static_cast<uint32_t>(lengths.size()), lengths.data());
-  }
-  const auto compressedBytes =
-      FsstEncoding::validateCompressedLengths(lengths, blob_, /*blobOffset=*/0);
-  NIMBLE_CHECK_FILE_EQ(
-      compressedBytes,
-      blob_.size(),
-      "FSST compressed lengths do not match the blob size.");
+    compressedOffsets_.resize(this->rowCount_ + 1);
+    for (uint32_t row = 0; row < this->rowCount_; ++row) {
+      compressedOffsets_[row + 1] = compressedOffsets_[row] + lengths[row];
+    }
+    const auto numChunks = this->rowCount_ / kRowsPerChunk +
+        (this->rowCount_ % kRowsPerChunk != 0);
+    decodedChunks_.wlock()->resize(numChunks);
+    rowsReadAlone_ = std::make_unique<std::atomic_uint32_t[]>(numChunks);
+  });
+}
 
-  compressedOffsets_.resize(this->rowCount_ + 1);
-  for (uint32_t row = 0; row < this->rowCount_; ++row) {
-    compressedOffsets_[row + 1] = compressedOffsets_[row] + lengths[row];
-  }
-  const auto numChunks =
-      this->rowCount_ / kRowsPerChunk + (this->rowCount_ % kRowsPerChunk != 0);
-  decodedChunks_.wlock()->resize(numChunks);
-  rowsReadAlone_ = std::make_unique<std::atomic_uint32_t[]>(numChunks);
+void FsstEncodingView::ensureDecodedLengths() const {
+  folly::call_once(decodedLengthsRead_, [&] {
+    decodedLengths_ = readLengths(
+        encodedDecodedLengths_,
+        "FSST decoded lengths",
+        this->rowCount_,
+        *this->pool_,
+        this->options_);
+  });
 }
 
 std::string_view FsstEncodingView::readTypedAt(uint32_t index) const {
@@ -147,6 +189,7 @@ std::string_view FsstEncodingView::readTypedAt(uint32_t index) const {
     const auto begin = lengths_->sum(0, index);
     return decodeValue(index, begin, size, *decodedStrings_.wlock());
   }
+  ensureCompressedLengths();
   const auto chunk = chunkForRead(rowChunk(index), /*numRows=*/1);
   if (chunk != nullptr) {
     return valueAt(*chunk, index % kRowsPerChunk);
@@ -174,6 +217,7 @@ void FsstEncodingView::readPhysical(
     }
     return;
   }
+  ensureCompressedLengths();
 
   // Counts the rows of each chunk that a range across chunks asks for, so that
   // the chunks it decodes share one buffer.
@@ -236,6 +280,7 @@ void FsstEncodingView::readPhysicalAt(
     }
     return;
   }
+  ensureCompressedLengths();
 
   // Reads each run of indices in one chunk from the chunk or alone, as
   // chunkForRead() decides for the run.
@@ -273,6 +318,7 @@ uint32_t FsstEncodingView::read(
   this->checkReadIndices(indices);
   auto* values = static_cast<std::string_view*>(output);
   if (cachesDecodedChunks()) {
+    ensureCompressedLengths();
     decodeRows(indices, addStringBuffer, values);
     return static_cast<uint32_t>(indices.size());
   }
@@ -328,6 +374,7 @@ uint32_t FsstEncodingView::read(
         values);
     return numRows;
   }
+  ensureCompressedLengths();
 
   // Returns whether a chunk that the ranges ask for rows of is decoded, so
   // that the read takes the strings of those rows from the chunk.
@@ -666,9 +713,15 @@ class BulkStringDecoder {
   // 'numCompressedBytes' compressed bytes, however long they decode: finishes
   // the buffer and reserves a new one when it does not. Always inlined, as
   // decode() is.
-  FOLLY_ALWAYS_INLINE void reserve(size_t numCompressedBytes) {
-    const size_t numBytes =
-        numCompressedBytes * maxSymbolLength_ + kDecoderPadding;
+  FOLLY_ALWAYS_INLINE void reserveCompressed(size_t numCompressedBytes) {
+    reserveDecoded(numCompressedBytes * maxSymbolLength_);
+  }
+
+  // Makes sure that the buffer has room after its strings for strings of
+  // 'numDecodedBytes' bytes: finishes the buffer and reserves a new one when it
+  // does not.
+  FOLLY_ALWAYS_INLINE void reserveDecoded(size_t numDecodedBytes) {
+    const size_t numBytes = numDecodedBytes + kDecoderPadding;
     if (buffer_.size() - usedBytes_ < numBytes) {
       newBuffer(numBytes);
     }
@@ -684,7 +737,7 @@ class BulkStringDecoder {
     if (compressed.empty()) {
       return {};
     }
-    reserve(compressed.size());
+    reserveCompressed(compressed.size());
     auto* decoded = buffer_.data() + usedBytes_;
     const auto decodedSize = nimble_fsst_decompress(
         &decoder_,
@@ -698,6 +751,32 @@ class BulkStringDecoder {
         "FSST decompression failed for non-empty compressed string.");
     usedBytes_ += decodedSize;
     return {decoded, decodedSize};
+  }
+
+  // Decodes 'compressed', the compressed strings of several rows, with one call
+  // right after the strings in the buffer, and checks that they decode to
+  // 'numDecodedBytes' bytes, the sum of the decoded lengths of the rows. The
+  // buffer must have room for them: reserveDecoded(). 'compressed' must be
+  // validated, as for the decode() of one string.
+  void decode(std::string_view compressed, size_t numDecodedBytes) {
+    size_t decodedSize{0};
+    if (!compressed.empty()) {
+      NIMBLE_CHECK_GE(
+          buffer_.size() - usedBytes_,
+          numDecodedBytes + kDecoderPadding,
+          "The buffer must have room for the decoded strings.");
+      decodedSize = nimble_fsst_decompress(
+          &decoder_,
+          compressed.size(),
+          reinterpret_cast<const unsigned char*>(compressed.data()),
+          buffer_.size() - usedBytes_,
+          reinterpret_cast<unsigned char*>(buffer_.data() + usedBytes_));
+    }
+    NIMBLE_CHECK_FILE_EQ(
+        decodedSize,
+        numDecodedBytes,
+        "FSST decoded size does not match the decoded lengths.");
+    usedBytes_ += decodedSize;
   }
 
   // Returns where the next string goes, right after the strings in the
@@ -905,23 +984,58 @@ FsstEncodingView::decodeChunks(std::span<const uint32_t> chunkIndices) const {
       };
   auto stringDecoder = makeBulkStringDecoder(setBuffer);
 
-  // Reserves room for every string of the chunks, so that they lie in the one
-  // buffer that every chunk holds.
-  if (numCompressedBytes > 0) {
-    stringDecoder.reserve(numCompressedBytes);
-  }
   std::vector<std::shared_ptr<DecodedChunk>> chunks;
   chunks.reserve(chunkIndices.size());
-  for (const auto chunkIndex : chunkIndices) {
-    const auto firstRow = chunkIndex * kRowsPerChunk;
-    const auto endRow = firstRow + chunkRows(chunkIndex);
-    auto& chunk = chunks.emplace_back(std::make_shared<DecodedChunk>());
-    chunk->strings = stringDecoder.position();
-    chunk->offsets.resize(endRow - firstRow + 1);
-    size_t offset{0};
-    for (auto row = firstRow; row < endRow; ++row) {
-      offset += stringDecoder.decode(compressedValue(row)).size();
-      chunk->offsets[row - firstRow + 1] = offset;
+  if (!encodedDecodedLengths_.empty()) {
+    ensureDecodedLengths();
+
+    // The decoded lengths give the offset of every string and the bytes that
+    // the strings of the chunks take, so the chunks reserve exactly that room,
+    // and one call decodes all strings of a chunk.
+    size_t numDecodedBytes{0};
+    for (const auto chunkIndex : chunkIndices) {
+      const auto firstRow = chunkIndex * kRowsPerChunk;
+      const auto endRow = firstRow + chunkRows(chunkIndex);
+      auto& chunk = chunks.emplace_back(std::make_shared<DecodedChunk>());
+      chunk->offsets.resize(endRow - firstRow + 1);
+      for (auto row = firstRow; row < endRow; ++row) {
+        FsstEncoding::validateDecodedLength(
+            compressedOffsets_[row + 1] - compressedOffsets_[row],
+            decodedLengths_[row]);
+        chunk->offsets[row - firstRow + 1] =
+            chunk->offsets[row - firstRow] + decodedLengths_[row];
+      }
+      numDecodedBytes += chunk->offsets.back();
+    }
+    if (numDecodedBytes > 0) {
+      stringDecoder.reserveDecoded(numDecodedBytes);
+    }
+    for (size_t i{0}; i < chunks.size(); ++i) {
+      const auto firstRow = chunkIndices[i] * kRowsPerChunk;
+      const auto endRow = firstRow + chunkRows(chunkIndices[i]);
+      chunks[i]->strings = stringDecoder.position();
+      stringDecoder.decode(
+          {blob_.data() + compressedOffsets_[firstRow],
+           compressedOffsets_[endRow] - compressedOffsets_[firstRow]},
+          chunks[i]->offsets.back());
+    }
+  } else {
+    // Reserves room for every string of the chunks, so that they lie in the one
+    // buffer that every chunk holds.
+    if (numCompressedBytes > 0) {
+      stringDecoder.reserveCompressed(numCompressedBytes);
+    }
+    for (const auto chunkIndex : chunkIndices) {
+      const auto firstRow = chunkIndex * kRowsPerChunk;
+      const auto endRow = firstRow + chunkRows(chunkIndex);
+      auto& chunk = chunks.emplace_back(std::make_shared<DecodedChunk>());
+      chunk->strings = stringDecoder.position();
+      chunk->offsets.resize(endRow - firstRow + 1);
+      size_t offset{0};
+      for (auto row = firstRow; row < endRow; ++row) {
+        offset += stringDecoder.decode(compressedValue(row)).size();
+        chunk->offsets[row - firstRow + 1] = offset;
+      }
     }
   }
   stringDecoder.finish();
