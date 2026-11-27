@@ -69,6 +69,8 @@ class BulkStringDecoder;
 /// of its rows this way, without building the offsets of whole chunks or
 /// reading the strings out of them. The read caches none of the rows it
 /// decodes into its region, so a read of the same rows decodes them again.
+/// Without Encoding::Options::decodedStringBuffers, a decode sizes its buffer
+/// to exactly the bytes that its strings decode to.
 ///
 /// A read holds a lock of the view while it decodes rows alone, so concurrent
 /// reads of one view decode such rows one read at a time. Views that share
@@ -163,6 +165,13 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
         compressedOffsets_[row + 1] - compressedOffsets_[row]};
   }
 
+  // Returns the bytes that the strings of the rows from 'startRow' up to
+  // 'endRow' of a cached view decode to, a pass over their compressed bytes.
+  // A decode without the options' decodedStringBuffers reserves that many
+  // bytes before it decodes the rows, so that its buffer holds no more than
+  // their strings take.
+  size_t decodedBytes(uint32_t startRow, uint32_t endRow) const;
+
   // Decodes the string of 'row' alone from its compressed bytes, which start
   // at 'compressedBegin', for a read without cacheEncodingView or a read of a
   // cached view that leaves the row's chunk undecoded. Keeps the string in
@@ -214,35 +223,64 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
       uint32_t chunkIndex,
       std::span<const uint32_t> numChunkRows) const;
 
-  // Returns a decoder of the strings of this view that takes buffers from the
-  // options' decodedStringBuffers when they are set, and from buffers of its
-  // own otherwise, and passes each buffer that holds strings to 'addBuffer',
-  // which must outlive the decoder.
+  // Returns a decoder of the strings of this view that takes rooms of the
+  // options' decodedStringBuffers when they are set, and buffers of its own
+  // of exactly the room reserved otherwise, and passes each buffer that holds
+  // strings to 'addBuffer', which must outlive the decoder.
   detail::BulkStringDecoder makeBulkStringDecoder(
       const std::function<void(velox::BufferPtr)>& addBuffer) const;
 
+  // Reserves in 'stringDecoder' room for every string of the chunks
+  // 'chunkIndices', of 'numCompressedBytes' compressed bytes: the most bytes
+  // that they can decode to when it shares buffers, which give the bytes that
+  // they do not take to later rooms, and else exactly the bytes that they
+  // decode to, which takes a pass over their compressed bytes.
+  void reserveDecodeBuffer(
+      std::span<const uint32_t> chunkIndices,
+      size_t numCompressedBytes,
+      detail::BulkStringDecoder& stringDecoder) const;
+
   // Decodes the chunks 'chunkIndices' into one region, which they share, and
   // builds the offsets of each into it. chunkForRead() decodes one chunk with
-  // it, and prepareChunks() several. Reserves the region for the most bytes
-  // that their strings can decode to, so that it never moves, and takes it
-  // from the options' decodedStringBuffers when they are set, and from a
-  // buffer of its own otherwise. 'chunkIndices' must not be empty.
+  // it, and prepareChunks() several. Reserves room for all their strings
+  // first with reserveDecodeBuffer(), so that the region never moves.
+  // 'chunkIndices' must not be empty.
   std::vector<std::shared_ptr<DecodedChunk>> decodeChunks(
       std::span<const uint32_t> chunkIndices) const;
+
+  // Reserves in 'stringDecoder', unless it shares buffers, the bytes that the
+  // strings of the rows of 'ranges' decode to, but for the rows of the chunks
+  // that 'chunks' holds. 'chunks' is as decodeRanges() takes it: empty, or the
+  // chunk or null for each chunk from the first that the ranges span.
+  void reserveDecodeBuffer(
+      std::span<const RowRange> ranges,
+      std::span<const std::shared_ptr<const DecodedChunk>> chunks,
+      detail::BulkStringDecoder& stringDecoder) const;
 
   // Reads the rows of 'ranges' of a cached view for a read given an
   // addStringBuffer. Takes the rows of each chunk that 'chunks' holds from
   // it, and decodes every other row straight into 'output', in a region of
-  // buffers that it takes as decodeChunks() does, and caches nothing. 'chunks'
-  // is empty, or holds the chunk or null for each chunk from the first that
-  // the ranges span. Passes the buffers of the chunks it read from and of the
-  // region that hold its strings to 'addStringBuffer'. 'ranges' must be checked
-  // and not empty.
+  // buffers from makeBulkStringDecoder(), and caches nothing. 'chunks' is
+  // empty, or holds the chunk or null for each chunk from the first that the
+  // ranges span. Passes the buffers of the chunks it read from and of the
+  // region that hold its strings to 'addStringBuffer'. Without shared buffers,
+  // reserves exactly the bytes that its strings decode to first. 'ranges' must
+  // be checked and not empty.
   void decodeRanges(
       std::span<const RowRange> ranges,
       std::span<const std::shared_ptr<const DecodedChunk>> chunks,
       const std::function<void(velox::BufferPtr)>& addStringBuffer,
       std::string_view* output) const;
+
+  // Reserves in 'stringDecoder', unless it shares buffers, the bytes that the
+  // strings of the rows 'indices' decode to, but for the runs of indices whose
+  // chunk 'runChunks' holds. Run 'i' ends at 'runEnds[i]', and starts where
+  // the run before it ends.
+  void reserveDecodeBuffer(
+      std::span<const uint32_t> indices,
+      std::span<const size_t> runEnds,
+      std::span<const std::shared_ptr<const DecodedChunk>> runChunks,
+      detail::BulkStringDecoder& stringDecoder) const;
 
   // Does what decodeRanges() does for the rows 'indices' of a cached view, in
   // any order. Takes the rows of each run of indices in one chunk from the
@@ -253,12 +291,21 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
       const std::function<void(velox::BufferPtr)>& addStringBuffer,
       std::string_view* output) const;
 
+  // Reserves in 'stringDecoder', unless it shares buffers, the bytes that the
+  // strings of 'sizes[i]' compressed bytes at 'offsets[i]' in the blob decode
+  // to.
+  void reserveDecodeBuffer(
+      std::span<const uint64_t> offsets,
+      std::span<const uint32_t> sizes,
+      detail::BulkStringDecoder& stringDecoder) const;
+
   // Decodes the string of each row of a read of a view without
   // cacheEncodingView that is given an addStringBuffer straight into
   // 'output', in a region of buffers, from its compressed bytes, which start
   // at 'offsets[i]' in the blob and take 'sizes[i]' bytes. Checks each string
   // against the blob, as decodeValue() does. Passes the buffers of the region
-  // that hold its strings to 'addStringBuffer'.
+  // that hold its strings to 'addStringBuffer'. Without shared buffers,
+  // reserves exactly the bytes that its strings decode to first.
   void decodeRows(
       std::span<const uint64_t> offsets,
       std::span<const uint32_t> sizes,
