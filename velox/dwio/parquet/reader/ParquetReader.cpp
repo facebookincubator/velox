@@ -1678,7 +1678,7 @@ class ParquetRowReader::Impl {
         requestedType_,
         readerBase_->schemaWithId(), // Id is schema id
         params,
-        *options_.scanSpec());
+        *readerBase_->options().scanSpec());
     columnReader_->setIsTopLevel();
 
     filterRowGroups();

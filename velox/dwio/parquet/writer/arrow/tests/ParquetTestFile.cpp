@@ -31,7 +31,8 @@ void ParquetTestFile::write(
 
 ParquetTestFile ParquetTestFile::open(
     const std::shared_ptr<::arrow::Buffer>& buffer,
-    const std::string& poolName) {
+    const std::string& poolName,
+    std::shared_ptr<common::ScanSpec> scanSpec) {
   ParquetTestFile file;
   file.path_ = common::testutil::TempFilePath::create();
   write(file.path_, buffer);
@@ -40,7 +41,8 @@ ParquetTestFile ParquetTestFile::open(
   file.rootPool_ = memory::memoryManager()->addRootPool(poolName);
   file.leafPool_ = file.rootPool_->addLeafChild(poolName);
 
-  dwio::common::ReaderOptions readerOptions{file.leafPool_.get()};
+  dwio::common::ReaderOptions readerOptions{
+      file.leafPool_.get(), std::move(scanSpec)};
   auto input = std::make_unique<dwio::common::BufferedInput>(
       std::make_shared<LocalReadFile>(file.path_->getPath()),
       FileIoContext{.pool = &readerOptions.memoryPool()});

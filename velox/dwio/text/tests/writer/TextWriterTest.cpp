@@ -54,10 +54,10 @@ class TextWriterTest : public testing::Test,
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
   }
 
-  void setScanSpec(const Type& type, dwio::common::RowReaderOptions& options) {
+  std::shared_ptr<common::ScanSpec> makeScanSpec(const Type& type) {
     auto spec = std::make_shared<common::ScanSpec>("root");
     spec->addAllChildFields(type);
-    options.setScanSpec(spec);
+    return spec;
   }
 
   std::unique_ptr<dwio::common::Reader> createReader(
@@ -68,7 +68,7 @@ class TextWriterTest : public testing::Test,
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
     auto readFile = std::make_shared<LocalReadFile>(filePath);
-    dwio::common::ReaderOptions readerOptions(pool());
+    dwio::common::ReaderOptions readerOptions(pool(), makeScanSpec(*schema));
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setFileSchema(schema);
@@ -292,7 +292,6 @@ TEST_F(TextWriterTest, verifyWriteWithTextReader) {
 
   auto reader = createReader(schema, filePath.string());
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   EXPECT_EQ(*reader->rowType(), *schema);
@@ -552,7 +551,6 @@ TEST_F(TextWriterTest, verifyMapAndArrayComplexTypesWithTextReader) {
 
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   // Change the expected value
@@ -734,7 +732,6 @@ TEST_F(TextWriterTest, verifyArrayTypesWithTextReader) {
 
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -962,7 +959,6 @@ TEST_F(TextWriterTest, verifyMapTypesWithTextReader) {
 
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1107,7 +1103,6 @@ TEST_F(TextWriterTest, verifyNestedRowTypesWithTextReader) {
 
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1328,7 +1323,6 @@ TEST_F(
 
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
   EXPECT_EQ(*reader->rowType(), *schema);
@@ -1447,7 +1441,6 @@ TEST_F(TextWriterTest, verifySimpleEscapeCharTestWithTextReader) {
 
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1569,7 +1562,6 @@ TEST_F(TextWriterTest, verifyCustomEscapeCharTestWithTextReader) {
 
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
-  setScanSpec(*schema, rowReaderOptions);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
 
@@ -1682,7 +1674,6 @@ TEST_F(TextWriterTest, verifyHeaderTestWithTextReader) {
   auto reader = createReader(schema, filePath.string(), serDeOptions);
   dwio::common::RowReaderOptions rowReaderOptions;
   rowReaderOptions.setSkipRows(1);
-  setScanSpec(*schema, rowReaderOptions);
 
   auto rowReader = reader->createRowReader(rowReaderOptions);
   EXPECT_EQ(*reader->rowType(), *schema);

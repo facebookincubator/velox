@@ -434,7 +434,7 @@ void E2EFilterTestBase::readWithoutFilter(
     const std::vector<RowVectorPtr>& batches,
     uint64_t& time) {
   SCOPED_TRACE("Read without filter");
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts{leafPool_.get(), spec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   dwio::common::RowReaderOptions rowReaderOpts;
@@ -443,8 +443,7 @@ void E2EFilterTestBase::readWithoutFilter(
       FileIoContext{.pool = &readerOpts.memoryPool()});
   auto reader = makeReader(readerOpts, std::move(input));
 
-  // The spec must stay live over the lifetime of the reader.
-  setUpRowReaderOptions(rowReaderOpts, spec);
+  setUpRowReaderOptions(rowReaderOpts);
   OwnershipChecker ownershipChecker;
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
@@ -491,7 +490,7 @@ void E2EFilterTestBase::readWithFilter(
     bool useValueHook,
     bool skipCheck) {
   SCOPED_TRACE("Read with filter");
-  dwio::common::ReaderOptions readerOpts{leafPool_.get()};
+  dwio::common::ReaderOptions readerOpts{leafPool_.get(), spec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   dwio::common::RowReaderOptions rowReaderOpts;
@@ -500,8 +499,7 @@ void E2EFilterTestBase::readWithFilter(
       FileIoContext{.pool = &readerOpts.memoryPool()});
   auto reader = makeReader(readerOpts, std::move(input));
 
-  // The spec must stay live over the lifetime of the reader.
-  setUpRowReaderOptions(rowReaderOpts, spec);
+  setUpRowReaderOptions(rowReaderOpts);
   VLOG(1) << "spec: " << spec->toString();
   if (!mutationSpec.deletedRows.empty()) {
     VLOG(1) << "numDeletedRows=" << mutationSpec.deletedRows.size();
@@ -882,7 +880,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
   specB->setChannel(1);
   specC->setProjectOut(true);
   specC->setChannel(0);
-  ReaderOptions readerOpts{leafPool_.get()};
+  ReaderOptions readerOpts{leafPool_.get(), spec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
@@ -890,7 +888,7 @@ void E2EFilterTestBase::testMetadataFilterImpl(
       std::make_shared<InMemoryReadFile>(sinkData_),
       FileIoContext{.pool = &readerOpts.memoryPool()});
   auto reader = makeReader(readerOpts, std::move(input));
-  setUpRowReaderOptions(rowReaderOpts, spec);
+  setUpRowReaderOptions(rowReaderOpts);
   rowReaderOpts.setMetadataFilter(metadataFilter);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto result = BaseVector::create(batches[0]->type(), 1, leafPool_.get());
@@ -1148,7 +1146,7 @@ void E2EFilterTestBase::testSubfieldsPruning() {
   auto specF = spec->addFieldRecursively("f", *ARRAY(BIGINT()), 5);
   specF->childByName(common::ScanSpec::kArrayElementsFieldName)
       ->setFilter(common::createBigintValues({0, 2, 4}, false));
-  ReaderOptions readerOpts{leafPool_.get()};
+  ReaderOptions readerOpts{leafPool_.get(), spec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
@@ -1156,7 +1154,7 @@ void E2EFilterTestBase::testSubfieldsPruning() {
       std::make_shared<InMemoryReadFile>(sinkData_),
       FileIoContext{.pool = &readerOpts.memoryPool()});
   auto reader = makeReader(readerOpts, std::move(input));
-  setUpRowReaderOptions(rowReaderOpts, spec);
+  setUpRowReaderOptions(rowReaderOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto result = BaseVector::create(batches[0]->type(), 1, leafPool_.get());
   int totalIndex = 0;
@@ -1241,7 +1239,9 @@ void E2EFilterTestBase::testMutationCornerCases() {
   }
   auto& rowType = batches[0]->type();
   writeToMemory(rowType, batches, false);
-  ReaderOptions readerOpts{leafPool_.get()};
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*rowType);
+  ReaderOptions readerOpts{leafPool_.get(), spec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
@@ -1252,10 +1252,8 @@ void E2EFilterTestBase::testMutationCornerCases() {
   // 1. Interleave batches with and without deletions.
   // 2. Whole batch deletion.
   // 3. Delete last a few rows in a batch.
-  auto spec = std::make_shared<common::ScanSpec>("<root>");
-  spec->addAllChildFields(*rowType);
   RowReaderOptions rowReaderOpts;
-  setUpRowReaderOptions(rowReaderOpts, spec);
+  setUpRowReaderOptions(rowReaderOpts);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto result = BaseVector::create(rowType, 0, leafPool_.get());
   constexpr int kReadBatchSize = 10;
@@ -1311,7 +1309,14 @@ void E2EFilterTestBase::testMutationCornerCases() {
 
   // No child reader.
   spec = std::make_shared<common::ScanSpec>("<root>");
-  setUpRowReaderOptions(rowReaderOpts, spec);
+  readerOpts = ReaderOptions(leafPool_.get(), spec);
+  readerOpts.setDataIoStats(dataIoStats_);
+  readerOpts.setMetadataIoStats(metadataIoStats_);
+  input = std::make_unique<BufferedInput>(
+      std::make_shared<InMemoryReadFile>(sinkData_),
+      FileIoContext{.pool = &readerOpts.memoryPool()});
+  reader = makeReader(readerOpts, std::move(input));
+  setUpRowReaderOptions(rowReaderOpts);
   rowReader = reader->createRowReader(rowReaderOpts);
   result = BaseVector::create(ROW({}), 0, leafPool_.get());
   totalScanned = 0;

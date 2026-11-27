@@ -214,8 +214,7 @@ class NullsOnlyReadBenchmark : public velox::test::VectorTestBase {
       outputType = ROW("c0", INTEGER());
     }
 
-    dwio::common::ReaderOptions readerOptions(pool());
-    readerOptions.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions readerOptions(pool(), scanSpec);
     auto reader =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
@@ -225,10 +224,8 @@ class NullsOnlyReadBenchmark : public velox::test::VectorTestBase {
                 readerOptions);
 
     // The stripe loads in the timed loop rather than in createRowReader.
-    // Nulls-only reads need nimbleScanFastPath and the non-legacy encodings,
-    // which stringDecoderZeroCopy selects.
+    // The Nimble scan fast path enables nulls-only reads.
     dwio::common::RowReaderOptions rowReaderOptions;
-    rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(asRowType(rowType));
     rowReaderOptions.setEagerFirstStripeLoad(false);
     rowReaderOptions.setNimbleScanFastPath(true);

@@ -113,7 +113,7 @@ class E2EWriterTest : public testing::Test {
 
     writer.close();
 
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
@@ -178,7 +178,7 @@ class E2EWriterTest : public testing::Test {
 
     writer.close();
 
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
@@ -312,7 +312,7 @@ RowTypePtr readWithFieldIds(
   writer.write(BatchMaker::createBatch(fileSchema, 10, *leafPool, nullptr, 0));
   writer.close();
 
-  dwio::common::ReaderOptions readerOpts(leafPool);
+  dwio::common::ReaderOptions readerOpts(leafPool, nullptr);
   readerOpts.setColumnMappingMode(dwio::common::ColumnMappingMode::kFieldId);
   readerOpts.setFileSchema(tableSchema);
   readerOpts.setFieldIds(fieldIds);
@@ -612,7 +612,7 @@ TEST_F(E2EWriterTest, presentStreamIsSuppressedOnFlatMap) {
       config,
       dwrf::E2EWriterTestUtil::simpleFlushPolicyFactory(true));
 
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
@@ -879,7 +879,7 @@ TEST_F(E2EWriterTest, flatMapVectorIntoMapColumn) {
     writer.write(maker.rowVector({"m"}, {input}));
     writer.close();
 
-    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    dwio::common::ReaderOptions readerOptions(leafPool_.get(), nullptr);
     auto reader = createReader(*sinkPtr, readerOptions);
     auto rowReader = reader->createRowReader(RowReaderOptions{});
     auto* dwrfRowReader = dynamic_cast<dwrf::DwrfRowReader*>(rowReader.get());
@@ -1067,7 +1067,7 @@ TEST_F(E2EWriterTest, partialStride) {
   writer.write(batch);
   writer.close();
 
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   RowReaderOptions rowReaderOpts;
@@ -1271,7 +1271,7 @@ class E2EEncryptionTest : public E2EWriterTest {
     writer_->close();
 
     // read it back for compare
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     readerOpts.setDecrypterFactory(decrypterFactory);
@@ -1502,6 +1502,31 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
     VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
+  }
+
+  // Read the unencrypted column with a ScanSpec.
+  {
+    auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
+    scanSpec->addFieldRecursively("a", *type->childAt(0), 0);
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
+    RowReaderOptions rowReaderOpts;
+    auto scanSpecReader = createReader(*sink_, readerOpts);
+    auto rowReader = scanSpecReader->createRowReader(rowReaderOpts);
+    VectorPtr batch =
+        BaseVector::create(ROW("a", type->childAt(0)), 0, leafPool_.get());
+    ASSERT_TRUE(rowReader->next(1, batch));
+  }
+
+  // Reject the encrypted column selected by a ScanSpec.
+  {
+    auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
+    scanSpec->addFieldRecursively("b", *type->childAt(1), 0);
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), scanSpec);
+    RowReaderOptions rowReaderOpts;
+    auto scanSpecReader = createReader(*sink_, readerOpts);
+    VELOX_ASSERT_THROW(
+        scanSpecReader->createRowReader(rowReaderOpts),
+        "Failed to access encrypted data");
   }
 }
 

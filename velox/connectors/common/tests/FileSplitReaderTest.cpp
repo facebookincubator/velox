@@ -163,7 +163,7 @@ class FileSplitReaderTest : public testing::Test,
   }
 
   dwio::common::ReaderOptions newReaderOptions() {
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), nullptr);
     options.setDataIoStats(ioStats_);
     options.setMetadataIoStats(ioStats_);
     return options;
@@ -203,7 +203,6 @@ class FileSplitReaderTest : public testing::Test,
         makeFileConfig(config),
         context.ctx.get(),
         split,
-        /*scanSpec=*/nullptr,
         /*metadataFilter=*/nullptr,
         /*requestedType=*/nullptr,
         /*ioExecutor=*/nullptr,
@@ -547,7 +546,6 @@ TEST_F(FileSplitReaderTest, rowReaderOptionsFromArguments) {
       FileFormat::SST,
       /*start=*/100,
       /*length=*/5'000);
-  const auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
   const auto requestedType = ROW("c0", BIGINT());
   const Properties serdeParameters{{"key_col_indices", "0,1,2"}};
   folly::InlineExecutor executor;
@@ -557,7 +555,6 @@ TEST_F(FileSplitReaderTest, rowReaderOptionsFromArguments) {
       makeFileConfig(),
       context.ctx.get(),
       split,
-      scanSpec,
       /*metadataFilter=*/nullptr,
       requestedType,
       &executor,
@@ -565,7 +562,6 @@ TEST_F(FileSplitReaderTest, rowReaderOptionsFromArguments) {
       serdeParameters,
       options);
 
-  EXPECT_EQ(options.scanSpec(), scanSpec);
   EXPECT_EQ(options.requestedType(), requestedType);
   EXPECT_EQ(options.ioExecutor(), &executor);
   EXPECT_EQ(options.offset(), 100);

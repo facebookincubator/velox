@@ -48,8 +48,7 @@ class SelectiveNimbleReaderFactory : public velox::dwio::common::ReaderFactory {
   /// Creates a reader sharing already loaded metadata and its input. Throws if
   /// 'readerBase' is null.
   std::unique_ptr<velox::dwio::common::Reader> createReader(
-      std::shared_ptr<ReaderBase> readerBase,
-      const velox::dwio::common::ReaderOptions& options);
+      std::shared_ptr<ReaderBase> readerBase);
 
  private:
   // Shares tablets among the readers that load the cluster index. Null shares

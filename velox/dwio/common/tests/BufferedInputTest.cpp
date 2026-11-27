@@ -785,7 +785,7 @@ class CustomBufferedInputTest : public testing::Test {
 
 TEST_F(CustomBufferedInputTest, basic) {
   facebook::velox::FileHandle fileHandle;
-  facebook::velox::dwio::common::ReaderOptions readerOpts(pool_.get());
+  facebook::velox::dwio::common::ReaderOptions readerOpts(pool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   auto ioStatistics = std::make_shared<facebook::velox::io::IoStatistics>();

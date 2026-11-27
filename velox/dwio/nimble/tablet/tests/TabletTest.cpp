@@ -7876,7 +7876,7 @@ TEST_P(TabletTest, configureOptionsDefaultsMetadataIoStats) {
   // The TabletReader constructor requires non-null metadata IO stats, but
   // ReaderOptions built through Velox's connector path arrive without them.
   // configureOptions must supply a default so every reader entry point works.
-  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   ASSERT_EQ(readerOptions.metadataIoStats(), nullptr);
 
   auto opts = nimble::TabletReader::configureOptions(readerOptions);
@@ -7887,7 +7887,7 @@ TEST_P(TabletTest, configureOptionsDefaultsMetadataIoStats) {
   EXPECT_EQ(readerOptions.metadataIoStats(), nullptr);
 
   // A caller-supplied instance is preserved rather than replaced.
-  velox::dwio::common::ReaderOptions withStats(pool_.get());
+  velox::dwio::common::ReaderOptions withStats(pool_.get(), nullptr);
   withStats.setMetadataIoStats(metadataIoStats_);
   auto optsWithStats = nimble::TabletReader::configureOptions(withStats);
   ASSERT_TRUE(optsWithStats.ioOptions.has_value());
@@ -7903,7 +7903,7 @@ TEST_P(TabletTest, configureOptionsIndexFlags) {
     return std::find(sections.begin(), sections.end(), name) != sections.end();
   };
 
-  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
 
@@ -7963,7 +7963,7 @@ TEST_P(TabletTest, configureOptionsIndexFlags) {
 }
 
 TEST_P(TabletTest, configureOptionsClusterIndexName) {
-  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   EXPECT_EQ(
@@ -7977,7 +7977,7 @@ TEST_P(TabletTest, configureOptionsClusterIndexName) {
 }
 
 TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
-  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   EXPECT_FALSE(
@@ -7993,7 +7993,7 @@ TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
 }
 
 TEST_P(TabletTest, configureOptionsStripeGroupEncodingViewDeduplication) {
-  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get(), nullptr);
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   EXPECT_FALSE(
@@ -8018,7 +8018,7 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
 
   // Verify defaults are null.
   {
-    velox::dwio::common::ReaderOptions defaults(pool_.get());
+    velox::dwio::common::ReaderOptions defaults(pool_.get(), nullptr);
     defaults.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
     defaults.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
     auto opts = nimble::TabletReader::configureOptions(defaults);
@@ -8060,7 +8060,7 @@ TEST_P(TabletTest, configureOptionsCacheFields) {
   // Helper to create ReaderOptions with cache fields set.
   auto makeReaderOptions =
       [&](std::shared_ptr<velox::io::IoStatistics> metadataStats) {
-        velox::dwio::common::ReaderOptions opts(pool_.get());
+        velox::dwio::common::ReaderOptions opts(pool_.get(), nullptr);
         opts.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
         opts.setMetadataIoStats(std::move(metadataStats));
         opts.setFileHandle(&fileHandle);

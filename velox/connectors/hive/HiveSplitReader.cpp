@@ -203,7 +203,6 @@ void HiveSplitReader::configureBaseRowReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
       fileSplit_,
-      scanSpec_,
       std::move(metadataFilter),
       rowType,
       ioExecutor_,

@@ -1055,7 +1055,7 @@ TEST_F(IcebergInsertTest, timestampAndTimestampTzFooterAnnotations) {
       std::make_unique<dwio::common::BufferedInput>(
           std::make_shared<LocalReadFile>(filePath),
           FileIoContext{.pool = opPool_.get()}),
-      dwio::common::ReaderOptions(opPool_.get()));
+      dwio::common::ReaderOptions(opPool_.get(), nullptr));
 
   const auto typeWithId =
       std::static_pointer_cast<const parquet::ParquetTypeWithId>(

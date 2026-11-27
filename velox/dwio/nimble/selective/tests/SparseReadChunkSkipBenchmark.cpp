@@ -365,8 +365,7 @@ class SparseReadChunkSkipBenchmark : public velox::test::VectorTestBase {
           common::createBigintValues(keptKeys, /*nullAllowed=*/false));
     }
 
-    dwio::common::ReaderOptions readerOptions(pool());
-    readerOptions.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions readerOptions(pool(), scanSpec);
     auto reader =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
@@ -377,7 +376,6 @@ class SparseReadChunkSkipBenchmark : public velox::test::VectorTestBase {
 
     // The stripe loads in the timed loop rather than in createRowReader.
     dwio::common::RowReaderOptions rowReaderOptions;
-    rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(rowType);
     rowReaderOptions.setEagerFirstStripeLoad(false);
     rowReaderOptions.setNimblePreserveDictionaryEncoding(

@@ -32,8 +32,10 @@ class ParquetReaderWideningTest : public ParquetTestBase {
   /// Builds widening/narrowing ReaderOptions from the default options.
   dwio::common::ReaderOptions makeWideningReaderOptions(
       const RowTypePtr& readSchema,
-      bool allowInt32Narrowing = false) const {
-    auto opts = makeDefaultReaderOptions();
+      bool allowInt32Narrowing = false,
+      std::shared_ptr<common::ScanSpec> scanSpec = nullptr) const {
+    auto opts = makeDefaultReaderOptions(
+        scanSpec ? std::move(scanSpec) : makeScanSpec(readSchema));
     opts.setFileSchema(readSchema);
     auto parquetOptions = std::make_shared<ParquetReaderOptions>();
     parquetOptions->setAllowInt32Narrowing(allowInt32Narrowing);
@@ -78,13 +80,13 @@ class ParquetReaderWideningTest : public ParquetTestBase {
       const RowVectorPtr& expected,
       bool allowInt32Narrowing = false) {
     auto* sink = write(writeData);
-    auto reader = createReaderInMemory(
-        *sink, makeWideningReaderOptions(readSchema, allowInt32Narrowing));
-    auto rowReaderOpts = makeRowReaderOpts(readSchema);
     auto scanSpec = makeScanSpec(readSchema);
     auto* child = scanSpec->getOrCreateChild(common::Subfield("col"));
     child->setFilter(std::move(filter));
-    rowReaderOpts.setScanSpec(scanSpec);
+    auto readerOptions =
+        makeWideningReaderOptions(readSchema, allowInt32Narrowing, scanSpec);
+    auto reader = createReaderInMemory(*sink, readerOptions);
+    auto rowReaderOpts = makeRowReaderOpts(readSchema);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     assertReadWithReaderAndExpected(
         readSchema, *rowReader, expected, *leafPool_);
@@ -232,20 +234,13 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
 
   RowTypePtr readSchema = ROW({"float_col", "id"}, {DOUBLE(), BIGINT()});
 
-  auto readerOptions = makeWideningReaderOptions(readSchema);
+  auto scanSpec = makeScanSpec(readSchema);
+  auto readerOptions = makeWideningReaderOptions(readSchema, false, scanSpec);
 
   std::string dataBuf(sinkPtr->data(), sinkPtr->size());
   auto file = std::make_shared<InMemoryReadFile>(std::move(dataBuf));
   auto buffer = std::make_unique<dwio::common::BufferedInput>(
       file, FileIoContext{.pool = &readerOptions.memoryPool()});
-  auto reader =
-      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
-
-  RowReaderOptions rowReaderOpts;
-  rowReaderOpts.select(
-      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
-          readSchema, readSchema->names()));
-  auto scanSpec = makeScanSpec(readSchema);
 
   // Apply IsNull or IsNotNull filter if specified
   switch (spec.filter) {
@@ -285,7 +280,12 @@ void FloatToDoubleEvolutionTest::runFloatToDoubleScenario(
     }
   }
 
-  rowReaderOpts.setScanSpec(scanSpec);
+  RowReaderOptions rowReaderOpts;
+  rowReaderOpts.select(
+      std::make_shared<facebook::velox::dwio::common::ColumnSelector>(
+          readSchema, readSchema->names()));
+  auto reader =
+      std::make_unique<ParquetReader>(std::move(buffer), readerOptions);
   auto rowReader = reader->createRowReader(rowReaderOpts);
 
   std::vector<bool> deletedFlags(numRows, false);
@@ -501,7 +501,6 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
          }) {
       SCOPED_TRACE(static_cast<int>(precision));
       auto rowReaderOptions = makeRowReaderOpts(readSchema);
-      rowReaderOptions.setScanSpec(makeScanSpec(readSchema));
       rowReaderOptions.setTimestampPrecision(precision);
       auto precisionReader = createReaderInMemory(*sink, readerOptions);
       auto rowReader = precisionReader->createRowReader(rowReaderOptions);
@@ -511,7 +510,6 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtc) {
 
     const auto timestampSchema = ROW("col", TIMESTAMP());
     auto timestampOptions = makeRowReaderOpts(timestampSchema);
-    timestampOptions.setScanSpec(makeScanSpec(timestampSchema));
     VELOX_ASSERT_THROW(
         reader->createRowReader(timestampOptions),
         "Converted type DATE is not allowed for requested type TIMESTAMP for file column 'col'");
@@ -645,9 +643,8 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcFilters) {
         auto scanSpec = makeScanSpec(readSchema);
         scanSpec->childByName("col")->setFilter(filter->clone());
         auto rowReaderOptions = makeRowReaderOpts(readSchema);
-        rowReaderOptions.setScanSpec(scanSpec);
-        auto reader =
-            createReaderInMemory(*sink, makeWideningReaderOptions(readSchema));
+        auto reader = createReaderInMemory(
+            *sink, makeWideningReaderOptions(readSchema, false, scanSpec));
         ASSERT_EQ(reader->fileMetaData().numRowGroups(), days.size());
         auto rowReader = reader->createRowReader(rowReaderOptions);
         VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
@@ -697,18 +694,17 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcDeltaPageBoundaries) {
     auto* sink = write(data, writerOptions);
     for (auto batchSize : {127, 128, 1'024}) {
       SCOPED_TRACE(batchSize);
-      auto reader =
-          createReaderInMemory(*sink, makeWideningReaderOptions(readSchema));
-      EXPECT_THAT(
-          reader->fileMetaData().rowGroup(0).columnChunk(1).encodings(),
-          testing::Contains(thrift::Encoding::DELTA_BINARY_PACKED));
       auto scanSpec = makeScanSpec(readSchema);
       scanSpec->childByName("id")->setFilter(
           exec::in({3, 31, 32, 127, 128, 255, 1'001, 2'047, 4'095}));
       scanSpec->childByName("col")->setFilter(
           exec::between(Timestamp(-86'400, 1), Timestamp(4'320'000, 0)));
+      auto reader = createReaderInMemory(
+          *sink, makeWideningReaderOptions(readSchema, false, scanSpec));
+      EXPECT_THAT(
+          reader->fileMetaData().rowGroup(0).columnChunk(1).encodings(),
+          testing::Contains(thrift::Encoding::DELTA_BINARY_PACKED));
       auto rowOptions = makeRowReaderOpts(readSchema);
-      rowOptions.setScanSpec(scanSpec);
       auto rowReader = reader->createRowReader(rowOptions);
       VectorPtr result = BaseVector::create(readSchema, 0, leafPool_.get());
       vector_size_t total = 0;
@@ -770,8 +766,11 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcOverflow) {
             continue;
           }
           SCOPED_TRACE(projectOut);
+          auto scanSpec = makeScanSpec(readSchema);
+          auto* column = scanSpec->childByName("col");
+          column->setProjectOut(projectOut);
           auto reader = createReaderInMemory(
-              *sink, makeWideningReaderOptions(readSchema));
+              *sink, makeWideningReaderOptions(readSchema, false, scanSpec));
           auto statistics = reader->columnStatistics(
               reader->typeWithId()->childByName("col")->id());
           auto* timestampStatistics =
@@ -779,15 +778,11 @@ TEST_F(ParquetReaderWideningTest, dateToTimestampUtcOverflow) {
           ASSERT_NE(timestampStatistics, nullptr);
           EXPECT_FALSE(timestampStatistics->getMinimum().has_value());
           EXPECT_FALSE(timestampStatistics->getMaximum().has_value());
-          auto scanSpec = makeScanSpec(readSchema);
-          auto* column = scanSpec->childByName("col");
-          column->setProjectOut(projectOut);
           if (filter) {
             column->setFilter(filter->clone());
             EXPECT_TRUE(common::testFilters(*scanSpec, *reader));
           }
           auto rowOptions = makeRowReaderOpts(readSchema);
-          rowOptions.setScanSpec(scanSpec);
           rowOptions.setTimestampPrecision(TimestampPrecision::kMicroseconds);
           auto rowReader = reader->createRowReader(rowOptions);
           VectorPtr result = BaseVector::create(
@@ -1457,7 +1452,7 @@ TEST_F(ParquetReaderWideningTest, allowInt32Narrowing) {
   auto* sink = write(data);
 
   // Default: flag is false.
-  auto readerOptions = makeDefaultReaderOptions();
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(data->rowType()));
   auto parquetOptions = std::make_shared<ParquetReaderOptions>();
   ASSERT_FALSE(parquetOptions->allowInt32Narrowing());
   readerOptions.setFormatSpecificOptions(parquetOptions);

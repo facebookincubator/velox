@@ -2022,7 +2022,7 @@ std::unique_ptr<DwrfReader> getDwrfReader(
   writer.close();
 
   std::string data(sinkPtr->data(), sinkPtr->size());
-  dwio::common::ReaderOptions readerOpts{&leafPool};
+  dwio::common::ReaderOptions readerOpts{&leafPool, nullptr};
   readerOpts.setDataIoStats(std::move(dataIoStats));
   readerOpts.setMetadataIoStats(std::move(metadataIoStats));
   return std::make_unique<DwrfReader>(

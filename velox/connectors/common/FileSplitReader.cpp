@@ -109,7 +109,7 @@ FileSplitReader::FileSplitReader(
       fileSplit_(fileSplit),
       connectorQueryCtx_(connectorQueryCtx),
       readerOutputType_(readerOutputType),
-      baseReaderOpts_(connectorQueryCtx->memoryPool()),
+      baseReaderOpts_(connectorQueryCtx->memoryPool(), scanSpec_),
       emptySplit_(false) {
   baseReaderOpts_.setDataIoStats(dataIoStats_);
   baseReaderOpts_.setMetadataIoStats(metadataIoStats_);
@@ -120,7 +120,6 @@ void FileSplitReader::initialize(
     const folly::F14FastSet<std::string>& remainingFilterColumns) {
   configureBaseReaderOptions();
   baseReaderOpts_.setRandomSkip(std::move(randomSkip));
-  baseReaderOpts_.setScanSpec(scanSpec_);
   baseRowReaderOpts_.setRemainingFilterColumns(remainingFilterColumns);
 }
 
@@ -458,7 +457,6 @@ void FileSplitReader::configureBaseRowReaderOptions(
       fileConfig_,
       connectorQueryCtx_,
       fileSplit_,
-      scanSpec_,
       std::move(metadataFilter),
       std::move(rowType),
       ioExecutor_,
@@ -755,7 +753,6 @@ void FileSplitReader::configureRowReaderOptions(
     const std::shared_ptr<const FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const FileConnectorSplit>& fileSplit,
-    const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& requestedType,
     folly::Executor* const ioExecutor,
@@ -768,7 +765,6 @@ void FileSplitReader::configureRowReaderOptions(
     rowReaderOptions.setSkipRows(folly::to<uint64_t>(skipRowsIt->second));
   }
   rowReaderOptions.setSerdeParameters(serdeParameters);
-  rowReaderOptions.setScanSpec(scanSpec);
   rowReaderOptions.setIOExecutor(ioExecutor);
   rowReaderOptions.setMetadataFilter(std::move(metadataFilter));
   rowReaderOptions.setRequestedType(requestedType);

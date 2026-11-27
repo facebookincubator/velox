@@ -144,10 +144,12 @@ FileContents::FileContents(
 
 TextRowReader::TextRowReader(
     std::shared_ptr<FileContents> fileContents,
-    const RowReaderOptions& opts)
+    const RowReaderOptions& opts,
+    std::shared_ptr<velox::common::ScanSpec> scanSpec)
     : RowReader(),
       contents_{fileContents},
       schemaWithId_{TypeWithId::create(fileContents->schema)},
+      scanSpec_{std::move(scanSpec)},
       selectedSchema_{nullptr},
       options_{opts},
       columnSelector_{
@@ -339,7 +341,7 @@ uint64_t TextRowReader::next(
   // Resize the row vector to the actual number of rows read.
   // Handled here for both cases: pos_ > fileLength_ and pos_ > limit_
   rowVecPtr->resize(rowsRead);
-  result = projectColumns(rowVecPtr, *options_.scanSpec(), mutation);
+  result = projectColumns(rowVecPtr, *scanSpec_, mutation);
 
   return rowsRead;
 }
@@ -1601,7 +1603,7 @@ const std::shared_ptr<const TypeWithId>& TextReader::typeWithId() const {
 
 std::unique_ptr<RowReader> TextReader::createRowReader(
     const RowReaderOptions& opts) const {
-  return std::make_unique<TextRowReader>(contents_, opts);
+  return std::make_unique<TextRowReader>(contents_, opts, options_.scanSpec());
 }
 
 uint64_t TextReader::getFileLength() const {

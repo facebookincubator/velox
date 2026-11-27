@@ -2314,7 +2314,7 @@ TEST_P(NimbleIndexProjectorTest, blockCacheParameterControlsCaching) {
   dataIoStats_ = std::make_shared<io::IoStatistics>();
   metadataIoStats_ = std::make_shared<io::IoStatistics>();
   indexIoStats_ = std::make_shared<io::IoStatistics>();
-  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  dwio::common::ReaderOptions readerOptions(leafPool_.get(), nullptr);
   readerOptions.setFileFormat(dwio::common::FileFormat::NIMBLE);
   readerOptions.setLoadClusterIndex(true);
   readerOptions.setDataIoStats(dataIoStats_);
@@ -6443,7 +6443,7 @@ TEST_P(NimbleIndexProjectorTest, localReadModeStats) {
         testCase.bufferIo,
         testCase.useIoUring);
     const auto fileName = dataReadFile->getName();
-    dwio::common::ReaderOptions tabletReaderOptions(leafPool_.get());
+    dwio::common::ReaderOptions tabletReaderOptions(leafPool_.get(), nullptr);
     tabletReaderOptions.setFileFormat(FileFormat::NIMBLE);
     tabletReaderOptions.setLoadClusterIndex(true);
     tabletReaderOptions.setCacheData(false);
@@ -7360,7 +7360,7 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
     metadataIoStats_ = std::make_shared<velox::io::IoStatistics>();
     indexIoStats_ = std::make_shared<velox::io::IoStatistics>();
     auto fileHandle = makeFileHandle();
-    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    dwio::common::ReaderOptions readerOptions(leafPool_.get(), nullptr);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setIndexIoStats(indexIoStats_);

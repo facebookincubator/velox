@@ -190,8 +190,7 @@ class ConstantEncodingBenchmark : public velox::test::VectorTestBase {
 
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions readerOptions(pool());
-    readerOptions.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions readerOptions(pool(), scanSpec);
 
     Readers readers;
     readers.reader = factory->createReader(
@@ -200,7 +199,6 @@ class ConstantEncodingBenchmark : public velox::test::VectorTestBase {
             FileIoContext{.pool = pool()}),
         readerOptions);
     dwio::common::RowReaderOptions rowReaderOptions;
-    rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(inputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
     // Constant chunks take the bulk path only through the non-legacy encodings.

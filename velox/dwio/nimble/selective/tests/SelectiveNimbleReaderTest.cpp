@@ -200,10 +200,9 @@ class SelectiveNimbleReaderTest
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), scanSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(scanSpec);
     options.setPinMetadata(GetParam().pinMetadata);
     options.setCacheMetadata(GetParam().enableCache);
     options.setFilePreloadThreshold(0);
@@ -254,7 +253,6 @@ class SelectiveNimbleReaderTest
     dwio::common::typeutils::checkTypeCompatibility(
         *readers.reader->rowType(), *type);
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setLazyColumnIo(lazyColumnIo);
@@ -1028,8 +1026,7 @@ TEST_P(SelectiveNimbleReaderTest, readsWithoutMetadataIoStats) {
   scanSpec->addAllChildFields(*input->type());
 
   const auto file = test::createNimbleFile(*rootPool(), input);
-  dwio::common::ReaderOptions options(pool());
-  options.setScanSpec(scanSpec);
+  dwio::common::ReaderOptions options(pool(), scanSpec);
   ASSERT_EQ(options.metadataIoStats(), nullptr);
 
   auto reader = SelectiveNimbleReaderFactory().createReader(
@@ -1040,7 +1037,6 @@ TEST_P(SelectiveNimbleReaderTest, readsWithoutMetadataIoStats) {
   EXPECT_EQ(reader->numberOfRows(), input->size());
 
   dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(asRowType(input->type()));
   auto rowReader = reader->createRowReader(rowOptions);
   validate(*input, *rowReader, 101, [](auto /*i*/) { return true; });
@@ -1054,30 +1050,26 @@ TEST_P(SelectiveNimbleReaderTest, createReaderFromSharedReaderBase) {
   scanSpec->addAllChildFields(*input->type());
 
   const auto file = test::createNimbleFile(*rootPool(), input);
-  dwio::common::ReaderOptions options(pool());
-  options.setScanSpec(scanSpec);
+  dwio::common::ReaderOptions options(pool(), scanSpec);
   auto readerBase = ReaderBase::create(
       std::make_unique<dwio::common::BufferedInput>(
           std::make_shared<InMemoryReadFile>(file),
           FileIoContext{.pool = pool()}),
       options);
 
-  auto reader =
-      SelectiveNimbleReaderFactory().createReader(readerBase, options);
+  auto reader = SelectiveNimbleReaderFactory().createReader(readerBase);
   EXPECT_EQ(reader->numberOfRows(), input->size());
 
   dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(asRowType(input->type()));
   auto rowReader = reader->createRowReader(rowOptions);
   validate(*input, *rowReader, 101, [](auto /*i*/) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, createReaderRejectsNullReaderBase) {
-  dwio::common::ReaderOptions options(pool());
   NIMBLE_ASSERT_USER_THROW(
       SelectiveNimbleReaderFactory().createReader(
-          std::shared_ptr<ReaderBase>{}, options),
+          std::shared_ptr<ReaderBase>{}),
       "readerBase must not be null");
 }
 
@@ -1913,17 +1905,15 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSize) {
     auto readFile = std::make_shared<InMemoryReadFile>(fileContent);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), structScanSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(structScanSpec);
     auto reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(
             readFile, FileIoContext{.pool = pool()}),
         options);
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(structScanSpec);
-    auto rowReader = readers.reader->createRowReader(rowOptions);
+    auto rowReader = reader->createRowReader(rowOptions);
     auto structEstimatedRowSize = rowReader->estimatedRowSize();
     ASSERT_TRUE(structEstimatedRowSize.has_value());
     ASSERT_EQ(*structEstimatedRowSize, 37);
@@ -1987,16 +1977,14 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizePartialProjection) {
     auto readFile = std::make_shared<InMemoryReadFile>(fileContent);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), partialSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(partialSpec);
     auto reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(
             readFile, FileIoContext{.pool = pool()}),
         options);
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(partialSpec);
     auto rowReader = reader->createRowReader(rowOptions);
     auto partialSize = rowReader->estimatedRowSize();
     ASSERT_TRUE(partialSize.has_value());
@@ -2086,16 +2074,14 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedRowPartialProjection) {
     auto readFile = std::make_shared<InMemoryReadFile>(fileContent);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), partialSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(partialSpec);
     auto reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(
             readFile, FileIoContext{.pool = pool()}),
         options);
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(partialSpec);
     auto rowReader = reader->createRowReader(rowOptions);
     auto partialSize = rowReader->estimatedRowSize();
     ASSERT_TRUE(partialSize.has_value());
@@ -3254,16 +3240,14 @@ TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
   auto readFile = std::make_shared<InMemoryReadFile>(file);
   auto factory =
       dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-  dwio::common::ReaderOptions options(pool());
+  dwio::common::ReaderOptions options(pool(), scanSpec);
   options.setDataIoStats(dataIoStats_);
   options.setMetadataIoStats(metadataIoStats_);
-  options.setScanSpec(scanSpec);
   auto reader = factory->createReader(
       std::make_unique<dwio::common::BufferedInput>(
           readFile, FileIoContext{.pool = pool()}),
       options);
   dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(asRowType(input->type()));
   rowOptions.setCollectColumnStats(true);
   rowOptions.setEagerFirstStripeLoad(true);
@@ -3443,10 +3427,9 @@ TEST_P(SelectiveNimbleReaderTest, pinMetadata) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), scanSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(scanSpec);
     options.setPinMetadata(true);
     if (enableCache) {
       options.setCacheMetadata(true);
@@ -3458,7 +3441,6 @@ TEST_P(SelectiveNimbleReaderTest, pinMetadata) {
         options);
     auto type = asRowType(input->type());
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     validate(*input, *readers.rowReader, 100, [](auto) { return true; });
@@ -4253,8 +4235,7 @@ TEST_P(SelectiveNimbleReaderTest, lazyFileStatsMatchEager) {
     std::vector<std::string> columnStatistics;
   };
   const auto read = [&](bool lazyFileStats) {
-    dwio::common::ReaderOptions options(pool());
-    options.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions options(pool(), scanSpec);
     options.setNimbleLazyFileStats(lazyFileStats);
     auto reader = SelectiveNimbleReaderFactory().createReader(
         std::make_unique<dwio::common::BufferedInput>(
@@ -4274,7 +4255,6 @@ TEST_P(SelectiveNimbleReaderTest, lazyFileStatsMatchEager) {
       }
     }
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(asRowType(input->type()));
     result.estimatedRowSize =
         reader->createRowReader(rowOptions)->estimatedRowSize();
@@ -4684,18 +4664,16 @@ TEST_F(SmallFilePreloadTest, preloadReducesPreadCalls) {
         std::make_shared<velox::tests::utils::CountingReadFile>(nimbleFile);
     auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
         countingFile, FileIoContext{.pool = pool()});
-    dwio::common::ReaderOptions options(pool());
     auto ioStats = std::make_shared<io::IoStatistics>();
-    options.setDataIoStats(ioStats);
-    options.setMetadataIoStats(ioStats);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    options.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions options(pool(), scanSpec);
+    options.setDataIoStats(ioStats);
+    options.setMetadataIoStats(ioStats);
     options.setFilePreloadThreshold(preloadThreshold);
 
     auto reader = factory->createReader(std::move(bufferedInput), options);
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowOptions);
     VectorPtr result = BaseVector::create(asRowType(input->type()), 0, pool());
     EXPECT_EQ(rowReader->next(1'000, result), 500);
@@ -4725,17 +4703,15 @@ TEST_F(SmallFilePreloadTest, preloadAttributesSingleReadToData) {
       std::make_shared<velox::tests::utils::CountingReadFile>(nimbleFile);
   auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
       countingFile, FileIoContext{.pool = pool()});
-  dwio::common::ReaderOptions options(pool());
-  options.setDataIoStats(dataStats);
-  options.setMetadataIoStats(metadataStats);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  options.setScanSpec(scanSpec);
+  dwio::common::ReaderOptions options(pool(), scanSpec);
+  options.setDataIoStats(dataStats);
+  options.setMetadataIoStats(metadataStats);
   options.setFilePreloadThreshold(nimbleFile.size() + 1);
 
   auto reader = factory->createReader(std::move(bufferedInput), options);
   dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowOptions);
   VectorPtr result = BaseVector::create(asRowType(input->type()), 0, pool());
   ASSERT_EQ(rowReader->next(1'000, result), 500);
@@ -4760,7 +4736,7 @@ TEST_F(SmallFilePreloadTest, preloadKeepsFileReadOps) {
       FileIoContext{.fileOpts = fileReadOps, .pool = pool()},
       dwio::common::MetricsLog::voidLog(),
       /*stats=*/nullptr);
-  dwio::common::ReaderOptions options(pool());
+  dwio::common::ReaderOptions options(pool(), nullptr);
   options.setFilePreloadThreshold(nimbleFile.size() + 1);
 
   dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
@@ -4786,16 +4762,14 @@ TEST_F(SmallFilePreloadTest, readsWithoutPreloadKeepFileReadOps) {
       FileIoContext{.fileOpts = fileReadOps, .pool = pool()},
       dwio::common::MetricsLog::voidLog(),
       /*stats=*/nullptr);
-  dwio::common::ReaderOptions options(pool());
-  options.setFilePreloadThreshold(0);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  options.setScanSpec(scanSpec);
+  dwio::common::ReaderOptions options(pool(), scanSpec);
+  options.setFilePreloadThreshold(0);
 
   auto reader = dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
                     ->createReader(std::move(bufferedInput), options);
   dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowOptions);
   VectorPtr result = BaseVector::create(asRowType(input->type()), 0, pool());
   ASSERT_EQ(rowReader->next(1'000, result), 500);
@@ -4847,18 +4821,16 @@ TEST_F(SmallFilePreloadTest, cachePresentSkipsPreload) {
         ioReaderOpts,
         FileIoContext{.pool = &ioReaderOpts.memoryPool()});
 
-    dwio::common::ReaderOptions options(pool());
-    options.setDataIoStats(ioStats);
-    options.setMetadataIoStats(ioStats);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    options.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions options(pool(), scanSpec);
+    options.setDataIoStats(ioStats);
+    options.setMetadataIoStats(ioStats);
     options.setFilePreloadThreshold(nimbleFile.size() + 1);
     options.setCache(cache.get());
 
     auto reader = factory->createReader(std::move(cachedInput), options);
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowOptions);
     VectorPtr result = BaseVector::create(asRowType(input->type()), 0, pool());
     ASSERT_EQ(rowReader->next(1'000, result), 500);

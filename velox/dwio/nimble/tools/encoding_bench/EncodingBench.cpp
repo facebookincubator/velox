@@ -319,7 +319,7 @@ std::unique_ptr<ReaderContext> makeReaderContext(
   ctx->fileData = nimble::test::createNimbleFile(pool, rowVector);
 
   auto readFile = std::make_shared<InMemoryReadFile>(ctx->fileData);
-  dwio::common::ReaderOptions readerOpts(&pool);
+  dwio::common::ReaderOptions readerOpts(&pool, nullptr);
   auto ioStats = std::make_shared<velox::io::IoStatistics>();
   readerOpts.setDataIoStats(ioStats);
   readerOpts.setMetadataIoStats(ioStats);

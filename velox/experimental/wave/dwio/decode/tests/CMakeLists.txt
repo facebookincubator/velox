@@ -33,6 +33,7 @@ target_link_libraries(
 add_executable(velox_wave_reader_kernel_test ReaderKernelTest.cpp)
 
 add_test(velox_wave_reader_kernel_test velox_wave_reader_kernel_test)
+set_tests_properties(velox_wave_reader_kernel_test PROPERTIES LABELS cuda_driver)
 
 target_link_libraries(
   velox_wave_reader_kernel_test

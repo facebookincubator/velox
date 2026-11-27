@@ -120,7 +120,8 @@ class ParquetWriterTest : public ParquetTestBase {
       const ParquetWriterOptions& writerOptions = {}) {
     auto schema = asRowType(data->type());
     auto* sinkPtr = write(data, writerOptions);
-    auto reader = createReaderInMemory(*sinkPtr);
+    auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
     ASSERT_EQ(reader->numberOfRows(), data->size());
     auto rowReader = createRowReaderFromReader(*reader, schema);
     assertReadWithReaderAndExpected(schema, *rowReader, expected, *leafPool_);
@@ -543,7 +544,8 @@ TEST_F(ParquetWriterTest, compression) {
 
   auto* sinkPtr = write(data, options, writerOptions);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *schema);
@@ -614,7 +616,8 @@ TEST_F(ParquetWriterTest, compressionRoundTripAcrossPages) {
 
     auto* sinkPtr = write(data, options, writerOptions);
 
-    auto reader = createReaderInMemory(*sinkPtr);
+    auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
     ASSERT_EQ(reader->numberOfRows(), kRows);
 
     auto rowReader = createRowReaderFromReader(*reader, schema);
@@ -940,7 +943,8 @@ TEST_F(ParquetWriterTest, preEpochInt96Timestamp) {
 
   auto* sinkPtr = write(data, writerOptions);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *schema);
@@ -1200,7 +1204,7 @@ TEST_F(ParquetWriterTest, largeMetadata) {
 
   const auto* sinkPtr = write(data, options, writerOptions);
 
-  auto readerOpts = makeDefaultReaderOptions();
+  auto readerOpts = makeDefaultReaderOptions(nullptr);
   readerOpts.setFooterSpeculativeIoSize(1024);
   readerOpts.setFilePreloadThreshold(1024 * 8);
 
@@ -1254,7 +1258,8 @@ TEST_F(ParquetWriterTest, configurableWriteSchema) {
 
     ParquetWriterOptions writerOptions;
     const auto* sinkPtr = write(data, writerOptions, newType);
-    auto reader = createReaderInMemory(*sinkPtr);
+    auto readerOptions = makeDefaultReaderOptions(makeScanSpec(newType));
+    auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
     ASSERT_EQ(reader->numberOfRows(), kNumRows);
     EXPECT_EQ(reader->rowType()->toString(), newType->toString());
@@ -1295,13 +1300,14 @@ TEST_F(ParquetWriterTest, updateWriterOptionsFromHiveConfig) {
 
   const auto* sinkPtr = write(data, std::move(configFromFile), {});
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(data->rowType()));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
 
   ASSERT_EQ(reader->numberOfRows(), data->size());
   ASSERT_EQ(*reader->rowType(), *data->rowType());
 
   auto rowReaderOpts = makeRowReaderOpts(data->rowType());
-  rowReaderOpts.setScanSpec(makeScanSpec(data->rowType()));
+
   rowReaderOpts.setTimestampPrecision(TimestampPrecision::kNanoseconds);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   assertReadWithReaderAndExpected(
@@ -1359,7 +1365,8 @@ TEST_F(ParquetWriterTest, enableStoreDecimalAsInteger) {
         auto* sinkPtr = write(
             data, std::move(configFromFile), std::move(sessionProperties));
 
-        auto reader = createReaderInMemory(*sinkPtr);
+        auto readerOptions = makeDefaultReaderOptions(makeScanSpec(rowType));
+        auto reader = createReaderInMemory(*sinkPtr, readerOptions);
         auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
 
         const auto& types = parquetReader.typeWithId()->getChildren();
@@ -1659,7 +1666,8 @@ TEST_F(ParquetWriterTest, dictionaryPassthroughMultipleBatches) {
   options.schema = schema;
   auto* sinkPtr = write(batches, options, writerOptions);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(
       reader->numberOfRows(),
       static_cast<uint64_t>(kBatchSize) * batches.size());
@@ -1718,7 +1726,8 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenFlat) {
   auto* sinkPtr =
       write({dictBatch, flatBatch}, options, ParquetWriterOptions{});
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
 
   const auto total = kBatchSize * 2;
@@ -1774,7 +1783,8 @@ TEST_F(ParquetWriterTest, multiBatchDictionaryThenForcedFlattenDictionary) {
   auto* sinkPtr =
       write({dictBatch, nestedBatch}, options, ParquetWriterOptions{});
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(schema));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(reader->numberOfRows(), static_cast<uint64_t>(kBatchSize) * 2);
 
   // Both batches resolve to dictStrings[row % kDictSize].
@@ -2084,7 +2094,8 @@ TEST_F(ParquetWriterTest, allNulls) {
 
   auto sinkPtr = write(vector);
 
-  auto reader = createReaderInMemory(*sinkPtr);
+  auto readerOptions = makeDefaultReaderOptions(makeScanSpec(rowType));
+  auto reader = createReaderInMemory(*sinkPtr, readerOptions);
   ASSERT_EQ(reader->numberOfRows(), kRows);
   ASSERT_EQ(*reader->rowType(), *rowType);
 

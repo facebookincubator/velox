@@ -1404,7 +1404,7 @@ TEST_F(HiveDataSinkTest, parquetRowGroupRows) {
   ASSERT_TRUE(dataSink->finish());
   dataSink->close();
 
-  dwio::common::ReaderOptions readerOpts(pool_.get());
+  dwio::common::ReaderOptions readerOpts(pool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   const auto filePaths = listFiles(outputDirectory->getPath());
@@ -1460,7 +1460,7 @@ TEST_F(
   ASSERT_TRUE(dataSink->finish());
   dataSink->close();
 
-  dwio::common::ReaderOptions readerOpts(pool_.get());
+  dwio::common::ReaderOptions readerOpts(pool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   const std::vector<std::string> filePaths =

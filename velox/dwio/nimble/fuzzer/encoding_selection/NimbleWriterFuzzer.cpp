@@ -2664,11 +2664,10 @@ void NimbleWriterFuzzer::readAndVerify(
     auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
     scanSpec->addAllChildFields(*schema);
 
-    velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    velox::dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
     readerOptions.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
     readerOptions.setMetadataIoStats(
         std::make_shared<velox::io::IoStatistics>());
-    readerOptions.setScanSpec(scanSpec);
     auto reader = factory->createReader(
         std::make_unique<velox::dwio::common::BufferedInput>(
             readFile, velox::FileIoContext{.pool = leafPool_.get()}),
@@ -2676,7 +2675,6 @@ void NimbleWriterFuzzer::readAndVerify(
     checkSchema(*reader->rowType());
 
     velox::dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(schema);
     auto rowReader = reader->createRowReader(rowOptions);
 
@@ -3413,10 +3411,9 @@ void NimbleWriterFuzzer::verifyPointLookup(
   }
 
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
-  velox::dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  velox::dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
   readerOptions.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
   readerOptions.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
-  readerOptions.setScanSpec(scanSpec);
   readerOptions.setNimbleLazyFileStats(lazyFileStats);
   auto reader =
       velox::dwio::common::getReaderFactory(
@@ -3437,7 +3434,6 @@ void NimbleWriterFuzzer::verifyPointLookup(
       fileStatsMode,
       options_.seed);
   velox::dwio::common::RowReaderOptions rowOptions;
-  rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(schema);
   auto rowReader = reader->createRowReader(rowOptions);
 

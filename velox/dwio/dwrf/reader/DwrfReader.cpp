@@ -174,7 +174,8 @@ void DwrfUnit::ensureDecoders() {
       stripeIndex_,
       splitStats_.get());
 
-  auto* scanSpec = options_.scanSpec().get();
+  auto* scanSpec =
+      stripeReaderBase_.getReader().readerOptions().scanSpec().get();
   const auto& fileType = stripeReaderBase_.getReader().schemaWithId();
   FlatMapContext flatMapContext;
   flatMapContext.keySelectionCallback = options_.keySelectionCallback();
@@ -264,7 +265,7 @@ DwrfRowReader::DwrfRowReader(
     : StripeReaderBase(reader),
       options_(opts),
       columnSelector_{
-          options_.scanSpec() != nullptr
+          reader->readerOptions().scanSpec() != nullptr
               ? nullptr
               : std::make_shared<ColumnSelector>(ColumnSelector::apply(
                     options_.selector(),

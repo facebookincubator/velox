@@ -150,7 +150,7 @@ TEST_F(IcebergDeletionVectorReadTest, deletionVectorAppliesToNonZeroByteSplit) {
   auto readFile = filesystems::getFileSystem(dataFile->getPath(), nullptr)
                       ->openFileForRead(dataFile->getPath());
   const uint64_t fileSize = readFile->size();
-  dwio::common::ReaderOptions readerOptions{pool()};
+  dwio::common::ReaderOptions readerOptions{pool(), nullptr};
   auto reader = std::make_unique<dwrf::ReaderBase>(
       readerOptions,
       std::make_unique<dwio::common::BufferedInput>(

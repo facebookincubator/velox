@@ -76,7 +76,7 @@ class ReaderBase {
       std::shared_ptr<io::IoStatistics> dataIoStats = nullptr,
       std::shared_ptr<io::IoStatistics> metadataIoStats = nullptr)
       : options_{[&] {
-          dwio::common::ReaderOptions opts(&pool);
+          dwio::common::ReaderOptions opts(&pool, nullptr);
           opts.setDataIoStats(std::move(dataIoStats));
           opts.setMetadataIoStats(std::move(metadataIoStats));
           return opts;

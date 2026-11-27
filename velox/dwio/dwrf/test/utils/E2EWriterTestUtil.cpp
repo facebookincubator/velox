@@ -119,7 +119,7 @@ namespace facebook::velox::dwrf {
 
   auto dataIoStats = std::make_shared<io::IoStatistics>();
   auto metadataIoStats = std::make_shared<io::IoStatistics>();
-  dwio::common::ReaderOptions readerOpts(&pool);
+  dwio::common::ReaderOptions readerOpts(&pool, nullptr);
   readerOpts.setDataIoStats(dataIoStats);
   readerOpts.setMetadataIoStats(metadataIoStats);
   RowReaderOptions rowReaderOpts;

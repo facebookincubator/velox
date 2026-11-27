@@ -83,7 +83,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       0,
       deleteFile.fileSizeInBytes);
 
-  dwio::common::ReaderOptions deleteReaderOpts(pool_);
+  dwio::common::ReaderOptions deleteReaderOpts(pool_, scanSpec);
   deleteReaderOpts.setDataIoStats(ioStatistics);
   deleteReaderOpts.setMetadataIoStats(ioStatistics);
   ::facebook::velox::connector::FileSplitReader::configureReaderOptions(
@@ -128,7 +128,6 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       nullptr,
       nullptr,
       deleteSplit,
-      scanSpec,
       nullptr,
       deleteFileSchema,
       nullptr,

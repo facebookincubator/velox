@@ -347,10 +347,11 @@ class NimbleReader : public dwio::common::Reader {
       return factory.create(pool, data, std::move(stringBufferFactory));
     };
 
+    const auto& scanSpec = options_.scanSpec();
     auto selector = options.selector();
     if (!selector) {
-      selector = dwio::common::ColumnSelector::fromScanSpec(
-          *options.scanSpec(), rowType());
+      selector =
+          dwio::common::ColumnSelector::fromScanSpec(*scanSpec, rowType());
     }
     facebook::nimble::populateFeatureSelector(
         *selector, options.mapColumnIdAsStruct(), params);
@@ -361,7 +362,7 @@ class NimbleReader : public dwio::common::Reader {
         std::move(params));
     return std::make_unique<NimbleRowReader>(
         std::move(reader),
-        options.scanSpec(),
+        scanSpec,
         /*projectNestedStructs=*/tableNamedSchema_ != nullptr);
   }
 

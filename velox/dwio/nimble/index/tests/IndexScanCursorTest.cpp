@@ -486,7 +486,8 @@ TEST_P(IndexScanCursorTest, returnsCallerScratchEncodingOptions) {
 
 TEST_P(IndexScanCursorTest, releasesSelectiveReaderStripeOwnership) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/1);
-  velox::dwio::common::ReaderOptions options(leafPool_.get());
+  velox::dwio::common::ReaderOptions options(
+      leafPool_.get(), /*scanSpec=*/nullptr);
   configureReaderOptions(
       options,
       /*setDataIoStats=*/true,

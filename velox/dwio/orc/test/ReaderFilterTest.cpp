@@ -222,13 +222,12 @@ TEST_P(OrcReaderFilterTestP, tests) {
 
   std::string fileName = "orc_all_type.orc";
 
-  dwio::common::ReaderOptions readerOpts{pool()};
+  dwio::common::ReaderOptions readerOpts{pool(), scanSpec};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
 
   // To make DwrfReader reads ORC file, setFileFormat to FileFormat::ORC
   readerOpts.setFileFormat(dwio::common::FileFormat::ORC);
-  readerOpts.setScanSpec(scanSpec);
 
   // Read orc file
   auto orcFilePath = getExamplesFilePath(fileName);
@@ -241,7 +240,6 @@ TEST_P(OrcReaderFilterTestP, tests) {
       ->setFilter(GetParam().filter->clone());
 
   RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   auto batch = BaseVector::create(schema, 0, &readerOpts.memoryPool());
 

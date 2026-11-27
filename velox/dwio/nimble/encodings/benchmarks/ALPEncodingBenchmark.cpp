@@ -450,8 +450,7 @@ class AlpFileBenchmarkFixture {
           std::make_unique<velox::common::FloatingPointRange<FloatType>>(
               FloatType{0}, true, false, filterUpper_, false, false, false));
     }
-    auto options = readerOptions();
-    options.setScanSpec(scanSpec);
+    auto options = readerOptions(scanSpec);
     nimble::SelectiveNimbleReaderFactory factory;
     auto reader = factory.createReader(
         std::make_unique<common::BufferedInput>(
@@ -459,7 +458,6 @@ class AlpFileBenchmarkFixture {
             facebook::velox::FileIoContext{.pool = pool_.get()}),
         options);
     common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(velox::asRowType(input_->type()));
     auto rowReader = reader->createRowReader(rowOptions);
     velox::VectorPtr output =
@@ -521,8 +519,9 @@ class AlpFileBenchmarkFixture {
     return !filtered || (!isNull(row) && values_[row] <= filterUpper_);
   }
 
-  common::ReaderOptions readerOptions() const {
-    common::ReaderOptions options(pool_.get());
+  common::ReaderOptions readerOptions(
+      std::shared_ptr<velox::common::ScanSpec> scanSpec = nullptr) const {
+    common::ReaderOptions options(pool_.get(), std::move(scanSpec));
     options.setDataIoStats(std::make_shared<velox::io::IoStatistics>());
     options.setMetadataIoStats(std::make_shared<velox::io::IoStatistics>());
     return options;

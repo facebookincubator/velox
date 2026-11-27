@@ -9278,7 +9278,14 @@ TEST_P(BatchReaderTest, projectedStripePrefetchMatchesOnDemand) {
         FactoryKind::kParallel}) {
     SCOPED_TRACE(static_cast<int>(factoryKind));
     const bool prefetch = factoryKind == FactoryKind::kParallel;
-    velox::dwio::common::ReaderOptions options(leafPool_.get());
+    auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
+    for (int column = 0; column < 2; ++column) {
+      auto* field = scanSpec->getOrCreateChild(
+          velox::common::Subfield(column == 0 ? "a" : "b"));
+      field->setProjectOut(true);
+      field->setChannel(column);
+    }
+    velox::dwio::common::ReaderOptions options(leafPool_.get(), scanSpec);
     auto reader = velox::nimble::detail::createBatchReader(options, file, {});
     size_t numPrefetchScheduled{0};
     size_t numBlockedOnIoCallbacks{0};
@@ -9303,14 +9310,6 @@ TEST_P(BatchReaderTest, projectedStripePrefetchMatchesOnDemand) {
         velox::checkedPointerCast<const velox::RowType>(vectors[0]->type()),
         std::vector<std::string>{"a", "b"});
     velox::dwio::common::RowReaderOptions rowOptions;
-    auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
-    for (int column = 0; column < 2; ++column) {
-      auto* field = scanSpec->getOrCreateChild(
-          velox::common::Subfield(column == 0 ? "a" : "b"));
-      field->setProjectOut(true);
-      field->setChannel(column);
-    }
-    rowOptions.setScanSpec(scanSpec);
     rowOptions.select(selector);
     size_t numStripeCountCallbacks{0};
     rowOptions.setStripeCountCallback([&](auto) { ++numStripeCountCallbacks; });

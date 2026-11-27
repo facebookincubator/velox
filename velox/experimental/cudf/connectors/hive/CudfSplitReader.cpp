@@ -210,7 +210,7 @@ CudfSplitReader::CudfSplitReader(
       ioStats_(ioStats),
       cudfHiveConfig_(cudfHiveConfig),
       pool_(connectorQueryCtx->memoryPool()),
-      baseReaderOpts_(pool_),
+      baseReaderOpts_(pool_, nullptr),
       subfieldFilterAst_(subfieldFilterAst),
       pushdownFilterExpr_(subfieldFilterAst) {
   VELOX_CHECK_GE(

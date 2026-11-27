@@ -391,7 +391,7 @@ TEST(Metadata, testAddKeyValueMetadata) {
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
-  auto file = test::ParquetTestFile::open(buffer, "MetadataTest");
+  auto file = test::ParquetTestFile::open(buffer, "MetadataTest", nullptr);
   auto& reader = file.reader();
   ASSERT_EQ(3, reader.fileMetaData().keyValueMetadataSize());
   // Verify keys that were added before file writer was closed are present.
@@ -498,7 +498,7 @@ TEST(Metadata, testSortingColumns) {
 
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
 
-  auto file = test::ParquetTestFile::open(buffer, "MetadataTest");
+  auto file = test::ParquetTestFile::open(buffer, "MetadataTest", nullptr);
   auto& reader = file.reader();
   ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
   auto rowGroup = reader.fileMetaData().rowGroup(0);

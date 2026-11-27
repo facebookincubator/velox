@@ -49,7 +49,7 @@ class IcebergParquetStatsTest : public test::IcebergTestBase {
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<LocalReadFile>(task["path"].asString()),
             FileIoContext{.pool = opPool_.get()}),
-        dwio::common::ReaderOptions(opPool_.get()));
+        dwio::common::ReaderOptions(opPool_.get(), nullptr));
     const auto metadata = reader.fileMetaData();
     ASSERT_EQ(metadata.numRowGroups(), expectedRowGroups);
     for (auto i = 0; i < expectedRowGroups; ++i) {

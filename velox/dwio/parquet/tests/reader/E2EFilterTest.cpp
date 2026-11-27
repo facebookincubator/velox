@@ -99,7 +99,7 @@ class E2EFilterTest : public E2EFilterTestBase,
   // file. Uses ColumnChunkMetaDataPtr::encodings() — no PageReader needed.
   bool columnChunkUsesEncoding(
       facebook::velox::parquet::arrow::Encoding::type encoding) {
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     readerOpts.setDataIoStats(dataIoStats_);
     readerOpts.setMetadataIoStats(metadataIoStats_);
     auto reader = std::make_unique<ParquetReader>(
@@ -121,7 +121,7 @@ class E2EFilterTest : public E2EFilterTestBase,
   // the most recently written file. Used to confirm that a decimal column was
   // actually stored as INT64 rather than FIXED_LEN_BYTE_ARRAY.
   thrift::Type leafColumnPhysicalType(int32_t columnIndex) {
-    dwio::common::ReaderOptions readerOpts(leafPool_.get());
+    dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
     auto reader = std::make_unique<ParquetReader>(
         std::make_unique<dwio::common::BufferedInput>(
             std::make_shared<InMemoryReadFile>(std::string(sinkData_)),
@@ -901,7 +901,7 @@ TEST_F(E2EFilterTest, combineRowGroup) {
             rowType_, 1, *leafPool_, nullptr, 0)));
   }
   writeToMemory(rowType_, batches, false);
-  dwio::common::ReaderOptions readerOpts(leafPool_.get());
+  dwio::common::ReaderOptions readerOpts(leafPool_.get(), nullptr);
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   auto input = std::make_unique<BufferedInput>(
@@ -962,29 +962,28 @@ TEST_F(E2EFilterTest, parquetMRVersionStringStatsRowGroupFiltering) {
             {kSanXing, kVivo, kSanXing, kVivo, kSanXing})));
     writer->close();
 
-    dwio::common::ReaderOptions readerOptions(leafPool_.get());
+    auto scanSpec = std::make_shared<ScanSpec>("");
+    scanSpec->addAllChildFields(*rowType);
+    dwio::common::ReaderOptions readerOptions(leafPool_.get(), scanSpec);
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     auto input = std::make_unique<BufferedInput>(
         std::make_shared<InMemoryReadFile>(
             std::string(sinkPtr->data(), sinkPtr->size())),
         FileIoContext{.pool = &readerOptions.memoryPool()});
-    auto reader = makeReader(readerOptions, std::move(input));
-    auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
-    EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
-
-    auto scanSpec = std::make_shared<ScanSpec>("");
-    scanSpec->addAllChildFields(*rowType);
     // Equality filter: s = "360手机助手".
     scanSpec->getOrCreateChild(Subfield("s"))
         ->setFilter(
             std::make_unique<BytesRange>(
                 k360, false, false, k360, false, false, false));
 
+    auto reader = makeReader(readerOptions, std::move(input));
+    auto& parquetReader = dynamic_cast<ParquetReader&>(*reader);
+    EXPECT_EQ(parquetReader.fileMetaData().numRowGroups(), 2);
+
     RowReaderOptions rowReaderOpts;
     rowReaderOpts.select(
         std::make_shared<ColumnSelector>(rowType, rowType->names()));
-    rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
 
     VectorPtr result = BaseVector::create(rowType, 1, leafPool_.get());

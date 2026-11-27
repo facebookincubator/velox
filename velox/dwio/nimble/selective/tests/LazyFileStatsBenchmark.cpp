@@ -189,10 +189,9 @@ class LazyFileStatsBenchmark : public velox::test::VectorTestBase {
 
   // Opens a reader, prunes on 'bigint_0' and estimates the row size.
   void runSplit(const std::shared_ptr<ReadFile>& readFile, bool lazyFileStats) {
-    dwio::common::ReaderOptions readerOptions(pool());
+    dwio::common::ReaderOptions readerOptions(pool(), scanSpec_);
     readerOptions.setDataIoStats(std::make_shared<io::IoStatistics>());
     readerOptions.setMetadataIoStats(std::make_shared<io::IoStatistics>());
-    readerOptions.setScanSpec(scanSpec_);
     readerOptions.setFilePreloadThreshold(0);
     readerOptions.setNimbleLazyFileStats(lazyFileStats);
     auto reader =
@@ -207,7 +206,6 @@ class LazyFileStatsBenchmark : public velox::test::VectorTestBase {
         reader->columnStatistics(filterNode) != nullptr, "Missing stats");
 
     dwio::common::RowReaderOptions rowReaderOptions;
-    rowReaderOptions.setScanSpec(scanSpec_);
     rowReaderOptions.setEagerFirstStripeLoad(false);
     const auto rowReader = reader->createRowReader(rowReaderOptions);
     NIMBLE_CHECK(

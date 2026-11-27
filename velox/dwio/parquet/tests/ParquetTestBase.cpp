@@ -25,8 +25,9 @@ namespace {
 dwio::common::ReaderOptions makeReaderOptions(
     memory::MemoryPool* pool,
     const std::shared_ptr<velox::io::IoStatistics>& dataIoStats,
-    const std::shared_ptr<velox::io::IoStatistics>& metadataIoStats) {
-  dwio::common::ReaderOptions opts(pool);
+    const std::shared_ptr<velox::io::IoStatistics>& metadataIoStats,
+    std::shared_ptr<velox::common::ScanSpec> scanSpec) {
+  dwio::common::ReaderOptions opts(pool, std::move(scanSpec));
   opts.setDataIoStats(dataIoStats);
   opts.setMetadataIoStats(metadataIoStats);
   return opts;
@@ -81,8 +82,8 @@ ParquetReaderBuilder& ParquetReaderBuilder::byteRange(
   return *this;
 }
 
-ParquetReaderBuilder& ParquetReaderBuilder::withScanSpecOnly() {
-  withScanSpecOnly_ = true;
+ParquetReaderBuilder& ParquetReaderBuilder::withoutColumnSelector() {
+  useColumnSelector_ = false;
   return *this;
 }
 
@@ -97,8 +98,8 @@ ParquetReaderBundle ParquetReaderBuilder::build() {
       filePath_.has_value() ^ (buffer_ != nullptr),
       "file path or in-memory buffer must be set");
 
-  auto readerOpts = readerOptions_.value_or(
-      makeReaderOptions(pool_, dataIoStats_, metadataIoStats_));
+  auto readerOpts = readerOptions_.value_or(makeReaderOptions(
+      pool_, dataIoStats_, metadataIoStats_, makeScanSpec(outputType_)));
   std::unique_ptr<ParquetReader> reader;
   if (buffer_ != nullptr) {
     std::string data(buffer_->data(), buffer_->size());
@@ -115,10 +116,9 @@ ParquetReaderBundle ParquetReaderBuilder::build() {
   }
 
   dwio::common::RowReaderOptions rowReaderOpts;
-  if (!withScanSpecOnly_) {
+  if (useColumnSelector_) {
     rowReaderOpts = makeRowReaderOptsWithSelector(outputType_);
   }
-  rowReaderOpts.setScanSpec(makeScanSpec(outputType_));
   if (byteRange_.has_value()) {
     rowReaderOpts.range(byteRange_->first, byteRange_->second);
   }
@@ -126,8 +126,10 @@ ParquetReaderBundle ParquetReaderBuilder::build() {
   return {std::move(reader), std::move(rowReader)};
 }
 
-dwio::common::ReaderOptions ParquetTestBase::makeDefaultReaderOptions() const {
-  return makeReaderOptions(leafPool_.get(), dataIoStats_, metadataIoStats_);
+dwio::common::ReaderOptions ParquetTestBase::makeDefaultReaderOptions(
+    std::shared_ptr<velox::common::ScanSpec> scanSpec) const {
+  return makeReaderOptions(
+      leafPool_.get(), dataIoStats_, metadataIoStats_, std::move(scanSpec));
 }
 
 std::unique_ptr<facebook::velox::parquet::ParquetReader>
@@ -179,16 +181,15 @@ void ParquetTestBase::assertReadWithReaderAndExpected(
 void ParquetTestBase::assertReadWithReaderAndFilters(
     dwio::common::Reader& reader,
     const RowTypePtr& fileSchema,
+    velox::common::ScanSpec& scanSpec,
     FilterMap filters,
     const RowVectorPtr& expected) {
-  auto scanSpec = makeScanSpec(fileSchema);
   for (auto&& [column, filter] : filters) {
-    scanSpec->getOrCreateChild(velox::common::Subfield(column))
+    scanSpec.getOrCreateChild(velox::common::Subfield(column))
         ->setFilter(std::move(filter));
   }
 
   auto rowReaderOpts = makeRowReaderOpts(fileSchema);
-  rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader.createRowReader(rowReaderOpts);
   assertReadWithReaderAndExpected(fileSchema, *rowReader, expected, *leafPool_);
 }
@@ -321,7 +322,6 @@ ParquetTestBase::createRowReaderFromReader(
   if (useColumnSelector) {
     rowReaderOpts = makeRowReaderOpts(rowType);
   }
-  rowReaderOpts.setScanSpec(makeScanSpec(rowType));
   return reader.createRowReader(rowReaderOpts);
 }
 

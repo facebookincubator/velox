@@ -132,7 +132,7 @@ TEST_F(ChunkedDecoderTest, bufferedInput) {
   }
 
   auto file = std::make_shared<InMemoryReadFile>(fileContent);
-  dwio::common::ReaderOptions readerOpts{&pool()};
+  dwio::common::ReaderOptions readerOpts{&pool(), nullptr};
   readerOpts.setDataIoStats(dataIoStats_);
   readerOpts.setMetadataIoStats(metadataIoStats_);
   readerOpts.setLoadQuantum(kLoadQuantum);

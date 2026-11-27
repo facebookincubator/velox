@@ -304,8 +304,7 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
       spec->getOrCreateChild("gate")->setFilter(
           std::make_unique<common::BigintRange>(1, 1, false));
     }
-    dwio::common::ReaderOptions options(pool_.get());
-    options.setScanSpec(spec);
+    dwio::common::ReaderOptions options(pool_.get(), spec);
     auto reader =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
             ->createReader(
@@ -314,7 +313,6 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
                     FileIoContext{.pool = pool_.get()}),
                 options);
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(spec);
     rowOptions.setRequestedType(type);
     rowOptions.setNimbleFsstDecodeRepeatedPayloads(cache);
     rowOptions.setNimblePreserveDictionaryEncoding(preserve);

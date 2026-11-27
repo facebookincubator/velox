@@ -168,8 +168,7 @@ class AggregationPushdownBenchmark : public velox::test::VectorTestBase {
 
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions readerOptions(pool());
-    readerOptions.setScanSpec(scanSpec);
+    dwio::common::ReaderOptions readerOptions(pool(), scanSpec);
     Readers readers;
     readers.reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(
@@ -177,7 +176,6 @@ class AggregationPushdownBenchmark : public velox::test::VectorTestBase {
             FileIoContext{.pool = pool()}),
         readerOptions);
     dwio::common::RowReaderOptions rowReaderOptions;
-    rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(kInputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
     rowReaderOptions.setNimbleScanFastPath(config.scanFastPath);

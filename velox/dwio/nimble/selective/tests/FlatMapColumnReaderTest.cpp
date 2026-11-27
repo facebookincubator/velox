@@ -126,10 +126,9 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
-    dwio::common::ReaderOptions options(pool());
+    dwio::common::ReaderOptions options(pool(), scanSpec);
     options.setDataIoStats(dataIoStats_);
     options.setMetadataIoStats(metadataIoStats_);
-    options.setScanSpec(scanSpec);
     Readers readers;
     readers.reader = factory->createReader(
         std::make_unique<dwio::common::BufferedInput>(
@@ -137,7 +136,6 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
         options);
     auto type = asRowType(expected->type());
     dwio::common::RowReaderOptions rowOptions;
-    rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setLazyColumnIo(lazyColumnIo);

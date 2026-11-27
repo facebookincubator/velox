@@ -1867,7 +1867,7 @@ void TableEvolutionFuzzer::run() {
 
 RowTypePtr TableEvolutionFuzzer::readInputFileSchema(
     const InputFile& inputFile) const {
-  dwio::common::ReaderOptions readerOptions(config_.pool);
+  dwio::common::ReaderOptions readerOptions(config_.pool, nullptr);
   readerOptions.setFileFormat(inputFile.format);
   auto uniqueReadFile = filesystems::getFileSystem(inputFile.path, nullptr)
                             ->openFileForRead(inputFile.path);

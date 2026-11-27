@@ -139,14 +139,14 @@ SelectiveNimbleIndexReader::SelectiveNimbleIndexReader(
               encodingOptions(readerBase_->tablet(), options))),
       rowSizeTracker_(
           std::make_unique<RowSizeTracker>(readerBase_->fileSchemaWithId())),
-      hasFilters_(options.scanSpec()->hasFilter()),
+      hasFilters_(readerBase_->scanSpec()->hasFilter()),
       outputType_(
           options.requestedType() ? options.requestedType()
                                   : readerBase_->fileSchema()),
       fileOutputType_(adaptOutputTypeForReader(
           outputType_,
           readerBase_->fileSchema(),
-          *options.scanSpec())),
+          *readerBase_->scanSpec())),
       clusterIndex_{readerBase_->tablet().clusterIndex()},
       numStripes_{static_cast<int32_t>(readerBase_->tablet().stripeCount())},
       streams_{readerBase_},
@@ -527,7 +527,7 @@ void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
         fileOutputType_,
         readerBase_->fileSchemaWithId(),
         params,
-        *options_.scanSpec(),
+        *readerBase_->scanSpec(),
         true);
     rowSizeTracker_->finalizeProjection();
     columnReader_->setIsTopLevel();

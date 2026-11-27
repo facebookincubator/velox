@@ -44,7 +44,7 @@ TEST(OptionsTests, commonReaderOptions) {
   facebook::velox::memory::MemoryManager::testingSetInstance({});
   auto pool = facebook::velox::memory::memoryManager()->addRootPool(
       "commonReaderOptionsTest");
-  facebook::velox::dwio::common::ReaderOptions options(pool.get());
+  facebook::velox::dwio::common::ReaderOptions options(pool.get(), nullptr);
 
   options.setColumnMappingMode(ColumnMappingMode::kName);
   options.setFooterSpeculativeIoSize(1234);
@@ -87,7 +87,7 @@ TEST(OptionsTests, cacheData) {
   facebook::velox::memory::MemoryManager::testingSetInstance({});
   auto pool =
       facebook::velox::memory::memoryManager()->addRootPool("cacheDataTest");
-  facebook::velox::dwio::common::ReaderOptions options(pool.get());
+  facebook::velox::dwio::common::ReaderOptions options(pool.get(), nullptr);
   EXPECT_TRUE(options.cacheData());
 
   options.setCacheData(false);

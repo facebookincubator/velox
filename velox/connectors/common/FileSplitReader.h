@@ -157,7 +157,6 @@ class FileSplitReader {
       const std::shared_ptr<const FileConfig>& fileConfig,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const FileConnectorSplit>& fileSplit,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
       std::shared_ptr<common::MetadataFilter> metadataFilter,
       const RowTypePtr& requestedType,
       folly::Executor* ioExecutor,

@@ -527,7 +527,7 @@ TEST_F(IcebergPositionalDeleteTest, skipDeleteFileByPositionUpperBound) {
                      ->openFileForRead(dataFilePath->getPath());
   const uint64_t fileSize = filePtr->size();
   std::shared_ptr<ReadFile> file = std::move(filePtr);
-  dwio::common::ReaderOptions readerOptions{pool()};
+  dwio::common::ReaderOptions readerOptions{pool(), nullptr};
   auto input = std::make_unique<dwio::common::BufferedInput>(
       file, FileIoContext{.pool = pool()});
   auto reader =

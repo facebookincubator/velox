@@ -126,6 +126,11 @@ class ReaderBase {
     return fileSchemaWithId_;
   }
 
+  /// Returns the ScanSpec from ReaderOptions, shared by row and index readers.
+  const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
+    return scanSpec_;
+  }
+
   /// Returns whether the file has a vectorized stats section.
   bool hasFileColumnStatistics() const;
 

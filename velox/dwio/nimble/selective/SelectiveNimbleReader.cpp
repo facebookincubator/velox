@@ -351,7 +351,9 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   SelectiveNimbleRowReader(
       const std::shared_ptr<ReaderBase>& readerBase,
       const dwio::common::RowReaderOptions& options)
-      : lazyIoColumns_{computeLazyIoColumns(options)},
+      : lazyIoColumns_{computeLazyIoColumns(
+            options,
+            readerBase->scanSpec().get())},
         readerBase_{readerBase},
         options_{options},
         encodingFactory_(
@@ -472,7 +474,8 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
   // spec and remaining filter columns. Returns a const set used for the
   // lifetime of this reader.
   static folly::F14FastSet<std::string> computeLazyIoColumns(
-      const dwio::common::RowReaderOptions& options);
+      const dwio::common::RowReaderOptions& options,
+      velox::common::ScanSpec* scanSpec);
 
   // Precomputed set of top-level column names that should use lazy I/O.
   // Const after construction — computed once per split.
@@ -658,7 +661,7 @@ void SelectiveNimbleRowReader::computeSkipRowRanges() {
       streams_.stripeIndex(),
       currentStripe_,
       "Chunk statistics must come from the current stripe.");
-  auto* scanSpec = options_.scanSpec().get();
+  auto* scanSpec = readerBase_->scanSpec().get();
   if (scanSpec == nullptr) {
     return;
   }
@@ -764,7 +767,7 @@ void SelectiveNimbleRowReader::computeStatsBasedRowSize() const {
     return;
   }
   auto totalLogicalSize =
-      sumProjectedLogicalSize(*readerBase_, *options_.scanSpec());
+      sumProjectedLogicalSize(*readerBase_, *readerBase_->scanSpec());
   auto totalRows = readerBase_->tablet().tabletRowCount();
   if (totalRows > 0) {
     statsBasedRowSize_ = std::max<size_t>(1, totalLogicalSize / totalRows);
@@ -834,12 +837,12 @@ void SelectiveNimbleRowReader::initReadRange() {
 // filter, and is projected in the output. Returns empty set when lazy I/O is
 // disabled.
 folly::F14FastSet<std::string> SelectiveNimbleRowReader::computeLazyIoColumns(
-    const dwio::common::RowReaderOptions& options) {
+    const dwio::common::RowReaderOptions& options,
+    velox::common::ScanSpec* scanSpec) {
   folly::F14FastSet<std::string> lazyIoColumns;
   if (!options.lazyColumnIo()) {
     return lazyIoColumns;
   }
-  auto* scanSpec = options.scanSpec().get();
   VELOX_CHECK_NOT_NULL(scanSpec);
   const auto& remainingFilterColumns = options.remainingFilterColumns();
   const auto stableChildren = scanSpec->stableChildren();
@@ -885,7 +888,7 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
                                : readerBase_->fileSchema(),
       readerBase_->fileSchemaWithId(),
       params,
-      *options_.scanSpec(),
+      *readerBase_->scanSpec(),
       true);
   rowSizeTracker_->finalizeProjection();
   columnReader_->setIsTopLevel();
@@ -955,7 +958,7 @@ void SelectiveNimbleRowReader::initIndexBounds() {
       indexColumns,
       sortOrders,
       readerBase_->fileSchema(),
-      *options_.scanSpec(),
+      *readerBase_->scanSpec(),
       readerBase_->pool());
 
   if (!result.has_value()) {
@@ -963,7 +966,7 @@ void SelectiveNimbleRowReader::initIndexBounds() {
   }
 
   filtersToRestore_ = std::move(result->removedFilters);
-  options_.scanSpec()->resetCachedValues(/*doReorder=*/false);
+  readerBase_->scanSpec()->resetCachedValues(/*doReorder=*/false);
 
   clusterIndex_ = clusterIndex;
 
@@ -1054,13 +1057,13 @@ void SelectiveNimbleRowReader::restoreFilters() {
       filtersToRestore_.empty() || clusterIndex_ != nullptr,
       "filtersToRestore_ should only be set when index bounds are used");
   for (auto& [columnName, filter] : filtersToRestore_) {
-    auto* childSpec = options_.scanSpec()->childByName(columnName);
+    auto* childSpec = readerBase_->scanSpec()->childByName(columnName);
     if (childSpec != nullptr) {
       childSpec->setFilter(std::move(filter));
     }
   }
   filtersToRestore_.clear();
-  options_.scanSpec()->resetCachedValues(/*doReorder=*/false);
+  readerBase_->scanSpec()->resetCachedValues(/*doReorder=*/false);
 }
 
 void SelectiveNimbleRowReader::setAtEnd() {
@@ -1110,14 +1113,10 @@ class SelectiveNimbleReader : public dwio::common::Reader {
   SelectiveNimbleReader(
       std::unique_ptr<dwio::common::BufferedInput> input,
       const dwio::common::ReaderOptions& options)
-      : SelectiveNimbleReader(
-            ReaderBase::create(std::move(input), options),
-            options) {}
+      : SelectiveNimbleReader(ReaderBase::create(std::move(input), options)) {}
 
-  SelectiveNimbleReader(
-      std::shared_ptr<ReaderBase> readerBase,
-      const dwio::common::ReaderOptions& options)
-      : readerBase_(std::move(readerBase)), options_(options) {
+  explicit SelectiveNimbleReader(std::shared_ptr<ReaderBase> readerBase)
+      : readerBase_(std::move(readerBase)) {
     NIMBLE_USER_CHECK_NOT_NULL(readerBase_, "readerBase must not be null");
     detail::initHook();
   }
@@ -1143,7 +1142,6 @@ class SelectiveNimbleReader : public dwio::common::Reader {
       const dwio::common::RowReaderOptions& options) const;
 
   const std::shared_ptr<ReaderBase> readerBase_;
-  const dwio::common::ReaderOptions options_;
 };
 
 std::optional<uint64_t> SelectiveNimbleReader::numberOfRows() const {
@@ -1198,7 +1196,7 @@ void SelectiveNimbleReader::validateOmittedKeyColumnStorageAccess(
 
   const auto outputType = options.requestedType() ? options.requestedType()
                                                   : readerBase_->fileSchema();
-  const auto* scanSpec = options.scanSpec().get();
+  const auto* scanSpec = readerBase_->scanSpec().get();
   for (const auto& column :
        properties.clusterIndexKeyColumnsWithOmittedStorage()) {
     NIMBLE_USER_CHECK(
@@ -1238,15 +1236,13 @@ SelectiveNimbleReaderFactory::createReader(
   const auto cachedTablet =
       tabletReaderCache_->get(input->getReadFile(), tabletOptions);
   return std::make_unique<SelectiveNimbleReader>(
-      ReaderBase::create(std::move(input), cachedTablet, options), options);
+      ReaderBase::create(std::move(input), cachedTablet, options));
 }
 
 std::unique_ptr<dwio::common::Reader>
 SelectiveNimbleReaderFactory::createReader(
-    std::shared_ptr<ReaderBase> readerBase,
-    const dwio::common::ReaderOptions& options) {
-  return std::make_unique<SelectiveNimbleReader>(
-      std::move(readerBase), options);
+    std::shared_ptr<ReaderBase> readerBase) {
+  return std::make_unique<SelectiveNimbleReader>(std::move(readerBase));
 }
 
 } // namespace facebook::nimble

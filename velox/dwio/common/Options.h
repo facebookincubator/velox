@@ -390,14 +390,6 @@ class RowReaderOptions {
     requestedType_ = std::move(requestedType);
   }
 
-  const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
-    return scanSpec_;
-  }
-
-  void setScanSpec(std::shared_ptr<velox::common::ScanSpec> scanSpec) {
-    scanSpec_ = std::move(scanSpec);
-  }
-
   folly::Executor* ioExecutor() const {
     return ioExecutor_;
   }
@@ -666,7 +658,6 @@ class RowReaderOptions {
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
   RowTypePtr requestedType_;
-  std::shared_ptr<velox::common::ScanSpec> scanSpec_{nullptr};
   std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
 
   // Node id for map column to a list of keys to be projected as a struct.
@@ -743,8 +734,12 @@ class ReaderOptions : public io::ReaderOptions {
   static constexpr uint64_t kDefaultFilePreloadThreshold =
       1024 * 1024 * 8; // 8MB
 
-  explicit ReaderOptions(velox::memory::MemoryPool* pool)
-      : io::ReaderOptions(pool) {}
+  /// The reader, its row readers and its index readers use this ScanSpec.
+  /// A null ScanSpec selects the non-selective reader path where supported.
+  explicit ReaderOptions(
+      velox::memory::MemoryPool* pool,
+      std::shared_ptr<velox::common::ScanSpec> scanSpec)
+      : io::ReaderOptions(pool), scanSpec_(std::move(scanSpec)) {}
 
   /// Sets the format of the file, such as "rc" or "dwrf". The default is
   /// "dwrf".
@@ -928,10 +923,6 @@ class ReaderOptions : public io::ReaderOptions {
 
   const std::shared_ptr<velox::common::ScanSpec>& scanSpec() const {
     return scanSpec_;
-  }
-
-  void setScanSpec(std::shared_ptr<velox::common::ScanSpec> scanSpec) {
-    scanSpec_ = std::move(scanSpec);
   }
 
   bool selectiveNimbleReaderEnabled() const {

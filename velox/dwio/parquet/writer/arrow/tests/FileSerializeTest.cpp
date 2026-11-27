@@ -254,10 +254,10 @@ class TestSerialize : public test::PrimitiveTypedTest<TestType> {
     auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
     scanSpec->addAllChildFields(*rowType);
     dwio::common::RowReaderOptions rowReaderOpts;
-    rowReaderOpts.setScanSpec(scanSpec);
     rowReaderOpts.setRequestedType(rowType);
 
-    auto file = test::ParquetTestFile::open(buffer, "FileSerializeTest");
+    auto file =
+        test::ParquetTestFile::open(buffer, "FileSerializeTest", scanSpec);
     auto& reader = file.reader();
     ASSERT_EQ(numColumns_, reader.fileMetaData().rowGroup(0).numColumns());
     ASSERT_EQ(numRowgroups_, reader.fileMetaData().numRowGroups());
@@ -540,7 +540,8 @@ TEST(TestBufferedRowGroupWriter, disabledDictionary) {
   rgWriter->close();
   fileWriter->close();
   PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
-  auto file = test::ParquetTestFile::open(buffer, "DisabledDictionary");
+  auto file =
+      test::ParquetTestFile::open(buffer, "DisabledDictionary", nullptr);
   auto& reader = file.reader();
   ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
   auto rowGroup = reader.fileMetaData().rowGroup(0);
@@ -577,11 +578,10 @@ TEST(TestBufferedRowGroupWriter, multiPageDisabledDictionary) {
   auto scanSpec = std::make_shared<common::ScanSpec>("");
   scanSpec->addAllChildFields(*rowType);
   dwio::common::RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.setRequestedType(rowType);
 
-  auto file =
-      test::ParquetTestFile::open(buffer, "MultiPageDisabledDictionary");
+  auto file = test::ParquetTestFile::open(
+      buffer, "MultiPageDisabledDictionary", scanSpec);
   auto& reader = file.reader();
   ASSERT_EQ(1, reader.fileMetaData().numRowGroups());
   auto rowGroup = reader.fileMetaData().rowGroup(0);
@@ -632,10 +632,9 @@ TEST(ParquetRoundtrip, AllNulls) {
   auto scanSpec = std::make_shared<velox::common::ScanSpec>("");
   scanSpec->addAllChildFields(*rowType);
   dwio::common::RowReaderOptions rowReaderOpts;
-  rowReaderOpts.setScanSpec(scanSpec);
   rowReaderOpts.setRequestedType(rowType);
 
-  auto file = test::ParquetTestFile::open(buffer, "AllNulls");
+  auto file = test::ParquetTestFile::open(buffer, "AllNulls", scanSpec);
   auto& reader = file.reader();
   auto rowGroup = reader.fileMetaData().rowGroup(0);
   ASSERT_EQ(1, rowGroup.numColumns());
