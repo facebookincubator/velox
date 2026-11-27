@@ -16,6 +16,7 @@
 
 #include "velox/dwio/nimble/encodings/views/FsstEncodingView.h"
 
+#include <folly/container/F14Set.h>
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -829,20 +830,15 @@ class BulkStringDecoder {
 
 namespace {
 
-// Passes the buffer of each of 'chunks', the decoded chunks that a read took
-// strings from or null, to 'addStringBuffer', once for each run of chunks that
-// share it.
-template <typename Chunks>
-void addChunkBuffers(
-    const Chunks& chunks,
-    const std::function<void(velox::BufferPtr)>& addStringBuffer) {
-  const velox::Buffer* prevData{nullptr};
-  for (const auto& chunk : chunks) {
-    if (chunk != nullptr && chunk->data != nullptr &&
-        chunk->data.get() != prevData) {
-      addStringBuffer(chunk->data);
-      prevData = chunk->data.get();
-    }
+// Passes 'buffer', the buffer of a decoded chunk that a read takes strings
+// from, to 'addStringBuffer' unless 'chunkBufferSet' holds it, and adds it
+// there: chunks can share a buffer, which a read passes once.
+void addChunkBuffer(
+    const velox::BufferPtr& buffer,
+    const std::function<void(velox::BufferPtr)>& addStringBuffer,
+    folly::F14FastSet<const velox::Buffer*>& chunkBufferSet) {
+  if (buffer != nullptr && chunkBufferSet.insert(buffer.get()).second) {
+    addStringBuffer(buffer);
   }
 }
 
@@ -917,23 +913,30 @@ void FsstEncodingView::decodeRanges(
     return;
   }
 
+  folly::F14FastSet<const velox::Buffer*> chunkBufferSet;
+  const DecodedChunk* prevChunk{nullptr};
   uint32_t outputOffset{0};
   for (const auto& range : ranges) {
     for (auto row = range.startRow; row < range.endRow; ++row) {
       const auto& chunk = chunks[rowChunk(row) - firstChunkIndex];
-      output[outputOffset++] = chunk != nullptr
-          ? valueAt(*chunk, row % kRowsPerChunk)
-          : stringDecoder.decode(compressedValue(row));
+      if (chunk == nullptr) {
+        output[outputOffset++] = stringDecoder.decode(compressedValue(row));
+        continue;
+      }
+      if (chunk.get() != prevChunk) {
+        addChunkBuffer(chunk->data, addStringBuffer, chunkBufferSet);
+        prevChunk = chunk.get();
+      }
+      output[outputOffset++] = valueAt(*chunk, row % kRowsPerChunk);
     }
   }
   stringDecoder.finish();
-  addChunkBuffers(chunks, addStringBuffer);
 }
 
 void FsstEncodingView::reserveDecodeBuffer(
     std::span<const uint32_t> indices,
     std::span<const size_t> runEnds,
-    std::span<const std::shared_ptr<const DecodedChunk>> runChunks,
+    std::span<const DecodedChunk* const> runChunks,
     detail::BulkStringDecoder& stringDecoder) const {
   if (stringDecoder.sharesBuffers()) {
     return;
@@ -955,11 +958,20 @@ void FsstEncodingView::decodeRows(
     std::span<const uint32_t> indices,
     const std::function<void(velox::BufferPtr)>& addStringBuffer,
     std::string_view* output) const {
-  // Splits the indices into runs in one chunk, as readPhysicalAt() does. Keeps
-  // where each run ends, and the chunk that the read takes the strings of the
-  // run from, or null when it decodes them itself.
-  std::vector<size_t> runEnds;
-  std::vector<std::shared_ptr<const DecodedChunk>> runChunks;
+  // Splits the indices into runs in one chunk, as readPhysicalAt() does, and
+  // decides for each run whether the read takes its strings from the chunk
+  // before it decodes any string, since a chunk that chunkForRead() decodes
+  // takes a room of the shared buffers. Keeps where each run ends, and the
+  // chunk of the run, or null when the read decodes its strings itself. The
+  // cache keeps every chunk that chunkForRead() returns while the view lives.
+  ScopedVector<size_t> runEnds{
+      indices.size(), this->pool_, this->options_.bufferPool};
+  ScopedVector<const DecodedChunk*> runChunks{
+      indices.size(), this->pool_, this->options_.bufferPool};
+
+  // Both start empty, and keep the capacity, which the runs never exceed.
+  runEnds.resize(0);
+  runChunks.resize(0);
   size_t runBegin{0};
   while (runBegin < indices.size()) {
     const auto chunkIndex = rowChunk(indices[runBegin]);
@@ -969,15 +981,24 @@ void FsstEncodingView::decodeRows(
     }
     runEnds.push_back(runEnd);
     runChunks.push_back(
-        chunkForRead(chunkIndex, static_cast<uint32_t>(runEnd - runBegin)));
+        chunkForRead(chunkIndex, static_cast<uint32_t>(runEnd - runBegin))
+            .get());
     runBegin = runEnd;
   }
   auto stringDecoder = makeBulkStringDecoder(addStringBuffer);
-  reserveDecodeBuffer(indices, runEnds, runChunks, stringDecoder);
+  reserveDecodeBuffer(
+      indices,
+      {runEnds.data(), runEnds.size()},
+      {runChunks.data(), runChunks.size()},
+      stringDecoder);
+  folly::F14FastSet<const velox::Buffer*> chunkBufferSet;
   size_t outputIndex{0};
   for (size_t run{0}; run < runEnds.size(); ++run) {
     // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-    const auto& chunk = runChunks[run];
+    const auto* chunk = runChunks[run];
+    if (chunk != nullptr) {
+      addChunkBuffer(chunk->data, addStringBuffer, chunkBufferSet);
+    }
     for (; outputIndex < runEnds[run]; ++outputIndex) {
       const auto row = indices[outputIndex];
       output[outputIndex] = chunk != nullptr
@@ -986,7 +1007,6 @@ void FsstEncodingView::decodeRows(
     }
   }
   stringDecoder.finish();
-  addChunkBuffers(runChunks, addStringBuffer);
 }
 
 void FsstEncodingView::reserveDecodeBuffer(

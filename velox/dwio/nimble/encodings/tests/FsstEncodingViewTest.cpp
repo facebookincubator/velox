@@ -812,7 +812,7 @@ TEST_P(
     return;
   }
 
-  // The region, then the buffers of chunks 0 and 1, which two reads decoded.
+  // The buffers of chunks 0 and 1, which two reads decoded, then the region.
   EXPECT_EQ(addedBuffers.size(), 3);
   for (uint32_t i = 0; i < chunk.size(); ++i) {
     EXPECT_EQ(output[1'024 + i].data(), chunk[i].data()) << "row " << 1'024 + i;
@@ -831,6 +831,38 @@ TEST_P(
   EXPECT_TRUE(liesIn(chunks, chunkBuffers));
   EXPECT_TRUE(liesIn(std::span{output}.first(2'048), chunkBuffers));
   EXPECT_FALSE(liesIn(std::span{output}.subspan(2'048), chunkBuffers));
+}
+
+TEST_P(FsstEncodingViewTest, readWithAddStringBufferPassesEachChunkBufferOnce) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 3'072);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+
+  // Two reads without addStringBuffer of every row of chunks 0 and 2, which a
+  // cached view decodes into a buffer each.
+  std::vector<std::string_view> chunk(1'024);
+  view->read(0, 1'024, chunk.data());
+  view->read(2'048, 1'024, chunk.data());
+
+  // Indices that alternate between the two chunks make a run of one index
+  // each. The read passes the buffer of each chunk once, not once for each
+  // run.
+  std::vector<uint32_t> indices;
+  indices.reserve(300);
+  for (uint32_t i = 0; i < 300; ++i) {
+    indices.push_back(i % 2 == 0 ? i : 2'048 + i);
+  }
+  std::vector<std::string_view> output(indices.size());
+  std::vector<velox::BufferPtr> addedBuffers;
+  view->read(indices, [](uint32_t) {}, appendTo(addedBuffers), output.data());
+  for (uint32_t i = 0; i < indices.size(); ++i) {
+    EXPECT_EQ(output[i], values[indices[i]]) << "index " << i;
+  }
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+  EXPECT_EQ(addedBuffers.size(), cacheEncodingView() ? 2 : 1);
+  EXPECT_EQ(distinct(addedBuffers).size(), addedBuffers.size());
 }
 
 TEST_P(FsstEncodingViewTest, readWithAddStringBufferSpansBuffers) {
