@@ -1,0 +1,22 @@
+[ {
+  "name" : "PaimonConnectorSplit",
+  "connectorId" : "paimon",
+  "snapshotId" : 6,
+  "tableType" : "PRIMARY_KEY",
+  "rawConvertible" : true,
+  "dataFiles" : [ {
+    "filePath" : "data/data-090bd304-e8a6-4d67-b884-556cdc73bdf9-0.nimble",
+    "fileFormat" : "nimble",
+    "fileSize" : 1972,
+    "rowCount" : 3,
+    "level" : 5,
+    "minSequenceNumber" : 0,
+    "maxSequenceNumber" : 3,
+    "deleteRowCount" : 0,
+    "creationTimeMs" : 1795757720293,
+    "fileType" : "DATA",
+    "sourceType" : "COMPACT"
+  } ],
+  "partitionKeys" : { },
+  "tableBucketNumber" : 0
+} ]

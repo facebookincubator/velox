@@ -54,19 +54,34 @@ StreamData::StreamData(
 
 void StreamData::reset(
     std::string_view data,
-    bool streamEncodingUsesVarintRowCount,
+    const Encoding::Options& options,
     bool rebindEncoding) {
   readRows_ = 0;
+  // Encodings parse row counts in the format they were built with, and
+  // nested SharedDictionary encodings keep the alphabet they were built
+  // with.
+  const bool sameEncodingOptions =
+      useVarintRowCount_ == options.useVarintRowCount &&
+      sharedDictionaryAlphabet_ == options.sharedDictionaryAlphabet;
   if (rebindEncoding && !legacyHeaderless_ && !data.empty() &&
-      useVarintRowCount_ == streamEncodingUsesVarintRowCount &&
-      this->rebindEncoding(data)) {
+      sameEncodingOptions && this->rebindEncoding(data)) {
     pos_ = data.data();
     end_ = data.data() + data.size();
     return;
   }
   encoding_.reset();
-  useVarintRowCount_ = streamEncodingUsesVarintRowCount;
+  useVarintRowCount_ = options.useVarintRowCount;
+  sharedDictionaryAlphabet_ = options.sharedDictionaryAlphabet;
   init(data);
+}
+
+void StreamData::releaseSharedDictionaryAlphabet() {
+  if (sharedDictionaryAlphabet_ == nullptr) {
+    return;
+  }
+  sharedDictionaryAlphabet_.reset();
+  encoding_.reset();
+  readRows_ = 0;
 }
 
 bool StreamData::rebindEncoding(std::string_view data) {
@@ -249,7 +264,9 @@ void StreamData::prepareForDecoding(std::string_view data) {
   // For string types, provide a stringBufferFactory that allocates separate
   // buffers using velox::AlignedBuffer for memory tracking.
   Encoding::Options options{
-      .useVarintRowCount = useVarintRowCount_, .bufferPool = bufferPool_};
+      .useVarintRowCount = useVarintRowCount_,
+      .bufferPool = bufferPool_,
+      .sharedDictionaryAlphabet = sharedDictionaryAlphabet_};
   encoding_ = EncodingFactory().create(
       *pool_,
       data,

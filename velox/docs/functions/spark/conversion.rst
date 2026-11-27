@@ -230,6 +230,22 @@ Invalid examples
   SELECT cast('1.2.3' as real); -- NULL (ANSI OFF) / ERROR (ANSI ON)
   SELECT cast('' as double); -- NULL (ANSI OFF) / ERROR (ANSI ON)
 
+From floating-point types
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Casting DOUBLE to REAL rounds to the nearest REAL value and never fails, in
+every cast mode including ``try_cast``. Values beyond the REAL range become
+``Infinity`` or ``-Infinity``, except values less than half an ulp beyond the
+REAL maximum, which round to it. NaN and +/-Infinity are preserved.
+
+::
+
+  SELECT cast(1.5D as real); -- 1.5
+  SELECT cast(3.4028235E38D as real); -- 3.4028235E38
+  SELECT cast(3.4028236E38D as real); -- Infinity
+  SELECT try_cast(-1.7E308D as real); -- -Infinity
+  SELECT cast(cast('nan' as double) as real); -- NaN
+
 Cast to Boolean
 ---------------
 

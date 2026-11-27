@@ -106,6 +106,14 @@ BufferPtr VectorTestBase::makeIndices(
   return indicesBuffer;
 }
 
+// static
+BufferPtr VectorTestBase::makeBufferView(std::span<const std::byte> bytes) {
+  return BufferView<NoopReleaser>::create(
+      reinterpret_cast<const uint8_t*>(bytes.data()),
+      bytes.size(),
+      NoopReleaser{});
+}
+
 BufferPtr VectorTestBase::makeNulls(
     vector_size_t size,
     std::function<bool(vector_size_t /*row*/)> isNullAt) {

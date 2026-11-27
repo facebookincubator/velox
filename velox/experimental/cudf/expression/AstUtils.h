@@ -133,28 +133,40 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       using CudfTimestampType = cudf::timestamp_us;
       auto micros = isNull ? 0 : value.toMicros();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
-          CudfTimestampType{cudf::duration_us{micros}}, !isNull, stream, mr);
+          CudfTimestampType{cudf::duration_us{micros}},
+          !isNull,
+          stream,
+          withTempMr(mr));
       stream.sync();
       return scalar;
     } else if (unit == cudf::type_id::TIMESTAMP_NANOSECONDS) {
       using CudfTimestampType = cudf::timestamp_ns;
       auto nanos = isNull ? 0 : value.toNanos();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
-          CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
+          CudfTimestampType{cudf::duration_ns{nanos}},
+          !isNull,
+          stream,
+          withTempMr(mr));
       stream.sync();
       return scalar;
     } else if (unit == cudf::type_id::TIMESTAMP_MILLISECONDS) {
       using CudfTimestampType = cudf::timestamp_ms;
       auto millis = isNull ? 0 : value.toMillis();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
-          CudfTimestampType{cudf::duration_ms{millis}}, !isNull, stream, mr);
+          CudfTimestampType{cudf::duration_ms{millis}},
+          !isNull,
+          stream,
+          withTempMr(mr));
       stream.sync();
       return scalar;
     } else if (unit == cudf::type_id::TIMESTAMP_SECONDS) {
       using CudfTimestampType = cudf::timestamp_s;
       auto seconds = isNull ? 0 : value.getSeconds();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
-          CudfTimestampType{cudf::duration_s{seconds}}, !isNull, stream, mr);
+          CudfTimestampType{cudf::duration_s{seconds}},
+          !isNull,
+          stream,
+          withTempMr(mr));
       stream.sync();
       return scalar;
     } else {
@@ -193,17 +205,29 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
         case cudf::type_id::DECIMAL32:
           scalar =
               std::make_unique<cudf::fixed_point_scalar<numeric::decimal32>>(
-                  static_cast<int32_t>(value), cudfScale, !isNull, stream, mr);
+                  static_cast<int32_t>(value),
+                  cudfScale,
+                  !isNull,
+                  stream,
+                  withTempMr(mr));
           break;
         case cudf::type_id::DECIMAL64:
           scalar =
               std::make_unique<cudf::fixed_point_scalar<numeric::decimal64>>(
-                  static_cast<int64_t>(value), cudfScale, !isNull, stream, mr);
+                  static_cast<int64_t>(value),
+                  cudfScale,
+                  !isNull,
+                  stream,
+                  withTempMr(mr));
           break;
         case cudf::type_id::DECIMAL128:
           scalar =
               std::make_unique<cudf::fixed_point_scalar<numeric::decimal128>>(
-                  static_cast<int128_t>(value), cudfScale, !isNull, stream, mr);
+                  static_cast<int128_t>(value),
+                  cudfScale,
+                  !isNull,
+                  stream,
+                  withTempMr(mr));
           break;
         default:
           VELOX_CHECK(
@@ -215,7 +239,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
               [&]<typename U>() -> std::unique_ptr<cudf::scalar> {
                 if constexpr (std::is_integral_v<U>) {
                   return std::make_unique<cudf::numeric_scalar<U>>(
-                      static_cast<U>(value), !isNull, stream, mr);
+                      static_cast<U>(value), !isNull, stream, withTempMr(mr));
                 }
                 VELOX_UNREACHABLE();
               });
@@ -228,7 +252,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
         auto scalar = std::make_unique<cudf::duration_scalar<CudfDurationType>>(
-            value, !isNull, stream, mr);
+            value, !isNull, stream, withTempMr(mr));
         stream.sync();
         return scalar;
       }
@@ -236,22 +260,22 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       using CudfDateType = cudf::timestamp_D;
       if constexpr (std::is_same_v<T, CudfDateType::rep>) {
         auto scalar = std::make_unique<cudf::timestamp_scalar<CudfDateType>>(
-            value, !isNull, stream, mr);
+            value, !isNull, stream, withTempMr(mr));
         stream.sync();
         return scalar;
       }
     } else if (toType.has_value()) {
       if (toType == cudf::type_id::DURATION_DAYS) {
         auto scalar = std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
-            value, !isNull, stream, mr);
+            value, !isNull, stream, withTempMr(mr));
         stream.sync();
         return scalar;
       }
       VELOX_FAIL(
           "Unsupported result type {}", static_cast<int32_t>(toType.value()));
     } else {
-      auto scalar =
-          std::make_unique<cudf::numeric_scalar<T>>(value, !isNull, stream, mr);
+      auto scalar = std::make_unique<cudf::numeric_scalar<T>>(
+          value, !isNull, stream, withTempMr(mr));
       stream.sync();
       return scalar;
     }
@@ -260,7 +284,10 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       std::is_same_v<T, StringView> || std::is_same_v<T, std::string_view> ||
       std::is_same_v<T, std::string>) {
     auto scalar = std::make_unique<cudf::string_scalar>(
-        std::string_view(value.data(), value.size()), !isNull, stream, mr);
+        std::string_view(value.data(), value.size()),
+        !isNull,
+        stream,
+        withTempMr(mr));
     stream.sync();
     return scalar;
   }

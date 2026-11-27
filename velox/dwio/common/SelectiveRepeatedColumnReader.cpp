@@ -84,6 +84,11 @@ bool isIntegralType(const TypePtr& type) {
 
 } // namespace
 
+void SelectiveRepeatedColumnReader::resetReadState() {
+  SelectiveColumnReader::resetReadState();
+  childTargetReadOffset_ = 0;
+}
+
 void SelectiveRepeatedColumnReader::ensureAllLengthsBuffer(vector_size_t size) {
   if (!allLengthsHolder_ ||
       allLengthsHolder_->capacity() < size * sizeof(vector_size_t)) {

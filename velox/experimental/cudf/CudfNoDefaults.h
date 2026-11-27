@@ -36,6 +36,8 @@
 
 #include "velox/experimental/cudf/CudfDefaultStreamOverload.h"
 
+#include <cudf/utilities/memory_resource.hpp>
+
 #include <rmm/mr/per_device_resource.hpp>
 #include <rmm/resource_ref.hpp>
 
@@ -47,10 +49,13 @@ __attribute__((
     error("cudf default stream argument used. Pass stream explicitly."),
     noinline)) cuda::stream_ref const get_default_stream();
 
+// memory_resource.hpp, included above, defines this function inline.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
 __attribute__((
     error("cudf default memory resource argument used. Pass mr explicitly."),
-    noinline)) rmm::device_async_resource_ref
-get_current_device_resource_ref();
+    noinline)) rmm::device_async_resource_ref get_current_device_resource_ref();
+#pragma GCC diagnostic pop
 
 #endif
 
@@ -65,6 +70,18 @@ namespace facebook::velox::cudf_velox {
 /// the current default device memory resource.
 inline rmm::device_async_resource_ref get_temp_mr() {
   return rmm::mr::get_current_device_resource_ref();
+}
+
+/// Returns memory resources that allocate results from 'mr' and temporaries
+/// from get_temp_mr().
+inline cudf::memory_resources withTempMr(rmm::device_async_resource_ref mr) {
+  return {mr, get_temp_mr()};
+}
+
+/// Returns memory resources that allocate both results and temporaries from
+/// get_temp_mr().
+inline cudf::memory_resources tempMrs() {
+  return {get_temp_mr(), get_temp_mr()};
 }
 
 } // namespace facebook::velox::cudf_velox

@@ -25,14 +25,6 @@
 
 namespace facebook::velox {
 
-namespace {
-struct DummyReleaser {
-  void addRef() const {}
-
-  void release() const {}
-};
-} // namespace
-
 template <typename T>
 class ConstantVector final : public SimpleVector<T> {
  public:
@@ -234,14 +226,13 @@ class ConstantVector final : public SimpleVector<T> {
   }
 
   const BufferPtr& wrapInfo() const override {
-    static const DummyReleaser kDummy;
     auto* wrapInfo = wrapInfo_.load();
     if (!wrapInfo) [[unlikely]] {
       wrapInfo = new BufferPtr(
-          BufferView<DummyReleaser>::create(
+          BufferView<NoopReleaser>::create(
               reinterpret_cast<const uint8_t*>(&index_),
               sizeof(vector_size_t),
-              kDummy));
+              NoopReleaser{}));
       BufferPtr* oldWrapInfo = nullptr;
       if (!wrapInfo_.compare_exchange_strong(oldWrapInfo, wrapInfo)) {
         delete wrapInfo;

@@ -47,6 +47,35 @@ void ChunkedDecoder::dropChunk() {
   remainingValues_ = 0;
 }
 
+void ChunkedDecoder::rebindStream(
+    std::unique_ptr<velox::dwio::common::SeekableInputStream> input,
+    std::shared_ptr<index::StreamIndex> streamIndex,
+    DictionaryAlphabetLoader dictionaryAlphabetLoader) {
+  NIMBLE_CHECK_NOT_NULL(input);
+  unbindStream();
+  input_ = std::move(input);
+  streamIndex_ = std::move(streamIndex);
+  streamRowCount_ = streamIndex_ != nullptr
+      ? std::optional<uint32_t>(streamIndex_->rowCount())
+      : std::nullopt;
+  dictionaryAlphabetLoader_ = std::move(dictionaryAlphabetLoader);
+}
+
+void ChunkedDecoder::unbindStream() {
+  dropChunk();
+  input_.reset();
+  streamIndex_.reset();
+  streamRowCount_.reset();
+  dictionaryAlphabetLoader_ = nullptr;
+  dictionaryAlphabet_.reset();
+  inputData_ = nullptr;
+  inputSize_ = 0;
+  rowCountEstimate_.reset();
+  stringDataSizeEstimate_.reset();
+  rowPosition_ = 0;
+  hasLazyChunkSeek_ = false;
+}
+
 bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   if (hasLazyChunkSeek_) {
     return loadLazySeekChunk(onChunkLoaded);

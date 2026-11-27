@@ -132,7 +132,11 @@ struct PaimonDataFile {
   /// Used to determine rawConvertible: if deleteRowCount > 0, the file
   /// contains changelog records and cannot be read raw (needs RowKind
   /// filtering during merge-on-read).
-  int64_t deleteRowCount{0};
+  ///
+  /// Unset when the file does not record it, as files of old Paimon versions
+  /// do not. Such a file may hold DELETE and UPDATE_BEFORE rows, so a
+  /// primary-key split with one is merged even when it is rawConvertible.
+  std::optional<int64_t> deleteRowCount{0};
 
   /// Timestamp (epoch millis) when this file was created.
   int64_t creationTimeMs{0};

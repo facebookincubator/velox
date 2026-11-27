@@ -3615,6 +3615,45 @@ TEST_F(SparkCastExprTest, ansiCastModeDecimalToIntegralOverflow) {
       "Cannot cast DECIMAL(9, 0) '999999999' to SMALLINT. Out of bounds.");
 }
 
+TEST_F(SparkCastExprTest, doubleToRealOutOfRange) {
+  // try_cast narrows double to float like Spark's Java (float) cast: it rounds
+  // to the nearest float, so out-of-range values become +/-Infinity instead
+  // of NULL. Values less than half an ulp above FLT_MAX round to FLT_MAX.
+  const auto doubleInfinity = std::numeric_limits<double>::infinity();
+  const auto doubleNan = std::numeric_limits<double>::quiet_NaN();
+  const auto floatMax = std::numeric_limits<float>::max();
+  // FLT_MAX plus half an ulp; ties round to even, which is Infinity.
+  const double halfUlpAboveFloatMax = 3.4028235677973366E38;
+  const std::vector<std::optional<double>> input = {
+      1.7E308,
+      -1.7E308,
+      3.5E38,
+      3.4028235E38,
+      -3.4028235E38,
+      3.4028235677973362E38,
+      halfUlpAboveFloatMax,
+      -halfUlpAboveFloatMax,
+      doubleInfinity,
+      -doubleInfinity,
+      doubleNan,
+      1.5};
+  const std::vector<std::optional<float>> expected = {
+      kInf,
+      -kInf,
+      kInf,
+      floatMax,
+      -floatMax,
+      floatMax,
+      kInf,
+      -kInf,
+      kInf,
+      -kInf,
+      kNan,
+      1.5f};
+
+  testTryCast<double, float>("real", input, expected);
+}
+
 TEST_F(SparkCastExprTestAnsiOff, castDecimalToIntegralOverflow) {
   // Casts that overflow the target integral type wrap when ANSI mode is
   // disabled.

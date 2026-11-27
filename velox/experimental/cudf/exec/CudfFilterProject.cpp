@@ -171,9 +171,9 @@ void CudfFilterProject::initialize() {
         if (scalar->type() != type) {
           auto stream = getDefaultStreamForCurrentThread();
           auto column =
-              cudf::make_column_from_scalar(*scalar, 1, stream, get_temp_mr());
-          column = cudf::cast(column->view(), type, stream, get_temp_mr());
-          scalar = cudf::get_element(column->view(), 0, stream, get_temp_mr());
+              cudf::make_column_from_scalar(*scalar, 1, stream, tempMrs());
+          column = cudf::cast(column->view(), type, stream, tempMrs());
+          scalar = cudf::get_element(column->view(), 0, stream, tempMrs());
           stream.sync();
         }
         constantProjections_.emplace_back(i, std::move(scalar));
@@ -309,7 +309,7 @@ void CudfFilterProject::filter(
         *cudf::make_all_aggregation<cudf::reduce_aggregation>(),
         cudf::data_type(cudf::type_id::BOOL8),
         stream,
-        get_temp_mr());
+        tempMrs());
     using ScalarType = cudf::scalar_type_t<bool>;
     auto result = static_cast<ScalarType*>(isAllTrue.get());
     // If filter is not all true, apply the filter
@@ -319,7 +319,7 @@ void CudfFilterProject::filter(
     auto filterTable =
         std::make_unique<cudf::table>(std::move(inputTableColumns));
     auto filteredTable = cudf::apply_retention_mask(
-        *filterTable, filterColumnView, stream, get_output_mr());
+        *filterTable, filterColumnView, stream, withTempMr(get_output_mr()));
     inputTableColumns = filteredTable->release();
   }
 }
@@ -344,7 +344,7 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
   // Constant projections of a zero-column input.
   for (const auto& [outputChannel, scalar] : constantProjections_) {
     outputColumns[outputChannel] = cudf::make_column_from_scalar(
-        *scalar, numRows, stream, get_output_mr());
+        *scalar, numRows, stream, withTempMr(get_output_mr()));
   }
   // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {
@@ -357,7 +357,8 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
       // Materialize the column_view into an owned column
       auto view = std::get<cudf::column_view>(columnOrView);
       outputColumns[resultProjections_[i].outputChannel] =
-          std::make_unique<cudf::column>(view, stream, get_output_mr());
+          std::make_unique<cudf::column>(
+              view, stream, withTempMr(get_output_mr()));
     }
   }
 
@@ -378,7 +379,9 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     } else {
       // Otherwise, copy the column and decrement the count
       outputColumns[identity.outputChannel] = std::make_unique<cudf::column>(
-          *inputTableColumns[identity.inputChannel], stream, get_output_mr());
+          *inputTableColumns[identity.inputChannel],
+          stream,
+          withTempMr(get_output_mr()));
     }
     VELOX_CHECK_GT(inputChannelCount[identity.inputChannel], 0);
     inputChannelCount[identity.inputChannel]--;

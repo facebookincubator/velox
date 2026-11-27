@@ -231,6 +231,23 @@ class TrieKeyReaderTest : public testing::Test {
         built_, cacheEncodingViews_, keyCodec_, pool_.get());
   }
 
+  // Returns the encoding of each sequence of the last built chunk in serialized
+  // order: the level-0 values, then the child offsets above each further level
+  // and its values.
+  std::vector<EncodingType> builtSequenceEncodings() const {
+    const char* position = built_.data();
+    encoding::readChar(position);
+    const auto numLevels = static_cast<uint8_t>(encoding::readChar(position));
+    position +=
+        sizeof(uint32_t) + numLevels * (sizeof(uint8_t) + sizeof(uint32_t));
+    std::vector<EncodingType> encodings;
+    while (position < built_.data() + built_.size()) {
+      encodings.push_back(
+          EncodingPrefix::encodingType(encoding::readString(position)));
+    }
+    return encodings;
+  }
+
   // Row-major view of the same data, for round-trip expectations.
   static std::vector<std::string> packRows(
       const std::vector<std::vector<uint64_t>>& columns) {
@@ -838,6 +855,51 @@ TEST_F(TrieKeyReaderTest, picksPartitionedEliasFanoForLongRuns) {
             EncodingType::PartitionedEliasFano,
         rowsPerParent == 200);
     EXPECT_EQ(index->materialize(0, kNumRows), packRows(columns));
+  }
+}
+
+TEST_F(TrieKeyReaderTest, picksSequenceForArithmeticSequences) {
+  // Each level-0 value has one child, so the child offsets above level 1 are
+  // 0, 1, 2, ..., 100. Level 1 holds one value per parent, which grow by a
+  // constant step only with 'arithmeticValues'.
+  struct TestParam {
+    bool arithmeticValues;
+
+    std::string debugString() const {
+      return arithmeticValues ? "arithmeticValues" : "squareValues";
+    }
+  };
+  constexpr uint64_t kNumRows{100};
+  for (const auto& testData : std::vector<TestParam>{{false}, {true}}) {
+    SCOPED_TRACE(testData.debugString());
+    std::vector<std::vector<uint64_t>> columns(2);
+    for (uint64_t row = 0; row < kNumRows; ++row) {
+      columns[0].push_back(row * row);
+      columns[1].push_back(
+          testData.arithmeticValues ? 5 + row * 7 : 3 * row * row + 1);
+    }
+    const auto index = build(columns);
+    const auto encodings = builtSequenceEncodings();
+    ASSERT_EQ(encodings.size(), 3);
+    EXPECT_NE(encodings[0], EncodingType::Sequence);
+    EXPECT_EQ(encodings[1], EncodingType::Sequence);
+    EXPECT_EQ(
+        encodings[2] == EncodingType::Sequence, testData.arithmeticValues);
+
+    const auto expected = packRows(columns);
+    checkReads(*index, expected);
+    for (const auto& probe :
+         {makeKey({0, 0}),
+          makeKey({49, 0}),
+          makeKey({49, 1'000}),
+          makeKey({2'500, 0}),
+          makeKey({9'801, 1'000'000})}) {
+      for (const bool inclusive : {true, false}) {
+        EXPECT_EQ(
+            index->seek(probe, inclusive),
+            expectedSeek(expected, probe, inclusive));
+      }
+    }
   }
 }
 

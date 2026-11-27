@@ -124,12 +124,6 @@ void toBits(uint64_t* words, int32_t numBytes) {
 }
 
 namespace {
-class NoReleaser {
- public:
-  void addRef() const {};
-  void release() const {};
-};
-
 template <TypeKind kind>
 static VectorPtr toVeloxTyped(
     vector_size_t size,
@@ -141,7 +135,7 @@ static VectorPtr toVeloxTyped(
 
   BufferPtr nullsView;
   if (nulls) {
-    nullsView = BufferView<NoReleaser>::create(nulls, size, NoReleaser());
+    nullsView = BufferView<NoopReleaser>::create(nulls, size, NoopReleaser{});
     toBits(
         const_cast<uint64_t*>(nullsView->as<uint64_t>()),
         nullsView->capacity());
