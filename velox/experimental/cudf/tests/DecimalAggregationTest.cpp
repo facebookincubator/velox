@@ -868,11 +868,13 @@ TEST_F(CudfDecimalTest, streamingDecimalSumAndAvg) {
   auto& config = CudfConfig::getInstance();
   const auto savedEnabled = config.streamingGroupbyEnabled;
   const auto savedMultiplier = config.streamingGroupbyCapacityMultiplier;
+  const auto savedMaxPartitionKeys = config.streamingGroupbyMaxPartitionKeys;
   config.streamingGroupbyEnabled = true;
   config.streamingGroupbyCapacityMultiplier = 1.1;
   SCOPE_EXIT {
     config.streamingGroupbyEnabled = savedEnabled;
     config.streamingGroupbyCapacityMultiplier = savedMultiplier;
+    config.streamingGroupbyMaxPartitionKeys = savedMaxPartitionKeys;
   };
 
   auto input = makeRowVector({
@@ -883,8 +885,16 @@ TEST_F(CudfDecimalTest, streamingDecimalSumAndAvg) {
           {100, -200, std::nullopt, 0}, DECIMAL(20, 2)),
   });
   const std::vector<RowVectorPtr> batches(12, input);
-  for (bool includeAvg : {false, true}) {
-    SCOPED_TRACE(includeAvg);
+  // The last setting splits the table of the four keys.
+  const std::vector<std::pair<bool, std::optional<int32_t>>> settings{
+      {false, std::nullopt}, {true, std::nullopt}, {true, 2}};
+  for (const auto& [includeAvg, maxPartitionKeys] : settings) {
+    SCOPED_TRACE(
+        fmt::format(
+            "includeAvg {} maxPartitionKeys {}",
+            includeAvg,
+            maxPartitionKeys.value_or(0)));
+    config.streamingGroupbyMaxPartitionKeys = maxPartitionKeys;
     std::vector<std::string> aggregates{"sum(c1)", "sum(c2)"};
     std::vector<VectorPtr> expectedColumns{
         makeFlatVector<int32_t>({0, 1, 2, 3}),
@@ -917,8 +927,15 @@ TEST_F(CudfDecimalTest, streamingDecimalSumAndAvg) {
     const auto stats = exec::toPlanStats(task->taskStats());
     const auto& customStats = stats.at(plan->id()).customStats;
     EXPECT_GT(customStats.at(std::string{kStreamingGroupbyUsedStat}).sum, 0);
-    EXPECT_GT(
-        customStats.at(std::string{kStreamingGroupbyRebuildsStat}).sum, 0);
+    if (maxPartitionKeys.has_value()) {
+      ASSERT_TRUE(
+          customStats.contains(std::string{kStreamingGroupbySplitsStat}));
+      EXPECT_GT(
+          customStats.at(std::string{kStreamingGroupbySplitsStat}).sum, 0);
+    } else {
+      EXPECT_GT(
+          customStats.at(std::string{kStreamingGroupbyRebuildsStat}).sum, 0);
+    }
   }
 }
 

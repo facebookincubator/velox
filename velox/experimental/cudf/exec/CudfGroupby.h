@@ -17,6 +17,7 @@
 
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 
 #include <cudf/groupby.hpp>
 
@@ -36,6 +37,10 @@ inline constexpr std::string_view kStreamingGroupbyUsedStat{
     "streamingGroupbyUsed"};
 inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
     "streamingGroupbyRebuilds"};
+// Number of times a streaming_groupby table that reached its limit was split
+// into tables for parts of its hash buckets.
+inline constexpr std::string_view kStreamingGroupbySplitsStat{
+    "streamingGroupbySplits"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be
@@ -211,6 +216,12 @@ class CudfGroupby : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  // Keep the buffered state of this operator: in cuDF tables, and in
+  // streaming_groupby tables for a streaming final aggregation. Defined in
+  // CudfGroupby.cpp.
+  class GroupbyBufferedStateOps;
+  class StreamingGroupbyBufferedStateOps;
+
   CudfVectorPtr doGroupByAggregation(
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
@@ -219,12 +230,18 @@ class CudfGroupby : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
-  // Converts the merged per-key states in 'bufferedResult_' to final output
-  // without regrouping. Keeps key columns as-is.
+  // Converts the merged per-key states in 'state' to final output without
+  // regrouping. Keeps key columns as-is. 'state' must be the only owner of its
+  // table.
   CudfVectorPtr finalizeGroupedStates(
+      CudfVectorPtr state,
       std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators);
 
-  CudfVectorPtr releaseAndResetBufferedResult();
+  void recordPartialFlushStats(const CudfVector& output);
+
+  // Records the number of partitions of 'state' once, when it is first
+  // drained.
+  void recordStatePartitions(const PartitionedBufferedState& state);
 
   bool initializeStreamingGroupby(
       const RowTypePtr& inputRowSchema,
@@ -274,14 +291,23 @@ class CudfGroupby : public CudfOperatorBase {
   std::vector<CudfVectorPtr> inputs_;
   TypePtr inputType_;
   RowTypePtr bufferedResultType_;
-  CudfVectorPtr bufferedResult_;
+  // Buffered state of an incremental partial or intermediate step: one leaf
+  // that is flushed when it reaches its row or byte limit.
+  std::unique_ptr<FlushableBufferedState> flushableBufferedState_;
+  // Buffered state of an incremental final or single step: hash-partitioned
+  // leaves that are each kept within the row limit.
+  std::unique_ptr<PartitionedBufferedState> partitionedBufferedState_;
 
   std::vector<std::unique_ptr<StreamingGroupbyAggregator>>
       streamingGroupbyAggregators_;
-  std::unique_ptr<cudf::groupby::streaming_groupby> streamingGroupby_;
+  // Buffered state of a streaming final step: hash-partitioned
+  // streaming_groupby tables that are each kept within the key limit.
+  std::unique_ptr<PartitionedBufferedState> streamingBufferedState_;
+  // True once a batch has been added to 'streamingBufferedState_'.
+  bool streamingGroupbyUsed_{false};
+  bool statePartitionsRecorded_{false};
   std::optional<cuda::stream_ref> streamingGroupbyStream_;
   std::unique_ptr<CudaEvent> streamingGroupbyEvent_;
-  size_t streamingGroupbyCapacity_{0};
 };
 
 } // namespace facebook::velox::cudf_velox

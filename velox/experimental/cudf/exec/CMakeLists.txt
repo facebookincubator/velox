@@ -44,6 +44,7 @@ add_library(
   GpuCapabilities.cpp
   GpuResources.cpp
   OperatorAdapters.cpp
+  PartitionedBufferedState.cpp
   PrestoAggregateFunctions.cpp
   SparkAggregateFunctions.cpp
   ToCudf.cpp

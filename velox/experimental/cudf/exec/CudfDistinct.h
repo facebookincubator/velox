@@ -17,6 +17,7 @@
 
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/PartitionedBufferedState.h"
 
 namespace facebook::velox::cudf_velox {
 
@@ -49,14 +50,18 @@ class CudfDistinct : public CudfOperatorBase {
   void doClose() override;
 
  private:
+  // Keeps the distinct keys seen so far in cuDF tables. Defined in
+  // CudfDistinct.cpp.
+  class DistinctBufferedStateOps;
+
+  // Returns the distinct rows of the columns 'groupByKeys' of 'tableView', or
+  // nullptr if there are none.
   CudfVectorPtr getDistinctKeys(
       cudf::table_view tableView,
       std::vector<column_index_t> const& groupByKeys,
       cuda::stream_ref stream);
 
-  CudfVectorPtr releaseAndResetBufferedResult();
-
-  void computePartialDistinctStreaming(CudfVectorPtr tbl);
+  void recordPartialFlushStats(const CudfVector& output);
 
   std::vector<column_index_t> groupingKeyInputChannels_;
   std::vector<column_index_t> groupingKeyOutputChannels_;
@@ -64,14 +69,19 @@ class CudfDistinct : public CudfOperatorBase {
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const bool isPartialOutput_;
+  const bool isSingleStep_;
   const int64_t maxPartialAggregationMemoryUsage_;
   int64_t numInputRows_ = 0;
 
   bool finished_ = false;
+  bool statePartitionsRecorded_ = false;
 
-  std::vector<CudfVectorPtr> inputs_;
-  TypePtr inputType_;
-  CudfVectorPtr bufferedResult_;
+  // The keys of a partial or intermediate step. They are sent downstream when
+  // they reach the row limit or the memory limit for partial aggregation.
+  std::unique_ptr<FlushableBufferedState> flushableBufferedState_;
+  // The keys of a final or single step, kept in hash partitions until the
+  // input ends.
+  std::unique_ptr<PartitionedBufferedState> partitionedBufferedState_;
 };
 
 } // namespace facebook::velox::cudf_velox
