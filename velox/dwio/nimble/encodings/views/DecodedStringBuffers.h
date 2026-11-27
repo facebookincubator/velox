@@ -87,19 +87,18 @@ class DecodedStringBuffers {
   /// decode that fails passes zero.
   velox::BufferPtr finish(size_t numUsedBytes);
 
-  /// Returns the bytes of the largest buffer, so that a test can reserve more
-  /// to get a buffer of its own.
-  static constexpr size_t testingMaxBufferBytes() {
-    return kMaxBufferBytes;
-  }
+  /// The bytes that the largest buffer takes from the pool, with the header of
+  /// the buffer: 1 MB, a power of two, which fits a size class of the
+  /// allocators exactly. It bounds what a buffer that a caller holds for a few
+  /// strings keeps alive, since a larger reservation takes a buffer of its
+  /// own. A decoder that would reserve more for the most bytes that its
+  /// strings can decode to counts the bytes that they decode to instead.
+  static constexpr size_t kMaxBufferBytes{1 << 20};
 
  private:
-  // The bytes that the first buffer and the largest take from the pool, with
-  // the header of the buffer. A power of two fits a size class of the
-  // allocators exactly. The largest bounds what a buffer that a caller holds
-  // for a few strings keeps alive.
+  // The bytes that the first buffer takes from the pool, with the header of
+  // the buffer, a power of two like kMaxBufferBytes.
   static constexpr size_t kMinBufferBytes{32 << 10};
-  static constexpr size_t kMaxBufferBytes{1 << 20};
 
   // Allocates the buffers.
   velox::memory::MemoryPool* const pool_;
