@@ -1,0 +1,137 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/CudfOperator.h"
+
+#include "velox/common/base/Exceptions.h"
+#include "velox/type/Type.h"
+
+#include <cudf/column/column.hpp>
+#include <cudf/scalar/scalar.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/types.hpp>
+
+#include <rmm/resource_ref.hpp>
+
+#include <cuda/stream>
+
+#include <functional>
+#include <memory>
+#include <optional>
+#include <vector>
+
+namespace facebook::velox::cudf_velox {
+
+/// Builds a constant cuDF scalar on the given stream. The memory pool is the
+/// operator's, for factories that materialize Velox values first.
+using ScalarFactory = std::function<
+    std::unique_ptr<cudf::scalar>(cuda::stream_ref, memory::MemoryPool*)>;
+
+/// One output column of a projection: either an input channel or a constant.
+struct ProjectionColumn {
+  /// Input channel, or kConstantChannel when the column is a constant.
+  column_index_t channel{kConstantChannel};
+
+  /// Builds the constant. Empty when the column is an input channel.
+  ScalarFactory makeScalar;
+
+  /// Creates a column taken from input channel 'channel'.
+  static ProjectionColumn field(column_index_t channel) {
+    return {channel, nullptr};
+  }
+
+  /// Creates a column filled with the scalar 'makeScalar' returns.
+  static ProjectionColumn constant(ScalarFactory makeScalar) {
+    return {kConstantChannel, std::move(makeScalar)};
+  }
+};
+
+/// Base class for operators that emit several projections of each input batch,
+/// such as Expand and GroupId. Takes one input batch and produces one output
+/// batch per projection.
+///
+/// An input column is copied for every use except its last across all
+/// projections, where it is moved into the output.
+class CudfProjectionOperator : public CudfOperatorBase {
+ public:
+  /// 'projections' lists the output columns of each projection.
+  /// 'numInputColumns' is the width of every input batch.
+  CudfProjectionOperator(
+      int32_t operatorId,
+      exec::DriverCtx* driverCtx,
+      RowTypePtr outputType,
+      const core::PlanNodeId& planNodeId,
+      const std::string& operatorName,
+      std::optional<nvtx3::color> color,
+      NvtxMethodFlag nvtxMethods,
+      std::optional<std::shared_ptr<const core::PlanNode>> planNode,
+      std::vector<std::vector<ProjectionColumn>> projections,
+      size_t numInputColumns);
+
+  bool needsInput() const override;
+
+  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+    return exec::BlockingReason::kNotBlocked;
+  }
+
+  bool isFinished() override;
+
+ protected:
+  void doAddInput(RowVectorPtr input) override;
+
+  RowVectorPtr doGetOutput() override;
+
+  void doClose() override;
+
+ private:
+  // Output columns of each projection.
+  const std::vector<std::vector<ProjectionColumn>> projections_;
+
+  // Width of every input table, used to validate each batch before any
+  // projection indexes into it.
+  const size_t numInputColumns_;
+
+  // Whether each output column takes ownership of its input column, one list
+  // per projection. True only for the last use of an input column across all
+  // projections.
+  std::vector<std::vector<bool>> moveInputColumns_;
+
+  // Scalars built from the constants for the current input, on its stream.
+  // Input batches may come from different streams, so they are not reused
+  // across batches. Null for input channels.
+  std::vector<std::vector<std::unique_ptr<cudf::scalar>>> scalars_;
+
+  // Columns of the current input, released from its table.
+  std::vector<std::unique_ptr<cudf::column>> inputColumns_;
+
+  // Signals pending input separately from 'inputColumns_', which is empty for
+  // a zero-column input.
+  bool hasInput_{false};
+
+  // Row count of the current input.
+  cudf::size_type numRows_{0};
+
+  // Stream of the current input, used for all its outputs.
+  cuda::stream_ref stream_{cudaStream_t{cudaStreamDefault}};
+
+  // Index of the projection 'next' outputs.
+  size_t projectionIndex_{0};
+};
+
+} // namespace facebook::velox::cudf_velox
