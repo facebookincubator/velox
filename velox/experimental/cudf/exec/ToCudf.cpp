@@ -495,6 +495,10 @@ void CudfConfig::initialize(
     streamingGroupbyCapacityMultiplier =
         folly::to<double>(config[kCudfStreamingGroupbyCapacityMultiplier]);
   }
+  if (config.find(kCudfStreamingGroupbyTables) != config.end()) {
+    streamingGroupbyTables =
+        folly::to<int32_t>(config[kCudfStreamingGroupbyTables]);
+  }
   if (config.find(kCudfFunctionNamePrefix) != config.end()) {
     functionNamePrefix = config[kCudfFunctionNamePrefix];
   }

@@ -36,6 +36,12 @@ inline constexpr std::string_view kStreamingGroupbyUsedStat{
     "streamingGroupbyUsed"};
 inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
     "streamingGroupbyRebuilds"};
+inline constexpr std::string_view kStreamingGroupbyTablesStat{
+    "streamingGroupbyTables"};
+inline constexpr std::string_view kStreamingGroupbyTableKeysStat{
+    "streamingGroupbyTableKeys"};
+inline constexpr std::string_view kStreamingGroupbyDoublingsStat{
+    "streamingGroupbyDoublings"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be
@@ -201,6 +207,14 @@ class CudfGroupby : public CudfOperatorBase {
 
   bool isFinished() override;
 
+  /// Lets tests lower the key limit, the number of keys a table may hold
+  /// before the tables double, so that doubling happens with a few keys.
+  /// std::nullopt restores the default, which is also the highest allowed.
+  static void testingSetStreamingGroupbyMaxTableKeys(
+      std::optional<size_t> maxTableKeys) {
+    testingStreamingGroupbyMaxTableKeys_ = maxTableKeys;
+  }
+
  protected:
   void doAddInput(RowVectorPtr input) override;
 
@@ -238,7 +252,43 @@ class CudfGroupby : public CudfOperatorBase {
   std::unique_ptr<cudf::groupby::streaming_groupby> createStreamingGroupby(
       size_t capacity);
 
+  // Keeps a table's capacity with the table, so that each table grows on its
+  // own.
+  struct StreamingGroupbyTable {
+    // Created by the table's first rows, so that a table that never gets rows
+    // costs nothing.
+    std::unique_ptr<cudf::groupby::streaming_groupby> groupby;
+    size_t capacity{0};
+  };
+
+  // Adds 'input' to 'table', creating or growing the table first if needed.
+  void aggregateStreamingGroupbyTable(
+      StreamingGroupbyTable& table,
+      cudf::table_view input,
+      double capacityMultiplier,
+      cuda::stream_ref stream);
+
+  // Sends each row of 'input' to the table of its key and adds it there.
+  void aggregateStreamingGroupbyTables(
+      cudf::table_view input,
+      double capacityMultiplier,
+      cuda::stream_ref stream);
+
+  // Returns true if a table holds more keys than the key limit and the tables
+  // can still double.
+  bool shouldDoubleStreamingGroupbyTables() const;
+
+  // Doubles the number of tables. Moves one old table at a time into the new
+  // tables, so that only one table's keys are taken out at once.
+  void doubleStreamingGroupbyTables(
+      double capacityMultiplier,
+      cuda::stream_ref stream);
+
   void computeFinalGroupbyStreaming(CudfVectorPtr input);
+
+  // Returns the output of 'table' and releases the table, or null if the table
+  // has no groups.
+  CudfVectorPtr finalizeStreamingGroupbyTable(StreamingGroupbyTable& table);
 
   CudfVectorPtr finalizeStreamingGroupby();
 
@@ -278,10 +328,16 @@ class CudfGroupby : public CudfOperatorBase {
 
   std::vector<std::unique_ptr<StreamingGroupbyAggregator>>
       streamingGroupbyAggregators_;
-  std::unique_ptr<cudf::groupby::streaming_groupby> streamingGroupby_;
+  // Several tables, so that only one table grows or produces output at a time,
+  // which lowers the peak GPU memory.
+  std::vector<StreamingGroupbyTable> streamingGroupbyTables_;
+  // getOutput returns one table per call, so the next table to return must be
+  // remembered between calls, as HashAggregation does with resultIterator_.
+  size_t nextStreamingGroupbyTable_{0};
+  // Set by tests, which need the tables to double with a few keys.
+  inline static std::optional<size_t> testingStreamingGroupbyMaxTableKeys_;
   std::optional<cuda::stream_ref> streamingGroupbyStream_;
   std::unique_ptr<CudaEvent> streamingGroupbyEvent_;
-  size_t streamingGroupbyCapacity_{0};
 };
 
 } // namespace facebook::velox::cudf_velox
