@@ -108,7 +108,7 @@ velox::DictionaryVector<velox::ComplexType>* prepareDictionaryArrayResult(
   auto dictionaryVector = result
       ? result->as<velox::DictionaryVector<velox::ComplexType>>()
       : nullptr;
-  if (result && result.unique()) {
+  if (result && result.use_count() == 1) {
     if (result->nulls() && result->nulls()->isMutable()) {
       nulls = result->mutableNulls(size);
     }
@@ -118,7 +118,7 @@ velox::DictionaryVector<velox::ComplexType>* prepareDictionaryArrayResult(
         indices = dictionaryVector->mutableIndices(size);
       }
       if (dictionaryVector->valueVector() &&
-          dictionaryVector->valueVector().unique()) {
+          dictionaryVector->valueVector().use_count() == 1) {
         alphabet = dictionaryVector->valueVector();
         auto arrayVector = alphabet->as<velox::ArrayVector>();
         if (arrayVector) {
@@ -183,7 +183,7 @@ velox::DictionaryVector<velox::ComplexType>* prepareDictionaryMapResult(
   auto dictionaryVector = result
       ? result->as<velox::DictionaryVector<velox::ComplexType>>()
       : nullptr;
-  if (result && result.unique()) {
+  if (result && result.use_count() == 1) {
     if (result->nulls() && result->nulls()->isMutable()) {
       nulls = result->mutableNulls(size);
     }
@@ -193,7 +193,7 @@ velox::DictionaryVector<velox::ComplexType>* prepareDictionaryMapResult(
         indices = dictionaryVector->mutableIndices(size);
       }
       if (dictionaryVector->valueVector() &&
-          dictionaryVector->valueVector().unique()) {
+          dictionaryVector->valueVector().use_count() == 1) {
         alphabet = dictionaryVector->valueVector();
         auto mapVector = alphabet->as<velox::MapVector>();
         if (mapVector) {
