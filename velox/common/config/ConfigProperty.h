@@ -33,8 +33,8 @@ enum class ConfigPropertyType {
 
 VELOX_DECLARE_ENUM_NAME(ConfigPropertyType);
 
-/// Describes a single configuration property: name, type, default, and
-/// human-readable description.
+/// Describes a configuration property: name, type, default, description, and
+/// whether a session may override the default.
 struct ConfigProperty {
   /// Property name, e.g. "session_timezone".
   std::string name;
@@ -46,6 +46,9 @@ struct ConfigProperty {
 
   /// Human-readable description of the property.
   std::string description;
+
+  /// Whether a session may override this property's default value.
+  bool sessionOverridable{true};
 };
 
 namespace detail {
