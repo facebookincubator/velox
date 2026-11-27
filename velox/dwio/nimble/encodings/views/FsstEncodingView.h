@@ -71,7 +71,9 @@ class BulkStringDecoder;
 /// decodes into its region, so a read of the same rows decodes them again.
 ///
 /// A read holds a lock of the view while it decodes rows alone, so concurrent
-/// reads of one view decode such rows one read at a time.
+/// reads of one view decode such rows one read at a time. Views that share
+/// Encoding::Options::decodedStringBuffers must not be read at once, since its
+/// buffers are not thread-safe.
 class FsstEncodingView final : public TypedEncodingView<std::string_view> {
  public:
   using TypedEncodingView<std::string_view>::read;

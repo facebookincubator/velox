@@ -78,9 +78,12 @@ class EncodingView {
   /// it holds every buffer that the read passes to it for as long as it keeps
   /// the values. The read must then pass to `addStringBuffer` buffers, each
   /// non-null and non-empty, that hold every non-empty value it returns, and
-  /// may pass none only when every value is empty. The view may decode the
-  /// values into buffers that it does not keep. The default reads pass the
-  /// values to addStrings(), which copies them into one buffer that it passes.
+  /// may pass none only when every value is empty. A passed buffer can also
+  /// hold bytes that are not values of the read, such as values that later
+  /// reads decode into it while the caller holds it, so the caller reads the
+  /// values, never the whole buffer. The view may decode the values into
+  /// buffers that it does not keep. The default reads pass the values to
+  /// addStrings(), which copies them into one buffer that it passes.
   /// A view whose values lie in a buffer that it can pass, such as its input,
   /// overrides addStrings() to pass it, and a view that returns the values of
   /// another view passes `addStringBuffer` to the read of that view.

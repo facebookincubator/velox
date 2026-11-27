@@ -287,7 +287,7 @@ std::shared_ptr<const EncodingView> StreamReader::makeEncodingView(
 
 DecodedStringBuffers* StreamReader::ensureDecodedStringBuffers(
     size_t streamIndex) {
-  if (!options_.cacheEncodingView || !holdsStrings(loadedChunks_)) {
+  if (!holdsStrings(loadedChunks_)) {
     return nullptr;
   }
   auto& buffers = decodedStringBuffers_[streamIndex];
@@ -376,9 +376,9 @@ void StreamReader::bindStream(
       streamBufferHolders.empty() ? kNoBufferHolder
                                   : streamBufferHolders[streamIndex]);
 
-  // Gives the cached views of the stream's chunks buffers to decode strings
-  // into that only they share, so that a read of the stream holds a few
-  // buffers instead of at least one for each chunk. The decoder creates the
+  // Gives the views of the stream's chunks buffers to decode strings into
+  // that only they share, so that a read of the stream holds a few buffers
+  // instead of at least one for each chunk. The decoder creates the
   // views before it returns, and they keep a pointer to the buffers, which
   // the reader owns, so options_ points to them only meanwhile.
   options_.decodedStringBuffers = ensureDecodedStringBuffers(streamIndex);
