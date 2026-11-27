@@ -224,6 +224,33 @@ std::string FileSplitReader::toString() const {
       static_cast<const void*>(baseRowReader_.get()));
 }
 
+FileProperties FileSplitReader::makeFileProperties(
+    const folly::F14FastMap<std::string, std::string>& fileReadOps) const {
+  // The split's own fileReadOps only add keys; the reader's keys win. Like the
+  // reader's, they take effect only when the file is opened: the file handle
+  // cache key ignores them, so a cached handle keeps the ops it was opened
+  // with.
+  auto fileProperties = fileSplit_->properties.value_or(FileProperties{});
+  for (const auto& [key, value] : fileReadOps) {
+    fileProperties.fileReadOps.insert_or_assign(key, value);
+  }
+  // The table's identity authorizes the file unless the reader's ops name
+  // another table's, as for a file of a side table read in place of the base.
+  if (!tableHandle_->dbName().empty() && !fileReadOps.contains(kDbNameKey)) {
+    fileProperties.fileReadOps[kDbNameKey] = tableHandle_->dbName();
+  }
+  if (!tableHandle_->name().empty() && !fileReadOps.contains(kTableNameKey)) {
+    fileProperties.fileReadOps[kTableNameKey] = tableHandle_->name();
+  }
+  // Per-operation counters are attributed to the data source that opened the
+  // file, so they are only meaningful while file handles are not reused across
+  // data sources. A cached handle would both outlive these statistics and
+  // report one data source's reads against another's.
+  fileProperties.ioStatistics =
+      fileHandleFactory_->maxSize() == 0 ? dataIoStats_.get() : nullptr;
+  return fileProperties;
+}
+
 void FileSplitReader::createReader(
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   VELOX_CHECK_NE(
@@ -234,26 +261,7 @@ void FileSplitReader::createReader(
       .filename = fileSplit_->readPath(),
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
 
-  // The split's own fileReadOps only add keys; the reader's keys win. Like the
-  // reader's, they take effect only when the file is opened: the file handle
-  // cache key ignores them, so a cached handle keeps the ops it was opened
-  // with.
-  auto fileProperties = fileSplit_->properties.value_or(FileProperties{});
-  for (const auto& [key, value] : fileReadOps) {
-    fileProperties.fileReadOps.insert_or_assign(key, value);
-  }
-  if (!tableHandle_->dbName().empty()) {
-    fileProperties.fileReadOps[kDbNameKey] = tableHandle_->dbName();
-  }
-  if (!tableHandle_->name().empty()) {
-    fileProperties.fileReadOps[kTableNameKey] = tableHandle_->name();
-  }
-  // Per-operation counters are attributed to the data source that opened the
-  // file, so they are only meaningful while file handles are not reused across
-  // data sources. A cached handle would both outlive these statistics and
-  // report one data source's reads against another's.
-  fileProperties.ioStatistics =
-      fileHandleFactory_->maxSize() == 0 ? dataIoStats_.get() : nullptr;
+  auto fileProperties = makeFileProperties(fileReadOps);
 
   try {
     fileHandleCachePtr = fileHandleFactory_->generate(
