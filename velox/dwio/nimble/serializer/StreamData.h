@@ -121,16 +121,31 @@ class StreamData {
   /// can visit them with ctz instead of scanning one bool per row.
   void decodeBoolsAsBits(uint32_t count, uint64_t* bits);
 
-  /// Binds the stream to a new segment `data` and rewinds it. With
-  /// `rebindEncoding`, the current encoding is rebound to `data`
-  /// (Encoding::rebind) instead of being rebuilt when `data` holds the
-  /// same encoding and data type, which saves the per-segment setup of
-  /// streams that keep their encoding from segment to segment, e.g. one
-  /// small payload after another.
+  /// Binds the stream to a new segment `data` and rewinds it. Of `options`,
+  /// reset() reads only the settings that may change from one segment to the
+  /// next: `useVarintRowCount`, the segment's row-count format, and
+  /// `sharedDictionaryAlphabet`, the alphabet a SharedDictionary segment
+  /// decodes against (e.g. the file dictionary a caller resolved for this
+  /// stream; null for none). Every other setting comes from the construction
+  /// options. E.g. `reset(segment, {.useVarintRowCount = true,
+  /// .sharedDictionaryAlphabet = fileAlphabet})`. With `rebindEncoding`, the
+  /// current encoding is rebound to `data` (Encoding::rebind) instead of
+  /// being rebuilt when `data` holds the same encoding and data type and
+  /// those two settings are the ones it was built with, which saves the
+  /// per-segment setup of streams that keep their encoding from segment to
+  /// segment, e.g. one small payload after another.
   void reset(
       std::string_view data,
-      bool streamEncodingUsesVarintRowCount,
+      const Encoding::Options& options,
       bool rebindEncoding = false);
+
+  /// Drops the shared-dictionary alphabet the last reset() passed, with the
+  /// encoding built on it, so the stream no longer keeps the alphabet alive.
+  /// E.g. a cached decoder calls it when the file whose dictionary it decoded
+  /// against is closed. A stream whose last reset() passed no alphabet is left
+  /// as it is. After a release the stream has no encoding until the next
+  /// reset().
+  void releaseSharedDictionaryAlphabet();
 
   /// Advance the encoded stream cursor by `count` rows without materializing
   /// output. Uses the encoding's native state-only skip primitive. Only valid
@@ -225,6 +240,8 @@ class StreamData {
   // Cursor over raw legacy headerless stream data.
   const char* pos_{nullptr};
   const char* end_{nullptr};
+  // The alphabet encoding_ was built with; see reset().
+  std::shared_ptr<const SharedDictionaryAlphabet> sharedDictionaryAlphabet_;
   std::unique_ptr<Encoding> encoding_;
   // Track consumed rows for nimble encoding path.
   uint32_t readRows_{0};

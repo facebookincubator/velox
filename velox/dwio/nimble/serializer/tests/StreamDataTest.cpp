@@ -29,11 +29,14 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/NullableEncoding.h"
+#include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/StreamData.h"
@@ -140,7 +143,7 @@ TEST_F(StreamDataTest, resetRebindsAlternatingEncodings) {
           std::pair{trivial, trivialValues}}) {
       stream.reset(
           data,
-          /*streamEncodingUsesVarintRowCount=*/false,
+          {.useVarintRowCount = false},
           /*rebindEncoding=*/true);
       std::vector<int32_t> output(expected.size());
       stream.decode(
@@ -151,6 +154,290 @@ TEST_F(StreamDataTest, resetRebindsAlternatingEncodings) {
       EXPECT_EQ(output, expected);
     }
   }
+}
+
+TEST_F(StreamDataTest, sharedDictionaryDecodesAgainstSetAlphabet) {
+  // The same SharedDictionary segment decodes against whichever alphabet is
+  // set, as payloads of two files with their own dictionaries do, also when
+  // the encoding would otherwise be rebound.
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto segment = test::encodeSharedDictionary(buffer, {2, 0, 1});
+  const std::vector<int32_t> firstEntries{10, 20, 30};
+  const std::vector<int32_t> secondEntries{7, 8, 9};
+  const auto first = test::createSharedDictionaryAlphabet<int32_t>(
+      firstEntries, /*candidateEncodings=*/{}, pool_.get());
+  const auto second = test::createSharedDictionaryAlphabet<int32_t>(
+      secondEntries, /*candidateEncodings=*/{}, pool_.get());
+
+  std::vector<BufferPtr> stringBuffers;
+  BufferPtr decompressionBuffer;
+  serde::StreamData stream(
+      /*data=*/{},
+      ScalarKind::Int32,
+      stringBuffers,
+      pool_.get(),
+      serde::StreamData::Options{.decompressionBuffer = &decompressionBuffer});
+  const auto decode = [&] {
+    std::vector<int32_t> output(3);
+    stream.decode(output.data(), /*offset=*/0, 3, sizeof(int32_t));
+    return output;
+  };
+  for (const auto& [alphabet, expected] :
+       {std::pair{first, std::vector<int32_t>{30, 10, 20}},
+        std::pair{second, std::vector<int32_t>{9, 7, 8}},
+        std::pair{first, std::vector<int32_t>{30, 10, 20}}}) {
+    stream.reset(
+        segment,
+        {.useVarintRowCount = false, .sharedDictionaryAlphabet = alphabet},
+        /*rebindEncoding=*/true);
+    EXPECT_EQ(decode(), expected);
+  }
+
+  NIMBLE_ASSERT_THROW(
+      stream.reset(
+          segment, {.useVarintRowCount = false}, /*rebindEncoding=*/true),
+      "Shared dictionary encoding requires an alphabet.");
+}
+
+namespace {
+
+// A SharedDictionary segment of T values with fixed-width row counts: one
+// index per row into the alphabet the reader passes.
+template <typename T>
+std::string_view encodeSharedDictionarySegment(
+    facebook::nimble::Buffer& buffer,
+    const std::vector<uint32_t>& indices) {
+  return SharedDictionaryEncoding<T>::encode(
+      indices,
+      defaultEncodingSelectionPolicyCreator(),
+      buffer,
+      Encoding::Options{.useVarintRowCount = false});
+}
+
+// `values`, a segment of `numRows` int32 rows, under a Nullable encoding whose
+// rows are all non-null. Unlike a SharedDictionary encoding, a Nullable one
+// rebinds, rebuilding a child that does not rebind with its own options, so
+// it shows which alphabet a rebound encoding decodes against.
+std::string_view wrapInNullable(
+    facebook::nimble::Buffer& buffer,
+    std::string_view values,
+    uint32_t numRows,
+    memory::MemoryPool* pool) {
+  const Vector<bool> nonNulls{pool, numRows, true};
+  const auto nulls =
+      test::Encoder<TrivialEncoding<bool>>::encode(buffer, nonNulls);
+  return NullableEncoding<int32_t>::encodeNullable(
+      numRows,
+      values,
+      nulls,
+      buffer,
+      Encoding::Options{.useVarintRowCount = false});
+}
+
+// A Trivial segment of int32 `values` with fixed-width row counts.
+std::string_view encodeTrivialSegment(
+    facebook::nimble::Buffer& buffer,
+    const std::vector<int32_t>& values,
+    memory::MemoryPool* pool) {
+  const Vector<int32_t> vector{pool, values.begin(), values.end()};
+  return test::Encoder<TrivialEncoding<int32_t>>::encode(buffer, vector);
+}
+
+// Decodes the next `count` int32 rows of `stream`, nullable or not.
+std::vector<int32_t> decodeInt32s(serde::StreamData& stream, uint32_t count) {
+  std::vector<int32_t> output(count);
+  std::vector<uint64_t> nulls(bits::nwords(count));
+  stream.decode(
+      output.data(), /*offset=*/0, count, sizeof(int32_t), [&]() -> void* {
+        return nulls.data();
+      });
+  return output;
+}
+
+// An int32 alphabet over `entries`.
+std::shared_ptr<const SharedDictionaryAlphabet> int32Alphabet(
+    const std::vector<int32_t>& entries,
+    memory::MemoryPool* pool) {
+  return test::createSharedDictionaryAlphabet<int32_t>(
+      entries, /*candidateEncodings=*/{}, pool);
+}
+
+} // namespace
+
+TEST_F(StreamDataTest, sharedDictionaryDecodesStringAlphabet) {
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto segment =
+      encodeSharedDictionarySegment<std::string_view>(buffer, {1, 1, 0});
+  const std::vector<std::string_view> firstEntries{"us", "ca"};
+  const std::vector<std::string_view> secondEntries{"mx", "fr"};
+  const auto first = test::createSharedDictionaryAlphabet<std::string_view>(
+      firstEntries, /*candidateEncodings=*/{}, pool_.get());
+  const auto second = test::createSharedDictionaryAlphabet<std::string_view>(
+      secondEntries, /*candidateEncodings=*/{}, pool_.get());
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData stream(stringBuffers, pool_.get());
+  const auto decode = [&] {
+    std::vector<std::string_view> output(3);
+    stream.decodeStrings(3, output.data());
+    return output;
+  };
+
+  stream.reset(
+      segment, {.useVarintRowCount = false, .sharedDictionaryAlphabet = first});
+  EXPECT_EQ(decode(), (std::vector<std::string_view>{"ca", "ca", "us"}));
+
+  stream.reset(
+      segment,
+      {.useVarintRowCount = false, .sharedDictionaryAlphabet = second},
+      /*rebindEncoding=*/true);
+  EXPECT_EQ(decode(), (std::vector<std::string_view>{"fr", "fr", "mx"}));
+}
+
+TEST_F(StreamDataTest, sharedDictionaryAlphabetOfAnotherTypeThrows) {
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto segment = encodeSharedDictionarySegment<int32_t>(buffer, {0});
+  const std::vector<std::string_view> entries{"us"};
+  const auto strings = test::createSharedDictionaryAlphabet<std::string_view>(
+      entries, /*candidateEncodings=*/{}, pool_.get());
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData stream(stringBuffers, pool_.get());
+
+  NIMBLE_ASSERT_THROW(
+      stream.reset(
+          segment,
+          {.useVarintRowCount = false, .sharedDictionaryAlphabet = strings}),
+      "Shared dictionary alphabet has unexpected type.");
+}
+
+TEST_F(
+    StreamDataTest,
+    sharedDictionaryAlphabetChangeRebuildsRebindableEncoding) {
+  // A Nullable encoding would rebind to the next segment and rebuild its
+  // SharedDictionary child with the alphabet it was built with; a new
+  // alphabet must rebuild the whole encoding instead.
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto segment = wrapInNullable(
+      buffer,
+      encodeSharedDictionarySegment<int32_t>(buffer, {2, 0, 1}),
+      /*numRows=*/3,
+      pool_.get());
+  const auto first = int32Alphabet({10, 20, 30}, pool_.get());
+  const auto second = int32Alphabet({7, 8, 9}, pool_.get());
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData stream(stringBuffers, pool_.get());
+
+  stream.reset(
+      segment,
+      {.useVarintRowCount = false, .sharedDictionaryAlphabet = first},
+      /*rebindEncoding=*/true);
+  EXPECT_EQ(decodeInt32s(stream, 3), (std::vector<int32_t>{30, 10, 20}));
+
+  stream.reset(
+      segment,
+      {.useVarintRowCount = false, .sharedDictionaryAlphabet = second},
+      /*rebindEncoding=*/true);
+  EXPECT_EQ(decodeInt32s(stream, 3), (std::vector<int32_t>{9, 7, 8}));
+}
+
+TEST_F(StreamDataTest, sharedDictionarySameAlphabetRebinds) {
+  // Under one alphabet, a repeated Nullable SharedDictionary segment rebinds
+  // the current encoding, a Trivial segment between them rebuilds it, and
+  // each decodes against that alphabet.
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto nullable = wrapInNullable(
+      buffer,
+      encodeSharedDictionarySegment<int32_t>(buffer, {1, 0}),
+      /*numRows=*/2,
+      pool_.get());
+  const auto trivial = encodeTrivialSegment(buffer, {4, 5}, pool_.get());
+  const auto alphabet = int32Alphabet({10, 20}, pool_.get());
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData stream(stringBuffers, pool_.get());
+
+  for (int round = 0; round < 3; ++round) {
+    SCOPED_TRACE(fmt::format("round {}", round));
+    for (int repeat = 0; repeat < 2; ++repeat) {
+      stream.reset(
+          nullable,
+          {.useVarintRowCount = false, .sharedDictionaryAlphabet = alphabet},
+          /*rebindEncoding=*/true);
+      EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{20, 10}));
+    }
+    stream.reset(
+        trivial,
+        {.useVarintRowCount = false, .sharedDictionaryAlphabet = alphabet},
+        /*rebindEncoding=*/true);
+    EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{4, 5}));
+  }
+}
+
+TEST_F(StreamDataTest, sharedDictionaryAlphabetToNoAlphabet) {
+  // A segment without an alphabet after one with an alphabet, and back: the
+  // stream decodes each against the alphabet its own reset() passes, and a
+  // SharedDictionary segment reset without one throws rather than decoding
+  // against the previous segment's.
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto shared = wrapInNullable(
+      buffer,
+      encodeSharedDictionarySegment<int32_t>(buffer, {1, 0}),
+      /*numRows=*/2,
+      pool_.get());
+  const auto trivial = encodeTrivialSegment(buffer, {4, 5}, pool_.get());
+  const auto alphabet = int32Alphabet({10, 20}, pool_.get());
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData stream(stringBuffers, pool_.get());
+
+  stream.reset(trivial, {.useVarintRowCount = false}, /*rebindEncoding=*/true);
+  EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{4, 5}));
+  stream.reset(
+      shared,
+      {.useVarintRowCount = false, .sharedDictionaryAlphabet = alphabet},
+      /*rebindEncoding=*/true);
+  EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{20, 10}));
+  stream.reset(trivial, {.useVarintRowCount = false}, /*rebindEncoding=*/true);
+  EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{4, 5}));
+  NIMBLE_ASSERT_THROW(
+      stream.reset(
+          shared, {.useVarintRowCount = false}, /*rebindEncoding=*/true),
+      "Shared dictionary encoding requires an alphabet.");
+}
+
+TEST_F(StreamDataTest, releaseSharedDictionaryAlphabet) {
+  facebook::nimble::Buffer buffer{*pool_};
+  const auto shared = wrapInNullable(
+      buffer,
+      encodeSharedDictionarySegment<int32_t>(buffer, {1, 0}),
+      /*numRows=*/2,
+      pool_.get());
+  const auto trivial = encodeTrivialSegment(buffer, {4, 5}, pool_.get());
+  const auto first = int32Alphabet({10, 20}, pool_.get());
+  const auto second = int32Alphabet({7, 8}, pool_.get());
+  std::vector<BufferPtr> stringBuffers;
+  serde::StreamData stream(stringBuffers, pool_.get());
+
+  // The stream and its encodings hold the alphabet until it is released.
+  stream.reset(
+      shared,
+      {.useVarintRowCount = false, .sharedDictionaryAlphabet = first},
+      /*rebindEncoding=*/true);
+  EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{20, 10}));
+  EXPECT_GT(first.use_count(), 1);
+  stream.releaseSharedDictionaryAlphabet();
+  EXPECT_EQ(first.use_count(), 1);
+  EXPECT_FALSE(stream.hasEncoding());
+
+  // The next reset() rebuilds the encoding, against its own alphabet.
+  stream.reset(
+      shared,
+      {.useVarintRowCount = false, .sharedDictionaryAlphabet = second},
+      /*rebindEncoding=*/true);
+  EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{8, 7}));
+
+  // A stream reset without an alphabet keeps its encoding and rows.
+  stream.reset(trivial, {.useVarintRowCount = false});
+  stream.releaseSharedDictionaryAlphabet();
+  ASSERT_TRUE(stream.hasEncoding());
+  EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{4, 5}));
 }
 
 // ---------------------------------------------------------------------------
@@ -1846,10 +2133,10 @@ TEST_F(StreamDataEncodedResetTest, resetUpdatesRowCountEncodingFlag) {
     std::vector<BufferPtr> stringBuffers;
     serde::StreamData streamData(stringBuffers, pool_.get());
 
-    streamData.reset(varintEncoded, /*streamEncodingUsesVarintRowCount=*/true);
+    streamData.reset(varintEncoded, {.useVarintRowCount = true});
     expectDecoded(streamData, varintValues);
 
-    streamData.reset(fixedEncoded, /*streamEncodingUsesVarintRowCount=*/false);
+    streamData.reset(fixedEncoded, {.useVarintRowCount = false});
     expectDecoded(streamData, fixedValues);
   }
 }
@@ -1864,19 +2151,19 @@ TEST_F(StreamDataEncodedResetTest, rebindRejectsTruncatedPrefix) {
   const auto encoded = encode(values, buffer, /*useVarintRowCount=*/true);
   std::vector<BufferPtr> stringBuffers;
   serde::StreamData streamData(stringBuffers, pool_.get());
-  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/true);
+  streamData.reset(encoded, {.useVarintRowCount = true});
   expectDecoded(streamData, values);
 
   NIMBLE_ASSERT_THROW(
       streamData.reset(
           encoded.substr(0, 3),
-          /*streamEncodingUsesVarintRowCount=*/true,
+          {.useVarintRowCount = true},
           /*rebindEncoding=*/true),
       "Truncated uint32 varint.");
   NIMBLE_ASSERT_THROW(
       streamData.reset(
           encoded.substr(0, 1),
-          /*streamEncodingUsesVarintRowCount=*/true,
+          {.useVarintRowCount = true},
           /*rebindEncoding=*/true),
       "Truncated encoding prefix.");
 }
@@ -1911,7 +2198,7 @@ TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBits) {
         /*compressionOptions=*/std::nullopt);
     std::vector<BufferPtr> stringBuffers;
     serde::StreamData streamData(stringBuffers, pool_.get());
-    streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+    streamData.reset(encoded, {.useVarintRowCount = false});
 
     // Two reads, so the second starts mid-word and mid-stream; poisoned words
     // check that the read overwrites rather than ORs.
@@ -1967,7 +2254,7 @@ TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBitsWordBoundaries) {
     const auto encoded = encodeBools({values.get(), kRows}, buffer, layout);
     std::vector<BufferPtr> stringBuffers;
     serde::StreamData streamData(stringBuffers, pool_.get());
-    streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+    streamData.reset(encoded, {.useVarintRowCount = false});
     uint32_t begin = 0;
     for (const uint32_t count : {0u, 63u, 65u, 0u, 64u}) {
       SCOPED_TRACE(fmt::format("read [{}, {})", begin, begin + count));
@@ -2077,7 +2364,7 @@ TEST_P(StreamDataBoolsAsBitsTest, readsAcrossWordBoundaries) {
       toEncodingType(std::get<0>(GetParam())));
   std::vector<BufferPtr> stringBuffers;
   serde::StreamData streamData(stringBuffers, pool_.get());
-  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+  streamData.reset(encoded, {.useVarintRowCount = false});
   uint32_t begin = 0;
   for (const uint32_t count : {0u, 63u, 64u, 65u, 300u, kRows - 492u}) {
     SCOPED_TRACE(fmt::format("read [{}, {})", begin, begin + count));
@@ -2100,7 +2387,7 @@ TEST_P(StreamDataBoolsAsBitsTest, interleavedWithDecode) {
   const auto encoded = encodePattern(values, buffer);
   std::vector<BufferPtr> stringBuffers;
   serde::StreamData streamData(stringBuffers, pool_.get());
-  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+  streamData.reset(encoded, {.useVarintRowCount = false});
   uint32_t begin = 0;
   bool asBits = false;
   for (const uint32_t count : {10u, 70u, 1u, 129u, 64u, 3u, 200u, 523u}) {
@@ -2156,7 +2443,7 @@ TEST_F(StreamDataEncodedResetTest, decodeBoolsAsBitsPastEndThrows) {
   const auto encoded = encodeBools({values.get(), 10}, buffer, nullptr);
   std::vector<BufferPtr> stringBuffers;
   serde::StreamData streamData(stringBuffers, pool_.get());
-  streamData.reset(encoded, /*streamEncodingUsesVarintRowCount=*/false);
+  streamData.reset(encoded, {.useVarintRowCount = false});
   uint64_t bits = 0;
   streamData.decodeBoolsAsBits(4, &bits);
   NIMBLE_ASSERT_THROW(
