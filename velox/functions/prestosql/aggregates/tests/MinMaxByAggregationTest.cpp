@@ -1186,18 +1186,18 @@ TEST_F(MinMaxByComplexTypes, trackRowSize) {
   // opposite comparator outcomes, so exercise both.
   for (const auto& name : {"min_by", "max_by"}) {
     SCOPED_TRACE(name);
-    const auto varcharSize =
-        aggregateAndReadRowSize(pool(), name, VARCHAR(), strings, comparisons);
+    const auto varcharSize = aggregateAndReadRowSize(
+        pool(), name, VARCHAR(), {strings, comparisons});
     EXPECT_GE(varcharSize, stringBytes);
     EXPECT_LE(varcharSize, allStringBytes + kAllocatorSlack);
 
     const auto arraySize = aggregateAndReadRowSize(
-        pool(), name, ARRAY(BIGINT()), arrays, comparisons);
+        pool(), name, ARRAY(BIGINT()), {arrays, comparisons});
     EXPECT_GE(arraySize, sizeof(int64_t));
     EXPECT_LE(arraySize, kArrayBytes + kAllocatorSlack);
 
     EXPECT_EQ(
-        aggregateAndReadRowSize(pool(), name, BIGINT(), numbers, comparisons),
+        aggregateAndReadRowSize(pool(), name, BIGINT(), {numbers, comparisons}),
         0);
   }
 }

@@ -35,13 +35,12 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
  protected:
   void SetUp() override {
     AggregationTestBase::SetUp();
+    fuzzerOptions_.vectorSize = 1'000;
+    fuzzerOptions_.nullRatio = 0.1;
   }
 
   std::vector<RowVectorPtr> fuzzData(const RowTypePtr& rowType) {
-    VectorFuzzer::Options options;
-    options.vectorSize = 1'000;
-    options.nullRatio = 0.1;
-    VectorFuzzer fuzzer(options, pool());
+    VectorFuzzer fuzzer(fuzzerOptions_, pool());
     std::vector<RowVectorPtr> vectors(10);
     for (auto i = 0; i < 10; ++i) {
       vectors[i] = fuzzer.fuzzInputRow(rowType);
@@ -298,6 +297,9 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
           .assertResults(expected);
     }
   }
+
+  // Options of the input that doTest() generates.
+  VectorFuzzer::Options fuzzerOptions_;
 };
 
 TEST_F(MinMaxTest, maxTinyint) {
@@ -374,6 +376,14 @@ TEST_F(MinMaxTest, minBoolean) {
   doTest(min, BOOLEAN());
 }
 
+TEST_F(MinMaxTest, variableLengthVarchar) {
+  // Mixes strings that are inline in a StringView with strings that are not.
+  fuzzerOptions_.stringVariableLength = true;
+  fuzzerOptions_.stringLength = 30;
+  doTest(min, VARCHAR());
+  doTest(max, VARCHAR());
+}
+
 TEST_F(MinMaxTest, constVarchar) {
   // Create two batches of the source data for the aggregation:
   // Column c0 with 1K of "apple" and 1K of "banana".
@@ -391,6 +401,159 @@ TEST_F(MinMaxTest, constVarchar) {
       .inputs(constVectors)
       .aggregates({"min(c0)", "max(c0)", "min(c1)", "max(c1)"})
       .assertResults("SELECT 'apple', 'banana', null, null");
+}
+
+// Updates the min and max of each group with strings that alternate between
+// inline and out of line, exercising buffer growth, reuse, and release.
+TEST_F(MinMaxTest, stringSequences) {
+  const std::string huge(4'000, 'h');
+  const std::string sharedPrefix{"abcdefghijklmnopqrstuvwxyz"};
+
+  // Rows of the same group in input order. Each value of 'c1' is a new max
+  // and each value of 'c2' is a new min, except where noted.
+  const std::vector<int64_t> keys{
+      0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3};
+  const std::vector<std::optional<std::string>> maxInputs{
+      // Short, long, longer, short, long, then a smaller value.
+      "b",
+      std::string(20, 'c'),
+      std::string(40, 'd'),
+      "e",
+      std::string(16, 'f'),
+      std::string(30, 'a'),
+      // Same prefix, then same prefix and longer, then a smaller value.
+      sharedPrefix + "1",
+      sharedPrefix + "2",
+      sharedPrefix + "2x",
+      sharedPrefix + "1zzzzzzzzzz",
+      // All NULL.
+      std::nullopt,
+      std::nullopt,
+      // Larger than HashStringAllocator::kMaxAlloc, then inline, then long.
+      huge,
+      huge + "i",
+      "j",
+      std::string(20, 'k'),
+  };
+  const std::vector<std::optional<std::string>> minInputs{
+      "y",
+      std::string(20, 'x'),
+      std::string(40, 'w'),
+      "v",
+      std::string(16, 'u'),
+      std::string(30, 'z'),
+      sharedPrefix + "2",
+      sharedPrefix + "1",
+      sharedPrefix + "0x",
+      sharedPrefix + "1",
+      std::nullopt,
+      std::nullopt,
+      "t" + huge,
+      "s" + huge,
+      "r",
+      std::string(20, 'q'),
+  };
+
+  for (const auto& type : std::vector<TypePtr>{VARCHAR(), VARBINARY()}) {
+    SCOPED_TRACE(type->toString());
+    const auto makeStrings =
+        [&](const std::vector<std::optional<std::string>>& values) {
+          return makeNullableFlatVector<std::string>(values, type);
+        };
+
+    // Each row in its own batch, so that the rows of a group update the
+    // accumulator one after another.
+    std::vector<RowVectorPtr> inputs;
+    for (size_t i = 0; i < keys.size(); ++i) {
+      inputs.push_back(makeRowVector({
+          makeFlatVector<int64_t>({keys[i]}),
+          makeStrings({maxInputs[i]}),
+          makeStrings({minInputs[i]}),
+      }));
+    }
+    // All the rows in one batch.
+    inputs.push_back(makeRowVector({
+        makeFlatVector<int64_t>(keys),
+        makeStrings(maxInputs),
+        makeStrings(minInputs),
+    }));
+
+    const auto expected = makeRowVector({
+        makeFlatVector<int64_t>({0, 1, 2, 3}),
+        makeStrings({
+            std::string(16, 'f'),
+            sharedPrefix + "2x",
+            std::nullopt,
+            std::string(20, 'k'),
+        }),
+        makeStrings({
+            std::string(16, 'u'),
+            sharedPrefix + "0x",
+            std::nullopt,
+            std::string(20, 'q'),
+        }),
+    });
+
+    AggregationTester(*this)
+        .inputs(inputs)
+        .groupBy({"c0"})
+        .aggregates({"max(c1)", "min(c2)"})
+        .assertResults(expected);
+  }
+}
+
+TEST_F(MinMaxTest, trackRowSize) {
+  // A string past the inline StringView limit is copied into the
+  // HashStringAllocator, so the row's variable-length size must be tracked for
+  // spill and output batches to be sized correctly.
+  const std::vector<std::string> longStrings{
+      "a string comfortably longer than the inlined limit 3",
+      "a string comfortably longer than the inlined limit 1",
+      "a string comfortably longer than the inlined limit 5",
+      "a string comfortably longer than the inlined limit 2",
+      "a string comfortably longer than the inlined limit 4",
+  };
+  // Inline strings live in the row, so nothing should be tracked.
+  const std::vector<std::string> inlineStrings{"c", "a", "e", "b", "d"};
+  const std::string largeString(64 << 10, 'm');
+
+  // Bound the tracked size rather than just requiring it to be non-zero, so a
+  // garbage read fails too. The upper bound allows for allocator headers.
+  constexpr uint32_t kAllocatorSlack = 1'024;
+  const uint32_t stringBytes = longStrings[0].size();
+
+  for (const auto& name : {"min", "max"}) {
+    SCOPED_TRACE(name);
+    // Both replacements are new extrema, even though they are much shorter.
+    const char replacement = std::string_view(name) == "min" ? 'a' : 'z';
+    const std::vector<std::string> largeToInline{
+        largeString, std::string(1, replacement)};
+    const std::vector<std::string> largeToSmall{
+        largeString, std::string(stringBytes, replacement)};
+    for (const auto& type : std::vector<TypePtr>{VARCHAR(), VARBINARY()}) {
+      SCOPED_TRACE(type->toString());
+      const auto longSize = functions::aggregate::test::aggregateAndReadRowSize(
+          pool(), name, type, {makeFlatVector(longStrings, type)});
+      EXPECT_GE(longSize, stringBytes);
+      EXPECT_LE(longSize, stringBytes + kAllocatorSlack);
+
+      EXPECT_EQ(
+          functions::aggregate::test::aggregateAndReadRowSize(
+              pool(), name, type, {makeFlatVector(inlineStrings, type)}),
+          0);
+
+      EXPECT_EQ(
+          functions::aggregate::test::aggregateAndReadRowSize(
+              pool(), name, type, {makeFlatVector(largeToInline, type)}),
+          0);
+
+      const auto shrunkSize =
+          functions::aggregate::test::aggregateAndReadRowSize(
+              pool(), name, type, {makeFlatVector(largeToSmall, type)});
+      EXPECT_GE(shrunkSize, stringBytes);
+      EXPECT_LE(shrunkSize, stringBytes + kAllocatorSlack);
+    }
+  }
 }
 
 TEST_F(MinMaxTest, minMaxTimestamp) {
