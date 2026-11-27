@@ -21,7 +21,6 @@
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
 DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
@@ -29,21 +28,21 @@ DEFINE_int64(fuzzer_seed, 99887766, "Seed for random input dataset generator");
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
 
-static constexpr int32_t kNumVectors = 100;
-static constexpr int32_t kRowsPerVector = 10'000;
-
 namespace {
+
+constexpr int32_t kNumVectors = 100;
+constexpr int32_t kRowsPerVector = 10'000;
 
 class StringMinMaxBenchmark : public OperatorTestBase {
  public:
   StringMinMaxBenchmark() {
     OperatorTestBase::SetUp();
 
-    VectorFuzzer::Options opts;
-    opts.vectorSize = kRowsPerVector;
-    opts.nullRatio = 0;
-    opts.stringVariableLength = false;
-    VectorFuzzer fuzzer(opts, pool(), FLAGS_fuzzer_seed);
+    VectorFuzzer::Options options;
+    options.vectorSize = kRowsPerVector;
+    options.nullRatio = 0;
+    options.stringVariableLength = false;
+    VectorFuzzer fuzzer(options, pool(), FLAGS_fuzzer_seed);
 
     vectors_.reserve(kNumVectors);
     for (int32_t i = 0; i < kNumVectors; ++i) {
@@ -60,31 +59,31 @@ class StringMinMaxBenchmark : public OperatorTestBase {
               kRowsPerVector, [](auto row) { return row % 10'000; }));
 
       // Short (inline, 8 bytes) strings without nulls.
-      opts.nullRatio = 0;
-      opts.stringLength = 8;
-      fuzzer.setOptions(opts);
+      options.nullRatio = 0;
+      options.stringLength = 8;
+      fuzzer.setOptions(options);
       children.emplace_back(fuzzer.fuzzFlat(VARCHAR()));
 
       // Long (non-inline, 48 bytes) strings without nulls.
-      opts.stringLength = 48;
-      fuzzer.setOptions(opts);
+      options.stringLength = 48;
+      fuzzer.setOptions(options);
       children.emplace_back(fuzzer.fuzzFlat(VARCHAR()));
 
       // Short (inline, 8 bytes) strings with 50% nulls.
-      opts.nullRatio = 0.5;
-      opts.stringLength = 8;
-      fuzzer.setOptions(opts);
+      options.nullRatio = 0.5;
+      options.stringLength = 8;
+      fuzzer.setOptions(options);
       children.emplace_back(fuzzer.fuzzFlat(VARCHAR()));
 
       // Long (non-inline, 48 bytes) strings with 50% nulls.
-      opts.stringLength = 48;
-      fuzzer.setOptions(opts);
+      options.stringLength = 48;
+      fuzzer.setOptions(options);
       children.emplace_back(fuzzer.fuzzFlat(VARCHAR()));
 
       // Extra long string columns for multi-aggregate benchmark.
-      opts.nullRatio = 0;
-      opts.stringLength = 48;
-      fuzzer.setOptions(opts);
+      options.nullRatio = 0;
+      options.stringLength = 48;
+      fuzzer.setOptions(options);
       for (int32_t c = 0; c < 8; ++c) {
         children.emplace_back(fuzzer.fuzzFlat(VARCHAR()));
       }
@@ -154,8 +153,8 @@ std::unique_ptr<StringMinMaxBenchmark> benchmark;
 void runSingle(
     uint32_t,
     const std::vector<std::string>& keys,
-    const std::string& agg) {
-  benchmark->run(keys, {agg});
+    const std::string& aggregate) {
+  benchmark->run(keys, {aggregate});
 }
 
 void runMulti(uint32_t, const std::vector<std::string>& keys) {

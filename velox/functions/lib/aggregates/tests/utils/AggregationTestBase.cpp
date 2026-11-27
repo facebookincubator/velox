@@ -2049,28 +2049,33 @@ AggregationTestBase::AggregationTester::aggregateArgTypes() const {
 uint32_t aggregateAndReadRowSize(
     memory::MemoryPool* pool,
     const std::string& name,
-    const TypePtr& valueType,
-    const VectorPtr& values,
-    const VectorPtr& comparisons) {
+    const TypePtr& resultType,
+    const std::vector<VectorPtr>& args) {
+  VELOX_CHECK(!args.empty());
+  std::vector<TypePtr> argTypes;
+  argTypes.reserve(args.size());
+  for (const auto& arg : args) {
+    argTypes.push_back(arg->type());
+  }
   core::QueryConfig queryConfig({});
   auto fn = exec::Aggregate::create(
       name,
       core::AggregationNode::Step::kSingle,
-      std::vector<TypePtr>{valueType, comparisons->type()},
-      valueType,
+      argTypes,
+      resultType,
       queryConfig,
       /*constantInputs=*/{});
 
-  auto groupRows = makeGroupRows(*fn, valueType, pool);
+  auto groupRows = makeGroupRows(*fn, resultType, pool);
 
-  const auto size = values->size();
+  const auto size = args[0]->size();
   char* group = groupRows->newRow();
   std::vector<char*> groups(size, group);
   std::vector<vector_size_t> indices{0};
   fn->initializeNewGroups(groups.data(), indices);
 
   SelectivityVector rows{size};
-  fn->addRawInput(groups.data(), rows, {values, comparisons}, false);
+  fn->addRawInput(groups.data(), rows, args, false);
 
   return groupRows->rowSize(group) - groupRows->fixedRowSize();
 }

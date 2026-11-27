@@ -650,6 +650,11 @@ class StringMinMaxAggregate : public exec::Aggregate {
   explicit StringMinMaxAggregate(const TypePtr& resultType)
       : exec::Aggregate(resultType) {}
 
+  // A value past the inline limit is held in the HashStringAllocator.
+  bool isFixedSize() const override {
+    return false;
+  }
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(StringMinMaxAccumulator);
   }
@@ -781,6 +786,7 @@ class StringMinMaxAggregate : public exec::Aggregate {
     if (clearNull(group) ||
         (isMax ? newValue > accumulator->value
                : newValue < accumulator->value)) {
+      auto tracker = trackRowSize(group);
       accumulator->write(newValue, allocator_);
     }
   }

@@ -98,12 +98,13 @@ TEST_F(MinMaxByAggregateTest, trackRowSize) {
   for (const auto& name : {"spark_min_by", "spark_max_by"}) {
     SCOPED_TRACE(name);
     const auto arraySize = aggregateAndReadRowSize(
-        pool(), name, ARRAY(BIGINT()), arrays, comparisons);
+        pool(), name, ARRAY(BIGINT()), {arrays, comparisons});
     EXPECT_GE(arraySize, sizeof(int64_t));
     EXPECT_LE(arraySize, kArrayBytes + kAllocatorSlack);
 
     EXPECT_EQ(
-        aggregateAndReadRowSize(pool(), name, INTEGER(), numbers, comparisons),
+        aggregateAndReadRowSize(
+            pool(), name, INTEGER(), {numbers, comparisons}),
         0);
   }
 }

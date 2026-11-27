@@ -503,6 +503,42 @@ TEST_F(MinMaxTest, stringSequences) {
   }
 }
 
+TEST_F(MinMaxTest, trackRowSize) {
+  // A string past the inline StringView limit is copied into the
+  // HashStringAllocator, so the row's variable-length size must be tracked for
+  // spill and output batches to be sized correctly.
+  const std::vector<std::string> longStrings{
+      "a string comfortably longer than the inlined limit 3",
+      "a string comfortably longer than the inlined limit 1",
+      "a string comfortably longer than the inlined limit 5",
+      "a string comfortably longer than the inlined limit 2",
+      "a string comfortably longer than the inlined limit 4",
+  };
+  // Inline strings live in the row, so nothing should be tracked.
+  const std::vector<std::string> inlineStrings{"c", "a", "e", "b", "d"};
+
+  // Bound the tracked size rather than just requiring it to be non-zero, so a
+  // garbage read fails too. The upper bound allows for allocator headers.
+  constexpr uint32_t kAllocatorSlack = 1'024;
+  const uint32_t stringBytes = longStrings[0].size();
+
+  for (const auto& name : {"min", "max"}) {
+    SCOPED_TRACE(name);
+    for (const auto& type : std::vector<TypePtr>{VARCHAR(), VARBINARY()}) {
+      SCOPED_TRACE(type->toString());
+      const auto longSize = functions::aggregate::test::aggregateAndReadRowSize(
+          pool(), name, type, {makeFlatVector(longStrings, type)});
+      EXPECT_GE(longSize, stringBytes);
+      EXPECT_LE(longSize, stringBytes + kAllocatorSlack);
+
+      EXPECT_EQ(
+          functions::aggregate::test::aggregateAndReadRowSize(
+              pool(), name, type, {makeFlatVector(inlineStrings, type)}),
+          0);
+    }
+  }
+}
+
 TEST_F(MinMaxTest, minMaxTimestamp) {
   auto rowType = ROW({"c0", "c1"}, {SMALLINT(), TIMESTAMP()});
   auto vectors = makeVectors(rowType, 1'000, 10);
