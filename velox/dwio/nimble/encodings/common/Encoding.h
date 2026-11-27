@@ -261,18 +261,19 @@ class Encoding {
     /// reads stay thread safe. Other encodings ignore it.
     bool cacheEncodingView{false};
 
-    /// Gives the cached views created with these options buffers that they
-    /// share to decode strings into, such as the views of the chunks of one
-    /// stream. Their strings then lie in a few buffers instead of at least
-    /// one for each view, so that a caller that keeps the strings it reads by
-    /// holding their buffers, instead of copying them, holds and frees fewer
-    /// buffers. The views do not own it: the caller keeps it alive while the
-    /// views exist. It is not thread-safe, so the caller must not read the
-    /// views that share it at once. The buffers it gives out stay valid while
-    /// a caller holds them. When null, each view decodes into buffers of its
-    /// own. Cached FSST views decode into them the chunks of rows that they
-    /// cache, and the rows of a read given an addStringBuffer that they decode
-    /// for that read alone. Other encodings ignore it.
+    /// Gives the views created with these options buffers that they share to
+    /// decode strings into, such as the views of the chunks of one stream.
+    /// Their strings then lie in a few buffers instead of at least one for
+    /// each view, so that a caller that keeps the strings it reads by holding
+    /// their buffers, instead of copying them, holds and frees fewer buffers.
+    /// The views do not own it: the caller keeps it alive while the views
+    /// exist. It is not thread-safe, so the caller must not read the views
+    /// that share it at once. The buffers it gives out stay valid while a
+    /// caller holds them. When null, each view decodes into buffers of its
+    /// own. FSST views, cached or not, decode into them the rows of a read
+    /// given an addStringBuffer that they decode for that read alone, and
+    /// cached FSST views also the chunks of rows that they cache. Other
+    /// encodings ignore it.
     DecodedStringBuffers* decodedStringBuffers{nullptr};
 
     /// Points to the buffer that holds the bytes that the views created with

@@ -135,12 +135,12 @@ class StreamReader {
   /// views of their encodings take scratch buffers from `options.bufferPool`
   /// when it is not null. The pool must outlive this binding, which ends with
   /// reset(), the next binding or the destruction of the reader, and must not
-  /// serve another thread until then. With `options.cacheEncodingView`, the
-  /// views of the chunks of each stream decode strings into buffers that they
-  /// share, which the reader creates for each stream of each binding, so that
-  /// a read of a stream holds a few buffers instead of at least one for each
-  /// chunk. A dense read of FSST strings, such as a scan, decodes its rows
-  /// straight into them, and holds just the buffers of its rows.
+  /// serve another thread until then. The views of the chunks of each stream
+  /// of strings, cached or not, decode strings into buffers that they share,
+  /// which the reader creates for each stream of each binding, so that a read
+  /// of a stream holds a few buffers instead of at least one for each chunk.
+  /// A dense read of FSST strings, such as a scan, decodes its rows straight
+  /// into them, and holds just the buffers of its rows.
   /// `options.decodedStringBuffers` must be null.
   void setStreams(
       std::span<const std::string_view> streams,
@@ -223,11 +223,11 @@ class StreamReader {
       std::string_view encoding,
       const velox::BufferPtr& inputStringBuffer);
 
-  // Returns the buffers that the cached views of the chunks in loadedChunks_,
-  // those of the stream at 'streamIndex', share to decode strings into, which
-  // it creates at the first binding of the stream and reuses after. Returns
-  // null without cacheEncodingView, and for a stream of values other than
-  // strings, whose views do not use them.
+  // Returns the buffers that the views of the chunks in loadedChunks_, those
+  // of the stream at 'streamIndex', share to decode strings into, cached or
+  // not, which it creates at the first binding of the stream and reuses after.
+  // Returns null for a stream of values other than strings, whose views do not
+  // use them.
   DecodedStringBuffers* ensureDecodedStringBuffers(size_t streamIndex);
 
   // Returns true when a stripe is bound to the cached reader.
