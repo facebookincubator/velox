@@ -23,19 +23,99 @@
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
 #include "velox/expression/FieldReference.h"
+#include "velox/vector/FlatMapVector.h"
 
 namespace facebook::velox::exec {
 
 namespace {
+// Copies the rows that delayFlatMapCopy() recorded into the columns of
+// 'target', first making a column that is not a flat map yet into one that
+// keeps its first 'numRows' rows. 'flatMapCopies' is indexed by target column.
+void copyDelayedFlatMap(
+    const RowVectorPtr& target,
+    vector_size_t numRows,
+    std::vector<FlatMapRowCopies>& flatMapCopies) {
+  for (column_index_t channel = 0; channel < flatMapCopies.size(); ++channel) {
+    if (flatMapCopies[channel].empty()) {
+      continue;
+    }
+    auto& targetChild = target->childAt(channel);
+    if (targetChild->encoding() != VectorEncoding::Simple::FLAT_MAP) {
+      auto flatMap = std::make_shared<FlatMapVector>(
+          targetChild->pool(),
+          targetChild->type(),
+          nullptr,
+          targetChild->size(),
+          BaseVector::create(
+              targetChild->type()->asMap().keyType(), 0, targetChild->pool()),
+          std::vector<VectorPtr>{},
+          std::vector<BufferPtr>{});
+      flatMap->copy(targetChild.get(), 0, 0, numRows);
+      targetChild = std::move(flatMap);
+    }
+    for (const auto& [source, ranges] : flatMapCopies[channel]) {
+      targetChild->copyRanges(source.get(), ranges);
+    }
+    flatMapCopies[channel].clear();
+  }
+}
+
+// Records row 'sourceIndex' of the flat map 'source' in 'copies' for
+// copyDelayedFlatMap() to copy into row 'targetIndex' of 'target'. Until then
+// the row is null, or an empty map if 'target' is not a flat map yet.
+void delayFlatMapCopy(
+    const VectorPtr& source,
+    vector_size_t sourceIndex,
+    const VectorPtr& target,
+    vector_size_t targetIndex,
+    FlatMapRowCopies& copies) {
+  if (source->isNullAt(sourceIndex)) {
+    target->setNull(targetIndex, true);
+    return;
+  }
+  target->setNull(targetIndex, false);
+  if (target->encoding() == VectorEncoding::Simple::MAP) {
+    target->asUnchecked<MapVector>()->setOffsetAndSize(targetIndex, 0, 0);
+  }
+  const auto& sourceMap = BaseVector::wrappedVectorShared(source);
+  auto copy = copies.rbegin();
+  while (copy != copies.rend() && copy->first != sourceMap) {
+    ++copy;
+  }
+  auto& ranges = copy == copies.rend()
+      ? copies.emplace_back(sourceMap, std::vector<BaseVector::CopyRange>{})
+            .second
+      : copy->second;
+  const auto row = source->wrappedIndex(sourceIndex);
+  if (!ranges.empty() &&
+      ranges.back().sourceIndex + ranges.back().count == row &&
+      ranges.back().targetIndex + ranges.back().count == targetIndex) {
+    ++ranges.back().count;
+  } else {
+    ranges.push_back({row, targetIndex, 1});
+  }
+}
+
 void copyRow(
     const RowVectorPtr& source,
     vector_size_t sourceIndex,
     const RowVectorPtr& target,
     vector_size_t targetIndex,
-    const std::vector<IdentityProjection>& projections) {
+    const std::vector<IdentityProjection>& projections,
+    std::vector<FlatMapRowCopies>& flatMapCopies) {
   for (const auto& projection : projections) {
     const auto& sourceChild = source->childAt(projection.inputChannel);
     const auto& targetChild = target->childAt(projection.outputChannel);
+    if (sourceChild->wrappedVector()->encoding() ==
+        VectorEncoding::Simple::FLAT_MAP) {
+      delayFlatMapCopy(
+          sourceChild,
+          sourceIndex,
+          targetChild,
+          targetIndex,
+          flatMapCopies[projection.outputChannel]);
+      continue;
+    }
     targetChild->copy(sourceChild.get(), targetIndex, sourceIndex, 1);
   }
 }
@@ -391,7 +471,12 @@ bool MergeJoin::tryAddOutputRowForRightJoin() {
     rawRightOutputIndices_[outputSize_] = rightRowIndex_++;
   } else {
     copyRow(
-        rightInput_, rightRowIndex_++, output_, outputSize_, rightProjections_);
+        rightInput_,
+        rightRowIndex_++,
+        output_,
+        outputSize_,
+        rightProjections_,
+        outputFlatMapCopies_);
   }
 
   for (const auto& projection : leftProjections_) {
@@ -418,8 +503,21 @@ void MergeJoin::flattenRightProjections() {
 
   for (const auto& projection : rightProjections_) {
     auto& currentVector = children[projection.outputChannel];
-    auto newFlat = BaseVector::create(
-        currentVector->type(), outputBatchSize_, operatorCtx_->pool());
+    auto newFlat = currentVector->wrappedVector()->encoding() ==
+            VectorEncoding::Simple::FLAT_MAP
+        ? std::make_shared<FlatMapVector>(
+              operatorCtx_->pool(),
+              currentVector->type(),
+              nullptr,
+              outputBatchSize_,
+              BaseVector::create(
+                  currentVector->type()->asMap().keyType(),
+                  0,
+                  operatorCtx_->pool()),
+              std::vector<VectorPtr>{},
+              std::vector<BufferPtr>{})
+        : BaseVector::create(
+              currentVector->type(), outputBatchSize_, operatorCtx_->pool());
     newFlat->copy(currentVector.get(), 0, 0, outputSize_);
     children[projection.outputChannel] = std::move(newFlat);
   }
@@ -465,7 +563,13 @@ bool MergeJoin::tryAddOutputRow(
     // (rightIndices_).
     rawRightOutputIndices_[outputSize_] = rightRow;
   } else {
-    copyRow(rightBatch, rightRow, output_, outputSize_, rightProjections_);
+    copyRow(
+        rightBatch,
+        rightRow,
+        output_,
+        outputSize_,
+        rightProjections_,
+        outputFlatMapCopies_);
   }
 
   if (filter_) {
@@ -474,13 +578,15 @@ bool MergeJoin::tryAddOutputRow(
         leftRow,
         filterInput_,
         outputSize_,
-        filterLeftInputProjections_);
+        filterLeftInputProjections_,
+        filterFlatMapCopies_);
     copyRow(
         rightBatch,
         rightRow,
         filterInput_,
         outputSize_,
-        filterRightInputProjections_);
+        filterRightInputProjections_,
+        filterFlatMapCopies_);
 
     if (joinTracker_) {
       if (isRightJoin(joinType_) || isRightSemiFilterJoin(joinType_)) {
@@ -535,22 +641,40 @@ bool MergeJoin::prepareOutput(
   rightOutputIndices_ = allocateIndices(outputBatchSize_, pool());
   rawRightOutputIndices_ = rightOutputIndices_->asMutable<vector_size_t>();
 
+  // Output columns without an input batch are flat maps if their input ever
+  // was one.
+  flatMapOutputs_.resize(outputType_->size());
+  auto createColumn = [&](column_index_t channel) {
+    const auto& type = outputType_->childAt(channel);
+    return flatMapOutputs_[channel]
+        ? std::make_shared<FlatMapVector>(
+              operatorCtx_->pool(),
+              type,
+              nullptr,
+              outputBatchSize_,
+              BaseVector::create(
+                  type->asMap().keyType(), 0, operatorCtx_->pool()),
+              std::vector<VectorPtr>{},
+              std::vector<BufferPtr>{})
+        : BaseVector::create(type, outputBatchSize_, operatorCtx_->pool());
+  };
+
   // Create left side projection outputs.
   std::vector<VectorPtr> localColumns(outputType_->size());
   if (left == nullptr) {
     for (const auto& projection : leftProjections_) {
-      localColumns[projection.outputChannel] = BaseVector::create(
-          outputType_->childAt(projection.outputChannel),
-          outputBatchSize_,
-          operatorCtx_->pool());
+      localColumns[projection.outputChannel] =
+          createColumn(projection.outputChannel);
     }
   } else {
     for (const auto& projection : leftProjections_) {
+      const auto& child = left->childAt(projection.inputChannel);
+      if (child->wrappedVector()->encoding() ==
+          VectorEncoding::Simple::FLAT_MAP) {
+        flatMapOutputs_[projection.outputChannel] = true;
+      }
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-          {},
-          leftOutputIndices_,
-          outputBatchSize_,
-          left->childAt(projection.inputChannel));
+          {}, leftOutputIndices_, outputBatchSize_, child);
     }
   }
   currentLeft_ = left;
@@ -558,19 +682,19 @@ bool MergeJoin::prepareOutput(
   // Create right side projection outputs.
   if (right == nullptr) {
     for (const auto& projection : rightProjections_) {
-      localColumns[projection.outputChannel] = BaseVector::create(
-          outputType_->childAt(projection.outputChannel),
-          outputBatchSize_,
-          operatorCtx_->pool());
+      localColumns[projection.outputChannel] =
+          createColumn(projection.outputChannel);
     }
     isRightFlattened_ = true;
   } else {
     for (const auto& projection : rightProjections_) {
+      const auto& child = right->childAt(projection.inputChannel);
+      if (child->wrappedVector()->encoding() ==
+          VectorEncoding::Simple::FLAT_MAP) {
+        flatMapOutputs_[projection.outputChannel] = true;
+      }
       localColumns[projection.outputChannel] = BaseVector::wrapInDictionary(
-          {},
-          rightOutputIndices_,
-          outputBatchSize_,
-          right->childAt(projection.inputChannel));
+          {}, rightOutputIndices_, outputBatchSize_, child);
     }
     isRightFlattened_ = false;
   }
@@ -583,6 +707,9 @@ bool MergeJoin::prepareOutput(
       outputBatchSize_,
       std::move(localColumns));
   outputSize_ = 0;
+  outputFlatMapCopies_.assign(outputType_->size(), {});
+  filterFlatMapCopies_.assign(
+      filter_ != nullptr ? filterInputType_->size() : 0, {});
 
   if (isFullJoin(joinType_) && filter_) {
     rightRowIds_ = AlignedBuffer::allocate<uint64_t>(outputBatchSize_, pool());
@@ -614,6 +741,8 @@ bool MergeJoin::prepareOutput(
       // reset non-reusable buffers and updates child vectors for reusing.
       if (child->typeKind() == TypeKind::ARRAY) {
         child->as<ArrayVector>()->prepareForReuse();
+      } else if (child->encoding() == VectorEncoding::Simple::FLAT_MAP) {
+        child->as<FlatMapVector>()->prepareForReuse();
       } else if (child->typeKind() == TypeKind::MAP) {
         child->as<MapVector>()->prepareForReuse();
       }
@@ -811,7 +940,13 @@ void MergeJoin::appendProvisionalRightRow(
   if (!isRightFlattened_) {
     rawRightOutputIndices_[outputSize_] = rightRowIndex;
   } else {
-    copyRow(rightBatch, rightRowIndex, output_, outputSize_, rightProjections_);
+    copyRow(
+        rightBatch,
+        rightRowIndex,
+        output_,
+        outputSize_,
+        rightProjections_,
+        outputFlatMapCopies_);
   }
 
   rawLeftOutputIndices_[outputSize_] = 0;
@@ -958,6 +1093,15 @@ RowVectorPtr MergeJoin::getOutput() {
   for (;;) {
     auto output = doGetOutput();
     if (output != nullptr && output->size() > 0) {
+      copyDelayedFlatMap(output, output->size(), outputFlatMapCopies_);
+      if (filterInput_ != nullptr) {
+        for (const auto& [filterChannel, outputChannel] :
+             filterInputToOutputChannel_) {
+          filterInput_->childAt(filterChannel) = output->childAt(outputChannel);
+        }
+        copyDelayedFlatMap(filterInput_, output->size(), filterFlatMapCopies_);
+      }
+
       // Update the batch size based on the output before filtering.
       updateOutputBatchSize(output);
 

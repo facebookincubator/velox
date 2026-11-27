@@ -22,7 +22,9 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
+#include "velox/vector/FlatMapVector.h"
 
 #include "folly/synchronization/EventCount.h"
 
@@ -3094,4 +3096,313 @@ TEST_F(MergeJoinTest, flatMapVectorLeftJoin) {
   ASSERT_EQ(
       results[0]->childAt(2)->wrappedVector()->encoding(),
       VectorEncoding::Simple::FLAT_MAP);
+}
+
+// The filter reads a flat map column that is not projected, so its filter
+// input column starts as a regular map and becomes a flat map when the copied
+// rows are flushed.
+TEST_F(MergeJoinTest, flatMapVectorFilterOnlyColumn) {
+  auto left = makeRowVector(
+      {"t_c0", "t_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatMapVector<int64_t, int64_t>({
+              {{1, 10}, {2, 20}},
+              {{1, 30}},
+              {{2, 50}},
+          }),
+      });
+  auto right = makeRowVector(
+      {"u_c0", "u_c1"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatMapVector<int64_t, int64_t>({
+              {{1, 200}},
+              {{3, 300}},
+              {{1, 100}, {2, 500}},
+          }),
+      });
+
+  PlanBuilder builder;
+  auto plan = builder.values({left})
+                  .mergeJoin(
+                      {"t_c0"},
+                      {"u_c0"},
+                      builder.newPlan().values({right}).planNode(),
+                      "element_at(u_c1, 1) > 150",
+                      {"t_c0", "t_c1"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1}),
+      makeFlatMapVector<int64_t, int64_t>({{{1, 10}, {2, 20}}}),
+  });
+  facebook::velox::test::assertEqualVectors(
+      expected, AssertQueryBuilder(plan).copyResults(pool()));
+
+  // One row per output batch, so the filter input column is reused across
+  // batches whose rows hold different keys.
+  facebook::velox::test::assertEqualVectors(
+      expected,
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+          .config(core::QueryConfig::kMaxOutputBatchRows, "1")
+          .copyResults(pool()));
+}
+
+// Right side key groups span several batches, so the right side output is
+// copied row by row into flat output columns; other output batches start
+// without a left or right side batch. All must keep flat maps flat.
+TEST_F(MergeJoinTest, flatMapVectorAcrossBatches) {
+  using Entries = std::vector<std::pair<int32_t, std::optional<int64_t>>>;
+  auto makeBatches = [&](std::string_view prefix,
+                         const std::vector<std::vector<int64_t>>& keyBatches) {
+    std::vector<RowVectorPtr> maps;
+    std::vector<RowVectorPtr> flatMaps;
+    int32_t batch{0};
+    for (const auto& keyBatch : keyBatches) {
+      std::vector<std::optional<Entries>> entries;
+      for (vector_size_t row = 0; row < keyBatch.size(); ++row) {
+        if (row % 5 == 2) {
+          entries.emplace_back(std::nullopt);
+          continue;
+        }
+        Entries rowEntries;
+        for (int32_t key = batch; key < batch + 3; ++key) {
+          if ((row + key) % 2 == 0) {
+            rowEntries.emplace_back(
+                key,
+                row % 3 == 0
+                    ? std::nullopt
+                    : std::optional<int64_t>(keyBatch[row] * 10 + key));
+          }
+        }
+        entries.emplace_back(std::move(rowEntries));
+      }
+      auto keys = makeFlatVector<int64_t>(keyBatch);
+      auto map = makeNullableMapVector<int32_t, int64_t>(entries);
+      const std::vector<std::string> names = {
+          fmt::format("{}0", prefix), fmt::format("{}1", prefix)};
+      maps.push_back(makeRowVector(names, {keys, map}));
+      flatMaps.push_back(makeRowVector(
+          names, {keys, facebook::velox::test::withFlatMapBase(map)}));
+      ++batch;
+    }
+    return std::make_pair(maps, flatMaps);
+  };
+  const auto [leftMaps, leftFlatMaps] =
+      makeBatches("t", {{0, 1, 1, 2}, {3, 5, 5, 6}, {7, 9}});
+  const auto [rightMaps, rightFlatMaps] =
+      makeBatches("u", {{1, 1, 1}, {1, 2, 2}, {4, 5, 5}, {5, 8, 9}, {9}});
+
+  auto makePlan = [&](const std::vector<RowVectorPtr>& left,
+                      const std::vector<RowVectorPtr>& right,
+                      core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values(left)
+        .mergeJoin(
+            {"t0"},
+            {"u0"},
+            PlanBuilder(planNodeIdGenerator).values(right).planNode(),
+            "",
+            {"t0", "t1", "u0", "u1"},
+            joinType)
+        .planNode();
+  };
+
+  for (auto joinType :
+       {core::JoinType::kInner,
+        core::JoinType::kLeft,
+        core::JoinType::kRight,
+        core::JoinType::kFull}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    CursorParameters params;
+    params.queryConfigs = {
+        {core::QueryConfig::kPreferredOutputBatchRows, "4"},
+        {core::QueryConfig::kMaxOutputBatchRows, "4"},
+    };
+    assertFlatMapResults(
+        params,
+        makePlan(leftMaps, rightMaps, joinType),
+        makePlan(leftFlatMaps, rightFlatMaps, joinType),
+        {1, 3});
+  }
+}
+
+// Right side key groups span batches, so right rows are copied into flat output
+// columns. Each row holds a few of many keys, right rows repeat for several
+// left rows, and a right batch may hold maps instead of flat maps. A flat map
+// used only by the filter is copied as well.
+TEST_F(MergeJoinTest, flatMapVectorCopiedSparseKeys) {
+  using Entries = std::vector<std::pair<int32_t, std::optional<int64_t>>>;
+  constexpr int32_t kNumKeys{200};
+  auto makeBatches = [&](std::string_view prefix,
+                         const std::vector<std::vector<int64_t>>& keyBatches) {
+    std::vector<RowVectorPtr> maps;
+    std::vector<RowVectorPtr> flatMaps;
+    int32_t batch{0};
+    for (const auto& keyBatch : keyBatches) {
+      std::vector<std::optional<Entries>> entries;
+      for (vector_size_t row = 0; row < keyBatch.size(); ++row) {
+        if (row % 5 == 2) {
+          entries.emplace_back(std::nullopt);
+          continue;
+        }
+        Entries rowEntries;
+        const int32_t firstKey = (row * 37 + batch * 11) % kNumKeys;
+        for (int32_t i = 0; i < 3; ++i) {
+          rowEntries.emplace_back(
+              (firstKey + i * 67) % kNumKeys,
+              (row + i) % 4 == 0
+                  ? std::nullopt
+                  : std::optional<int64_t>(keyBatch[row] * 10 + i));
+        }
+        entries.emplace_back(std::move(rowEntries));
+      }
+      auto keys = makeFlatVector<int64_t>(keyBatch);
+      auto map = makeNullableMapVector<int32_t, int64_t>(entries);
+      const std::vector<std::string> names = {
+          fmt::format("{}0", prefix), fmt::format("{}1", prefix)};
+      maps.push_back(makeRowVector(names, {keys, map}));
+      flatMaps.push_back(makeRowVector(
+          names, {keys, facebook::velox::test::withFlatMapBase(map)}));
+      ++batch;
+    }
+    return std::make_pair(maps, flatMaps);
+  };
+  const auto [leftMaps, leftFlatMaps] =
+      makeBatches("t", {{1, 1, 2, 5, 5, 5, 7}, {8, 9, 9}});
+  const auto [rightMaps, rightFlatMaps] = makeBatches(
+      "u", {{1, 1, 1}, {1, 2, 3}, {5, 5}, {5, 6, 7, 8}, {8, 9}, {9, 9}});
+  std::vector<RowVectorPtr> rightMixed;
+  for (auto i = 0; i < rightMaps.size(); ++i) {
+    rightMixed.push_back(i % 2 == 0 ? rightMaps[i] : rightFlatMaps[i]);
+  }
+
+  auto makePlan = [&](const std::vector<RowVectorPtr>& left,
+                      const std::vector<RowVectorPtr>& right,
+                      const std::string& filter,
+                      const std::vector<std::string>& outputs,
+                      core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(planNodeIdGenerator)
+        .values(left)
+        .mergeJoin(
+            {"t0"},
+            {"u0"},
+            PlanBuilder(planNodeIdGenerator).values(right).planNode(),
+            filter,
+            outputs,
+            joinType)
+        .planNode();
+  };
+
+  CursorParameters params;
+  params.queryConfigs = {
+      {core::QueryConfig::kPreferredOutputBatchRows, "3"},
+      {core::QueryConfig::kMaxOutputBatchRows, "3"},
+  };
+  const std::vector<std::string> allColumns{"t0", "t1", "u0", "u1"};
+  for (auto joinType :
+       {core::JoinType::kInner,
+        core::JoinType::kLeft,
+        core::JoinType::kRight,
+        core::JoinType::kFull}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    {
+      SCOPED_TRACE("flat maps");
+      assertFlatMapResults(
+          params,
+          makePlan(leftMaps, rightMaps, "", allColumns, joinType),
+          makePlan(leftFlatMaps, rightFlatMaps, "", allColumns, joinType),
+          {1, 3});
+    }
+    {
+      SCOPED_TRACE("maps and flat maps");
+      assertFlatMapResults(
+          params,
+          makePlan(leftMaps, rightMaps, "", allColumns, joinType),
+          makePlan(leftFlatMaps, rightMixed, "", allColumns, joinType),
+          {1});
+    }
+    {
+      SCOPED_TRACE("filter only");
+      const std::string filter{
+          "element_at(u1, 67::INTEGER) IS NULL OR "
+          "element_at(t1, 37::INTEGER) IS NOT NULL"};
+      const std::vector<std::string> outputs{"t0", "u0"};
+      assertFlatMapResults(
+          params,
+          makePlan(leftMaps, rightMaps, filter, outputs, joinType),
+          makePlan(leftFlatMaps, rightFlatMaps, filter, outputs, joinType),
+          {});
+    }
+  }
+}
+
+// Copying a right row adds to the output only the keys the row holds, not every
+// key of its batch.
+TEST_F(MergeJoinTest, flatMapVectorCopiedKeysAbsentFromCopiedRows) {
+  auto left = makeRowVector({"t0"}, {makeFlatVector<int64_t>({1, 1})});
+  std::vector<RowVectorPtr> right{
+      makeRowVector(
+          {"u0", "u1"},
+          {
+              makeFlatVector<int64_t>({1, 1}),
+              makeFlatMapVector<int32_t, int64_t>({{{1, 10}}, {{2, 20}}}),
+          }),
+      makeRowVector(
+          {"u0", "u1"},
+          {
+              makeFlatVector<int64_t>({1, 2, 2}),
+              makeFlatMapVector<int32_t, int64_t>({
+                  {{3, 30}},
+                  {{1'000, 1}, {3, 31}},
+                  {{1'000, 2}},
+              }),
+          }),
+  };
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(planNodeIdGenerator)
+                  .values({left})
+                  .mergeJoin(
+                      {"t0"},
+                      {"u0"},
+                      PlanBuilder(planNodeIdGenerator).values(right).planNode(),
+                      "",
+                      {"t0", "u1"},
+                      core::JoinType::kInner)
+                  .planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 1, 1, 1}),
+      makeFlatMapVector<int32_t, int64_t>({
+          {{1, 10}},
+          {{2, 20}},
+          {{3, 30}},
+          {{1, 10}},
+          {{2, 20}},
+          {{3, 30}},
+      }),
+  });
+
+  CursorParameters params;
+  params.planNode = plan;
+  auto cursor = TaskCursor::create(params);
+  std::vector<RowVectorPtr> results;
+  readCursorAsync(
+      *cursor,
+      [](TaskCursor* taskCursor) {
+        taskCursor->setNoMoreSplits();
+        return ContinueFuture::makeEmpty();
+      },
+      5'000'000,
+      [&](const RowVectorPtr& vector) { results.push_back(vector); });
+  ASSERT_EQ(results.size(), 1);
+  facebook::velox::test::assertEqualVectors(expected, results[0]);
+  const auto* flatMap = results[0]->childAt(1)->as<FlatMapVector>();
+  ASSERT_NE(flatMap, nullptr);
+  EXPECT_FALSE(flatMap->getKeyChannel(int32_t{1'000}).has_value());
 }

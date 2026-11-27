@@ -77,6 +77,20 @@ class OperatorTestBase : public virtual testing::Test,
   /// By default, registers Presto-compatible serde.
   virtual void registerVectorSerde();
 
+  /// The same rows with their map column as MapVectors and as FlatMapVectors.
+  struct FlatMapTestBatches {
+    std::vector<RowVectorPtr> maps;
+    std::vector<RowVectorPtr> flatMaps;
+  };
+
+  /// Makes 'numBatches' batches of 'numRows' rows: a BIGINT column c0 of
+  /// distinct values in no particular order, and a MAP(INTEGER, BIGINT) column
+  /// c1. Each batch has a different key set, and the maps include null maps,
+  /// empty maps, missing keys and null values.
+  FlatMapTestBatches makeFlatMapTestBatches(
+      int32_t numBatches,
+      vector_size_t numRows);
+
   void createDuckDbTable(const std::vector<RowVectorPtr>& data) {
     duckDbQueryRunner_.createTable("tmp", data);
   }

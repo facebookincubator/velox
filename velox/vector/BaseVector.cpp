@@ -1369,7 +1369,9 @@ void BaseVector::flattenVector(VectorPtr& vector) {
 }
 
 void BaseVector::prepareForReuse(VectorPtr& vector, vector_size_t size) {
-  if (vector.use_count() != 1 || !reusableEncoding(vector->encoding())) {
+  if (vector.use_count() != 1 ||
+      !(reusableEncoding(vector->encoding()) ||
+        vector->encoding() == VectorEncoding::Simple::FLAT_MAP)) {
     vector = BaseVector::create(vector->type(), size, vector->pool());
     return;
   }

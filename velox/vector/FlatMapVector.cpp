@@ -363,6 +363,35 @@ vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {
   return size;
 }
 
+void FlatMapVector::prepareForReuse() {
+  BaseVector::prepareForReuse();
+
+  bool keepKeys = distinctKeys_.use_count() == 1 && keyIndex_.use_count() == 1;
+  for (column_index_t channel = 0; keepKeys && channel < mapValues_.size();
+       ++channel) {
+    keepKeys = BaseVector::recursivelyReusable(mapValues_[channel]) &&
+        (channel >= inMaps_.size() || inMaps_[channel] == nullptr ||
+         inMaps_[channel]->isMutable());
+  }
+  if (!keepKeys) {
+    setDistinctKeys(BaseVector::create(keyType(), 0, pool_));
+    return;
+  }
+
+  inMaps_.resize(mapValues_.size());
+  for (column_index_t channel = 0; channel < mapValues_.size(); ++channel) {
+    auto& inMap = inMaps_[channel];
+    if (inMap == nullptr || inMap->capacity() < bits::nbytes(size())) {
+      inMap = AlignedBuffer::allocate<bool>(size(), pool_, false);
+    } else {
+      bits::fillBits(inMap->asMutable<uint64_t>(), 0, size(), false);
+    }
+    if (mapValues_[channel] != nullptr) {
+      BaseVector::prepareForReuse(mapValues_[channel], size());
+    }
+  }
+}
+
 void FlatMapVector::resize(vector_size_t newSize, bool setNotNull) {
   const auto oldSize = size();
   BaseVector::resize(newSize, setNotNull);
@@ -955,6 +984,29 @@ void FlatMapVector::copyMapRanges(
   }
 }
 
+namespace {
+bool isInAnyCopiedRow(
+    const FlatMapVector& source,
+    column_index_t channel,
+    const folly::Range<const BaseVector::CopyRange*>& ranges) {
+  if (source.mapValuesAt(channel) == nullptr) {
+    return false;
+  }
+  const auto* inMap = source.rawInMapsAt(channel);
+  const auto* presentRows = inMap != nullptr ? inMap : source.rawNulls();
+  for (const auto& range : ranges) {
+    if (range.count > 0 &&
+        (presentRows == nullptr ||
+         bits::findFirstBit(
+             presentRows, range.sourceIndex, range.sourceIndex + range.count) >=
+             0)) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
 void FlatMapVector::copyFlatMapRanges(
     const FlatMapVector* sourceFlatMap,
     const folly::Range<const CopyRange*>& ranges) {
@@ -974,20 +1026,31 @@ void FlatMapVector::copyFlatMapRanges(
     const auto channel = getKeyChannel(sourceFlatMap->distinctKeys_, i)
                              .value_or(distinctKeys_->size());
 
-    if (channel == distinctKeys_->size()) {
-      // First append the new key to the distinct keys internal vector.
-      appendDistinctKey(sourceFlatMap->distinctKeys_, i);
+    if (isInAnyCopiedRow(*sourceFlatMap, i, ranges)) {
+      if (channel == distinctKeys_->size()) {
+        // First append the new key to the distinct keys internal vector.
+        appendDistinctKey(sourceFlatMap->distinctKeys_, i);
 
-      // Then we allocate a new key values vector and in map buffer.
-      inMapsAt(channel, true) =
-          AlignedBuffer::allocate<bool>(size(), pool(), false);
-      mapValues_.back() = BaseVector::createEmptyLike(
-          sourceFlatMap->mapValues_[i].get(), size(), pool());
+        // Then we allocate a new key values vector and in map buffer.
+        inMapsAt(channel, true) =
+            AlignedBuffer::allocate<bool>(size(), pool(), false);
+        mapValues_.back() = BaseVector::createEmptyLike(
+            sourceFlatMap->mapValues_[i].get(), size(), pool());
+      }
+
+      // Finally, copy the map values and update the in map buffers.
+      mapValues_[channel]->copyRanges(
+          sourceFlatMap->mapValues_[i].get(), ranges);
+      copyInMapRanges(channel, sourceFlatMap->rawInMapsAt(i), ranges);
+    } else if (channel < distinctKeys_->size()) {
+      auto* targetInMaps = ensureInMapAt(channel);
+      applyToEachRange(
+          ranges,
+          [targetInMaps](auto targetIndex, auto /* sourceIndex */, auto count) {
+            bits::fillBits(
+                targetInMaps, targetIndex, targetIndex + count, false);
+          });
     }
-
-    // Finally, copy the map values and update the in map buffers.
-    mapValues_[channel]->copyRanges(sourceFlatMap->mapValues_[i].get(), ranges);
-    copyInMapRanges(channel, sourceFlatMap->rawInMapsAt(i), ranges);
   }
 
   // Keys that exist in the target but not in the source may need to be updated

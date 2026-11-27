@@ -25,6 +25,12 @@
 
 namespace facebook::velox::exec {
 
+/// Rows of flat map input columns waiting to be copied into a flat map output
+/// column, grouped by the flat map they come from. Consecutive rows share a
+/// range.
+using FlatMapRowCopies =
+    std::vector<std::pair<VectorPtr, std::vector<BaseVector::CopyRange>>>;
+
 /// The merge join operator assumes both streams, left (from addInput()) and
 /// right (from rightSource), are sorted in ascending order on the join key.
 ///
@@ -642,6 +648,15 @@ class MergeJoin : public Operator {
   // If the right side projections have been flattened or they are still
   // dictionaries wrapped around the right side input.
   bool isRightFlattened_{false};
+
+  // Whether each output column ever came from a flat map input. Columns
+  // created without an input batch are then flat maps too.
+  std::vector<bool> flatMapOutputs_;
+
+  // Flat map rows copied into 'output_' and 'filterInput_', indexed by their
+  // column, whose entries are copied when the output batch is returned.
+  std::vector<FlatMapRowCopies> outputFlatMapCopies_;
+  std::vector<FlatMapRowCopies> filterFlatMapCopies_;
 
   // Preferred output batch size in bytes from QueryConfig.
   const uint64_t preferredOutputBatchBytes_;

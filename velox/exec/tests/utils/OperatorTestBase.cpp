@@ -166,6 +166,40 @@ void OperatorTestBase::TearDown() {
   resetMemory();
 }
 
+OperatorTestBase::FlatMapTestBatches OperatorTestBase::makeFlatMapTestBatches(
+    int32_t numBatches,
+    vector_size_t numRows) {
+  using Entries = std::vector<std::pair<int32_t, std::optional<int64_t>>>;
+  FlatMapTestBatches batches;
+  for (int32_t batch = 0; batch < numBatches; ++batch) {
+    std::vector<std::optional<Entries>> maps;
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      if (row % 7 == 3) {
+        maps.emplace_back(std::nullopt);
+        continue;
+      }
+      Entries entries;
+      for (int32_t key = batch; row % 11 != 5 && key < batch + 5; ++key) {
+        if ((row + key) % 3 != 0) {
+          entries.emplace_back(
+              key,
+              (row + key) % 5 == 0 ? std::nullopt
+                                   : std::optional<int64_t>(row * 10 + key));
+        }
+      }
+      maps.emplace_back(std::move(entries));
+    }
+    auto keys = makeFlatVector<int64_t>(numRows, [&](auto row) {
+      return batch * numRows + (row * 37) % numRows;
+    });
+    auto map = makeNullableMapVector<int32_t, int64_t>(maps);
+    batches.maps.push_back(makeRowVector({keys, map}));
+    batches.flatMaps.push_back(
+        makeRowVector({keys, velox::test::withFlatMapBase(map)}));
+  }
+  return batches;
+}
+
 TaskPtr OperatorTestBase::assertQuery(
     const core::PlanNodePtr& plan,
     const std::vector<std::shared_ptr<connector::ConnectorSplit>>&

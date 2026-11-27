@@ -125,4 +125,64 @@ void readCursorAsync(
   }
 }
 
+std::shared_ptr<Task> assertFlatMapResults(
+    CursorParameters params,
+    const core::PlanNodePtr& mapPlan,
+    const core::PlanNodePtr& flatMapPlan,
+    const std::vector<column_index_t>& flatMapChannels) {
+  const auto noMoreSplits = [](TaskCursor* cursor) {
+    cursor->setNoMoreSplits();
+    return ContinueFuture::makeEmpty();
+  };
+  params.copyResult = false;
+  params.planNode = mapPlan;
+  auto mapCursor = TaskCursor::create(params);
+  std::vector<RowVectorPtr> expected;
+  readCursorAsync(
+      *mapCursor, noMoreSplits, 5'000'000, [&](const RowVectorPtr& vector) {
+        expected.push_back(vector);
+      });
+  params.planNode = flatMapPlan;
+  auto cursor = TaskCursor::create(params);
+  std::vector<RowVectorPtr> results;
+  readCursorAsync(
+      *cursor, noMoreSplits, 5'000'000, [&](const RowVectorPtr& vector) {
+        results.push_back(vector);
+      });
+
+  vector_size_t expectedBatch{0};
+  vector_size_t expectedRow{0};
+  for (const auto& result : results) {
+    for (auto channel : flatMapChannels) {
+      EXPECT_EQ(
+          result->childAt(channel)->wrappedVector()->encoding(),
+          VectorEncoding::Simple::FLAT_MAP)
+          << "Column " << channel;
+    }
+    for (vector_size_t i = 0; i < result->size(); ++i) {
+      while (expectedBatch < expected.size() &&
+             expectedRow == expected[expectedBatch]->size()) {
+        ++expectedBatch;
+        expectedRow = 0;
+      }
+      if (expectedBatch == expected.size()) {
+        ADD_FAILURE() << "More rows than expected";
+        return cursor->task();
+      }
+      const auto& expectedVector = expected[expectedBatch];
+      EXPECT_TRUE(expectedVector->equalValueAt(result.get(), expectedRow, i))
+          << "Expected " << expectedVector->toString(expectedRow) << ", got "
+          << result->toString(i);
+      ++expectedRow;
+    }
+  }
+  while (expectedBatch < expected.size() &&
+         expectedRow == expected[expectedBatch]->size()) {
+    ++expectedBatch;
+    expectedRow = 0;
+  }
+  EXPECT_EQ(expectedBatch, expected.size()) << "Fewer rows than expected";
+  return cursor->task();
+}
+
 } // namespace facebook::velox::exec::test

@@ -75,6 +75,9 @@ class CompactRow {
 
   void initialize(const TypePtr& type);
 
+  // Sets up the keys, the values and the entries of each row of a flat map.
+  void initializeFlatMap();
+
   bool isNullAt(vector_size_t) const;
 
   /// Fixed-width types only. Returns number of bytes used by single value.
@@ -114,6 +117,40 @@ class CompactRow {
   /// Serializes map value to buffer. Value must not be null. Returns number of
   /// bytes written to 'buffer'.
   int32_t serializeMap(vector_size_t index, char* buffer) const;
+
+  /// Returns serialized size of a flat map row, the same as for a map row with
+  /// the same entries.
+  int32_t flatMapRowSize(vector_size_t index) const;
+
+  /// Serializes the entries of a flat map row in the layout of a map row.
+  /// Value must not be null. Returns number of bytes written to 'buffer'.
+  int32_t serializeFlatMap(vector_size_t index, char* buffer) const;
+
+  /// Serializes the values of a flat map row whose values are arrays of
+  /// fixed-width values. Returns number of bytes written to 'buffer'.
+  int32_t serializeFlatMapRawArrays(
+      vector_size_t baseIndex,
+      vector_size_t begin,
+      vector_size_t size,
+      char* buffer) const;
+
+  /// Returns serialized size of 'size' values, laid out as an array, where
+  /// 'elementAt(i)' returns the CompactRow and index of the i-th value.
+  template <typename TElementAt>
+  int32_t entriesRowSize(
+      vector_size_t size,
+      bool fixedWidth,
+      TElementAt elementAt) const;
+
+  /// Serializes 'size' values as an array, where 'elementAt(i)' returns the
+  /// CompactRow and index of the i-th value. Returns number of bytes written
+  /// to 'buffer'.
+  template <typename TElementAt>
+  int32_t serializeEntries(
+      vector_size_t size,
+      bool fixedWidth,
+      TElementAt elementAt,
+      char* buffer) const;
 
   /// Returns serialized size of a range of values.
   int32_t arrayRowSize(
@@ -165,5 +202,29 @@ class CompactRow {
 
   // Fixed-width types only. Number of bytes used for a single value.
   size_t valueBytes_{0};
+
+  // MAP type only. True if the map is a flat map. Then 'children_' holds the
+  // distinct keys, followed by the values of the keys listed in
+  // 'flatMapValueChildren_'.
+  bool flatMap_{false};
+
+  // Flat maps only. The entries of row i of the flat map are the keys at
+  // flatMapChannels_[flatMapOffsets_[i]] to
+  // flatMapChannels_[flatMapOffsets_[i + 1] - 1].
+  std::vector<vector_size_t> flatMapOffsets_;
+  std::vector<column_index_t> flatMapChannels_;
+
+  // Flat maps with values, or array elements, of a type copied as raw bytes
+  // only. The raw values and nulls of each key whose values are flat, else
+  // null.
+  std::vector<const char*> flatMapRawValues_;
+  std::vector<const uint64_t*> flatMapRawNulls_;
+
+  // Flat maps with array values only. The values of each key with raw values.
+  std::vector<const ArrayVector*> flatMapRawArrays_;
+
+  // Flat maps only. Index in 'children_' of the values of each key present in
+  // some row and without raw values.
+  std::vector<int32_t> flatMapValueChildren_;
 };
 } // namespace facebook::velox::row
