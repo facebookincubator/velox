@@ -49,6 +49,7 @@ target_link_libraries(
   nimble_velox_schema_builder
   nimble_writer
   nimble_random_encoding_selection_policy
+  nimble_encodings_tests_utils
   velox_type
   velox_vector
   velox_vector_fuzzer
