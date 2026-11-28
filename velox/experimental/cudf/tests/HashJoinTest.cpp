@@ -4838,6 +4838,76 @@ TEST_F(HashJoinTest, innerJoinWithDatePlusIntervalFilter) {
       .run();
 }
 
+// EXISTS and NOT EXISTS over a date range ending at a constant interval. AST
+// cannot add an interval to a date, so the filter reads plus(t_date, ...) from
+// a precomputed probe column that semi and anti joins must pass to cuDF.
+TEST_F(HashJoinTest, semiAndAntiJoinWithDatePlusConstantIntervalFilter) {
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+
+  const auto baseDate = DATE()->toDays("2025-01-01");
+  std::vector<RowVectorPtr> probeVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"t_k", "t_date"},
+        {makeFlatVector<int64_t>(50, [](auto row) { return row % 10; }),
+         makeFlatVector<int32_t>(
+             50,
+             [&](auto row) { return baseDate + row * 3 + batch; },
+             nullptr,
+             DATE())});
+  });
+  std::vector<RowVectorPtr> buildVectors = makeBatches(2, [&](int32_t batch) {
+    return makeRowVector(
+        {"u_k", "u_date"},
+        {makeFlatVector<int64_t>(40, [](auto row) { return row % 10; }),
+         makeFlatVector<int32_t>(
+             40,
+             [&](auto row) { return baseDate + row * 5 + batch * 7; },
+             nullptr,
+             DATE())});
+  });
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  const std::string filter =
+      "u_date >= t_date AND u_date <= plus(t_date, INTERVAL 30 DAYS)";
+  const std::string matches =
+      "u.u_k = t.t_k AND u.u_date >= t.t_date "
+      "AND u.u_date <= t.t_date + INTERVAL 30 DAY";
+  struct Case {
+    core::JoinType joinType;
+    std::vector<std::string> outputLayout;
+    std::string reference;
+  };
+  const std::vector<Case> cases{
+      {core::JoinType::kLeftSemiFilter,
+       {"t_k", "t_date"},
+       "SELECT t_k, t_date FROM t WHERE EXISTS (SELECT 1 FROM u WHERE " +
+           matches + ")"},
+      {core::JoinType::kRightSemiFilter,
+       {"u_k", "u_date"},
+       "SELECT u_k, u_date FROM u WHERE EXISTS (SELECT 1 FROM t WHERE " +
+           matches + ")"},
+      {core::JoinType::kAnti,
+       {"t_k", "t_date"},
+       "SELECT t_k, t_date FROM t WHERE NOT EXISTS (SELECT 1 FROM u WHERE " +
+           matches + ")"}};
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(core::JoinTypeName::toName(testCase.joinType));
+    HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+        .injectSpill(false)
+        .probeKeys({"t_k"})
+        .probeVectors(std::vector<RowVectorPtr>(probeVectors))
+        .buildKeys({"u_k"})
+        .buildVectors(std::vector<RowVectorPtr>(buildVectors))
+        .joinType(testCase.joinType)
+        .joinFilter(filter)
+        .joinOutputLayout(std::vector<std::string>(testCase.outputLayout))
+        .referenceQuery(testCase.reference)
+        .run();
+  }
+}
+
 // TODO: try to parallelize the following test cases if possible.
 TEST_F(HashJoinTest, memory) {
   // Measures memory allocation in a 1:n hash join followed by
