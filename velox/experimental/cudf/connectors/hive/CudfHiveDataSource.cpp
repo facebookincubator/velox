@@ -330,8 +330,8 @@ ScanFilters splitAndFoldFilters(
 }
 
 // Returns why the data source cannot scan with 'filters' on the GPU, or
-// std::nullopt if it can. isSupported() and the constructor share it, so that
-// the connectors pick this data source only for a scan the constructor
+// std::nullopt if it can. cannotReadReason() and the constructor share it, so
+// that the connectors pick this data source only for a scan the constructor
 // accepts.
 std::optional<std::string> unsupportedFiltersReason(
     const ScanFilters& filters,
@@ -377,15 +377,19 @@ std::optional<std::string> unsupportedFiltersReason(
 
 } // namespace
 
-bool CudfHiveDataSource::isSupported(
+std::optional<std::string> CudfHiveDataSource::cannotReadReason(
+    const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ConnectorQueryCtx& connectorQueryCtx) {
-  return !unsupportedReason(tableHandle, connectorQueryCtx).has_value();
-}
-
-std::optional<std::string> CudfHiveDataSource::unsupportedReason(
-    const ConnectorTableHandlePtr& tableHandle,
-    const ConnectorQueryCtx& connectorQueryCtx) {
+  if (!cudfIsEnabled(connectorQueryCtx)) {
+    return fmt::format(
+        "cuDF is disabled by the session properties of the catalog being read, or by the process-wide default: {}",
+        tableHandle->connectorId());
+  }
+  if (!isTypeSupportedByCudf(outputType)) {
+    return fmt::format(
+        "Output type is not representable in cuDF: {}", outputType);
+  }
   auto hiveTableHandle =
       std::dynamic_pointer_cast<const HiveTableHandle>(tableHandle);
   if (!hiveTableHandle) {
@@ -938,9 +942,12 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     cudfTable = std::make_unique<cudf::table>(std::move(outputColumns));
   }
 
-  // TODO (dm): Should we only enable table scan if cudf is registered?
-  // Earlier we could enable cudf table scans without using other cudf operators
-  // We still can, but I'm wondering if this is the right thing to do
+  // Only a cuDF connector constructs this data source, and only when
+  // cudfIsEnabled() held, so cuDF was registered when the scan started. The
+  // host branches below are reached only if unregisterCudf() runs while this
+  // scan does, which is not supported: it leaves the operators this driver
+  // was already compiled with, so they would be handed a host vector, and it
+  // resets memory resources the scan's stream is still using.
   RowVectorPtr output;
   if (cudfIsRegistered()) {
     output = std::make_shared<CudfVector>(

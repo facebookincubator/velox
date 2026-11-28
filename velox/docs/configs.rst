@@ -1677,6 +1677,18 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, enable cuDF. By default, it is enabled if compiled with cuDF.
+       A query may override it, in which case it has to be set in two places:
+       the query config, which the cuDF driver adapter reads, and the
+       connector session properties of each catalog the query reads, which is
+       where the cuDF connectors read it. A connector is handed only its own
+       catalog's session properties and never the query config, so a catalog
+       without an entry falls back to this process-wide value. Setting the
+       query config alone therefore only does what the query asked for while
+       this value agrees with it. A query that sets the query config to false
+       where this value is true gets GPU vectors from the cuDF connectors into
+       the CPU operators the rest of the query is compiled from, which fails
+       the query. A query that sets the query config to true where this value
+       is false runs on the GPU but reads its tables on the CPU.
    * - cudf.memory_resource
      - string
      - async

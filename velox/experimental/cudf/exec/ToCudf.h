@@ -19,6 +19,10 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
 
+namespace facebook::velox::connector {
+class ConnectorQueryCtx;
+} // namespace facebook::velox::connector
+
 namespace facebook::velox::cudf_velox {
 
 class CompileState {
@@ -52,5 +56,15 @@ void unregisterCudf();
 
 /// Returns true if cuDF is registered.
 bool cudfIsRegistered();
+
+/// Returns true when the query behind 'connectorQueryCtx' may use cuDF: cuDF
+/// is registered in this process and the query did not turn it off through the
+/// 'cudf.enabled' (CudfConfig::kCudfEnabled) session property of the catalog
+/// being read. An absent value means the process-wide CudfConfig default.
+///
+/// This is one term of the decision whether a scan reads on the GPU; callers
+/// want CudfHiveDataSource::cannotReadReason(), which asks the whole of it.
+bool cudfIsEnabled(
+    const ::facebook::velox::connector::ConnectorQueryCtx& connectorQueryCtx);
 
 } // namespace facebook::velox::cudf_velox

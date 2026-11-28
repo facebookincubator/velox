@@ -17,8 +17,6 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveDataSource.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/connectors/hive/HiveDataSource.h"
 
@@ -45,26 +43,27 @@ std::unique_ptr<DataSource> CudfHiveConnector::createDataSource(
   // TODO (dm): Make this ^^^ happen
   // Problem: this information is in split, not table handle
 
-  if (cudfIsRegistered() && isTypeSupportedByCudf(outputType) &&
-      CudfHiveDataSource::isSupported(tableHandle, *connectorQueryCtx)) {
-    return std::make_unique<CudfHiveDataSource>(
+  if (CudfHiveDataSource::cannotReadReason(
+          outputType, tableHandle, *connectorQueryCtx)
+          .has_value()) {
+    return std::make_unique<::facebook::velox::connector::hive::HiveDataSource>(
         outputType,
         tableHandle,
         columnHandles,
         &fileHandleFactory_,
         ioExecutor_,
         connectorQueryCtx,
-        cudfHiveConfig_);
+        hiveConfig_);
   }
 
-  return std::make_unique<::facebook::velox::connector::hive::HiveDataSource>(
+  return std::make_unique<CudfHiveDataSource>(
       outputType,
       tableHandle,
       columnHandles,
       &fileHandleFactory_,
       ioExecutor_,
       connectorQueryCtx,
-      hiveConfig_);
+      cudfHiveConfig_);
 }
 
 // TODO (dm): Re-add data sink

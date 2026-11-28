@@ -34,6 +34,7 @@
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/Connector.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -321,14 +322,24 @@ struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     const auto& queryConfig = driver.driverCtx()->queryConfig();
+    // Checked on its own: kCudfAllowCpuFallback governs failed conversions
+    // only, not whether one is attempted.
+    //
+    // TODO: Returning here leaves the query on the CPU, but a connector whose
+    // catalog did not get the same value still hands out a GPU data source,
+    // and that only fails later, inside a CPU operator reading a CudfVector.
+    // Raise a named user error here instead, by looping over this driver's
+    // TableScans and asking CudfHiveDataSource::cannotReadReason() for each.
+    // Asking on cudf.enabled alone would reject a query that runs correctly
+    // today, because a scan the connector turns down for an unsupported type
+    // or filter reads on the CPU already.
+    if (!queryConfig.get<bool>(
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
+      return false;
+    }
     const auto allowCpuFallback = queryConfig.get<bool>(
         CudfConfig::kCudfAllowCpuFallback,
         CudfConfig::getInstance().allowCpuFallback);
-    if (!queryConfig.get<bool>(
-            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
-        allowCpuFallback) {
-      return false;
-    }
     auto state = CompileState(factory, driver);
     return state.compile(allowCpuFallback);
   }
@@ -338,6 +349,15 @@ static bool isCudfRegistered = false;
 
 bool cudfIsRegistered() {
   return isCudfRegistered;
+}
+
+bool cudfIsEnabled(
+    const ::facebook::velox::connector::ConnectorQueryCtx& connectorQueryCtx) {
+  if (!cudfIsRegistered()) {
+    return false;
+  }
+  return connectorQueryCtx.sessionProperties()->get<bool>(
+      CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled);
 }
 
 void registerCudf() {
