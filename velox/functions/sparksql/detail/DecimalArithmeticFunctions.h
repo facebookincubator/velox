@@ -16,7 +16,9 @@
 #pragma once
 
 #include "velox/functions/Macros.h"
+#include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql::detail {
 
@@ -526,7 +528,8 @@ struct CheckedDecimalMultiplyFunction
 
 /// Spark decimal division. Rescales the dividend so that the quotient lands
 /// on the result scale, rounding its last digit half away from zero.
-/// Returns false on a zero divisor or overflow, reported as a null.
+/// A zero divisor or an overflow is a null, or an error when Spark ANSI mode
+/// is enabled in the query config.
 template <typename TExec, bool allowPrecisionLoss>
 struct DecimalDivideFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -534,7 +537,7 @@ struct DecimalDivideFunction {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       A* /*a*/,
       B* /*b*/) {
     auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
@@ -544,19 +547,29 @@ struct DecimalDivideFunction {
             aPrecision, aScale, bPrecision, bScale);
     rPrecision_ = rPrecision;
     aRescale_ = rScale - aScale + bScale;
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename R, typename A, typename B>
   bool call(R& out, const A& a, const B& b) {
+    if (b == 0) {
+      ansiUserFail(ansiEnabled_, "Division by zero");
+      return false;
+    }
     bool overflow = false;
     DecimalUtil::divideWithRoundUp<R, A, B>(out, a, b, aRescale_, overflow);
-    return !overflow &&
-        velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+    if (overflow ||
+        !velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_)) {
+      ansiUserFail(ansiEnabled_, "Decimal overflow in divide");
+      return false;
+    }
+    return true;
   }
 
  private:
   uint8_t aRescale_;
   uint8_t rPrecision_;
+  bool ansiEnabled_ = false;
 };
 
 /// The quotient itself, shared by the two integral divide functions below,
