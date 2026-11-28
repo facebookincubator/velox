@@ -16,13 +16,12 @@ name: CI Failure Comment
 
 # This workflow runs in the context of the base repo (not the fork) and has
 # write access to post PR comments. It is triggered when the Linux Build or
-# Fuzzer Jobs workflow completes with a failure and uses Claude to analyze
-# failure logs, correlate with the PR diff and open issues, and post a rich
-# diagnostic comment.
+# Fuzzer Jobs workflow completes with a failure and posts a diagnostic
+# comment rendered deterministically from the failed job logs.
 #
-# Security: This workflow never checks out or executes PR code. It reads
-# failure metadata from artifacts uploaded by our own status jobs, then uses
-# Claude with read-only gh CLI access to fetch logs and produce comments.
+# Security: This workflow never checks out or executes PR code, and no model
+# interprets PR-influenced data: the comment is rendered and posted by
+# trusted shell code, so prompt injection has no sink.
 #
 # zizmor:disable:dangerous-triggers -- only reads artifacts and posts comments, no PR code execution.
 on:
@@ -44,7 +43,6 @@ permissions:
   pull-requests: write
   issues: write
   actions: read
-  id-token: write
 
 jobs:
   analyze-and-comment:
@@ -57,10 +55,7 @@ jobs:
     steps:
       # workflow_run-triggered jobs start with an empty workspace; check
       # out just the helper-scripts dir so the sourced gh-api-retry.sh
-      # is on disk for the gh_api callers below. Sparse-checkout keeps
-      # this fast; the later "Checkout for Claude context and prompt"
-      # step swaps to a different sparse set (CLAUDE.md + skill files)
-      # but only after gh_api usage is done.
+      # is on disk for the gh_api callers below.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -113,16 +108,27 @@ jobs:
           FAILURES_DIR="/tmp/ci-failures"
           if [ -d "$FAILURES_DIR" ] && [ -n "$(ls -A "$FAILURES_DIR" 2>/dev/null)" ]; then
             # Collect all failure.json contents into a single JSON array.
+            # Artifact content is untrusted: it is produced while running PR
+            # code on the merge ref, so never interpolate raw bytes. Re-parse
+            # each file and rebuild an allowlisted object instead.
             METADATA="["
             FIRST=true
             for entry in "$FAILURES_DIR"/ci-failure-*/failure.json; do
               if [ -f "$entry" ]; then
+                SANITIZED=$(jq -c '{
+                  job: ((.job // "unknown") | tostring | gsub("[^A-Za-z0-9_.: -]"; "") | .[0:200]),
+                  type: ((.type // "unknown") | tostring | gsub("[^A-Za-z]"; "") | .[0:20]),
+                  failed_tests: ((.failed_tests // "") | tostring | gsub("[\\r\\n]+"; ", ") | gsub("[^A-Za-z0-9_.:, -]"; "") | .[0:500])
+                }' "$entry" 2>/dev/null || true)
+                if [ -z "$SANITIZED" ]; then
+                  SANITIZED='{"job":"unknown","type":"unknown","failed_tests":""}'
+                fi
                 if [ "$FIRST" = true ]; then
                   FIRST=false
                 else
                   METADATA="$METADATA,"
                 fi
-                METADATA="$METADATA$(cat "$entry")"
+                METADATA="$METADATA$SANITIZED"
               fi
             done
             METADATA="$METADATA]"
@@ -147,57 +153,12 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Checkout for Claude context and prompt
+      - name: Post failure comment
         if: steps.metadata.outputs.has_failures == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: |
-            CLAUDE.md
-            .claude/CLAUDE.md
-            .claude/skills/ci-failure-analysis/SKILL.md
-          # Cone mode (the default) rejects file paths as of git 2.54; the
-          # entries above are files, not directories, so disable cone mode.
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Prepare analysis prompt
-        if: steps.metadata.outputs.has_failures == 'true'
-        id: prompt
-        env:
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
-          FAILURE_METADATA: ${{ steps.metadata.outputs.failure_metadata }}
-        run: |
-          # Read the prompt template and interpolate variables.
-          PROMPT=$(sed \
-            -e "s|{{PR_NUMBER}}|${PR_NUMBER}|g" \
-            -e "s|{{REPOSITORY}}|${REPOSITORY}|g" \
-            -e "s|{{RUN_ID}}|${RUN_ID}|g" \
-            .claude/skills/ci-failure-analysis/SKILL.md)
-
-          # Failure metadata may contain newlines/special chars — use bash
-          # parameter expansion instead of sed to handle multiline content.
-          PROMPT="${PROMPT//\{\{FAILURE_METADATA\}\}/${FAILURE_METADATA}}"
-
-          {
-            echo 'value<<EOF'
-            echo "$PROMPT"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Analyze failures with Claude
-        if: steps.metadata.outputs.has_failures == 'true'
-        uses: izaitsevfb/claude-code-action@ececd56fb999d06b4dd2477437bc408938295d76 # forked-pr-fix
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          github_token: ${{ github.token }}
-          claude_args: --model claude-opus-4-6 --allowedTools Bash Read Grep Glob
-          prompt: ${{ steps.prompt.outputs.value }}
-          # Most Velox PRs are exported from Phabricator and pushed to GitHub
-          # by the meta-codesync bot, so the upstream workflow_run's `actor`
-          # is a Bot. Without this allowlist, claude-code-action refuses to
-          # run for those PRs and the failure analysis is silently dropped.
-          allowed_bots: meta-codesync
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          FAILURE_METADATA: ${{ steps.metadata.outputs.failure_metadata }}
+        run: bash .github/scripts/post-ci-failure-comment.sh
