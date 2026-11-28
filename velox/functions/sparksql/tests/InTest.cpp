@@ -174,23 +174,29 @@ TEST_F(InTest, string) {
 }
 
 TEST_F(InTest, timestamp) {
-  EXPECT_EQ(
-      in<Timestamp>(Timestamp(0, 0), {Timestamp(1, 0), std::nullopt}),
-      std::nullopt);
-  EXPECT_EQ(
-      in<Timestamp>(Timestamp(0, 0), {Timestamp(0, 0), Timestamp()}), true);
+  for (const auto& type : std::vector<TypePtr>{TIMESTAMP(), TIMESTAMP_UTC()}) {
+    SCOPED_TRACE(type->toString());
+    EXPECT_EQ(
+        in<Timestamp>(Timestamp(0, 0), {Timestamp(1, 0), std::nullopt}, type),
+        std::nullopt);
+    EXPECT_EQ(
+        in<Timestamp>(Timestamp(0, 0), {Timestamp(0, 0), Timestamp()}, type),
+        true);
 
-  // The precision of Spark 'in' is microseconds.
-  EXPECT_EQ(
-      in<Timestamp>(
-          Timestamp(0, 123'456'000),
-          {Timestamp(0, 123'000'000), Timestamp(0, 123'123'000)}),
-      false);
-  EXPECT_EQ(
-      in<Timestamp>(
-          Timestamp(0, 123'456'789),
-          {Timestamp(0, 123'456'000), Timestamp(0, 123'456'123)}),
-      true);
+    // The precision of Spark 'in' is microseconds.
+    EXPECT_EQ(
+        in<Timestamp>(
+            Timestamp(0, 123'456'000),
+            {Timestamp(0, 123'000'000), Timestamp(0, 123'123'000)},
+            type),
+        false);
+    EXPECT_EQ(
+        in<Timestamp>(
+            Timestamp(0, 123'456'789),
+            {Timestamp(0, 123'456'000), Timestamp(0, 123'456'123)},
+            type),
+        true);
+  }
 }
 
 TEST_F(InTest, date) {
