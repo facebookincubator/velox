@@ -580,6 +580,9 @@ class BaseVector {
 
   /// Transposes two sets of dictionary indices into one level of indirection.
   /// Sets result[i] = base[indices[i]] for i = 0 ... i < size.
+  ///
+  /// Alignment: all pointers must be 4-byte aligned.
+  /// Padding: not required.
   static void transposeIndices(
       const vector_size_t* base,
       vector_size_t size,
@@ -591,6 +594,10 @@ class BaseVector {
   /// indices[i] is not null in 'baseNulls'. If indices[i] is null in
   /// 'baseNulls' or i is null in 'wrapNulls', then 'resultNulls' is null at i.
   /// 'wrapNulls' may be nullptr, meaning that no new nulls are added.
+  ///
+  /// Alignment: the indices must be 4-byte aligned and the nulls 8-byte
+  /// aligned.
+  /// Padding: not required.
   static void transposeIndicesWithNulls(
       const vector_size_t* baseIndices,
       const uint64_t* baseNulls,
@@ -599,21 +606,6 @@ class BaseVector {
       const uint64_t* wrapNulls,
       vector_size_t* resultIndices,
       uint64_t* resultNulls);
-
-  /// Flattens 'dictionaryValues', which is a dictionary and replaces
-  /// it with its base. 'size' is the number of valid elements in
-  /// 'indices' and 'nulls'. Null positions may have an invalid
-  /// index. Rewrites 'indices' from being indices into
-  /// 'dictionaryValues' to being indices into the latter's
-  /// base. Rewrites 'nulls' to be nulls from 'dictionaryValues' and
-  /// its base vector. This is used when a dictionary vector loads a
-  /// lazy values vector and finds out that the loaded is itself a
-  /// dictionary.
-  static void transposeDictionaryValues(
-      vector_size_t wrapSize,
-      BufferPtr& wrapNulls,
-      BufferPtr& wrapIndices,
-      std::shared_ptr<BaseVector>& dictionaryValues);
 
   // Returns a vector of the type of 'source' where 'indices' contains
   // an index into 'source' for each element of 'source'. The

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <span>
 
@@ -26,6 +27,7 @@
 #include "velox/common/fuzzer/Utils.h"
 #include "velox/common/memory/ByteStream.h"
 #include "velox/common/testutil/OptionalEmpty.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
@@ -2537,6 +2539,51 @@ TEST_F(VectorTest, wrapInDictionaryOverLoadedLazy) {
   auto dict = wrapInDictionary(makeIndices(size, std::identity{}), size, lazy);
   auto valuesVector = dict->valueVector();
   EXPECT_FALSE(valuesVector->isLazy());
+}
+
+TEST_F(VectorTest, transposeIndicesAtEndOfMapping) {
+#if !XSIMD_WITH_AVX2
+  GTEST_SKIP() << "The transposes need AVX2.";
+#endif
+  // The result indices may end right before an unmapped page, so the
+  // transposes store only the first 'size' of them.
+  std::vector<vector_size_t> baseIndices(100);
+  std::iota(baseIndices.begin(), baseIndices.end(), 1'000);
+  // Room for a full batch of indices, which the transposes load.
+  std::vector<vector_size_t> wrapIndices(16);
+  for (auto i = 0; i < wrapIndices.size(); ++i) {
+    wrapIndices[i] = 99 - i * 7;
+  }
+  const uint64_t baseNulls[2] = {~0ULL, ~0ULL};
+  common::testutil::PageBeforeGuard page;
+  for (const vector_size_t size : {5, 13}) {
+    SCOPED_TRACE(fmt::format("size {}", size));
+    std::vector<vector_size_t> expected(size);
+    for (auto i = 0; i < size; ++i) {
+      expected[i] = baseIndices[wrapIndices[i]];
+    }
+    {
+      auto result = page.atEnd<vector_size_t>(size);
+      BaseVector::transposeIndices(
+          baseIndices.data(), size, wrapIndices.data(), result.data());
+      EXPECT_EQ(
+          std::vector<vector_size_t>(result.begin(), result.end()), expected);
+    }
+    {
+      auto result = page.atEnd<vector_size_t>(size);
+      uint64_t resultNulls[2]{};
+      BaseVector::transposeIndicesWithNulls(
+          baseIndices.data(),
+          baseNulls,
+          size,
+          wrapIndices.data(),
+          nullptr,
+          result.data(),
+          resultNulls);
+      EXPECT_EQ(
+          std::vector<vector_size_t>(result.begin(), result.end()), expected);
+    }
+  }
 }
 
 TEST_F(VectorTest, dictionaryResize) {
