@@ -233,5 +233,72 @@ TEST_F(ColumnReaderTest, rebindColumnReaderWithOtherStripeStreams) {
       "A reader must rebind with the StripeStreams it was built with.");
 }
 
+// A top-level struct reader returns its fields as lazy vectors unless its
+// params turn lazy children off. A nested struct takes the setting from the
+// params of its parent, so it reads its own fields eagerly too.
+TEST_F(ColumnReaderTest, generateLazyChildren) {
+  constexpr vector_size_t kNumRows{4};
+  const auto batch = makeRowVector(
+      {"point"},
+      {makeRowVector(
+          {"x", "nested"},
+          {makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+           makeRowVector(
+               {"y"}, {makeFlatVector<int64_t>(kNumRows, [](auto row) {
+                 return row * 10;
+               })})})});
+  writeFile({batch});
+
+  for (const bool generateLazyChildren : {true, false}) {
+    SCOPED_TRACE(fmt::format("generateLazyChildren {}", generateLazyChildren));
+    streams_->setStripe(0);
+    NimbleParams params(
+        *pool(),
+        splitStats_,
+        readerBase_->nimbleSchema()->asRow().childAt(0),
+        *streams_,
+        /*rowSizeTracker=*/nullptr,
+        encodingFactory_,
+        /*preserveFlatMapsInMemory=*/false,
+        /*nimblePreserveDictionaryEncoding=*/false,
+        /*lazyIoColumns=*/nullptr,
+        /*lazyColumnIo=*/false,
+        /*dictionaryAwareReads=*/false,
+        /*scanFastPath=*/false,
+        /*flatMapKeyNodePool=*/nullptr,
+        generateLazyChildren);
+    EXPECT_EQ(params.generateLazyChildren(), generateLazyChildren);
+    auto reader = buildReader(/*column=*/0, params);
+    reader->setIsTopLevel();
+    streams_->load();
+    std::vector<vector_size_t> rowNumbers(kNumRows);
+    std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+    reader->read(
+        /*offset=*/0,
+        RowSet(rowNumbers.data(), rowNumbers.size()),
+        /*incomingNulls=*/nullptr);
+
+    // A struct reader fills the result that its caller passes.
+    VectorPtr result = BaseVector::create(batch->childAt(0)->type(), 0, pool());
+    reader->getValues(reader->outputRows(), &result);
+
+    const auto* point = result->asChecked<RowVector>();
+    EXPECT_EQ(point->childAt(0)->isLazy(), generateLazyChildren);
+    EXPECT_EQ(point->childAt(1)->isLazy(), generateLazyChildren);
+    if (!generateLazyChildren) {
+      EXPECT_FALSE(
+          point->childAt(1)->asChecked<RowVector>()->childAt(0)->isLazy());
+    }
+
+    const auto* loaded = result->loadedVector();
+    const auto& expected = batch->childAt(0);
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      EXPECT_TRUE(loaded->equalValueAt(expected.get(), row, row))
+          << "row " << row << ": " << loaded->toString(row) << " vs "
+          << expected->toString(row);
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::nimble
