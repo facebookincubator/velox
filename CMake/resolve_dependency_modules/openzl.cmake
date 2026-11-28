@@ -62,7 +62,9 @@ FetchContent_Declare(
   openzl
   URL ${VELOX_OPENZL_SOURCE_URL}
   URL_HASH ${VELOX_OPENZL_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git init -q && git apply ${CMAKE_CURRENT_LIST_DIR}/openzl/openzl-cxx-standard.patch
+  PATCH_COMMAND
+    git init -q && git apply ${CMAKE_CURRENT_LIST_DIR}/openzl/openzl-cxx-standard.patch
+    ${CMAKE_CURRENT_LIST_DIR}/openzl/openzl-reuse-zstd-target.patch
   OVERRIDE_FIND_PACKAGE
   SYSTEM
   EXCLUDE_FROM_ALL
