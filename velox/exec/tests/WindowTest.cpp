@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/Window.h"
+#include <folly/String.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <gmock/gmock.h>
 #include "velox/common/base/Exceptions.h"
@@ -26,6 +27,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/window/RowsStreamingWindowBuild.h"
 #include "velox/exec/window/SortWindowBuild.h"
 #include "velox/exec/window/VectorWindowPartition.h"
@@ -42,6 +44,17 @@ using namespace facebook::velox::exec::test;
 namespace facebook::velox::exec {
 using namespace facebook::velox::common::testutil;
 namespace {
+
+// Formats a window function whose frame covers the entire partition.
+std::string wholePartitionFunction(
+    std::string_view function,
+    std::string_view frameType) {
+  return fmt::format(
+      "{} over (partition by p order by s {} between unbounded "
+      "preceding and unbounded following)",
+      function,
+      frameType);
+}
 
 class WindowTest : public OperatorTestBase {
  public:
@@ -75,6 +88,66 @@ class WindowTest : public OperatorTestBase {
         "none",
         0,
         prefixSortConfig);
+  }
+
+  RowVectorPtr makePartitionResultInput(
+      const std::vector<vector_size_t>& partitionSizes,
+      bool nullable = false,
+      bool peers = false) {
+    std::vector<int32_t> partitions;
+    std::vector<int32_t> order;
+    std::vector<std::optional<int64_t>> values;
+    for (auto p = 0; p < partitionSizes.size(); ++p) {
+      for (vector_size_t i = 0; i < partitionSizes[p]; ++i) {
+        partitions.push_back(p);
+        order.push_back(peers ? i / 2 : i);
+        values.push_back(
+            nullable && (p % 3 == 0 || (p == 1 && i % 2 == 0))
+                ? std::nullopt
+                : std::optional<int64_t>(100 * p + i + 1));
+      }
+    }
+    return makeRowVector(
+        {"p", "s", "d"},
+        {makeFlatVector<int32_t>(partitions),
+         makeFlatVector<int32_t>(order),
+         makeNullableFlatVector<int64_t>(values)});
+  }
+
+  void assertPartitionResultsInBothModes(
+      const std::vector<RowVectorPtr>& input,
+      const std::vector<std::string>& functions,
+      const std::function<void(bool, const std::vector<RowVectorPtr>&)>&
+          checkBatches = {}) {
+    createDuckDbTable(input);
+    const auto sql =
+        fmt::format("SELECT *, {} FROM tmp", folly::join(", ", functions));
+    for (bool streaming : {false, true}) {
+      SCOPED_TRACE(fmt::format("streaming={}", streaming));
+      PlanBuilder builder;
+      builder.values(input);
+      if (streaming) {
+        builder.streamingWindow(functions);
+      } else {
+        builder.window(functions);
+      }
+      // Retain the original output vectors until the query finishes.
+      TaskPtr task;
+      auto batches =
+          AssertQueryBuilder(builder.planNode())
+              .config(core::QueryConfig::kPreferredOutputBatchRows, 4)
+              .config(core::QueryConfig::kMaxOutputBatchRows, 4)
+              .results(task);
+      const auto& outputType = builder.planNode()->outputType();
+      ASSERT_TRUE(
+          test::assertEqualResults(
+              duckDbQueryRunner_.execute(sql, outputType),
+              outputType,
+              batches));
+      if (checkBatches) {
+        checkBatches(streaming, batches);
+      }
+    }
   }
 
   const std::shared_ptr<folly::Executor> executor_{
@@ -159,6 +232,102 @@ class TestingRowsStreamingWindowBuild
     return data_ != nullptr;
   }
 };
+
+TEST_F(WindowTest, aggregatePartitionResultEncoding) {
+  auto data = makePartitionResultInput({10, 1, 1, 1, 1, 1, 1, 1});
+  assertPartitionResultsInBothModes(
+      {data},
+      {wholePartitionFunction("sum(d)", "rows"),
+       wholePartitionFunction("count(d)", "range")},
+      [](bool streaming, const std::vector<RowVectorPtr>& batches) {
+        ASSERT_GE(batches.size(), 4);
+        if (!streaming) {
+          std::vector<vector_size_t> sizes;
+          for (const auto& batch : batches) {
+            sizes.push_back(batch->size());
+          }
+          ASSERT_THAT(sizes, testing::ElementsAre(4, 4, 4, 4, 1));
+        }
+        using Encoding = VectorEncoding::Simple;
+        for (const auto column : {3, 4}) {
+          EXPECT_EQ(
+              batches[0]->childAt(column)->encoding(), Encoding::CONSTANT);
+          EXPECT_EQ(
+              batches[1]->childAt(column)->encoding(), Encoding::CONSTANT);
+          const auto& dictionary = batches[2]->childAt(column);
+          ASSERT_EQ(dictionary->encoding(), Encoding::DICTIONARY);
+          EXPECT_EQ(dictionary->valueVector()->size(), 3);
+          const auto* indices = dictionary->wrapInfo()->as<vector_size_t>();
+          EXPECT_THAT(
+              std::vector(indices, indices + dictionary->size()),
+              testing::ElementsAre(0, 0, 1, 2));
+          for (size_t batch = 3; batch < batches.size(); ++batch) {
+            EXPECT_EQ(
+                batches[batch]->childAt(column)->encoding(), Encoding::FLAT);
+          }
+        }
+      });
+}
+
+TEST_F(WindowTest, aggregatePartitionResultWithoutOrderBy) {
+  auto data = makePartitionResultInput({9, 3});
+#ifndef NDEBUG
+  std::atomic_bool createdRowsStreamingBuild{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::window::RowsStreamingWindowBuild::RowsStreamingWindowBuild",
+      std::function<void(window::RowsStreamingWindowBuild*)>(
+          [&](window::RowsStreamingWindowBuild*) {
+            createdRowsStreamingBuild.store(true);
+          }));
+#endif
+  assertPartitionResultsInBothModes(
+      split(data, 2),
+      {"sum(d) over (partition by p range between unbounded preceding and current row)",
+       "count(*) over (partition by p)"},
+      [](bool /*streaming*/, const std::vector<RowVectorPtr>& batches) {
+        ASSERT_GE(batches.size(), 3);
+        for (const auto batch : {0, 1}) {
+          EXPECT_EQ(batches[batch]->size(), 4);
+          for (const auto column : {3, 4}) {
+            EXPECT_TRUE(batches[batch]->childAt(column)->isConstantEncoding());
+          }
+        }
+      });
+#ifndef NDEBUG
+  EXPECT_TRUE(createdRowsStreamingBuild.load());
+#endif
+}
+
+TEST_F(WindowTest, aggregatePartitionResultRetainedComplexValues) {
+  auto keys = makePartitionResultInput({3, 4, 5, 1, 1, 2, 2});
+  auto strings = makeFlatVector<std::string>(keys->size(), [](auto row) {
+    return std::string(256, 'a' + row % 26) + std::to_string(row);
+  });
+  auto data = makeRowVector(
+      {"p", "s", "d"}, {keys->childAt(0), keys->childAt(1), strings});
+  assertPartitionResultsInBothModes(
+      split(data, 2),
+      {wholePartitionFunction("array_agg(d)", "rows"),
+       wholePartitionFunction("max(d)", "range")});
+}
+
+TEST_F(WindowTest, aggregatePartitionResultMixedFrames) {
+  for (bool peers : {false, true}) {
+    auto data = makePartitionResultInput({3, 5, 1, 6}, true, peers);
+    std::vector<std::string> functions = {
+        wholePartitionFunction("sum(d)", "rows"),
+        wholePartitionFunction("count(d)", "rows"),
+        "sum(d) over (partition by p order by s)"};
+    // ROWS frames and row_number require unique ordering against DuckDB.
+    if (!peers) {
+      functions.push_back(
+          "sum(d) over (partition by p order by s rows between unbounded preceding and 2 following)");
+      functions.push_back("row_number() over (partition by p order by s)");
+    }
+    SCOPED_TRACE(fmt::format("peers={}", peers));
+    assertPartitionResultsInBothModes(split(data, 3), functions);
+  }
+}
 
 TEST_F(WindowTest, spill) {
   const vector_size_t size = 1'000;
@@ -273,10 +442,13 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
 
   createDuckDbTable({data});
 
+  const std::vector<std::string> functions = {
+      "row_number() over (partition by p order by s)",
+      wholePartitionFunction("sum(d)", "rows")};
   core::PlanNodeId windowId;
   auto plan = PlanBuilder()
                   .values(split(data, 10))
-                  .window({"row_number() over (partition by p order by s)"})
+                  .window(functions)
                   .capturePlanNodeId(windowId)
                   .planNode();
 
@@ -291,7 +463,8 @@ TEST_F(WindowTest, spillBatchReadHugePartitions) {
               core::QueryConfig::kWindowSpillMinReadBatchRows, minReadBatchRows)
           .spillDirectory(spillDirectory->getPath())
           .assertResults(
-              "SELECT *, row_number() over (partition by p order by s) FROM tmp");
+              fmt::format(
+                  "SELECT *, {} FROM tmp", folly::join(", ", functions)));
 
   const auto stats = exec::PlanNodeStats::extract(task->taskStats(), windowId);
 

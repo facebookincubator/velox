@@ -123,6 +123,8 @@ class Window : public Operator {
       vector_size_t startRow,
       vector_size_t endRow,
       vector_size_t resultOffset,
+      vector_size_t partitionResultOffset,
+      bool cachePartitionResult,
       const RowVectorPtr& result);
 
   // Gets the input columns of the current window partition
@@ -133,12 +135,27 @@ class Window : public Operator {
       vector_size_t resultOffset,
       const RowVectorPtr& result);
 
+  // Output range for a partition that contributes more than one row.
+  struct PartitionResultRun {
+    // First row of the partition in the batch.
+    vector_size_t start;
+    // Exclusive end of the partition in the batch.
+    vector_size_t end;
+  };
+
   // Computes the result vector for a single output block. The result
   // consists of all the input columns followed by the results of the
   // window function.
   // @return The number of rows processed in the loop.
   vector_size_t callApplyLoop(
       vector_size_t numOutputRows,
+      const RowVectorPtr& result,
+      std::vector<PartitionResultRun>& runs);
+
+  // Encodes reusable results after all the partitions in a batch are known.
+  void setPartitionResultColumns(
+      const std::vector<PartitionResultRun>& runs,
+      vector_size_t numRows,
       const RowVectorPtr& result);
 
   // Update frame bounds for kPreceding, kFollowing row frames.
@@ -188,6 +205,14 @@ class Window : public Operator {
   // Vector of WindowFrames corresponding to each windowFunction above.
   // It represents the frame spec for the function computation.
   std::vector<WindowFrame> windowFrames_;
+
+  // Identifies functions whose frame and arguments guarantee one result per
+  // partition. Indexed by window function position.
+  std::vector<bool> reusesPartitionResult_;
+
+  // Caches the current partition's results across output batches. Empty if
+  // there are no reusable functions.
+  std::vector<VectorPtr> partitionResults_;
 
   // The following 4 Buffers are used to pass peer and frame start and end
   // values to the WindowFunction::apply method. These buffers can be allocated

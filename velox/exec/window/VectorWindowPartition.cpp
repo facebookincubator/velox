@@ -323,6 +323,16 @@ VectorWindowPartition::computePeerBuffers(
     vector_size_t* rawPeerStarts,
     vector_size_t* rawPeerEnds) {
   VectorAccessor rows{*this};
+  if (complete() && sortKeyInfo().empty() && start < end) {
+    // Without sort keys, all rows in the completed partition are peers.
+    const auto partitionEnd = rows.partitionEnd();
+    VELOX_CHECK_LE(end, partitionEnd);
+    std::fill_n(rawPeerStarts, end - start, 0);
+    std::fill_n(rawPeerEnds, end - start, partitionEnd - 1);
+    previousRow_.reset();
+    return {0, partitionEnd};
+  }
+
   auto result = PeerGroupComputation::compute(
       rows, start, end, prevPeerStart, prevPeerEnd, rawPeerStarts, rawPeerEnds);
   if (result.previousRowConsumed) {
