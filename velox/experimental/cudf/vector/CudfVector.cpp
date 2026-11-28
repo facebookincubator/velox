@@ -163,6 +163,23 @@ uint64_t CudfVector::estimateFlatSize() const {
   return flatSize_;
 }
 
+uint64_t CudfVector::estimateFlatSize(
+    std::span<const column_index_t> channels) const {
+  if (const auto* table =
+          std::get_if<std::unique_ptr<cudf::table>>(&tableStorage_)) {
+    if (*table == nullptr) {
+      return 0;
+    }
+    uint64_t bytes = 0;
+    for (const auto channel : channels) {
+      bytes += (*table)->get_column(channel).alloc_size();
+    }
+    return bytes;
+  }
+  const auto numColumns = tabView_.num_columns();
+  return numColumns == 0 ? 0 : flatSize_ * channels.size() / numColumns;
+}
+
 uint64_t CudfVector::retainedSizeImpl(
     uint64_t& /*totalStringBufferSize*/) const {
   return flatSize_;

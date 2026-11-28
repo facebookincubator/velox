@@ -44,7 +44,6 @@
 #include <cuda/std/execution>
 #include <cuda/std/functional>
 #include <cuda_runtime.h>
-#include <thrust/gather.h>
 #include <thrust/transform.h>
 
 #include <algorithm>
@@ -159,6 +158,83 @@ __global__ void stringOffsetsKernel(
     cuda::std::memcpy(t.dst + int64_t{4} * i, &offset, sizeof(offset));
   }
 }
+
+// One block row (blockIdx.y) per column and page boundary, grid-stride over
+// the 32-row words of the page that starts at the boundary. Every thread adds
+// the nulls of its words to the page's count, which the caller zeroes.
+__global__ void pageStatsKernel(
+    const PageStatsColumn* columns,
+    const int64_t* bounds,
+    int32_t numBounds,
+    int64_t taskOffset,
+    PageStats* stats) {
+  const int64_t task = taskOffset + blockIdx.y;
+  const PageStatsColumn column = columns[task / numBounds];
+  const auto boundary = static_cast<int32_t>(task % numBounds);
+  const int64_t row = bounds[boundary];
+  if (blockIdx.x == 0 && threadIdx.x == 0 &&
+      column.offsets.offsets != nullptr) {
+    const cudf::detail::input_offsetalator offsets(
+        column.offsets.offsets,
+        column.offsets.offsetsType,
+        static_cast<cudf::size_type>(column.offsets.firstIndex));
+    stats[task].charsOffset = offsets[static_cast<cudf::size_type>(row)];
+  }
+  if (column.mask == nullptr || boundary + 1 == numBounds) {
+    return;
+  }
+  const auto begin = static_cast<cudf::size_type>(column.firstBit + row);
+  const auto end =
+      static_cast<cudf::size_type>(column.firstBit + bounds[boundary + 1]);
+  // The indices stay unsigned, as the kernel indices they derive from.
+  const auto numRows = static_cast<uint32_t>(end - begin);
+  const auto numWords = cudf::util::div_rounding_up_safe(numRows, 32u);
+  int32_t numNulls = 0;
+  for (auto w = blockIdx.x * blockDim.x + threadIdx.x; w < numWords;
+       w += gridDim.x * blockDim.x) {
+    const auto rows = min(32u, numRows - 32 * w);
+    const uint32_t inRange = rows == 32 ? ~0u : (1u << rows) - 1;
+    numNulls += __popc(~maskWord(column.mask, w, begin, end) & inRange);
+  }
+  if (numNulls > 0) {
+    atomicAdd(&stats[task].numNulls, numNulls);
+  }
+}
+
+// One block row (blockIdx.y) per column, grid-stride over its rows. Flags a
+// column that has a null row with string bytes; the caller zeroes the flags.
+__global__ void nonEmptyNullStringsKernel(
+    const PageStatsColumn* columns,
+    int32_t columnOffset,
+    uint32_t numRows,
+    uint8_t* flags) {
+  const auto index = columnOffset + blockIdx.y;
+  const PageStatsColumn column = columns[index];
+  if (column.mask == nullptr || column.offsets.offsets == nullptr) {
+    return;
+  }
+  const cudf::detail::input_offsetalator offsets(
+      column.offsets.offsets,
+      column.offsets.offsetsType,
+      static_cast<cudf::size_type>(column.offsets.firstIndex));
+  const auto firstBit = static_cast<cudf::size_type>(column.firstBit);
+  for (auto i = blockIdx.x * blockDim.x + threadIdx.x; i < numRows;
+       i += gridDim.x * blockDim.x) {
+    if (!cudf::bit_is_set(column.mask, firstBit + i) &&
+        offsets[i + 1] > offsets[i]) {
+      flags[index] = 1;
+    }
+  }
+}
+
+// Whether a bit of a cuDF validity mask is set.
+struct IsValid {
+  const cudf::bitmask_type* mask;
+
+  __device__ bool operator()(cudf::size_type bit) const {
+    return cudf::bit_is_set(mask, bit);
+  }
+};
 
 // One of mul, div is 1. Flags a product outside int64.
 struct ToMillis {
@@ -421,30 +497,149 @@ void batchedDeviceCopy(
   CUDF_CHECK_CUDA(stream.get());
 }
 
-std::vector<int64_t> device::gatherStringOffsets(
-    const StringOffsets& offsets,
-    cudf::host_span<const int64_t> rows,
+std::vector<PageStats> device::prestoPageStats(
+    cudf::host_span<const PageStatsColumn> columns,
+    cudf::host_span<const int64_t> bounds,
     cuda::stream_ref stream) {
-  if (rows.empty()) {
+  if (columns.empty()) {
     return {};
   }
-  // The output is allocated before the upload of 'rows', which the read of
+  // Everything is allocated before the uploads of 'columns' and 'bounds',
+  // which the read of the result below waits for.
+  auto mr = get_temp_mr();
+  const size_t numTasks = columns.size() * bounds.size();
+  cuda::device_buffer<PageStats> stats(stream, mr, numTasks, cuda::no_init);
+  cuda::device_buffer<PageStatsColumn> deviceColumns(
+      stream, mr, columns.size(), cuda::no_init);
+  cuda::device_buffer<int64_t> deviceBounds(
+      stream, mr, bounds.size(), cuda::no_init);
+  CUDF_CUDA_TRY(cudaMemsetAsync(
+      stats.data(), 0, numTasks * sizeof(PageStats), stream.get()));
+  cudf::detail::cuda_memcpy_async<PageStatsColumn>(
+      cudf::device_span<PageStatsColumn>{
+          deviceColumns.data(), deviceColumns.size()},
+      columns,
+      stream);
+  cudf::detail::cuda_memcpy_async<int64_t>(
+      cudf::device_span<int64_t>{deviceBounds.data(), deviceBounds.size()},
+      bounds,
+      stream);
+  int64_t maxWords = 0;
+  for (size_t i = 1; i < bounds.size(); ++i) {
+    maxWords = std::max(
+        maxWords,
+        cudf::util::div_rounding_up_safe<int64_t>(
+            bounds[i] - bounds[i - 1], 32));
+  }
+  const auto gridX = gridXFor(maxWords);
+  for (size_t offset = 0; offset < numTasks; offset += kMaxGridY) {
+    const auto count =
+        static_cast<uint32_t>(std::min(kMaxGridY, numTasks - offset));
+    pageStatsKernel<<<dim3(gridX, count), kBlockSize, 0, stream.get()>>>(
+        deviceColumns.data(),
+        deviceBounds.data(),
+        static_cast<int32_t>(bounds.size()),
+        static_cast<int64_t>(offset),
+        stats.data());
+    CUDF_CHECK_CUDA(stream.get());
+  }
+  return cudf::detail::make_std_vector(
+      cudf::device_span<PageStats const>{stats.data(), stats.size()}, stream);
+}
+
+std::vector<uint8_t> device::hasNonEmptyNullStrings(
+    cudf::host_span<const PageStatsColumn> columns,
+    int32_t numRows,
+    cuda::stream_ref stream) {
+  if (columns.empty()) {
+    return {};
+  }
+  // Everything is allocated before the upload of 'columns', which the read of
   // the result below waits for.
   auto mr = get_temp_mr();
-  cuda::device_buffer<int64_t> out(stream, mr, rows.size(), cuda::no_init);
-  auto deviceRows = cudf::detail::make_device_buffer_async(
-      rows, stream, cudf::memory_resources{mr, mr});
-  thrust::gather(
-      rmm::exec_policy_nosync(stream, mr),
-      deviceRows.data(),
-      deviceRows.data() + deviceRows.size(),
-      cudf::detail::input_offsetalator(
-          offsets.offsets,
-          offsets.offsetsType,
-          static_cast<cudf::size_type>(offsets.firstIndex)),
-      out.data());
+  cuda::device_buffer<uint8_t> flags(stream, mr, columns.size(), cuda::no_init);
+  cuda::device_buffer<PageStatsColumn> deviceColumns(
+      stream, mr, columns.size(), cuda::no_init);
+  CUDF_CUDA_TRY(cudaMemsetAsync(flags.data(), 0, flags.size(), stream.get()));
+  cudf::detail::cuda_memcpy_async<PageStatsColumn>(
+      cudf::device_span<PageStatsColumn>{
+          deviceColumns.data(), deviceColumns.size()},
+      columns,
+      stream);
+  const auto gridX = gridXFor(numRows);
+  for (size_t offset = 0; offset < columns.size(); offset += kMaxGridY) {
+    const auto count =
+        static_cast<uint32_t>(std::min(kMaxGridY, columns.size() - offset));
+    nonEmptyNullStringsKernel<<<
+        dim3(gridX, count),
+        kBlockSize,
+        0,
+        stream.get()>>>(
+        deviceColumns.data(),
+        static_cast<int32_t>(offset),
+        static_cast<uint32_t>(numRows),
+        flags.data());
+    CUDF_CHECK_CUDA(stream.get());
+  }
   return cudf::detail::make_std_vector(
-      cudf::device_span<int64_t const>{out.data(), out.size()}, stream);
+      cudf::device_span<uint8_t const>{flags.data(), flags.size()}, stream);
+}
+
+namespace {
+
+template <typename T>
+void compactValid(
+    const void* src,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream) {
+  // cub leaves the number of values on the device, where thrust::copy_if
+  // would wait for it. Nothing reads it: the caller has the null count.
+  auto mr = get_temp_mr();
+  rmm::device_scalar<int32_t> numValues(stream, mr);
+  CUDF_CUDA_TRY(
+      cub::DeviceSelect::FlaggedIf(
+          static_cast<const T*>(src),
+          cuda::counting_iterator<cudf::size_type>(
+              static_cast<cudf::size_type>(firstBit)),
+          static_cast<T*>(dst),
+          numValues.data(),
+          numRows,
+          IsValid{mask},
+          cubEnv(stream, mr)));
+  CUDF_CHECK_CUDA(stream.get());
+}
+
+} // namespace
+
+void device::compactValidValues(
+    const void* src,
+    int32_t width,
+    const cudf::bitmask_type* mask,
+    int64_t firstBit,
+    int32_t numRows,
+    void* dst,
+    cuda::stream_ref stream) {
+  if (numRows == 0) {
+    return;
+  }
+  switch (width) {
+    case 1:
+      return compactValid<uint8_t>(src, mask, firstBit, numRows, dst, stream);
+    case 2:
+      return compactValid<uint16_t>(src, mask, firstBit, numRows, dst, stream);
+    case 4:
+      return compactValid<uint32_t>(src, mask, firstBit, numRows, dst, stream);
+    case 8:
+      return compactValid<uint64_t>(src, mask, firstBit, numRows, dst, stream);
+    case 16:
+      return compactValid<unsigned __int128>(
+          src, mask, firstBit, numRows, dst, stream);
+    default:
+      CUDF_UNREACHABLE("PrestoPageDevice.cpp checks the width");
+  }
 }
 
 bool device::timestampsToMillis(
