@@ -23,7 +23,9 @@ namespace facebook::velox::functions::aggregate::sparksql {
 /// @tparam TInputType The raw input data type.
 /// @tparam TSumType The type of sum in the output of partial aggregation or the
 /// final output type of final aggregation.
-template <typename TInputType, typename TSumType>
+/// @tparam throwOnOverflow If true, throws when the final result overflows
+/// (Spark ANSI mode). Otherwise returns null.
+template <typename TInputType, typename TSumType, bool throwOnOverflow = false>
 class DecimalSumAggregate {
  public:
   using InputType = Row<TInputType>;
@@ -89,7 +91,7 @@ class DecimalSumAggregate {
 
     explicit AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        DecimalSumAggregate<TInputType, TSumType>* fn)
+        DecimalSumAggregate<TInputType, TSumType, throwOnOverflow>* fn)
         : resultPrecision{fn->resultPrecision_} {}
 
     std::optional<int128_t> computeFinalResult() const {
@@ -190,6 +192,9 @@ class DecimalSumAggregate {
         out = static_cast<TSumType>(finalResult.value());
         return true;
       } else {
+        if constexpr (throwOnOverflow) {
+          VELOX_USER_FAIL("Decimal overflow in sum");
+        }
         // Sum should be set to null on overflow.
         return false;
       }
