@@ -102,7 +102,7 @@ add_executable(
   VarcharTypeWriteSideCheckTest.cpp
   XxHash64Test.cpp
 )
-velox_add_test_headers(velox_functions_spark_test JsonTestUtil.h)
+velox_add_test_headers(velox_functions_spark_test JsonTestUtil.h TimestampTestUtil.h)
 
 add_test(velox_functions_spark_test velox_functions_spark_test)
 

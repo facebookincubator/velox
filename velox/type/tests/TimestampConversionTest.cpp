@@ -312,6 +312,12 @@ TEST(DateTimeUtilTest, fromTimestampString) {
   EXPECT_EQ(
       Timestamp(946729316, 0),
       parseTimestamp("2000-01-01T12:21:56", TimestampParseMode::kIso8601));
+  EXPECT_EQ(
+      Timestamp(3'600, 0),
+      parseTimestamp("1970-01-01T01", TimestampParseMode::kSparkCast));
+  EXPECT_EQ(
+      Timestamp(37'200, 0),
+      parseTimestamp("1970-01-01 10:20 ", TimestampParseMode::kSparkCast));
 }
 
 TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
@@ -388,6 +394,19 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
       Timestamp(1426636800, 0),
       parseTimestamp("2015-03-18T", TimestampParseMode::kLegacyCast));
 
+  // Spark accepts an hour-only time only at the end of the input.
+  EXPECT_TRUE(fromTimestampWithTimezoneString(
+                  "1970-01-01T01Z", TimestampParseMode::kSparkCast)
+                  .hasError());
+  // Spark rejects leap seconds, unlike the ISO parser.
+  EXPECT_TRUE(fromTimestampWithTimezoneString(
+                  "2016-12-31T23:59:60Z", TimestampParseMode::kSparkCast)
+                  .hasError());
+  EXPECT_TRUE(fromTimestampWithTimezoneString(
+                  "1970-01-01 00:00:01 america/los_angeles",
+                  TimestampParseMode::kSparkCast)
+                  .hasError());
+
   // Parse timestamp with (broken) timezones.
   VELOX_ASSERT_THROW(
       parseTimestampWithTimezone("1970-01-01 00:00:00-asd"), timezoneError);
@@ -399,7 +418,77 @@ TEST(DateTimeUtilTest, fromTimestampStringInvalid) {
       parseTimestampWithTimezone("1970-01-01 00:00:00  UTC"), timezoneError);
 }
 
+TEST(DateTimeUtilTest, sparkTimestampTimeZoneCaseSensitivity) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"UTC", "utc"},
+      {"UTC", "Utc"},
+      {"Z", "z"},
+      {"GMT", "gmt"},
+      {"GMT0", "gmt0"},
+      {"UCT", "uct"},
+      {"Greenwich", "greenwich"},
+      {"Universal", "universal"},
+      {"Zulu", "zulu"},
+      {"UTC+01:00", "utc+01:00"},
+      {"GMT+01:00", "gmt+01:00"},
+      {"GMT+01:00", "GmT+01:00"},
+      {"UT+01:00", "ut+01:00"},
+      {"Etc/GMT+1", "etc/gmt+1"},
+      {"Etc/GMT+1", "Etc/gmt+1"},
+      {"Etc/UTC", "etc/utc"},
+      {"Etc/UTC", "Etc/Utc"},
+      {"Etc/UCT", "Etc/uct"},
+      {"Etc/GMT", "Etc/gmt"},
+      {"Etc/GMT0", "etc/gmt0"},
+      {"Etc/Greenwich", "Etc/greenwich"},
+      {"Etc/Universal", "etc/universal"},
+      {"Etc/Zulu", "Etc/zulu"},
+      {"America/Los_Angeles", "america/los_angeles"},
+      {"US/Pacific", "us/pacific"},
+  };
+  for (const auto& [canonical, wrongCase] : cases) {
+    SCOPED_TRACE(wrongCase);
+    const auto valid = "1970-01-01 00:00:00 " + canonical;
+    const auto invalid = "1970-01-01 00:00:00 " + wrongCase;
+    const auto expected = ParsedTimestampWithTimeZone{
+        Timestamp(0, 0), tz::locateZone(canonical), std::nullopt};
+    EXPECT_EQ(
+        parseTimestampWithTimezone(
+            StringView(valid), TimestampParseMode::kSparkCast),
+        expected);
+    EXPECT_TRUE(fromTimestampWithTimezoneString(
+                    StringView(invalid), TimestampParseMode::kSparkCast)
+                    .hasError());
+    // Presto retains case-insensitive timezone lookup, including aliases.
+    EXPECT_EQ(
+        parseTimestampWithTimezone(
+            StringView(invalid), TimestampParseMode::kPrestoCast),
+        expected);
+  }
+  for (const auto& zone : {"+01", "+0100", "+01:00", "-00:00"}) {
+    const auto input = std::string("1970-01-01 00:00:00 ") + zone;
+    EXPECT_EQ(
+        parseTimestampWithTimezone(
+            StringView(input), TimestampParseMode::kSparkCast),
+        (ParsedTimestampWithTimeZone{
+            Timestamp(0, 0), tz::locateZone(zone), std::nullopt}));
+  }
+  EXPECT_EQ(
+      parseTimestampWithTimezone(
+          "1970-01-01 00:00:00 UT", TimestampParseMode::kSparkCast),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(0, 0), tz::locateZone("UTC"), std::nullopt}));
+  EXPECT_TRUE(fromTimestampWithTimezoneString(
+                  "1970-01-01 00:00:00 ut", TimestampParseMode::kSparkCast)
+                  .hasError());
+}
+
 TEST(DateTimeUtilTest, fromTimestampWithTimezoneString) {
+  EXPECT_EQ(
+      parseTimestampWithTimezone(
+          "1970-01-01 10:20 ", TimestampParseMode::kSparkCast),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(37'200, 0), nullptr, std::nullopt}));
   // -1 means no timezone information.
   auto expected =
       (ParsedTimestampWithTimeZone{Timestamp(0, 0), nullptr, std::nullopt});
@@ -487,12 +576,34 @@ TEST(DateTimeUtilTest, fromTimestampWithTimezoneString) {
       (ParsedTimestampWithTimeZone{
           Timestamp(60, 0), tz::locateZone("UTC"), std::nullopt}));
 
+  for (const auto mode :
+       {TimestampParseMode::kPrestoCast, TimestampParseMode::kSparkCast}) {
+    EXPECT_EQ(
+        parseTimestampWithTimezone(
+            "1970-01-01 00:00:01 America/Los_Angeles", mode),
+        (ParsedTimestampWithTimeZone{
+            Timestamp(1, 0),
+            tz::locateZone("America/Los_Angeles"),
+            std::nullopt}));
+    EXPECT_EQ(
+        parseTimestampWithTimezone("1970-01-01 00:00:01 US/Pacific", mode),
+        (ParsedTimestampWithTimeZone{
+            Timestamp(1, 0), tz::locateZone("US/Pacific"), std::nullopt}));
+  }
+  // Presto's case-insensitive timezone lookup remains unchanged.
   EXPECT_EQ(
-      parseTimestampWithTimezone("1970-01-01 00:00:01 America/Los_Angeles"),
+      parseTimestampWithTimezone(
+          "1970-01-01 00:00:01 america/los_angeles",
+          TimestampParseMode::kPrestoCast),
       (ParsedTimestampWithTimeZone{
           Timestamp(1, 0),
           tz::locateZone("America/Los_Angeles"),
           std::nullopt}));
+  EXPECT_EQ(
+      parseTimestampWithTimezone(
+          "2016-12-31T23:59:60Z", TimestampParseMode::kIso8601),
+      (ParsedTimestampWithTimeZone{
+          Timestamp(1'483'228'800, 0), tz::locateZone("UTC"), std::nullopt}));
 
   EXPECT_EQ(
       parseTimestampWithTimezone("1970-01-01 Pacific/Fiji"),

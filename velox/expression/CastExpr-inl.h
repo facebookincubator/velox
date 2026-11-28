@@ -232,6 +232,20 @@ void CastExpr::applyCastKernel(
 
     // Optimize empty input strings casting by avoiding throwing exceptions.
     if constexpr (is_string_kind(FromKind)) {
+      if constexpr (ToKind == TypeKind::TIMESTAMP) {
+        if (inputRowValue.empty()) {
+          setError("Empty string");
+          return;
+        }
+        // Timestamp parsers own their whitespace rules. Spark needs the
+        // original input to distinguish a leading 'T' from whitespace + 'T'.
+        const bool adjustTimezone =
+            !result->type()->equivalent(*TIMESTAMP_UTC());
+        const auto castResult =
+            hooks_->castStringToTimestamp(inputRowValue, adjustTimezone);
+        setResultOrStatus(castResult, row);
+        return;
+      }
       if constexpr (
           TypeTraits<ToKind>::isPrimitiveType &&
           TypeTraits<ToKind>::isFixedWidth) {
@@ -240,14 +254,6 @@ void CastExpr::applyCastKernel(
           setError("Empty string");
           return;
         }
-      }
-      if constexpr (ToKind == TypeKind::TIMESTAMP) {
-        const bool adjustTimezone =
-            !result->type()->equivalent(*TIMESTAMP_UTC());
-        const auto castResult =
-            hooks_->castStringToTimestamp(inputRowValue, adjustTimezone);
-        setResultOrStatus(castResult, row);
-        return;
       }
       if constexpr (ToKind == TypeKind::REAL) {
         const auto castResult = hooks_->castStringToReal(inputRowValue);

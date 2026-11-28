@@ -48,7 +48,8 @@ class CastHooks {
  public:
   virtual ~CastHooks() = default;
 
-  /// Parses a string to a timestamp. When 'adjustTimezone' is true, applies
+  /// Parses an untrimmed string to a timestamp. The hook handles whitespace
+  /// according to its parsing rules. When 'adjustTimezone' is true, applies
   /// the session timezone to the parsed result. When false, the parsed
   /// timestamp fields are stored as-is, not subject to session timezone
   /// adjustment (used for TIMESTAMP UTC casts).
