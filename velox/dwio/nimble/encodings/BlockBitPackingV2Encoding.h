@@ -47,9 +47,13 @@
 // Stores integer data in fixed-size blocks (default 1024 rows), each with its
 // own baseline and bit width. Adapted from Impulse's per-block bitpacking
 // approach for better compression when value ranges vary across the stream.
-// Every block holds exactly blockSize rows except the last one, which holds
-// the remaining rows. So row r lives in block r / blockSize, and no per-stream
-// row count other than the prefix row count is stored.
+// Two layouts share this implementation:
+// - kV2 (EncodingType::BlockBitPackingV2): every block holds exactly
+//   blockSize rows except the last one, which holds the remaining rows. So
+//   row r lives in block r / blockSize.
+// - kV1 (EncodingType::BlockBitPacking, deprecated::BlockBitPackingEncoding):
+//   the header also stores the row count of the first block, which may be
+//   shorter than blockSize.
 //
 // Layout after the encoding prefix:
 //   compressionType   uint8   compression of the packed block payload.
@@ -60,6 +64,7 @@
 //                     0 = constant block, 255 = raw block, else bit width.
 //   blockOffsets      varint size + nested encoding, one uint32 per block:
 //                     byte offset of the block in the packed payload.
+//   firstBlockRows    varint  kV1 only: rows in the first block.
 //   packed payload    all blocks back to back.
 //
 // For example, 2500 rows with blockSize 1024 give three blocks of 1024, 1024
@@ -67,11 +72,15 @@
 
 namespace facebook::nimble {
 
-template <typename T>
-class BlockBitPackingV2EncodingView;
+/// Header layout of a BlockBitPacking stream. kV1 also stores the row count of
+/// the first block.
+enum class BlockBitPackingLayout : uint8_t { kV1, kV2 };
 
-template <typename T>
-class BlockBitPackingV2Encoding final
+template <typename T, BlockBitPackingLayout kLayout>
+class BlockBitPackingEncodingViewImpl;
+
+template <typename T, BlockBitPackingLayout kLayout>
+class BlockBitPackingEncodingImpl final
     : public TypedEncoding<T, typename TypeTraits<T>::physicalType> {
  public:
   using cppDataType = T;
@@ -87,13 +96,13 @@ class BlockBitPackingV2Encoding final
   static constexpr uint32_t kMaxBlockCount =
       std::numeric_limits<uint16_t>::max();
 
-  BlockBitPackingV2Encoding(
+  BlockBitPackingEncodingImpl(
       velox::memory::MemoryPool& pool,
       std::string_view data,
       const std::function<void*(uint32_t)>& stringBufferFactory,
       const Encoding::Options& options = {});
 
-  ~BlockBitPackingV2Encoding() override {
+  ~BlockBitPackingEncodingImpl() override {
     this->releaseBuffer(uncompressedData_);
     this->releaseVectorBuffer(buffer_);
     this->releaseVectorBuffer(bitWidths_);
@@ -171,12 +180,14 @@ class BlockBitPackingV2Encoding final
     const auto baselinesSize = estimateMetadataSize<physicalType>(numBlocks);
     const auto bitWidthsSize = estimateMetadataSize<uint8_t>(numBlocks);
     const auto offsetsSize = estimateMetadataSize<uint32_t>(numBlocks);
+    const auto firstBlockRows = std::min<uint32_t>(blockSize, rowCount);
     const uint64_t metadataSize = headerSize(
                                       blockSize,
                                       numBlocks,
                                       static_cast<uint32_t>(baselinesSize),
                                       static_cast<uint32_t>(bitWidthsSize),
-                                      static_cast<uint32_t>(offsetsSize)) +
+                                      static_cast<uint32_t>(offsetsSize),
+                                      firstBlockRows) +
         baselinesSize + bitWidthsSize + offsetsSize;
     return EncodingPrefix::serializedSize(rowCount, /*useVarint=*/false) +
         metadataSize + packedSize;
@@ -184,8 +195,35 @@ class BlockBitPackingV2Encoding final
 
   std::string debugString(int offset) const final;
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
-  friend class BlockBitPackingV2EncodingView<T>;
+  friend class BlockBitPackingEncodingViewImpl<T, kLayout>;
+
+  // Whether the header stores the row count of the first block, as kV1 does.
+  static constexpr bool kHasFirstBlockRows =
+      kLayout == BlockBitPackingLayout::kV1;
+
+  // Encoding type written in the prefix of a stream of this layout.
+  static constexpr EncodingType kEncodingType = kHasFirstBlockRows
+      ? EncodingType::BlockBitPacking
+      : EncodingType::BlockBitPackingV2;
+
+  // Identifies the nested metadata encodings of this layout during encoding
+  // selection.
+  using Identifiers = std::conditional_t<
+      kHasFirstBlockRows,
+      EncodingIdentifiers::BlockBitPacking,
+      EncodingIdentifiers::BlockBitPackingV2>;
+
+  // Reads the block layout, the per-block metadata and the packed data of
+  // `data`.
+  void bindLayout(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory);
 
   struct BlockInfo {
     physicalType baseline;
@@ -263,10 +301,16 @@ class BlockBitPackingV2Encoding final
       uint32_t numBlocks,
       uint32_t baselinesSize,
       uint32_t bitWidthsSize,
-      uint32_t offsetsSize) {
-    return /*compressionType=*/sizeof(uint8_t) + varint::varintSize(blockSize) +
-        varint::varintSize(numBlocks) + varint::varintSize(baselinesSize) +
-        varint::varintSize(bitWidthsSize) + varint::varintSize(offsetsSize);
+      uint32_t offsetsSize,
+      uint32_t firstBlockRows) {
+    const uint32_t size = /*compressionType=*/sizeof(uint8_t) +
+        varint::varintSize(blockSize) + varint::varintSize(numBlocks) +
+        varint::varintSize(baselinesSize) + varint::varintSize(bitWidthsSize) +
+        varint::varintSize(offsetsSize);
+    if constexpr (kHasFirstBlockRows) {
+      return size + varint::varintSize(firstBlockRows);
+    }
+    return size;
   }
 
   template <typename MetadataType>
@@ -284,8 +328,8 @@ class BlockBitPackingV2Encoding final
     return std::min(trivialSize, fixedBitWidthSize);
   }
 
-  // Parsed stream metadata. lastBlockRows is derived from rowCount and
-  // blockSize; it is not serialized.
+  // Parsed stream metadata. lastBlockRows is derived from rowCount, blockSize
+  // and, for kV1, firstBlockRows; it is not serialized.
   struct Header {
     uint32_t rowCount{0};
     uint16_t blockSize{0};
@@ -294,14 +338,10 @@ class BlockBitPackingV2Encoding final
     std::string_view encodedBaselines;
     std::string_view encodedBitWidths;
     std::string_view encodedBlockOffsets;
+    // Rows in the first block. Zero for kV2, which does not store it.
+    uint32_t firstBlockRows{0};
     uint32_t lastBlockRows{0};
     std::string_view packedData;
-  };
-
-  struct BlockPosition {
-    uint32_t blockIndex{0};
-    uint32_t rowOffset{0};
-    uint32_t rowCount{0};
   };
 
   static Header parseHeader(
@@ -329,8 +369,18 @@ class BlockBitPackingV2Encoding final
     const auto blockOffsetsSize = varint::readVarint32(&pos);
     source.encodedBlockOffsets = {pos, blockOffsetsSize};
     pos += blockOffsetsSize;
-    source.lastBlockRows =
-        source.rowCount - (source.numBlocks - 1) * source.blockSize;
+    if constexpr (kHasFirstBlockRows) {
+      source.firstBlockRows = varint::readVarint32(&pos);
+      NIMBLE_CHECK_GT(source.firstBlockRows, 0);
+      NIMBLE_CHECK_LE(source.firstBlockRows, source.blockSize);
+      NIMBLE_CHECK_LE(source.firstBlockRows, source.rowCount);
+      source.lastBlockRows = source.numBlocks == 1 ? source.firstBlockRows
+                                                   : source.rowCount -
+              source.firstBlockRows - (source.numBlocks - 2) * source.blockSize;
+    } else {
+      source.lastBlockRows =
+          source.rowCount - (source.numBlocks - 1) * source.blockSize;
+    }
     NIMBLE_CHECK_GT(source.lastBlockRows, 0);
     NIMBLE_CHECK_LE(source.lastBlockRows, source.blockSize);
 
@@ -383,7 +433,13 @@ class BlockBitPackingV2Encoding final
     }
   }
 
+  // A kV1 stream, or a slice of one, can have a short first block.
   static uint32_t blockRowCount(const Header& header, uint32_t blockIndex) {
+    if constexpr (kHasFirstBlockRows) {
+      if (blockIndex == 0) {
+        return header.firstBlockRows;
+      }
+    }
     if (blockIndex == header.numBlocks - 1) {
       return header.lastBlockRows;
     }
@@ -391,37 +447,44 @@ class BlockBitPackingV2Encoding final
   }
 
   // Returns the number of rows in the given block (may be less than
-  // blockSize_ for the last block).
+  // blockSize for the last block, and for the first block of kV1).
   uint32_t blockRowCount(uint32_t blockIndex) const {
-    if (blockIndex == numBlocks_ - 1) {
-      return lastBlockRows_;
-    }
-    return blockSize_;
+    return blockRowCount(header_, blockIndex);
   }
 
+  // Returns the row offset of a block. A kV1 first block, also of a sliced
+  // stream, may be shorter than blockSize.
   static uint32_t blockRowOffset(const Header& header, uint32_t blockIndex) {
+    if constexpr (kHasFirstBlockRows) {
+      if (blockIndex == 0) {
+        return 0;
+      }
+      return header.firstBlockRows + (blockIndex - 1) * header.blockSize;
+    }
     return blockIndex * header.blockSize;
   }
 
-  static BlockPosition blockPosition(const Header& header, uint32_t row) {
-    const auto index = row / header.blockSize;
+  // Returns the block that holds 'row'.
+  static uint32_t blockIndex(const Header& header, uint32_t row) {
+    uint32_t index{0};
+    if constexpr (kHasFirstBlockRows) {
+      if (row < header.firstBlockRows) {
+        return 0;
+      }
+      index = 1 + (row - header.firstBlockRows) / header.blockSize;
+    } else {
+      index = row / header.blockSize;
+    }
     NIMBLE_CHECK_LT(index, header.numBlocks);
-    return {
-        .blockIndex = index,
-        .rowOffset = row % header.blockSize,
-        .rowCount = index == header.numBlocks - 1 ? header.lastBlockRows
-                                                  : header.blockSize,
-    };
+    return index;
   }
 
   uint32_t blockIndex(uint32_t row) const {
-    const auto blockIndex = row / blockSize_;
-    NIMBLE_CHECK_LT(blockIndex, numBlocks_);
-    return blockIndex;
+    return blockIndex(header_, row);
   }
 
   uint32_t blockRowOffset(uint32_t blockIndex) const {
-    return blockIndex * blockSize_;
+    return blockRowOffset(header_, blockIndex);
   }
 
   // Returns the byte size of a block payload for the selected storage mode.
@@ -435,7 +498,7 @@ class BlockBitPackingV2Encoding final
     return static_cast<uint32_t>(FixedBitArray::bufferSize(rowCount, bitWidth));
   }
 
-  // Writes a BlockBitPackingV2 encoding that covers the source's blocks
+  // Writes an encoding of this layout that covers the source's blocks
   // [firstBlock, firstBlock + numBlocks) whole -- baselines / bit widths
   // structurally sliced, block offsets rebased and re-encoded, packed payload
   // memcpy'd verbatim from the source.
@@ -447,8 +510,9 @@ class BlockBitPackingV2Encoding final
   // wraps the result in a SliceEncoding whose leadingSkipRows and length
   // trim the boundary-block overhang at decode time.
   //
-  // Only the source's last block can be short, and the touched blocks are
-  // contiguous, so the emitted encoding again has at most its last block short.
+  // For kV2 only the source's last block can be short, and the touched blocks
+  // are contiguous, so the emitted encoding again has at most its last block
+  // short. For kV1 the emitted header records the first touched block's rows.
   static std::string_view sliceBlockRange(
       const Header& source,
       std::string_view packedData,
@@ -501,12 +565,12 @@ class BlockBitPackingV2Encoding final
       Buffer& scratchBuffer,
       const Encoding::Options& options);
 
-  uint16_t blockSize_;
-  uint16_t numBlocks_;
+  // The parsed header, which gives the block of any row, and the row count and
+  // row offset of any block.
+  Header header_;
   Vector<physicalType> baselines_;
   Vector<uint8_t> bitWidths_;
   Vector<uint32_t> blockOffsets_;
-  uint32_t lastBlockRows_{0};
   const char* packedData_;
   uint32_t row_ = 0;
   velox::BufferPtr uncompressedData_;
@@ -517,8 +581,8 @@ class BlockBitPackingV2Encoding final
 // End of class declaration. Implementations follow.
 //
 
-template <typename T>
-std::optional<uint64_t> BlockBitPackingV2Encoding<T>::estimateSize(
+template <typename T, BlockBitPackingLayout kLayout>
+std::optional<uint64_t> BlockBitPackingEncodingImpl<T, kLayout>::estimateSize(
     std::span<const physicalType> values,
     uint16_t blockSize) {
   const auto rowCount = static_cast<uint32_t>(values.size());
@@ -535,20 +599,22 @@ std::optional<uint64_t> BlockBitPackingV2Encoding<T>::estimateSize(
   const auto baselinesSize = estimateMetadataSize<physicalType>(numBlocks);
   const auto bitWidthsSize = estimateMetadataSize<uint8_t>(numBlocks);
   const auto offsetsSize = estimateMetadataSize<uint32_t>(numBlocks);
+  const auto firstBlockRows = std::min<uint32_t>(blockSize, rowCount);
   const uint64_t metadataSize = headerSize(
                                     blockSize,
                                     numBlocks,
                                     static_cast<uint32_t>(baselinesSize),
                                     static_cast<uint32_t>(bitWidthsSize),
-                                    static_cast<uint32_t>(offsetsSize)) +
+                                    static_cast<uint32_t>(offsetsSize),
+                                    firstBlockRows) +
       baselinesSize + bitWidthsSize + offsetsSize;
   return EncodingPrefix::serializedSize(rowCount, /*useVarint=*/false) +
       metadataSize + packedSize;
 }
 
-template <typename T>
-typename BlockBitPackingV2Encoding<T>::BlockInfo
-BlockBitPackingV2Encoding<T>::makeBlockInfo(
+template <typename T, BlockBitPackingLayout kLayout>
+typename BlockBitPackingEncodingImpl<T, kLayout>::BlockInfo
+BlockBitPackingEncodingImpl<T, kLayout>::makeBlockInfo(
     std::span<const physicalType> values,
     uint32_t start,
     uint32_t count) {
@@ -583,8 +649,8 @@ BlockBitPackingV2Encoding<T>::makeBlockInfo(
       false};
 }
 
-template <typename T>
-BlockBitPackingV2Encoding<T>::BlockBitPackingV2Encoding(
+template <typename T, BlockBitPackingLayout kLayout>
+BlockBitPackingEncodingImpl<T, kLayout>::BlockBitPackingEncodingImpl(
     velox::memory::MemoryPool& pool,
     std::string_view data,
     const std::function<void*(uint32_t)>& stringBufferFactory,
@@ -595,49 +661,66 @@ BlockBitPackingV2Encoding<T>::BlockBitPackingV2Encoding(
       blockOffsets_{this->template getVectorBuffer<uint32_t>()},
       packedData_{nullptr},
       buffer_{&pool} {
-  const auto source = parseHeader(data, options);
-  blockSize_ = source.blockSize;
-  numBlocks_ = source.numBlocks;
-  lastBlockRows_ = source.lastBlockRows;
+  bindLayout(data, stringBufferFactory);
+}
 
-  NIMBLE_CHECK(blockSize_ > 0 && blockSize_ <= kMaxBlockSize);
+template <typename T, BlockBitPackingLayout kLayout>
+void BlockBitPackingEncodingImpl<T, kLayout>::bindLayout(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  auto& pool = *this->pool_;
+  const auto& options = this->options_;
+  header_ = parseHeader(data, options);
 
-  baselines_.resize(numBlocks_);
-  bitWidths_.resize(numBlocks_);
-  blockOffsets_.resize(numBlocks_);
+  NIMBLE_CHECK_GT(header_.blockSize, 0);
+  NIMBLE_CHECK_LE(header_.blockSize, kMaxBlockSize);
+
+  baselines_.resize(header_.numBlocks);
+  bitWidths_.resize(header_.numBlocks);
+  blockOffsets_.resize(header_.numBlocks);
 
   readMetadataStream(
-      source.encodedBaselines, baselines_, pool, stringBufferFactory, options);
+      header_.encodedBaselines, baselines_, pool, stringBufferFactory, options);
   readMetadataStream(
-      source.encodedBitWidths, bitWidths_, pool, stringBufferFactory, options);
+      header_.encodedBitWidths, bitWidths_, pool, stringBufferFactory, options);
   readMetadataStream(
-      source.encodedBlockOffsets,
+      header_.encodedBlockOffsets,
       blockOffsets_,
       pool,
       stringBufferFactory,
       options);
 
   packedData_ =
-      packedDataSource(source, uncompressedData_, &pool, options).data();
+      packedDataSource(header_, uncompressedData_, &pool, options).data();
 }
 
-template <typename T>
+template <typename T, BlockBitPackingLayout kLayout>
+bool BlockBitPackingEncodingImpl<T, kLayout>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  this->releaseBuffer(uncompressedData_);
+  row_ = 0;
+  bindLayout(data, stringBufferFactory);
+  return true;
+}
+
+template <typename T, BlockBitPackingLayout kLayout>
 template <typename MetadataType>
-void BlockBitPackingV2Encoding<T>::readMetadataStream(
+void BlockBitPackingEncodingImpl<T, kLayout>::readMetadataStream(
     std::string_view encoded,
     Vector<MetadataType>& output,
     velox::memory::MemoryPool& pool,
     const std::function<void*(uint32_t)>& stringBufferFactory,
     const Encoding::Options& options) const {
-  NIMBLE_CHECK_GT(numBlocks_, 0);
+  NIMBLE_CHECK_GT(header_.numBlocks, 0);
   EncodingFactory()
       .create(pool, encoded, stringBufferFactory, options)
-      ->materialize(numBlocks_, output.data());
+      ->materialize(header_.numBlocks, output.data());
 }
 
-template <typename T>
+template <typename T, BlockBitPackingLayout kLayout>
 template <typename OutputVector>
-void BlockBitPackingV2Encoding<T>::readMetadataRange(
+void BlockBitPackingEncodingImpl<T, kLayout>::readMetadataRange(
     std::string_view encoded,
     uint32_t offset,
     uint32_t count,
@@ -654,19 +737,19 @@ void BlockBitPackingV2Encoding<T>::readMetadataRange(
   encoding->materialize(count, output.data());
 }
 
-template <typename T>
-void BlockBitPackingV2Encoding<T>::reset() {
+template <typename T, BlockBitPackingLayout kLayout>
+void BlockBitPackingEncodingImpl<T, kLayout>::reset() {
   row_ = 0;
 }
 
-template <typename T>
-void BlockBitPackingV2Encoding<T>::skip(uint32_t rowCount) {
+template <typename T, BlockBitPackingLayout kLayout>
+void BlockBitPackingEncodingImpl<T, kLayout>::skip(uint32_t rowCount) {
   row_ += rowCount;
 }
 
-template <typename T>
-typename BlockBitPackingV2Encoding<T>::physicalType
-BlockBitPackingV2Encoding<T>::readSingleValue(uint32_t row) const {
+template <typename T, BlockBitPackingLayout kLayout>
+typename BlockBitPackingEncodingImpl<T, kLayout>::physicalType
+BlockBitPackingEncodingImpl<T, kLayout>::readSingleValue(uint32_t row) const {
   const auto blockIndex = this->blockIndex(row);
   const auto blockOffset = row - blockRowOffset(blockIndex);
   const auto bitWidth = bitWidths_[blockIndex];
@@ -687,8 +770,8 @@ BlockBitPackingV2Encoding<T>::readSingleValue(uint32_t row) const {
   return static_cast<physicalType>(fba.get(blockOffset)) + baseline;
 }
 
-template <typename T>
-void BlockBitPackingV2Encoding<T>::materializeBlockRange(
+template <typename T, BlockBitPackingLayout kLayout>
+void BlockBitPackingEncodingImpl<T, kLayout>::materializeBlockRange(
     uint32_t blockIndex,
     uint32_t blockValueOffset,
     uint32_t blockValueCount,
@@ -728,8 +811,8 @@ void BlockBitPackingV2Encoding<T>::materializeBlockRange(
   }
 }
 
-template <typename T>
-void BlockBitPackingV2Encoding<T>::fullUnpack(
+template <typename T, BlockBitPackingLayout kLayout>
+void BlockBitPackingEncodingImpl<T, kLayout>::fullUnpack(
     const uint8_t* input,
     physicalType* output,
     uint32_t numRows,
@@ -797,8 +880,8 @@ void BlockBitPackingV2Encoding<T>::fullUnpack(
   }
 }
 
-template <typename T>
-void BlockBitPackingV2Encoding<T>::materialize(
+template <typename T, BlockBitPackingLayout kLayout>
+void BlockBitPackingEncodingImpl<T, kLayout>::materialize(
     uint32_t rowCount,
     void* buffer) {
   auto* output = static_cast<physicalType*>(buffer);
@@ -820,9 +903,9 @@ void BlockBitPackingV2Encoding<T>::materialize(
   row_ += rowCount;
 }
 
-template <typename T>
+template <typename T, BlockBitPackingLayout kLayout>
 template <typename V>
-void BlockBitPackingV2Encoding<T>::readWithVisitor(
+void BlockBitPackingEncodingImpl<T, kLayout>::readWithVisitor(
     V& visitor,
     ReadWithVisitorParams& params) {
   using OutputType = detail::ValueType<typename V::DataType>;
@@ -858,9 +941,9 @@ void BlockBitPackingV2Encoding<T>::readWithVisitor(
       });
 }
 
-template <typename T>
+template <typename T, BlockBitPackingLayout kLayout>
 template <bool kScatter, typename V>
-void BlockBitPackingV2Encoding<T>::bulkScan(
+void BlockBitPackingEncodingImpl<T, kLayout>::bulkScan(
     V& visitor,
     vector_size_t currentRow,
     const vector_size_t* selectedRows,
@@ -1016,8 +1099,8 @@ void BlockBitPackingV2Encoding<T>::bulkScan(
   visitor.setRowIndex(visitor.numRows());
 }
 
-template <typename T>
-std::string_view BlockBitPackingV2Encoding<T>::encode(
+template <typename T, BlockBitPackingLayout kLayout>
+std::string_view BlockBitPackingEncodingImpl<T, kLayout>::encode(
     EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
     Buffer& buffer,
@@ -1029,12 +1112,13 @@ std::string_view BlockBitPackingV2Encoding<T>::encode(
   const uint16_t blockSize = options.blockBitPackingBlockSize;
   const auto rowCount = static_cast<uint32_t>(values.size());
   NIMBLE_CHECK_GT(
-      rowCount, 0, "BlockBitPackingV2 cannot encode empty streams.");
+      rowCount, 0, "{} cannot encode empty streams.", kEncodingType);
   const uint32_t numBlocks = velox::bits::divRoundUp(rowCount, blockSize);
   NIMBLE_CHECK_LE(
       numBlocks,
       kMaxBlockCount,
-      "Row count too large for BlockBitPackingV2 encoding.");
+      "Row count too large for {} encoding.",
+      kEncodingType);
 
   ScopedVector<BlockInfo> blocks{numBlocks, pool, options.bufferPool};
 
@@ -1071,7 +1155,7 @@ std::string_view BlockBitPackingV2Encoding<T>::encode(
         return pos;
       }};
 
-  // BlockBitPackingV2 routes the per-block metadata (baselines, bit widths,
+  // BlockBitPacking routes the per-block metadata (baselines, bit widths,
   // data offsets) through recursive encoding selection so Nimble can pick the
   // best encoding for each (e.g. Constant/Delta for correlated baselines, Delta
   // for the ascending offsets). The packed block data stays raw (still
@@ -1092,29 +1176,31 @@ std::string_view BlockBitPackingV2Encoding<T>::encode(
   ScopedEncodingBuffer tempBuffer{pool, options.encodingBufferPool};
   const std::string_view encodedBaselines =
       selection.template encodeNested<physicalType>(
-          EncodingIdentifiers::BlockBitPackingV2::Baselines,
+          Identifiers::Baselines,
           std::span<const physicalType>{baselines.data(), baselines.size()},
           tempBuffer.get(),
           options);
   const std::string_view encodedBitWidths =
       selection.template encodeNested<uint8_t>(
-          EncodingIdentifiers::BlockBitPackingV2::BitWidths,
+          Identifiers::BitWidths,
           std::span<const uint8_t>{bitWidths.data(), bitWidths.size()},
           tempBuffer.get(),
           options);
   const std::string_view encodedOffsets =
       selection.template encodeNested<uint32_t>(
-          EncodingIdentifiers::BlockBitPackingV2::Offsets,
+          Identifiers::Offsets,
           std::span<const uint32_t>{blockOffsets.data(), blockOffsets.size()},
           tempBuffer.get(),
           options);
+  const auto firstBlockRows = std::min<uint32_t>(blockSize, rowCount);
 
-  const uint32_t headerSize = BlockBitPackingV2Encoding<T>::headerSize(
+  const uint32_t headerSize = BlockBitPackingEncodingImpl::headerSize(
       blockSize,
       numBlocks,
       static_cast<uint32_t>(encodedBaselines.size()),
       static_cast<uint32_t>(encodedBitWidths.size()),
-      static_cast<uint32_t>(encodedOffsets.size()));
+      static_cast<uint32_t>(encodedOffsets.size()),
+      firstBlockRows);
   const uint32_t encodingSize = Encoding::serializePrefixSize(
                                     rowCount, options.useVarintRowCount) +
       headerSize +
@@ -1125,7 +1211,7 @@ std::string_view BlockBitPackingV2Encoding<T>::encode(
   char* reserved = buffer.reserve(encodingSize);
   char* pos = reserved;
   Encoding::serializePrefix(
-      EncodingType::BlockBitPackingV2,
+      kEncodingType,
       TypeTraits<T>::dataType,
       rowCount,
       options.useVarintRowCount,
@@ -1137,14 +1223,17 @@ std::string_view BlockBitPackingV2Encoding<T>::encode(
   encoding::writeVarintString(encodedBaselines, pos);
   encoding::writeVarintString(encodedBitWidths, pos);
   encoding::writeVarintString(encodedOffsets, pos);
+  if constexpr (kHasFirstBlockRows) {
+    varint::writeVarint(firstBlockRows, &pos);
+  }
   compressionEncoder.write(pos);
 
   NIMBLE_CHECK_EQ(encodingSize, pos - reserved, "Encoding size mismatch.");
   return {reserved, encodingSize};
 }
 
-template <typename T>
-std::string_view BlockBitPackingV2Encoding<T>::slice(
+template <typename T, BlockBitPackingLayout kLayout>
+std::string_view BlockBitPackingEncodingImpl<T, kLayout>::slice(
     std::string_view encoded,
     uint32_t offset,
     uint32_t length,
@@ -1164,15 +1253,16 @@ std::string_view BlockBitPackingV2Encoding<T>::slice(
   const auto packedData =
       packedDataSource(source, uncompressedSourceData, pool, options);
 
-  const auto firstBlock = blockPosition(source, offset).blockIndex;
-  const auto lastBlock = blockPosition(source, offset + length - 1).blockIndex;
+  const auto firstBlock = blockIndex(source, offset);
+  const auto lastBlock = blockIndex(source, offset + length - 1);
   const auto numBlocks = lastBlock - firstBlock + 1;
   NIMBLE_CHECK_LE(
       numBlocks,
       kMaxBlockCount,
-      "Row count too large for BlockBitPackingV2 encoding.");
+      "Row count too large for {} encoding.",
+      kEncodingType);
 
-  // Write a BlockBitPackingV2 that covers the touched source blocks whole.
+  // Write an encoding that covers the touched source blocks whole.
   // When the request lines up with block boundaries this is the final output;
   // when either boundary is mid-block, the output covers more rows than
   // requested and a SliceEncoding wrapper trims the overhang at decode time.
@@ -1198,8 +1288,8 @@ std::string_view BlockBitPackingV2Encoding<T>::slice(
       options);
 }
 
-template <typename T>
-std::string_view BlockBitPackingV2Encoding<T>::sliceBlockRange(
+template <typename T, BlockBitPackingLayout kLayout>
+std::string_view BlockBitPackingEncodingImpl<T, kLayout>::sliceBlockRange(
     const Header& source,
     std::string_view packedData,
     uint32_t rowCount,
@@ -1256,12 +1346,14 @@ std::string_view BlockBitPackingV2Encoding<T>::sliceBlockRange(
       scopedBuffer.get(),
       options);
 
-  const uint32_t headerSize = BlockBitPackingV2Encoding<T>::headerSize(
+  const auto firstBlockRows = blockRowCount(source, firstBlock);
+  const uint32_t headerSize = BlockBitPackingEncodingImpl::headerSize(
       source.blockSize,
       numBlocks,
       static_cast<uint32_t>(encodedBaselines.size()),
       static_cast<uint32_t>(encodedBitWidths.size()),
-      static_cast<uint32_t>(encodedOffsets.size()));
+      static_cast<uint32_t>(encodedOffsets.size()),
+      firstBlockRows);
   const uint32_t encodingSize = Encoding::serializePrefixSize(
                                     rowCount, options.useVarintRowCount) +
       headerSize +
@@ -1272,7 +1364,7 @@ std::string_view BlockBitPackingV2Encoding<T>::sliceBlockRange(
   char* reserved = buffer.reserve(encodingSize);
   char* pos = reserved;
   Encoding::serializePrefix(
-      EncodingType::BlockBitPackingV2,
+      kEncodingType,
       TypeTraits<T>::dataType,
       rowCount,
       options.useVarintRowCount,
@@ -1283,6 +1375,9 @@ std::string_view BlockBitPackingV2Encoding<T>::sliceBlockRange(
   encoding::writeVarintString(encodedBaselines, pos);
   encoding::writeVarintString(encodedBitWidths, pos);
   encoding::writeVarintString(encodedOffsets, pos);
+  if constexpr (kHasFirstBlockRows) {
+    varint::writeVarint(firstBlockRows, &pos);
+  }
 
   // Touched blocks are contiguous in the source's packedData, so a single
   // memcpy carries the payload -- constant blocks contribute 0 bytes, raw
@@ -1293,16 +1388,23 @@ std::string_view BlockBitPackingV2Encoding<T>::sliceBlockRange(
   return {reserved, encodingSize};
 }
 
-template <typename T>
-std::string BlockBitPackingV2Encoding<T>::debugString(int offset) const {
+template <typename T, BlockBitPackingLayout kLayout>
+std::string BlockBitPackingEncodingImpl<T, kLayout>::debugString(
+    int offset) const {
   return fmt::format(
       "{}{}<{}> rowCount={} blockSize={} numBlocks={}",
       std::string(offset, ' '),
       toString(Encoding::encodingType()),
       toString(Encoding::dataType()),
       Encoding::rowCount(),
-      blockSize_,
-      numBlocks_);
+      header_.blockSize,
+      header_.numBlocks);
 }
+
+/// The second BlockBitPacking layout (EncodingType::BlockBitPackingV2), whose
+/// blocks all hold blockSize rows except the last one.
+template <typename T>
+using BlockBitPackingV2Encoding =
+    BlockBitPackingEncodingImpl<T, BlockBitPackingLayout::kV2>;
 
 } // namespace facebook::nimble

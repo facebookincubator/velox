@@ -134,34 +134,7 @@ class SliceEncoding final
         valueDelta_{
             readValueDelta(data, this->dataOffset() + sizeof(uint32_t))},
         inner_{readInner(data, this->dataOffset())} {
-    // A non-zero delta on a physical type where the shift cannot be applied
-    // must never appear on the wire. wrap() blocks it at write time; a mismatch
-    // here means the payload was corrupted or produced by a mismatched writer.
-    if constexpr (!kSupportsValueDelta) {
-      NIMBLE_CHECK_EQ(
-          valueDelta_,
-          0,
-          "SliceEncoding value delta requires a non-bool integer physical type.");
-    } else {
-      // Accept any delta whose static_cast<physicalType> preserves the intent:
-      // the domain spans from the signed min of the physical type (so negative
-      // deltas that wrap to the top of the unsigned physical range still round-
-      // trip) up to the unsigned max. A wire delta outside this range aliases
-      // silently at materialize() -- reject it so a mismatched writer surfaces
-      // as a hard error instead of a mangled shift. Skipped when the physical
-      // type is already 64 bits wide because valueDelta_ (int64_t) cannot
-      // overflow its own type.
-      if constexpr (sizeof(physicalType) < sizeof(int64_t)) {
-        using signedPhysicalType = std::make_signed_t<physicalType>;
-        NIMBLE_CHECK(
-            valueDelta_ >=
-                    static_cast<int64_t>(
-                        std::numeric_limits<signedPhysicalType>::min()) &&
-                valueDelta_ <= static_cast<int64_t>(
-                                   std::numeric_limits<physicalType>::max()),
-            "SliceEncoding valueDelta does not fit in the physical type.");
-      }
-    }
+    checkValueDelta();
     reset();
   }
 
@@ -347,6 +320,23 @@ class SliceEncoding final
     return {reserved, encodingSize};
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final {
+    stringBufferFactory_ = stringBufferFactory;
+    sliceOffset_ = readSliceOffset(data, this->dataOffset());
+    valueDelta_ = readValueDelta(data, this->dataOffset() + sizeof(uint32_t));
+    inner_ = readInner(data, this->dataOffset());
+    checkValueDelta();
+    encoding_ =
+        this->rebindChild(inner_, stringBufferFactory_, std::move(encoding_));
+    if (sliceOffset_ > 0) {
+      encoding_->skip(sliceOffset_);
+    }
+    return true;
+  }
+
  private:
   // Only non-bool integer logical types can carry a shift: floats keep their
   // physical bits in an integer, but their arithmetic is not integer addition
@@ -381,18 +371,52 @@ class SliceEncoding final
     return {pos, static_cast<size_t>(data.data() + data.size() - pos)};
   }
 
-  const std::function<void*(uint32_t)> stringBufferFactory_;
-  const uint32_t sliceOffset_;
+  void checkValueDelta() const {
+    // A non-zero delta on a physical type where the shift cannot be applied
+    // must never appear on the wire. wrap() blocks it at write time; a mismatch
+    // here means the payload was corrupted or produced by a mismatched writer.
+    if constexpr (!kSupportsValueDelta) {
+      NIMBLE_CHECK_EQ(
+          valueDelta_,
+          0,
+          "SliceEncoding value delta requires a non-bool integer physical type.");
+    } else {
+      // Accept any delta whose static_cast<physicalType> preserves the intent:
+      // the domain spans from the signed min of the physical type (so negative
+      // deltas that wrap to the top of the unsigned physical range still round-
+      // trip) up to the unsigned max. A wire delta outside this range aliases
+      // silently at materialize() -- reject it so a mismatched writer surfaces
+      // as a hard error instead of a mangled shift. Skipped when the physical
+      // type is already 64 bits wide because valueDelta_ (int64_t) cannot
+      // overflow its own type.
+      if constexpr (sizeof(physicalType) < sizeof(int64_t)) {
+        using signedPhysicalType = std::make_signed_t<physicalType>;
+        NIMBLE_CHECK_GE(
+            valueDelta_,
+            static_cast<int64_t>(
+                std::numeric_limits<signedPhysicalType>::min()),
+            "SliceEncoding valueDelta does not fit in the physical type.");
+        NIMBLE_CHECK_LE(
+            valueDelta_,
+            static_cast<int64_t>(std::numeric_limits<physicalType>::max()),
+            "SliceEncoding valueDelta does not fit in the physical type.");
+      }
+    }
+  }
+
+  std::function<void*(uint32_t)> stringBufferFactory_;
+  uint32_t sliceOffset_;
   // Signed shift applied to every materialized value at decode time. Read
   // from the payload's zigzag varint after `sliceOffset_`. Held as int64_t so
   // negative deltas over any physical type width round-trip through wrap()
-  // without pre-truncation; the constructor validates that the stored delta
-  // fits the physical type before it is used. Always zero for physical types
-  // that cannot carry a shift (bool, non-integer).
-  const int64_t valueDelta_;
-  const std::string_view inner_;
-  // The only mutable member: reset() rebuilds the child rather than rewinding
-  // it, so this is reassigned on every reset().
+  // without pre-truncation; checkValueDelta() validates, at construction and
+  // on rebind, that the stored delta fits the physical type before it is used.
+  // Always zero for physical types that cannot carry a shift (bool,
+  // non-integer).
+  int64_t valueDelta_;
+  std::string_view inner_;
+  // reset() rebuilds the child rather than rewinding it, so this is
+  // reassigned on every reset().
   std::unique_ptr<Encoding> encoding_;
 };
 

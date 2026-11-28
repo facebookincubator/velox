@@ -74,6 +74,9 @@ struct TestParams {
   EncodingType streamSizesEncodingType{EncodingType::Trivial};
   // Max cached buffers per per-stream BufferPool. 0 disables pooling.
   size_t bufferPoolCapacity{velox::BufferPool::kDefaultCapacity};
+  // Sets DeserializerOptions::rebindEncodings, so each segment rebinds the
+  // encodings of the previous one instead of rebuilding them.
+  bool rebindEncodings{false};
 };
 
 class SerializationTest : public ::testing::TestWithParam<TestParams> {
@@ -111,6 +114,7 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
   DeserializerOptions deserializerOptions() const {
     return DeserializerOptions{
         .bufferPoolCapacity = bufferPoolCapacity(),
+        .rebindEncodings = GetParam().rebindEncodings,
     };
   }
 
@@ -362,6 +366,104 @@ class SerializationTest : public ::testing::TestWithParam<TestParams> {
 
 // Runs a test once per Serializer writer version.
 class SerializationVersionTest : public SerializationTest {};
+
+// One rebinding deserializer reads batches whose streams change encoding from
+// call to call: constant, few distinct values, all distinct, all null and
+// empty. Every format variant runs it.
+TEST_P(SerializationTest, encodingChangesAcrossCalls) {
+  auto type = velox::ROW({
+      {"id", velox::BIGINT()},
+      {"score", velox::DOUBLE()},
+      {"tag", velox::VARCHAR()},
+      {"flag", velox::BOOLEAN()},
+      {"ids", velox::ARRAY(velox::INTEGER())},
+      {"weights", velox::MAP(velox::INTEGER(), velox::REAL())},
+  });
+  velox::test::VectorMaker maker{pool_.get()};
+  SerializerOptions options{
+      .version = version(),
+      .compressionOptions = compressionOptions(),
+      .blobCompressionOptions = blobCompressionOptions(),
+      .streamIndicesEncodingType = streamSizesEncodingType(),
+      .streamSizesEncodingType = streamSizesEncodingType(),
+  };
+  Serializer serializer{options, type, pool_.get()};
+
+  const auto makeBatch = [&](velox::vector_size_t size, int shape) {
+    const auto value = [shape](velox::vector_size_t row) -> int64_t {
+      switch (shape) {
+        case 0:
+          return 7;
+        case 1:
+          return row % 3;
+        default:
+          return row * 1'000'003LL - 50'000;
+      }
+    };
+    const auto isNull = [shape](velox::vector_size_t row) {
+      return shape == 3 || (shape == 2 && row % 5 == 1);
+    };
+    std::vector<std::optional<std::string>> tags(size);
+    for (velox::vector_size_t row = 0; row < size; ++row) {
+      if (!isNull(row)) {
+        tags[row] = fmt::format("t{}", value(row));
+      }
+    }
+    return maker.rowVector(
+        {"id", "score", "tag", "flag", "ids", "weights"},
+        {
+            maker.flatVector<int64_t>(size, value, isNull),
+            maker.flatVector<double>(
+                size, [&](auto row) { return value(row) * 0.5; }, isNull),
+            maker.flatVectorNullable<std::string>(tags),
+            maker.flatVector<bool>(
+                size, [&](auto row) { return value(row) % 2 == 0; }, isNull),
+            maker.arrayVector<int32_t>(
+                size,
+                [&](auto row) { return shape == 0 ? 2 : row % 4; },
+                [&](auto index) { return value(index); },
+                isNull),
+            maker.mapVector<int32_t, float>(
+                size,
+                [&](auto row) { return shape == 1 ? 1 : row % 3; },
+                [](auto index) { return index; },
+                [&](auto index) { return value(index) * 0.25f; },
+                isNull),
+        });
+  };
+
+  auto deserializeOptions = deserializerOptions();
+  deserializeOptions.rebindEncodings = true;
+  Deserializer deserializer{
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+      pool_.get(),
+      deserializeOptions};
+  velox::VectorPtr output;
+  const std::vector<std::pair<velox::vector_size_t, int>> batches{
+      {100, 0},
+      {100, 1},
+      {300, 2},
+      {50, 3},
+      {100, 0},
+      {1, 2},
+      {200, 1},
+      {300, 2},
+      {100, 0}};
+  for (size_t i = 0; i < batches.size(); ++i) {
+    SCOPED_TRACE(fmt::format("batch {}", i));
+    const auto input = makeBatch(batches[i].first, batches[i].second);
+    const auto serialized =
+        serializer.serialize(input, OrderedRanges::of(0, input->size()));
+    deserializer.deserialize(serialized, output);
+    ASSERT_EQ(output->size(), input->size());
+    for (velox::vector_size_t row = 0; row < input->size(); ++row) {
+      ASSERT_TRUE(vectorEquals(input, output, row))
+          << "Content mismatch at row " << row
+          << "\nExpected: " << input->toString(row)
+          << "\nActual: " << output->toString(row);
+    }
+  }
+}
 
 TEST_P(SerializationTest, fuzzSimple) {
   auto type = velox::ROW({
@@ -1051,6 +1153,9 @@ std::string formatName(const ::testing::TestParamInfo<TestParams>& info) {
   } else if (
       info.param.bufferPoolCapacity != velox::BufferPool::kDefaultCapacity) {
     name += "_BufferPool" + std::to_string(info.param.bufferPoolCapacity);
+  }
+  if (info.param.rebindEncodings) {
+    name += "_Rebind";
   }
   return name;
 }
@@ -4082,17 +4187,25 @@ TEST_F(SerializationTest, legacyHeaderlessBlobs) {
                           std::string_view hex,
                           const velox::VectorPtr& expected) {
     const auto blob = folly::unhexlify(hex);
-    Deserializer deserializer{
-        convertToNimbleType(*type),
-        pool_.get(),
-        DeserializerOptions{.legacyHeaderless = true}};
-    velox::VectorPtr output;
-    deserializer.deserialize(blob, output);
-    ASSERT_EQ(output->size(), expected->size());
-    for (velox::vector_size_t i = 0; i < expected->size(); ++i) {
-      EXPECT_TRUE(vectorEquals(expected, output, i))
-          << "Expected: " << expected->toString(i)
-          << "\nActual: " << output->toString(i);
+    // A rebinding deserializer keeps its legacy streams across calls and must
+    // rebuild them for the next call.
+    for (const bool rebindEncodings : {false, true}) {
+      SCOPED_TRACE(fmt::format("rebindEncodings={}", rebindEncodings));
+      Deserializer deserializer{
+          convertToNimbleType(*type),
+          pool_.get(),
+          DeserializerOptions{
+              .legacyHeaderless = true, .rebindEncodings = rebindEncodings}};
+      for (int call = 0; call < 2; ++call) {
+        velox::VectorPtr output;
+        deserializer.deserialize(blob, output);
+        ASSERT_EQ(output->size(), expected->size());
+        for (velox::vector_size_t i = 0; i < expected->size(); ++i) {
+          EXPECT_TRUE(vectorEquals(expected, output, i))
+              << "Expected: " << expected->toString(i)
+              << "\nActual: " << output->toString(i);
+        }
+      }
     }
   };
 
@@ -8696,6 +8809,10 @@ INSTANTIATE_TEST_SUITE_P(
             .version = SerializationVersion::kSerialization,
             .streamSizesEncodingType = EncodingType::Varint,
             .bufferPoolCapacity = 0},
+        // Encodings rebound across segments and calls.
+        TestParams{
+            .version = SerializationVersion::kSerialization,
+            .rebindEncodings = true},
         // kBlob with the default Lz4 blob codec.
         TestParams{.version = SerializationVersion::kBlob},
         // kBlob with compressed streams and an uncompressed blob

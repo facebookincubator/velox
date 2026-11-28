@@ -342,6 +342,12 @@ struct DeserializerOptions {
   /// entirely (every encoding allocates and frees through MemoryPool).
   size_t bufferPoolCapacity{velox::BufferPool::kDefaultCapacity};
 
+  /// Keeps each stream's encodings across segments and deserialize calls and
+  /// rebinds them to the next segment (Encoding::rebind) instead of
+  /// rebuilding them. Saves the per-segment setup of many small segments, at
+  /// the cost of keeping the encodings resident between calls.
+  bool rebindEncodings{false};
+
   /// Executor for parallel decoding of child fields.
   /// When set, RowFieldReader and StructFlatMapFieldReader dispatch child reads
   /// as coroutines to this executor, using co_await to yield threads back to
