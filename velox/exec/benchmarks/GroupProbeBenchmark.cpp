@@ -49,6 +49,10 @@ enum class KeyShape {
   // multiply past 64 bits, so this resolves to kHash even for a table of a few
   // thousand groups, which a single BIGINT key never does.
   kEightBigints,
+  // Eight BIGINT keys as above and a unique VARCHAR key, which fits no value ID
+  // limit together with them. Resolves to kHash for a table of a few thousand
+  // groups, where probes compare non-inlined strings of any length.
+  kEightBigintsVarchar,
 };
 
 // Measures HashTable::groupProbe() with group-by tables from a few thousand
@@ -62,13 +66,16 @@ class GroupProbeBenchmark {
  public:
   // 'accumulatorBytes' is the width of the one fixed-size accumulator in a
   // group row, 0 for a table without accumulators.
+  // 'stringBytes' is the length of the VARCHAR key of the shapes that have one.
   GroupProbeBenchmark(
       KeyShape shape,
       int64_t numGroups,
-      int32_t accumulatorBytes)
+      int32_t accumulatorBytes,
+      int32_t stringBytes)
       : shape_(shape),
         numGroups_(numGroups),
         accumulatorBytes_(accumulatorBytes),
+        stringBytes_(stringBytes),
         pool_(memory::memoryManager()->addLeafPool()) {}
 
   // Returns the number of probed rows.
@@ -111,6 +118,11 @@ class GroupProbeBenchmark {
         return {BIGINT(), VARCHAR()};
       case KeyShape::kEightBigints:
         return std::vector<TypePtr>(8, BIGINT());
+      case KeyShape::kEightBigintsVarchar: {
+        std::vector<TypePtr> types(8, BIGINT());
+        types.push_back(VARCHAR());
+        return types;
+      }
     }
     VELOX_UNREACHABLE();
   }
@@ -178,8 +190,17 @@ class GroupProbeBenchmark {
       }
       case KeyShape::kBigintVarchar: {
         first->set(row, id % 1'000);
-        const auto name = fmt::format("item{:012d}", id);
+        const auto name = fmt::format("item{:0{}}", id, stringBytes_ - 4);
         children[1]->asFlatVector<StringView>()->set(row, StringView(name));
+        return;
+      }
+      case KeyShape::kEightBigintsVarchar: {
+        for (auto channel = 0; channel < 8; ++channel) {
+          children[channel]->asFlatVector<int64_t>()->set(
+              row, folly::hash::twang_mix64(id * 8 + channel) % 20'000);
+        }
+        const auto name = fmt::format("item{:0{}}", id, stringBytes_ - 4);
+        children[8]->asFlatVector<StringView>()->set(row, StringView(name));
         return;
       }
       case KeyShape::kEightBigints:
@@ -254,6 +275,7 @@ class GroupProbeBenchmark {
       case KeyShape::kRandomBigint:
       case KeyShape::kBigintVarchar:
       case KeyShape::kEightBigints:
+      case KeyShape::kEightBigintsVarchar:
         return BaseHashTable::HashMode::kHash;
     }
     VELOX_UNREACHABLE();
@@ -269,16 +291,19 @@ class GroupProbeBenchmark {
   const KeyShape shape_;
   const int64_t numGroups_;
   const int32_t accumulatorBytes_;
+  const int32_t stringBytes_;
   const std::shared_ptr<memory::MemoryPool> pool_;
 };
 
 // 'numGroupsList' lists the table sizes to run. 'accumulatorBytes' lists the
-// accumulator widths to run, 0 meaning no accumulator.
+// accumulator widths to run, 0 meaning no accumulator. 'stringBytes' is the
+// length of the VARCHAR key of the shapes that have one.
 void addBenchmarks(
     std::string_view name,
     KeyShape shape,
     const std::vector<int64_t>& numGroupsList,
-    const std::vector<int32_t>& accumulatorBytes) {
+    const std::vector<int32_t>& accumulatorBytes,
+    int32_t stringBytes = 16) {
   for (const auto width : accumulatorBytes) {
     for (const auto numGroups : numGroupsList) {
       // Sizes of a million groups and more keep the 'M' suffix of the first
@@ -290,12 +315,18 @@ void addBenchmarks(
         suffix += fmt::format("_acc{}", width);
       }
       folly::addBenchmark(
-          __FILE__, "build_" + suffix, [shape, numGroups, width]() {
-            return GroupProbeBenchmark(shape, numGroups, width).runBuild();
+          __FILE__,
+          "build_" + suffix,
+          [shape, numGroups, width, stringBytes]() {
+            return GroupProbeBenchmark(shape, numGroups, width, stringBytes)
+                .runBuild();
           });
       folly::addBenchmark(
-          __FILE__, "probe_" + suffix, [shape, numGroups, width]() {
-            return GroupProbeBenchmark(shape, numGroups, width).runProbe();
+          __FILE__,
+          "probe_" + suffix,
+          [shape, numGroups, width, stringBytes]() {
+            return GroupProbeBenchmark(shape, numGroups, width, stringBytes)
+                .runProbe();
           });
     }
   }
@@ -337,6 +368,20 @@ int main(int argc, char** argv) {
       KeyShape::kBigintVarchar,
       {1'000'000, 8'000'000, 32'000'000},
       {0});
+  for (const auto stringBytes : {24, 128, 512}) {
+    addBenchmarks(
+        fmt::format("hashBigintVarchar{}", stringBytes),
+        KeyShape::kBigintVarchar,
+        {1'000'000},
+        {0},
+        stringBytes);
+    addBenchmarks(
+        fmt::format("hashEightBigintsVarchar{}", stringBytes),
+        KeyShape::kEightBigintsVarchar,
+        {8'000},
+        {0},
+        stringBytes);
+  }
   folly::runBenchmarks();
   return 0;
 }

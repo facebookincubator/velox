@@ -331,17 +331,9 @@ void HashStringAllocator::newContiguousRange(int32_t bytes, ByteRange* range) {
 }
 
 // static
-StringView HashStringAllocator::contiguousString(
+StringView HashStringAllocator::copyContiguousString(
     StringView view,
     std::string& storage) {
-  if (view.isInline()) {
-    return view;
-  }
-  auto* header = headerOf(view.data());
-  if (view.size() <= header->size()) {
-    return view;
-  }
-
   InputStream stream(headerOf(view.data()));
   storage.resize(view.size());
   stream.ByteInputStream::readBytes(storage.data(), view.size());
