@@ -17,12 +17,15 @@
 #include <gtest/gtest.h>
 
 #include <sstream>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
+#include "velox/dwio/nimble/encodings/MainlyIntegerEncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/ReversedEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
@@ -592,6 +595,93 @@ TEST_F(EncodingUtilitiesTest, traverseEncodingsSharedDictionary) {
   EXPECT_EQ(traversed[1].level, 1);
   EXPECT_EQ(traversed[1].index, 0);
   EXPECT_EQ(traversed[1].nestedEncodingName, "Indices");
+}
+
+// --- MainlyInteger nested children ---
+
+TEST_F(EncodingUtilitiesTest, traverseEncodingsMainlyIntegerChildren) {
+  // A visited child: (name, level, index, data type, encoded size).
+  using Child = std::tuple<std::string, uint32_t, uint32_t, DataType, size_t>;
+  const auto traverseChildren = [&](const std::vector<std::string_view>& rows,
+                                    nimble::Buffer& buffer) {
+    const std::string_view stream =
+        nimble::test::Encoder<nimble::MainlyIntegerEncoding>::encode(
+            buffer,
+            nimble::Vector<std::string_view>{
+                pool_.get(), rows.begin(), rows.end()});
+    EXPECT_EQ(
+        EncodingPrefix::encodingType(stream), EncodingType::MainlyInteger);
+    std::vector<Child> children;
+    traverseEncodings(
+        stream,
+        [&](EncodingType /* encodingType */,
+            DataType dataType,
+            uint32_t level,
+            uint32_t index,
+            const std::string& nestedEncodingName,
+            const std::unordered_map<EncodingPropertyType, EncodingProperty>&
+                properties) -> bool {
+          if (level == 1) {
+            children.emplace_back(
+                nestedEncodingName,
+                level,
+                index,
+                dataType,
+                std::stoull(
+                    properties.at(EncodingPropertyType::EncodedSize).value));
+          }
+          return true;
+        });
+    return std::make_pair(stream, children);
+  };
+  // The child sizes as the decoder reads them: a varint size before the
+  // is-integer stream and before the integers. The exceptions run to the end.
+  const auto childSizes = [](std::string_view stream) {
+    std::string_view body =
+        stream.substr(EncodingPrefix::prefixSize(stream, /*useVarint=*/false));
+    const size_t isIntegerSize = encoding::readLengthPrefixedBytes(body).size();
+    const size_t integersSize = encoding::readLengthPrefixedBytes(body).size();
+    return std::make_tuple(isIntegerSize, integersSize, body.size());
+  };
+
+  {
+    SCOPED_TRACE("mixed");
+    nimble::Buffer buffer(*pool_);
+    const auto [stream, children] =
+        traverseChildren({"12", "x", "-3", "40000", "y"}, buffer);
+    const auto [isIntegerSize, integersSize, exceptionsSize] =
+        childSizes(stream);
+    const std::vector<Child> expected{
+        {"IsInteger", 1, 0, DataType::Bool, isIntegerSize},
+        {"Integers", 1, 1, DataType::Uint64, integersSize},
+        {"Exceptions", 1, 2, DataType::String, exceptionsSize}};
+    EXPECT_EQ(children, expected);
+  }
+  {
+    SCOPED_TRACE("all integers");
+    nimble::Buffer buffer(*pool_);
+    const auto [stream, children] =
+        traverseChildren({"12", "-3", "40000"}, buffer);
+    const auto [isIntegerSize, integersSize, exceptionsSize] =
+        childSizes(stream);
+    EXPECT_EQ(isIntegerSize, 0);
+    EXPECT_EQ(exceptionsSize, 0);
+    const std::vector<Child> expected{
+        {"Integers", 1, 1, DataType::Uint64, integersSize}};
+    EXPECT_EQ(children, expected);
+  }
+  {
+    SCOPED_TRACE("all exceptions");
+    nimble::Buffer buffer(*pool_);
+    const auto [stream, children] = traverseChildren({"x", "y", "007"}, buffer);
+    const auto [isIntegerSize, integersSize, exceptionsSize] =
+        childSizes(stream);
+    EXPECT_EQ(isIntegerSize, 0);
+    EXPECT_EQ(integersSize, 0);
+    const std::vector<Child> expected{
+        {"Exceptions", 1, 2, DataType::String, exceptionsSize}};
+    EXPECT_EQ(children, expected);
+  }
 }
 
 } // namespace facebook::nimble::tools::test

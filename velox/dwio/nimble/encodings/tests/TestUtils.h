@@ -32,6 +32,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyIntegerEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
@@ -144,6 +145,12 @@ template <>
 struct EncodingTypeTraits<nimble::FsstEncoding> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::Fsst;
+};
+
+template <>
+struct EncodingTypeTraits<nimble::MainlyIntegerEncoding> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::MainlyInteger;
 };
 
 template <typename T>

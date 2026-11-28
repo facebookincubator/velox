@@ -75,6 +75,7 @@ void extractCompressionType(
     case EncodingType::PFOR:
     case EncodingType::PartitionedEliasFano:
     case EncodingType::Reversed:
+    case EncodingType::MainlyInteger:
     case EncodingType::SimdForBitpack:
     // SubIntSplit integration is disabled; it carries no separate compression
     // byte, so treat it like the other encodings handled here.
@@ -382,6 +383,43 @@ void traverseEncodings(
           "OtherValues",
           useVarintRowCount,
           visitor);
+      break;
+    }
+    case EncodingType::MainlyInteger: {
+      // A child the stream omits is not traversed.
+      const char* pos = stream.data() + dataOffset;
+      const char* const end = stream.data() + stream.size();
+      const uint32_t isIntegerBytes = varint::readVarint32(&pos);
+      if (isIntegerBytes > 0) {
+        traverseEncodings(
+            {pos, isIntegerBytes},
+            level + 1,
+            0,
+            "IsInteger",
+            useVarintRowCount,
+            visitor);
+      }
+      pos += isIntegerBytes;
+      const uint32_t integerBytes = varint::readVarint32(&pos);
+      if (integerBytes > 0) {
+        traverseEncodings(
+            {pos, integerBytes},
+            level + 1,
+            1,
+            "Integers",
+            useVarintRowCount,
+            visitor);
+      }
+      pos += integerBytes;
+      if (pos < end) {
+        traverseEncodings(
+            {pos, static_cast<size_t>(end - pos)},
+            level + 1,
+            2,
+            "Exceptions",
+            useVarintRowCount,
+            visitor);
+      }
       break;
     }
     case EncodingType::Dictionary: {
