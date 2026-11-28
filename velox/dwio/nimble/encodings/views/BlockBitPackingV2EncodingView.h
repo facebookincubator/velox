@@ -32,32 +32,30 @@
 
 namespace facebook::nimble {
 
-template <typename T>
-class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
+template <typename T, BlockBitPackingLayout kLayout>
+class BlockBitPackingEncodingViewImpl final : public TypedEncodingView<T> {
  public:
   using physicalType = typename TypedEncodingView<T>::physicalType;
 
-  BlockBitPackingV2EncodingView(const BlockBitPackingV2EncodingView&) = delete;
-  BlockBitPackingV2EncodingView& operator=(
-      const BlockBitPackingV2EncodingView&) = delete;
-  BlockBitPackingV2EncodingView(BlockBitPackingV2EncodingView&&) = delete;
-  BlockBitPackingV2EncodingView& operator=(BlockBitPackingV2EncodingView&&) =
+  BlockBitPackingEncodingViewImpl(const BlockBitPackingEncodingViewImpl&) =
       delete;
+  BlockBitPackingEncodingViewImpl& operator=(
+      const BlockBitPackingEncodingViewImpl&) = delete;
+  BlockBitPackingEncodingViewImpl(BlockBitPackingEncodingViewImpl&&) = delete;
+  BlockBitPackingEncodingViewImpl& operator=(
+      BlockBitPackingEncodingViewImpl&&) = delete;
 
-  BlockBitPackingV2EncodingView(
+  BlockBitPackingEncodingViewImpl(
       std::string_view data,
       velox::memory::MemoryPool* pool,
       const Encoding::Options& options)
       : TypedEncodingView<T>{data, pool, options},
         blocks_{this->template getVectorBuffer<BlockMeta>()},
         blockRowOffsets_{this->template getVectorBuffer<uint32_t>()} {
-    NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::BlockBitPackingV2);
-    const auto source =
-        BlockBitPackingV2Encoding<T>::parseHeader(data, options);
+    NIMBLE_CHECK_EQ(this->encodingType_, EncodingImpl::kEncodingType);
+    const auto source = EncodingImpl::parseHeader(data, options);
     NIMBLE_CHECK_GT(source.blockSize, 0);
     NIMBLE_CHECK_GT(source.numBlocks, 0);
-    blockSize_ = source.blockSize;
-    numBlocks_ = source.numBlocks;
     header_ = source;
 
     // The view keeps the decompressed payload, so it stays valid with the view.
@@ -72,12 +70,16 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
     }
   }
 
-  ~BlockBitPackingV2EncodingView() override {
+  ~BlockBitPackingEncodingViewImpl() override {
     this->releaseVectorBuffer(blockRowOffsets_);
     this->releaseVectorBuffer(blocks_);
   }
 
  private:
+  // The encoding of this layout, whose header parsing and block math the view
+  // reuses.
+  using EncodingImpl = BlockBitPackingEncodingImpl<T, kLayout>;
+
   struct BlockMeta {
     physicalType baseline;
     uint8_t bitWidth;
@@ -87,8 +89,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
 
   // Reads the metadata of every block once, so that reads need no stream
   // access, and checks every block against the packed payload.
-  void initializeCached(
-      const typename BlockBitPackingV2Encoding<T>::Header& source) {
+  void initializeCached(const typename EncodingImpl::Header& source) {
     auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
     auto baselinesEncoding = EncodingFactory().create(
         *this->pool_,
@@ -126,7 +127,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
     for (uint16_t i = 0; i < source.numBlocks; ++i) {
       blockRowOffsets_[i] = rowOffset;
       const auto rowCount =
-          BlockBitPackingV2Encoding<T>::blockRowCount(source, /*blockIndex=*/i);
+          EncodingImpl::blockRowCount(source, /*blockIndex=*/i);
       NIMBLE_CHECK_LE(rowCount, source.blockSize);
       rowOffset += rowCount;
       const BlockMeta block{
@@ -147,8 +148,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
 
   // Keeps the metadata streams as views, so that a read touches only the
   // metadata of its own block.
-  void initializeUncached(
-      const typename BlockBitPackingV2Encoding<T>::Header& source) {
+  void initializeUncached(const typename EncodingImpl::Header& source) {
     baselinesView_ = detail::createTypedEncodingView<physicalType>(
         source.encodedBaselines, this->pool_, this->options_);
     NIMBLE_CHECK_NOT_NULL(baselinesView_);
@@ -175,13 +175,15 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
     NIMBLE_CHECK_FILE_LE(
         block.offset,
         packedSize_,
-        "BlockBitPackingV2 block offset exceeds packed payload");
-    const auto blockBytes = BlockBitPackingV2Encoding<T>::getPackedSize(
-        block.rowCount, block.bitWidth);
+        "{} block offset exceeds packed payload",
+        EncodingImpl::kEncodingType);
+    const auto blockBytes =
+        EncodingImpl::getPackedSize(block.rowCount, block.bitWidth);
     NIMBLE_CHECK_FILE_LE(
         blockBytes,
         packedSize_ - block.offset,
-        "BlockBitPackingV2 block payload exceeds packed payload");
+        "{} block payload exceeds packed payload",
+        EncodingImpl::kEncodingType);
   }
 
   T readTypedAt(uint32_t index) const final {
@@ -197,7 +199,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
 
   physicalType readBlockValue(uint32_t blockIndex, uint32_t blockOffset) const {
     const auto block = metaOf(blockIndex);
-    if (block.bitWidth == BlockBitPackingV2Encoding<T>::kRawBlockBitWidth) {
+    if (block.bitWidth == EncodingImpl::kRawBlockBitWidth) {
       const auto* values =
           reinterpret_cast<const physicalType*>(packedData_ + block.offset);
       return values[blockOffset];
@@ -226,19 +228,17 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
   }
 
   uint32_t blockRowCount(uint32_t blockIndex) const {
-    return BlockBitPackingV2Encoding<T>::blockRowCount(header_, blockIndex);
+    return EncodingImpl::blockRowCount(header_, blockIndex);
   }
 
   uint32_t rowOffsetOf(uint32_t blockIndex) const {
     return cachesBlockMetadata()
         ? blockRowOffsets_[blockIndex]
-        : BlockBitPackingV2Encoding<T>::blockRowOffset(header_, blockIndex);
+        : EncodingImpl::blockRowOffset(header_, blockIndex);
   }
 
   uint32_t blockIndex(uint32_t row) const {
-    const auto blockIndex = row / blockSize_;
-    NIMBLE_CHECK_LT(blockIndex, numBlocks_);
-    return blockIndex;
+    return EncodingImpl::blockIndex(header_, row);
   }
 
   void readBlockRange(
@@ -251,7 +251,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
     const auto baseline = block.baseline;
     const auto* blockData = packedData_ + block.offset;
 
-    if (bitWidth == BlockBitPackingV2Encoding<T>::kRawBlockBitWidth) {
+    if (bitWidth == EncodingImpl::kRawBlockBitWidth) {
       const auto* rawValues = reinterpret_cast<const physicalType*>(blockData);
       std::memcpy(
           output, rawValues + blockOffset, length * sizeof(physicalType));
@@ -265,8 +265,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
 
     const auto* inputBytes = reinterpret_cast<const uint8_t*>(blockData);
     if (blockOffset == 0) {
-      BlockBitPackingV2Encoding<T>::fullUnpack(
-          inputBytes, output, length, bitWidth, baseline);
+      EncodingImpl::fullUnpack(inputBytes, output, length, bitWidth, baseline);
       return;
     }
 
@@ -307,7 +306,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
     if (const auto groupOffset = blockOffset % kGroupSize; groupOffset != 0) {
       std::array<physicalType, kGroupSize> values;
       const auto group = blockOffset / kGroupSize;
-      BlockBitPackingV2Encoding<T>::fullUnpack(
+      EncodingImpl::fullUnpack(
           input + group * groupBytes,
           values.data(),
           kGroupSize,
@@ -325,7 +324,7 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
     const auto packedLength = std::min<uint32_t>(
         length - outputOffset, numFullGroupRows - blockOffset);
     if (packedLength != 0) {
-      BlockBitPackingV2Encoding<T>::fullUnpack(
+      EncodingImpl::fullUnpack(
           input + (blockOffset / kGroupSize) * groupBytes,
           output + outputOffset,
           packedLength,
@@ -372,8 +371,9 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
     return block;
   }
 
-  // The parsed header, which gives the row count and row offset of any block.
-  typename BlockBitPackingV2Encoding<T>::Header header_;
+  // The parsed header, which gives the block of any row, and the row count and
+  // row offset of any block.
+  typename EncodingImpl::Header header_;
   // Hold the metadata of every block. Empty without cacheEncodingView.
   Vector<BlockMeta> blocks_;
   Vector<uint32_t> blockRowOffsets_;
@@ -385,8 +385,11 @@ class BlockBitPackingV2EncodingView final : public TypedEncodingView<T> {
   // The uncompressed packed values of every block, and their size in bytes.
   const char* packedData_{nullptr};
   size_t packedSize_{0};
-  uint16_t blockSize_{0};
-  uint16_t numBlocks_{0};
 };
+
+/// Reads the second BlockBitPacking layout (EncodingType::BlockBitPackingV2).
+template <typename T>
+using BlockBitPackingV2EncodingView =
+    BlockBitPackingEncodingViewImpl<T, BlockBitPackingLayout::kV2>;
 
 } // namespace facebook::nimble
