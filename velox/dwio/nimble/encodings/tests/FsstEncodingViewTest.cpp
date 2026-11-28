@@ -866,6 +866,35 @@ TEST_P(FsstEncodingViewTest, readWithAddStringBufferPassesEachChunkBufferOnce) {
   EXPECT_EQ(distinct(addedBuffers).size(), addedBuffers.size());
 }
 
+TEST_P(FsstEncodingViewTest, readOfMoreIndicesThanRowsDecodesEachRowOnce) {
+  std::vector<std::string> storage;
+  const auto values = makeValues(storage, 10);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  size_t decodedBytes{0};
+  for (const auto value : values) {
+    decodedBytes += value.size();
+  }
+
+  // 1,000 indices that repeat the 10 rows, as the alphabet reads of a
+  // Dictionary do, decode each row once into one buffer, which holds no more
+  // than the 10 strings and the room that the decoder needs past them.
+  std::vector<uint32_t> indices(1'000);
+  for (uint32_t i = 0; i < indices.size(); ++i) {
+    indices[i] = (i * 7) % 10;
+  }
+  std::vector<std::string_view> output(indices.size());
+  std::vector<velox::BufferPtr> addedBuffers;
+  view->read(indices, [](uint32_t) {}, appendTo(addedBuffers), output.data());
+  for (uint32_t i = 0; i < indices.size(); ++i) {
+    EXPECT_EQ(output[i], values[indices[i]]) << "index " << i;
+  }
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+  ASSERT_EQ(addedBuffers.size(), 1);
+  EXPECT_LT(addedBuffers[0]->size(), decodedBytes + 1'024);
+}
+
 TEST_P(FsstEncodingViewTest, readWithAddStringBufferSpansBuffers) {
   // FSST encodes each run of eight repeated bytes as one code, so these
   // strings decode to about eight times their compressed size, about 600 KB.
