@@ -20,6 +20,7 @@ velox_add_library(
   DwrfReader.cpp
   FlatMapColumnReader.cpp
   ReaderBase.cpp
+  SelectiveByteRleColumnReader.cpp
   SelectiveDwrfReader.cpp
   SelectiveFlatMapColumnReader.cpp
   SelectiveIntegerDirectColumnReader.cpp
