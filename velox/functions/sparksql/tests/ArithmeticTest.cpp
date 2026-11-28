@@ -892,6 +892,7 @@ TEST_F(ArithmeticTest, hexWithVarbinaryAndVarchar) {
 
 TEST_F(ArithmeticTest, widthBucket) {
   constexpr int64_t kMaxInt64 = std::numeric_limits<int64_t>::max();
+  constexpr int64_t kMinInt64 = std::numeric_limits<int64_t>::min();
 
   const auto widthBucket = [&](std::optional<double> value,
                                std::optional<double> min,
@@ -915,6 +916,16 @@ TEST_F(ArithmeticTest, widthBucket) {
 
   // max - min + 1 > Long.MaxValue
   EXPECT_EQ(widthBucket(5.3, 0, 9223372036854775807, 10), 1);
+
+  // Intermediate arithmetic overflows to NaN. Spark converts NaN to zero
+  // before adding one.
+  EXPECT_EQ(1, widthBucket(0, -1e308, 1e308, 10));
+  EXPECT_EQ(1, widthBucket(0, 1e308, -1e308, 10));
+
+  // Intermediate arithmetic overflows to infinity. Spark converts infinity
+  // to Long.MaxValue, then adding one wraps to Long.MinValue.
+  EXPECT_EQ(kMinInt64, widthBucket(-5e307, -1e308, 0, kMaxInt64 - 1));
+  EXPECT_EQ(kMinInt64, widthBucket(-5e307, 0, -1e308, kMaxInt64 - 1));
 
   // Cases to get null result.
   EXPECT_EQ(widthBucket(3.14, 0, 4, 0), std::nullopt);

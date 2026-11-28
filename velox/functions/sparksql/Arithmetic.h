@@ -702,9 +702,11 @@ struct WidthBucketFunction {
         return numBuckets + 1;
       }
     }
-    return static_cast<int64_t>(
-               (numBuckets * (value - bound1) / (bound2 - bound1))) +
-        1;
+    const auto zeroBasedBucket =
+        safeDoubleToInt64(numBuckets * (value - bound1) / (bound2 - bound1));
+    return zeroBasedBucket == std::numeric_limits<int64_t>::max()
+        ? std::numeric_limits<int64_t>::min()
+        : zeroBasedBucket + 1;
   }
 };
 
