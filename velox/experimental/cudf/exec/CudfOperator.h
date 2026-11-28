@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/DebugUtil.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
+#include "velox/experimental/cudf/exec/NvtxTracing.h"
 
 #include "velox/common/base/SpillConfig.h"
 #include "velox/core/PlanNode.h"
@@ -122,12 +123,44 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
             planNodeId,
             operatorName,
             spillConfig),
-        NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
+        // Name and payload both carry the physical identity of this operator.
+        // A plan node can become several operators in several pipelines (a
+        // join is HashProbe in one and HashBuild in another), and a Driver
+        // migrates across OS threads after every block, so pipelineId and
+        // driverId are the only way a timeline can group ranges by the thing
+        // that actually ran them.
+        NvtxHelper(
+            color,
+            packOperatorIdentity(
+                driverCtx->pipelineId,
+                driverCtx->driverId,
+                operatorId,
+                driverCtx->splitGroupId),
+            fmt::format(
+                "[{}] p{}d{}",
+                planNodeId,
+                driverCtx->pipelineId,
+                driverCtx->driverId),
+            nvtxRegisterTask(driverCtx->task.get())),
         className_(operatorName),
-        nvtxMethods_(nvtxMethods) {}
+        nvtxMethods_(nvtxMethods),
+        driverLabel_(nvtxDriverLabel(
+            driverCtx->task.get(),
+            driverCtx->pipelineId,
+            driverCtx->driverId)),
+        // Distinguishes two Tasks that both have a p0d0 -- several stages run
+        // on one worker, and their pipeline ids restart from zero.
+        driverKey_(
+            packOperatorIdentity(
+                driverCtx->pipelineId,
+                driverCtx->driverId,
+                0,
+                driverCtx->splitGroupId) ^
+            reinterpret_cast<uint64_t>(driverCtx->task.get())) {}
 
   void addInput(RowVectorPtr input) final {
     ensureCudaContextForThread();
+    noteDriverOnThread(driverKey_, driverLabel_.c_str());
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kAddInput, className_);
     doAddInput(std::move(input));
@@ -136,6 +169,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
 
   RowVectorPtr getOutput() final {
     ensureCudaContextForThread();
+    noteDriverOnThread(driverKey_, driverLabel_.c_str());
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
     auto result = doGetOutput();
@@ -145,6 +179,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
 
   void noMoreInput() final {
     ensureCudaContextForThread();
+    noteDriverOnThread(driverKey_, driverLabel_.c_str());
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kNoMoreInput, className_);
     doNoMoreInput();
@@ -155,6 +190,7 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
     // close() may run on a different thread than construction so bind the
     // context here too.
     ensureCudaContextForThread();
+    noteDriverOnThread(driverKey_, driverLabel_.c_str());
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kClose, className_);
     doClose();
@@ -177,6 +213,9 @@ class CudfOperatorBase : public exec::Operator, public NvtxHelper {
  private:
   const std::string className_;
   const NvtxMethodFlag nvtxMethods_;
+  // Built once: the per-call path is a thread-local compare against driverKey_.
+  const std::string driverLabel_;
+  const uint64_t driverKey_;
 };
 
 /// Base class for cuDF source operators (first operator in a Driver pipeline).
@@ -207,12 +246,44 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
             operatorId,
             planNodeId,
             operatorName),
-        NvtxHelper(color, operatorId, fmt::format("[{}]", planNodeId)),
+        // Name and payload both carry the physical identity of this operator.
+        // A plan node can become several operators in several pipelines (a
+        // join is HashProbe in one and HashBuild in another), and a Driver
+        // migrates across OS threads after every block, so pipelineId and
+        // driverId are the only way a timeline can group ranges by the thing
+        // that actually ran them.
+        NvtxHelper(
+            color,
+            packOperatorIdentity(
+                driverCtx->pipelineId,
+                driverCtx->driverId,
+                operatorId,
+                driverCtx->splitGroupId),
+            fmt::format(
+                "[{}] p{}d{}",
+                planNodeId,
+                driverCtx->pipelineId,
+                driverCtx->driverId),
+            nvtxRegisterTask(driverCtx->task.get())),
         className_(operatorName),
-        nvtxMethods_(nvtxMethods) {}
+        nvtxMethods_(nvtxMethods),
+        driverLabel_(nvtxDriverLabel(
+            driverCtx->task.get(),
+            driverCtx->pipelineId,
+            driverCtx->driverId)),
+        // Distinguishes two Tasks that both have a p0d0 -- several stages run
+        // on one worker, and their pipeline ids restart from zero.
+        driverKey_(
+            packOperatorIdentity(
+                driverCtx->pipelineId,
+                driverCtx->driverId,
+                0,
+                driverCtx->splitGroupId) ^
+            reinterpret_cast<uint64_t>(driverCtx->task.get())) {}
 
   RowVectorPtr getOutput() final {
     ensureCudaContextForThread();
+    noteDriverOnThread(driverKey_, driverLabel_.c_str());
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kGetOutput, className_);
     auto result = doGetOutput();
@@ -224,6 +295,7 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
     // close() may run on a different thread than construction so bind the
     // context here too.
     ensureCudaContextForThread();
+    noteDriverOnThread(driverKey_, driverLabel_.c_str());
     VELOX_NVTX_OPERATOR_FUNC_RANGE_IF(
         nvtxMethods_ & NvtxMethodFlag::kClose, className_);
     doClose();
@@ -240,6 +312,9 @@ class CudfSourceOperatorBase : public exec::SourceOperator, public NvtxHelper {
  private:
   const std::string className_;
   const NvtxMethodFlag nvtxMethods_;
+  // Built once: the per-call path is a thread-local compare against driverKey_.
+  const std::string driverLabel_;
+  const uint64_t driverKey_;
 };
 
 } // namespace facebook::velox::cudf_velox
