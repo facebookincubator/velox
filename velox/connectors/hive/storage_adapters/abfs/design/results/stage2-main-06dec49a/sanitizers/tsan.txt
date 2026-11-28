@@ -1,0 +1,55 @@
+Stage 2 C2 ThreadSanitizer validation
+Date: 2026-07-20
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Configuration
+- Clang/Compiler-rt 20.1.2.
+- Separate Debug build tree.
+- -O1 -fsanitize=thread -fno-omit-frame-pointer.
+- TSAN_OPTIONS=halt_on_error=1:abort_on_error=1.
+- Bundled pinned Folly compiled under the same TSAN flags.
+- Every TSAN binary is launched through setarch x86_64 -R because the WSL
+  kernel's randomized mapping layout can otherwise abort TSAN before main.
+  ASLR is disabled only for each test process; no system setting is changed.
+
+Complete suites
+- velox_abfs_stage2_runtime_test: 12 of 12 passed.
+- velox_abfs_stage1_transport_test: 59 of 59 passed.
+- No ThreadSanitizer race report.
+
+Runtime focused matrix, 100 in-process repetitions
+- BoundsActiveAndQueuedRequestsAcrossShards
+- ShutdownCancelsActiveAndQueuedRequests
+- DestroysLastOwnerFromRuntimeFiber
+- AssignsEndpointToOneRuntimeShard
+- OwnsEndpointTransportOnAssignedShard
+- DestroysRejectedEndpointRequestOnAssignedShard
+- SharesDnsResolutionOffRuntimeThreads
+- ExpiresPositiveAndNegativeDnsEntries
+- BoundsEndpointCacheAndResolverQueue
+- ShutdownCancelsQueuedDnsResolution
+- DestroysEndpointRequestsOnAssignedShard
+Result: 100 of 100 repetitions passed, 11 tests per repetition.
+
+Transport focused matrix, 100 in-process repetitions
+- AzureBodyStreamAbandonsUnreadBody
+- AbandonmentReleasesOnce
+- EvictsIdleConnectionAtTimeout
+- AbandonedResponseIsNotReused
+- PoolCapSuspendsFiberUntilBodyRelease
+- ConnectionReturnAtWaiterTimeoutBoundary
+- PoolWaitersCompleteInFifoOrder
+- PoolAcquireTimeoutRemovesWaiter
+- DestroyingTransportKeepsActiveBodySafe
+- DestroysLeasedWaitingAndIdlePoolState
+- DestroysIdlePoolOnOwningEventBase
+- DestroyingStreamingResponseClosesPeerBeforeEof
+Result: 100 of 100 repetitions passed, 12 tests per repetition.
+
+Covered race surfaces
+- Global enqueue, active completion, queue dispatch, cancellation, and metrics.
+- Runtime destruction and final-owner release from a runtime fiber.
+- Endpoint identity, resolver completion, cache expiry, failure, and shutdown.
+- Connection handoff, body abandonment, pool accounting, waiter timeout,
+  idle-timer eviction, and EventBase-affine teardown.
