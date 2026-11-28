@@ -653,23 +653,48 @@ class CudfFilterProjectTest : public OperatorTestBase {
     facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
   }
 
-  RowVectorPtr runPlan(const core::PlanNodePtr& plan) {
-    return AssertQueryBuilder(plan).copyResults(pool());
+  RowVectorPtr runPlan(
+      const core::PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& config = {}) {
+    return AssertQueryBuilder(plan).configs(config).copyResults(pool());
   }
 
-  void assertPlanMatchesVelox(const core::PlanNodePtr& plan) {
-    auto cudfResult = runPlan(plan);
+  void assertPlanMatchesVelox(
+      const core::PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& config = {}) {
+    auto cudfResult = runPlan(plan, config);
     cudf_velox::unregisterCudf();
-    auto veloxResult = runPlan(plan);
+    auto veloxResult = runPlan(plan, config);
     cudf_velox::registerCudf();
     facebook::velox::test::assertEqualVectors(cudfResult, veloxResult);
   }
 
   void assertProjectMatchesVelox(
       const std::vector<RowVectorPtr>& input,
-      const std::vector<std::string>& projections) {
-    auto plan = PlanBuilder().values(input).project(projections).planNode();
-    assertPlanMatchesVelox(plan);
+      const std::vector<std::string>& projections,
+      const std::unordered_map<std::string, std::string>& config = {}) {
+    auto plan =
+        PlanBuilder(pool_.get()).values(input).project(projections).planNode();
+    assertPlanMatchesVelox(plan, config);
+  }
+
+  // Probes for the constant lookup tests, with present, missing and NULL
+  // values. The last TIMESTAMP is 1 ns after a key and must miss.
+  RowVectorPtr makeConstantLookupProbes() {
+    return makeRowVector(
+        {"s", "i", "ts", "dt", "amount"},
+        {makeNullableFlatVector<std::string>(
+             {"a", "B", "z", std::nullopt, "A"}),
+         makeNullableFlatVector<int64_t>({1, 50, 251, std::nullopt, 200}),
+         makeNullableFlatVector<Timestamp>(
+             {Timestamp(1, 0),
+              Timestamp(2, 0),
+              Timestamp(3, 0),
+              std::nullopt,
+              Timestamp(1, 1)}),
+         makeNullableFlatVector<int32_t>({1, 2, 3, std::nullopt, 1}, DATE()),
+         makeNullableFlatVector<int64_t>(
+             {125, -350, 1, std::nullopt, 125}, DECIMAL(12, 2))});
   }
 
   void runTest(core::PlanNodePtr planNode, const std::string& duckDbSql) {
@@ -2687,6 +2712,66 @@ TEST_F(CudfFilterProjectTest, arrayJoin) {
   auto expected = makeRowVector({makeNullableFlatVector<std::string>(
       {"a, b, c", "", ", d", "e", std::nullopt})});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// element_at over a constant map runs on the GPU as a lookup into the keys;
+// a missing or NULL key gives NULL. Each batch reaches the GPU on its own, so
+// the second reuses the lookup built for the first.
+TEST_F(CudfFilterProjectTest, constantMapElementAt) {
+  auto data = makeConstantLookupProbes();
+  const auto mapOf = [](int numEntries) {
+    std::string keys;
+    std::string values;
+    for (int i = 1; i <= numEntries; ++i) {
+      keys += fmt::format("{}{}", i == 1 ? "" : ", ", i);
+      values += fmt::format("{}{}", i == 1 ? "" : ", ", 100 + i);
+    }
+    return fmt::format("map(array[{}], array[{}])", keys, values);
+  };
+
+  assertProjectMatchesVelox(
+      {data, data},
+      {"element_at(map(array['a'], array[10]), s) AS one_entry",
+       "element_at(map(array['a', 'b'], array[1, 2]), s) AS varchar_key",
+       fmt::format("element_at({}, i) AS bigint_key", mapOf(50)),
+       "element_at(map(array['a', 'b'], array[1, 2]), lower(s)) AS "
+       "computed_key",
+       "element_at(map(array['a', 'b'], array[cast(1.25 as decimal(12, 2)), "
+       "cast(-3.5 as decimal(12, 2))]), s) AS decimal_value",
+       // length() gives INT32 on the GPU for the BIGINT keys.
+       "element_at(map(array[1, 3], array['x', 'y']), length(s)) AS "
+       "narrower_probe",
+       "element_at(map(array[1, 50], array[10, null]), i) AS null_value",
+       "element_at(map(array[TIMESTAMP '1970-01-01 00:00:01', "
+       "TIMESTAMP '1970-01-01 00:00:02'], array[1, 2]), ts) AS timestamp_key",
+       "element_at(map(array[DATE '1970-01-02', DATE '1970-01-03'], "
+       "array[1, 2]), dt) AS date_key",
+       "element_at(map(array[cast(1.25 as decimal(12, 2)), "
+       "cast(-3.5 as decimal(12, 2))], array[1, 2]), amount) AS decimal_key",
+       // Compiled as a subexpression of an AST or JIT parent.
+       "element_at(map(array['a', 'b'], array[1, 2]), s) + 1 AS nested"},
+      {{cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"}});
+}
+
+// contains over a constant array runs on the GPU as a lookup into the
+// elements. Each batch reaches the GPU on its own.
+TEST_F(CudfFilterProjectTest, constantArrayContains) {
+  auto data = makeConstantLookupProbes();
+
+  assertProjectMatchesVelox(
+      {data, data},
+      {"contains(array[1, 5, 7], i) AS bigint_element",
+       "contains(array['a', 'b'], s) AS varchar_element",
+       "contains(array[2, 6, 8], i + 1) AS computed_probe",
+       // length() gives INT32 on the GPU for the BIGINT elements.
+       "contains(array[1, 3], length(s)) AS narrower_probe",
+       "contains(array[TIMESTAMP '1970-01-01 00:00:01', "
+       "TIMESTAMP '1970-01-01 00:00:02'], ts) AS timestamp_element",
+       "contains(array[DATE '1970-01-02', DATE '1970-01-03'], dt) AS "
+       "date_element",
+       "contains(array[cast(1.25 as decimal(12, 2)), "
+       "cast(-3.5 as decimal(12, 2))], amount) AS decimal_element"},
+      {{cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"}});
 }
 
 TEST_F(CudfFilterProjectTest, negativeSubstr) {

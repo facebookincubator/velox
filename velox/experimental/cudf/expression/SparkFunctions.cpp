@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/expression/CommonFunctions.h"
+#include "velox/experimental/cudf/expression/ConstantLookupFunctions.h"
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
@@ -153,6 +154,8 @@ void registerSparkFunctions(const std::string& prefix) {
       });
 
   registerSparkArrayAccessFunctions(prefix);
+  registerConstantMapElementAtFunction(prefix + "element_at");
+  registerConstantArrayContainsFunction(prefix + "array_contains");
 }
 
 } // namespace facebook::velox::cudf_velox
