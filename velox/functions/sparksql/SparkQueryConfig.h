@@ -189,6 +189,19 @@ class SparkQueryConfig {
       false,
       "Enable high precision casts from DECIMAL to REAL/DOUBLE.")
 
+  /// If true, map, map_from_arrays, map_from_entries and transform_keys keep
+  /// -0.0 and 0.0, and NaNs with other bits, as distinct map keys, as Spark 3.x
+  /// does. If false, they normalize the top-level REAL and DOUBLE keys before
+  /// they deduplicate them, as Spark 4.0+ does unless
+  /// spark.sql.legacy.disableMapKeyNormalization is set.
+  VELOX_SPARK_CONFIG(
+      kLegacyDisableMapKeyNormalization,
+      legacyDisableMapKeyNormalization,
+      "legacy_disable_map_key_normalization",
+      bool,
+      false,
+      "Keep -0.0 and 0.0 as distinct map keys, as Spark 3.x does.")
+
   /// Returns all registered Spark config properties. Property names are
   /// unqualified (no "spark." prefix).
   static const std::vector<config::ConfigProperty>& registeredProperties();

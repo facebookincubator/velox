@@ -19,6 +19,7 @@
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/sparksql/LastWin.h"
 #include "velox/functions/sparksql/Map.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -58,7 +59,8 @@ std::shared_ptr<exec::VectorFunction> makeMapFromArrays(
     const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
     const core::QueryConfig& config) {
   return std::make_shared<MapFromArraysFunction>(
-      config.throwExceptionOnDuplicateMapKeys());
+      config.throwExceptionOnDuplicateMapKeys(),
+      !SparkQueryConfig{config}.legacyDisableMapKeyNormalization());
 }
 } // namespace
 
@@ -83,8 +85,14 @@ void MapFromArraysFunction::apply(
       keysArray,
       decodedKeys->nulls(&rows),
       decodedKeys->indices());
+  // The keys are normalized before they are deduplicated. A map with a repeated
+  // key holds its normalized keys, and the others keep their keys, as in
+  // Spark.
+  const auto normalizedKeys = normalizeKeys_
+      ? normalizeMapKeys(keysElements, keyElementRows, context)
+      : keysElements;
   exec::LocalDecodedVector decodedKeyElements(
-      context, *keysElements, keyElementRows);
+      context, *normalizedKeys, keyElementRows);
 
   // Under EXCEPTION no row can shrink, so the result can reference the input
   // arrays instead of building entry indices.
@@ -120,7 +128,8 @@ void MapFromArraysFunction::apply(
       *decodedKeyElements,
       keysElements,
       valuesArray->elements(),
-      throwExceptionOnDuplicateMapKeys_);
+      throwExceptionOnDuplicateMapKeys_,
+      normalizedKeys);
   context.deselectErrors(*remainingRows);
   context.moveOrCopyResult(mapVector, *remainingRows, result);
 }

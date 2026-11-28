@@ -18,6 +18,7 @@
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/sparksql/Map.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
 namespace {
@@ -25,8 +26,9 @@ namespace {
 // Implements Spark's map_from_entries.
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
-  explicit MapFromEntriesFunction(bool throwOnDuplicateKey)
-      : throwOnDuplicateKey_{throwOnDuplicateKey} {}
+  MapFromEntriesFunction(bool throwOnDuplicateKey, bool normalizeKeys)
+      : throwOnDuplicateKey_{throwOnDuplicateKey},
+        normalizeKeys_{normalizeKeys} {}
 
   void apply(
       const SelectivityVector& rows,
@@ -59,8 +61,11 @@ class MapFromEntriesFunction : public exec::VectorFunction {
         rawEntryIndices[i] = decodedEntries->index(i);
       }
     });
-    const auto wrappedKeys = BaseVector::wrapInDictionary(
+    VectorPtr wrappedKeys = BaseVector::wrapInDictionary(
         entryNulls, entryIndices, numElements, keys);
+    if (normalizeKeys_) {
+      wrappedKeys = normalizeMapKeys(wrappedKeys, elementRows, context);
+    }
     exec::LocalDecodedVector decodedKeys(context, *wrappedKeys, elementRows);
 
     exec::LocalSelectivityVector entryRows(context, rows);
@@ -127,6 +132,8 @@ class MapFromEntriesFunction : public exec::VectorFunction {
  private:
   // Whether a repeated key is an error rather than keeping its last value.
   const bool throwOnDuplicateKey_;
+  // Whether -0.0 and NaN keys are normalized first, see normalizeMapKeys.
+  const bool normalizeKeys_;
 };
 
 std::shared_ptr<exec::VectorFunction> makeMapFromEntries(
@@ -134,7 +141,8 @@ std::shared_ptr<exec::VectorFunction> makeMapFromEntries(
     const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
     const core::QueryConfig& config) {
   return std::make_shared<MapFromEntriesFunction>(
-      config.throwExceptionOnDuplicateMapKeys());
+      config.throwExceptionOnDuplicateMapKeys(),
+      !SparkQueryConfig{config}.legacyDisableMapKeyNormalization());
 }
 } // namespace
 

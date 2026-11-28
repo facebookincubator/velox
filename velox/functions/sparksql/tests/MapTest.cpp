@@ -551,7 +551,7 @@ TEST_F(MapTest, lastWinKeepsFirstPositionAndLastValue) {
       evaluate("map_values(map(c0, c1, c2, c3, c4, c5))", data));
 }
 
-TEST_F(MapTest, topLevelSignedZeroKeysStayDistinct) {
+TEST_F(MapTest, legacyTopLevelSignedZeroKeysStayDistinct) {
   const auto data = makeRowVector({
       makeFlatVector<double>({-0.0}),
       makeFlatVector<int32_t>({1}),
@@ -560,7 +560,8 @@ TEST_F(MapTest, topLevelSignedZeroKeysStayDistinct) {
   });
   for (const bool throwOnDuplicate : {false, true}) {
     SCOPED_TRACE(fmt::format("throwOnDuplicate: {}", throwOnDuplicate));
-    setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+    setThrowExceptionOnDuplicateMapKeys(
+        throwOnDuplicate, /*legacyDisableMapKeyNormalization=*/true);
     EXPECT_THAT(
         elementBitPatterns(evaluate("map_keys(map(c0, c1, c2, c3))", data)),
         testing::ElementsAre(
@@ -610,6 +611,125 @@ TEST_F(MapTest, nestedSignedZeroKeysAreOneKey) {
   ::facebook::velox::test::assertEqualVectors(
       makeArrayVector<int32_t>({{2}}),
       evaluate("map_values(map(c0, c1, c2, c3))", data));
+}
+
+TEST_F(MapTest, normalizedSignedZeroKeysAreOneKey) {
+  const auto data = makeRowVector({
+      makeFlatVector<double>({-0.0}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<double>({0.0}),
+      makeFlatVector<int32_t>({2}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate("map_keys(map(c0, c1, c2, c3))", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int32_t>({{2}}),
+      evaluate("map_values(map(c0, c1, c2, c3))", data));
+
+  setThrowExceptionOnDuplicateMapKeys(true);
+  VELOX_ASSERT_THROW(
+      evaluate("map(c0, c1, c2, c3)", data), "Duplicate map key was found");
+}
+
+TEST_F(MapTest, normalizedKeysOnlyForMapsWithRepeatedKeys) {
+  // As Spark's ArrayBasedMapBuilder.from, a map without a repeated key keeps
+  // its keys, and a map with one, of any key, holds all its keys normalized.
+  const auto data = makeRowVector({
+      makeFlatVector<double>({-0.0, -0.0}),
+      makeFlatVector<int32_t>({1, 1}),
+      makeFlatVector<double>({1.5, 1.5}),
+      makeFlatVector<int32_t>({2, 2}),
+      makeFlatVector<double>({2.5, 1.5}),
+      makeFlatVector<int32_t>({3, 3}),
+  });
+  for (const bool throwOnDuplicate : {false, true}) {
+    SCOPED_TRACE(fmt::format("throwOnDuplicate: {}", throwOnDuplicate));
+    setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+    // The first row has no repeated key.
+    EXPECT_THAT(
+        elementBitPatterns(evaluate(
+            "map_keys(map(c0, c1, c2, c3, c4, c5))",
+            makeRowVector(
+                {data->childAt(0)->slice(0, 1),
+                 data->childAt(1)->slice(0, 1),
+                 data->childAt(2)->slice(0, 1),
+                 data->childAt(3)->slice(0, 1),
+                 data->childAt(4)->slice(0, 1),
+                 data->childAt(5)->slice(0, 1)}))),
+        testing::ElementsAre(
+            std::bit_cast<uint64_t>(-0.0),
+            std::bit_cast<uint64_t>(1.5),
+            std::bit_cast<uint64_t>(2.5)));
+  }
+  // The second row repeats 1.5, so its -0.0 is normalized too.
+  setThrowExceptionOnDuplicateMapKeys(false);
+  EXPECT_THAT(
+      elementBitPatterns(
+          evaluate("map_keys(map(c0, c1, c2, c3, c4, c5))", data)),
+      testing::ElementsAre(
+          std::bit_cast<uint64_t>(-0.0),
+          std::bit_cast<uint64_t>(1.5),
+          std::bit_cast<uint64_t>(2.5),
+          std::bit_cast<uint64_t>(0.0),
+          std::bit_cast<uint64_t>(1.5)));
+}
+
+TEST_F(MapTest, normalizedRealKeys) {
+  const auto data = makeRowVector({
+      makeFlatVector<float>({-0.0f}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<float>({0.0f}),
+      makeFlatVector<int32_t>({2}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int32_t>({{2}}),
+      evaluate("map_values(map(c0, c1, c2, c3))", data));
+  // A cast to DOUBLE keeps the sign of zero.
+  EXPECT_THAT(
+      elementBitPatterns(evaluate(
+          "transform(map_keys(map(c0, c1, c2, c3)), x -> cast(x as double))",
+          data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(0.0)));
+}
+
+TEST_F(MapTest, normalizedNanKeyIsCanonical) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  const auto otherNaN =
+      std::bit_cast<double>(std::bit_cast<uint64_t>(kNaN) | uint64_t{1});
+  const auto data = makeRowVector({
+      makeFlatVector<double>({otherNaN}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<double>({1.5}),
+      makeFlatVector<int32_t>({2}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  // Without a repeated key, the NaN keeps its bits.
+  EXPECT_THAT(
+      elementBitPatterns(evaluate("map_keys(map(c0, c1, c2, c3))", data)),
+      testing::ElementsAre(
+          std::bit_cast<uint64_t>(otherNaN), std::bit_cast<uint64_t>(1.5)));
+  // With a repeated key, it is the canonical NaN.
+  EXPECT_THAT(
+      elementBitPatterns(
+          evaluate("map_keys(map(c0, c1, c2, c3, c2, c3))", data)),
+      testing::ElementsAre(
+          std::bit_cast<uint64_t>(kNaN), std::bit_cast<uint64_t>(1.5)));
+}
+
+TEST_F(MapTest, normalizationKeepsNestedSignedZero) {
+  // Spark normalizes only top-level floating-point keys.
+  const auto data = makeRowVector({
+      makeArrayVector<double>({{-0.0}}),
+      makeFlatVector<int32_t>({1}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  EXPECT_THAT(
+      elementBitPatterns(
+          evaluate("element_at(map_keys(map(c0, c1)), 1)", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(-0.0)));
 }
 
 TEST_F(MapTest, constantKeys) {

@@ -45,11 +45,18 @@ class SparkFunctionBaseTest : public FunctionBaseTest {
           std::to_string(partitionId)}});
   }
 
-  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config.
-  void setThrowExceptionOnDuplicateMapKeys(bool value) {
+  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config. With
+  // 'legacyDisableMapKeyNormalization', -0.0 and 0.0 map keys stay distinct, as
+  // with Spark's 'spark.sql.legacy.disableMapKeyNormalization'.
+  void setThrowExceptionOnDuplicateMapKeys(
+      bool value,
+      bool legacyDisableMapKeyNormalization = false) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
          value ? "true" : "false"},
+        {SparkQueryConfig::qualify(
+             SparkQueryConfig::kLegacyDisableMapKeyNormalization),
+         legacyDisableMapKeyNormalization ? "true" : "false"},
     });
   }
 

@@ -19,6 +19,10 @@ Map Functions
 
         SELECT map(array(1, 2), array(3, 4)); -- {[1, 2] -> [3, 4]}
 
+    Top-level ``REAL`` and ``DOUBLE`` keys ``-0.0`` and ``0.0`` are the same key, and so are all NaN
+    values, unless ``spark.legacy_disable_map_key_normalization`` is set. A map that has a repeated key
+    holds its keys normalized to ``0.0`` and the canonical NaN, as in Spark; the other maps keep their keys.
+
 .. spark:function:: map_concat(map1(K,V), map2(K,V), ..., mapN(K,V)) -> map(K,V)
 
     Returns the union of all the given maps. If a key is found in multiple given maps,
@@ -56,6 +60,10 @@ Map Functions
         SELECT map_from_arrays(array(1.0, 3.0), array('2', '4')); -- {1.0 -> 2, 3.0 -> 4}
         SELECT map_from_arrays(array(2, 1, 2), array('a', 'b', 'c')); -- {2 -> 'c', 1 -> 'b'}
 
+    Top-level ``REAL`` and ``DOUBLE`` keys ``-0.0`` and ``0.0`` are the same key, and so are all NaN
+    values, unless ``spark.legacy_disable_map_key_normalization`` is set. A map that has a repeated key
+    holds its keys normalized to ``0.0`` and the canonical NaN, as in Spark; the other maps keep their keys.
+
 .. spark:function:: map_from_entries(array(struct(K,V))) -> map(K,V)
 
     Returns a map created from the given array of entries. Throws exception if duplicate key or NULL
@@ -65,6 +73,10 @@ Map Functions
         SELECT map_from_entries(array(struct(1, 'a'), null)); -- {null}
         SELECT map_from_entries(array(struct(null, 'a'))); -- "map key cannot be null"
         SELECT map_from_entries(array(struct(1, 'a'), struct(1, 'b'))); -- "Duplicate map keys (1) are not allowed"
+
+    Top-level ``REAL`` and ``DOUBLE`` keys ``-0.0`` and ``0.0`` are the same key, and so are all NaN
+    values, unless ``spark.legacy_disable_map_key_normalization`` is set. The map holds its keys normalized
+    to ``0.0`` and the canonical NaN, as in Spark.
 
 .. spark:function:: map_keys(x(K,V)) -> array(K)
 
@@ -115,6 +127,10 @@ Map Functions
         SELECT transform_keys(map(1, 'a', 2, 'b'), (k, v) -> k + 10); -- {11 -> 'a', 12 -> 'b'}
         SELECT transform_keys(map(1, 'a', 2, 'b', 3, 'c'), (k, v) -> k % 2); -- {1 -> 'c', 0 -> 'b'} (LAST_WIN behavior)
         SELECT transform_keys(map(1, 'a', 2, 'b', 3, 'c'), (k, v) -> k % 2); -- "Duplicate map key was found: 1" (EXCEPTION behavior)
+
+    Top-level ``REAL`` and ``DOUBLE`` keys ``-0.0`` and ``0.0`` are the same key, and so are all NaN
+    values, unless ``spark.legacy_disable_map_key_normalization`` is set. A map that has a repeated key
+    holds its keys normalized to ``0.0`` and the canonical NaN, as in Spark; the other maps keep their keys.
 
 .. spark:function:: transform_values(map(K,V1), func) -> map(K,V2)
 

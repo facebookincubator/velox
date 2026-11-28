@@ -18,8 +18,10 @@
 #include <velox/common/base/Exceptions.h>
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
+#include "velox/functions/sparksql/JavaFloatingPoint.h"
 #include "velox/functions/sparksql/LastWin.h"
 #include "velox/functions/sparksql/MapFromArrays.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/vector/FlatMapVector.h"
 
 // The description of the map function in Spark
@@ -133,6 +135,55 @@ vector_size_t buildMapEntriesForConstantKeys(
   return numEntries;
 }
 
+// Returns the key Spark 4.0+ stores for a floating-point map key: 0.0 for
+// -0.0, and the canonical NaN for a NaN.
+template <typename T>
+T normalizeKey(T key) {
+  if (std::isnan(key)) {
+    return std::numeric_limits<T>::quiet_NaN();
+  }
+  // -0.0 == 0.0, so this turns -0.0 into 0.0.
+  return key == 0 ? T{0} : key;
+}
+
+// Whether normalizeKey changes a key: -0.0, or a NaN other than the canonical
+// one.
+template <typename T>
+bool needsNormalization(T key) {
+  if (key == 0) {
+    return std::signbit(key);
+  }
+  if (std::isnan(key)) {
+    return std::bit_cast<JavaFloatingPoint::Bits<T>>(key) !=
+        JavaFloatingPoint::bits(std::numeric_limits<T>::quiet_NaN());
+  }
+  return false;
+}
+
+template <typename T>
+VectorPtr normalizeFloatingPointKeys(
+    const VectorPtr& keys,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context) {
+  exec::LocalDecodedVector decoded(context, *keys, rows);
+  const bool normalized = rows.testSelected([&](vector_size_t row) {
+    return decoded->isNullAt(row) ||
+        !needsNormalization(decoded->valueAt<T>(row));
+  });
+  if (normalized) {
+    return keys;
+  }
+  auto result = BaseVector::create<FlatVector<T>>(
+      keys->type(), keys->size(), context.pool());
+  result->copy(keys.get(), 0, 0, keys->size());
+  rows.applyToSelected([&](vector_size_t row) {
+    if (!result->isNullAt(row)) {
+      result->set(row, normalizeKey(result->valueAt(row)));
+    }
+  });
+  return result;
+}
+
 } // namespace
 
 std::shared_ptr<MapVector> buildDeduplicatedMap(
@@ -145,7 +196,8 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
     const DecodedVector& decodedKeyElements,
     const VectorPtr& keyElements,
     const VectorPtr& valueElements,
-    bool throwOnDuplicateKey) {
+    bool throwOnDuplicateKey,
+    const VectorPtr& normalizedKeyElements) {
   const auto* keysArray = decodedKeys.base()->asUnchecked<ArrayVectorBase>();
   const auto* valuesArray =
       decodedValues.base()->asUnchecked<ArrayVectorBase>();
@@ -178,6 +230,27 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
       ? buildMapEntriesForConstantKeys(rows, context, buffers)
       : buildMapEntries(rows, context, buffers);
 
+  // A map with a repeated key holds its normalized keys, and the other maps
+  // keep their keys.
+  VectorPtr resultKeys = keyElements;
+  if (normalizedKeyElements != nullptr &&
+      normalizedKeyElements != keyElements) {
+    rows.applyToSelected([&](vector_size_t row) {
+      const auto keysIndex = decodedKeys.index(row);
+      const auto numKeys = keysArray->sizeAt(keysIndex);
+      if (buffers.rawSizes[row] == numKeys) {
+        return;
+      }
+      if (resultKeys == keyElements) {
+        resultKeys =
+            BaseVector::create(keyElements->type(), keyElements->size(), pool);
+        resultKeys->copy(keyElements.get(), 0, 0, keyElements->size());
+      }
+      const auto offset = keysArray->offsetAt(keysIndex);
+      resultKeys->copy(normalizedKeyElements.get(), offset, offset, numKeys);
+    });
+  }
+
   return std::make_shared<MapVector>(
       pool,
       outputType,
@@ -186,9 +259,23 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
       std::move(offsets),
       std::move(sizes),
       BaseVector::wrapInDictionary(
-          nullptr, std::move(keysIndices), numEntries, keyElements),
+          nullptr, std::move(keysIndices), numEntries, std::move(resultKeys)),
       BaseVector::wrapInDictionary(
           nullptr, std::move(valuesIndices), numEntries, valueElements));
+}
+
+VectorPtr normalizeMapKeys(
+    const VectorPtr& keys,
+    const SelectivityVector& rows,
+    exec::EvalCtx& context) {
+  switch (keys->typeKind()) {
+    case TypeKind::REAL:
+      return normalizeFloatingPointKeys<float>(keys, rows, context);
+    case TypeKind::DOUBLE:
+      return normalizeFloatingPointKeys<double>(keys, rows, context);
+    default:
+      return keys;
+  }
 }
 
 void checkNullAndDuplicateKeys(
@@ -325,9 +412,12 @@ class MapFunction : public exec::VectorFunction {
     }
 
     bool throwExceptionOnDuplicateMapKeys{false};
+    bool normalizeKeys{false};
     if (auto* ctx = context.execCtx()->queryCtx()) {
       throwExceptionOnDuplicateMapKeys =
           ctx->queryConfig().throwExceptionOnDuplicateMapKeys();
+      normalizeKeys = !SparkQueryConfig{ctx->queryConfig()}
+                           .legacyDisableMapKeyNormalization();
     }
 
     bool constantKeys{true};
@@ -352,7 +442,7 @@ class MapFunction : public exec::VectorFunction {
       auto* pool = context.pool();
       auto [keys, values] = toArrays(rows, args, mapSize, constantKeys, pool);
       std::vector<VectorPtr> arrays{std::move(keys), std::move(values)};
-      MapFromArraysFunction(throwExceptionOnDuplicateMapKeys)
+      MapFromArraysFunction(throwExceptionOnDuplicateMapKeys, normalizeKeys)
           .apply(rows, arrays, outputType, context, result);
     }
   }

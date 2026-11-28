@@ -1622,6 +1622,16 @@ Spark-specific Configuration
        (via an intermediate string) for values that cannot be represented exactly by floating
        point arithmetic, aligning the result with Spark. Disabled by default due to the
        significant performance regression; users sensitive to precision loss can enable it.
+   * - spark.legacy_disable_map_key_normalization
+     - bool
+     - false
+     - If false, top-level ``REAL`` and ``DOUBLE`` map keys created by Spark map-building functions, including ``map``,
+       ``map_from_arrays``, ``map_from_entries``, and ``transform_keys``, are normalized before deduplication.
+       Specifically, ``-0.0`` is normalized to ``0.0``, and all NaN values are normalized to the canonical NaN. As in
+       Spark, ``map_from_entries`` always returns the normalized keys, and the other functions return them only for a
+       map that has a repeated key. This matches Spark 4.0 behavior, where normalization can be disabled via
+       ``spark.sql.legacy.disableMapKeyNormalization``. If true, ``-0.0`` and ``0.0`` are treated as distinct keys,
+       matching Spark 3.x behavior. ``map_concat`` is not covered: it uses the shared Presto implementation.
 
 Tracing
 --------
