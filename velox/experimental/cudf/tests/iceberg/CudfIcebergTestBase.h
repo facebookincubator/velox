@@ -69,6 +69,10 @@ class CudfIcebergTestBase : public CudfHiveConnectorTestBase {
 
   uint64_t getFileSize(const std::string& path);
 
+  void assertDeletedRows(
+      const std::shared_ptr<facebook::velox::exec::Task>& task,
+      int64_t expected);
+
   /// Builds a table scan plan using the cudf iceberg connector.
   facebook::velox::core::PlanNodePtr makeTableScanPlan(
       const RowTypePtr& rowType);

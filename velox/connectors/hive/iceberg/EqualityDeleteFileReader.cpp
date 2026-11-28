@@ -322,14 +322,15 @@ void EqualityDeleteFileReader::convertGeospatialColumns(
   }
 }
 
-void EqualityDeleteFileReader::applyDeletes(
+vector_size_t EqualityDeleteFileReader::applyDeletes(
     const RowVectorPtr& output,
     BufferPtr deleteBitmap) {
   if (deleteKeyHashes_.empty() || output->size() == 0) {
-    return;
+    return 0;
   }
 
   auto* bitmap = deleteBitmap->asMutable<uint8_t>();
+  vector_size_t numDeleted = 0;
 
   // For each row in the output, compute its hash and probe the delete set.
   for (vector_size_t i = 0; i < output->size(); ++i) {
@@ -346,10 +347,12 @@ void EqualityDeleteFileReader::applyDeletes(
       auto& entry = it->second;
       if (equalRows(output, i, deleteRows_[entry.batchIndex], entry.rowIndex)) {
         bits::setBit(bitmap, i);
+        ++numDeleted;
         break;
       }
     }
   }
+  return numDeleted;
 }
 
 const std::vector<column_index_t>&

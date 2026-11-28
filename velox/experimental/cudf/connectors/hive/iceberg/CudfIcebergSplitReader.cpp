@@ -25,6 +25,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -485,6 +486,14 @@ CudfIcebergSplitReader::readNextChunk() {
     } else {
       rowCountOverride = numRows;
     }
+  }
+
+  if (isApplyingDeletes) {
+    const auto remainingRows = cudfTable->num_columns() > 0
+        ? cudfTable->num_rows()
+        : rowCountOverride.value();
+    ioStats_->addCounter(
+        "icebergDeletedRows", RuntimeCounter(numRows - remainingRows));
   }
 
   // Build output table by injecting missing columns at appropriate indices

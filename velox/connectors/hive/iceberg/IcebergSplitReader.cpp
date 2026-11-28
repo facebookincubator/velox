@@ -22,6 +22,7 @@
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/common/FileConfig.h"
@@ -1281,6 +1282,7 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
   }
 
   // Post-read filters and equality deletes share one bitmap, compacted once.
+  vector_size_t numEqualityDeletes = 0;
   if (rowsScanned > 0 &&
       (!postReadFilters_.empty() || !equalityDeleteFileReaders_.empty())) {
     auto outputRowVector = std::dynamic_pointer_cast<RowVector>(output);
@@ -1299,13 +1301,25 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       // Equality deletes need the data values, so they run after the read and
       // skip the rows already marked.
       for (auto& reader : equalityDeleteFileReaders_) {
-        reader->applyDeletes(outputRowVector, rowsToRemove_);
+        numEqualityDeletes +=
+            reader->applyDeletes(outputRowVector, rowsToRemove_);
       }
 
       removeRows(output, rawRowsToRemove, numRows, pool);
     }
   }
 
+  if (rowsScanned > 0 &&
+      (mutation.deletedRows || !equalityDeleteFileReaders_.empty())) {
+    // Avoids counting positional deletes + equality deletes twice
+    const auto numPositionDeletes = mutation.deletedRows
+        ? bits::countBits(
+              mutation.deletedRows, 0, static_cast<int32_t>(rowsScanned))
+        : 0;
+    addThreadLocalRuntimeStat(
+        "icebergDeletedRows",
+        RuntimeCounter(numPositionDeletes + numEqualityDeletes));
+  }
   return rowsScanned;
 }
 
