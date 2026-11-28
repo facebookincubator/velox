@@ -472,7 +472,8 @@ annotation, definition level, repetition level, and compression when useful.
   }
   ```
 
-- Purpose: Minimal struct fixture used to verify a single row struct scan.
+- Purpose: Minimal struct fixture used to verify a single row struct scan,
+  and `IS NULL` and `IS NOT NULL` filters on a required struct.
 
 ### `row_map_array.parquet`
 
