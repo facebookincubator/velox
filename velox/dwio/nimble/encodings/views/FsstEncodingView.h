@@ -232,9 +232,10 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
 
   // Reserves in 'stringDecoder' room for every string of the chunks
   // 'chunkIndices', of 'numCompressedBytes' compressed bytes: the most bytes
-  // that they can decode to when it shares buffers, which give the bytes that
-  // they do not take to later rooms, and else exactly the bytes that they
-  // decode to, which takes a pass over their compressed bytes.
+  // that they can decode to when it shares buffers and that fits a room of
+  // them, which give the bytes that they do not take to later rooms, and else
+  // exactly the bytes that they decode to, which takes a pass over their
+  // compressed bytes.
   void reserveDecodeBuffer(
       std::span<const uint32_t> chunkIndices,
       size_t numCompressedBytes,

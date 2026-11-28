@@ -154,7 +154,7 @@ TEST_F(DecodedStringBuffersTest, givesOversizeRoomABufferOfItsOwn) {
 
   // A room larger than a buffer of the largest size holds takes a buffer of
   // exactly its size, which no later room shares.
-  constexpr size_t kSize{DecodedStringBuffers::testingMaxBufferBytes() + 1};
+  constexpr size_t kSize{DecodedStringBuffers::kMaxBufferBytes + 1};
   const auto oversize = buffers.reserve(/*numReservedBytes=*/kSize);
   EXPECT_EQ(oversize.size(), kSize);
   std::fill_n(oversize.data(), 10, 'b');
