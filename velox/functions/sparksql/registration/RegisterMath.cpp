@@ -76,6 +76,20 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "round"});
   registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
   registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
+  registerUnaryIntegral<IntegralBRoundFunction>({prefix + "bround"});
+  registerUnaryFloatingPoint<BRoundFunction>({prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int8_t, int8_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int16_t, int16_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int32_t, int32_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<IntegralBRoundFunction, int64_t, int64_t, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, double, double, Constant<int32_t>>(
+      {prefix + "bround"});
+  registerFunction<BRoundFunction, float, float, Constant<int32_t>>(
+      {prefix + "bround"});
   registerFunction<UnHexFunction, Varbinary, Varchar>({prefix + "unhex"});
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});

@@ -164,6 +164,33 @@ struct DecimalArithmetic {
     return value < powerOfTen(precision) && value > -powerOfTen(precision);
   }
 
+  /// Divides by a positive divisor using HALF_UP rounding.
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static int128_t
+  divideWithRoundHalfUp(int128_t value, int128_t divisor) {
+    int128_t result;
+    divideWithRoundUp(result, value, divisor, false, 0, 0);
+    return result;
+  }
+
+  /// Divides by a positive divisor using HALF_EVEN rounding.
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE static int128_t
+  divideWithRoundHalfEven(int128_t value, int128_t divisor) {
+    VELOX_DCHECK_GT(divisor, 0);
+    const int128_t quotient = value / divisor;
+    const int128_t remainder = value % divisor;
+    if (remainder == 0) {
+      return quotient;
+    }
+
+    const int128_t absoluteRemainder = remainder < 0 ? -remainder : remainder;
+    const int128_t remainderComplement = divisor - absoluteRemainder;
+    if (absoluteRemainder > remainderComplement ||
+        (absoluteRemainder == remainderComplement && quotient % 2 != 0)) {
+      return quotient + (value < 0 ? -1 : 1);
+    }
+    return quotient;
+  }
+
   template <typename R, typename A, typename B>
   VELOX_GPU_COMPATIBLE inline static R divideWithRoundUp(
       R& r,

@@ -71,6 +71,41 @@ Mathematical Functions
 
     Returns the string representation of the long value ``x`` represented in binary.
 
+.. spark:function:: bround(x [, d]) -> [same as x] (ANSI compliant)
+
+    Like :spark:func:`round`, but uses HALF_EVEN instead of HALF_UP rounding.
+    Values exactly halfway between two results round to the nearest even value.
+    Supported input types are integral and floating-point types. If ``d`` is
+    omitted, it defaults to zero. If specified, ``d`` must be a constant
+    INTEGER expression. Decimal inputs use ``decimal_bround``.
+
+    Integral overflow follows Spark's two's-complement wraparound when ANSI
+    mode is disabled and raises an error when ANSI mode is enabled.
+    Floating-point NaN and infinity are returned unchanged.
+
+    Unlike ``round``'s native scale-column extension, ``bround`` requires a
+    constant scale to match Spark's foldable-scale contract. Floating-point
+    zero results are positive zero. Negative scales divide by ``10^abs(d)``
+    before rounding; positive scales with an infinite factor preserve the
+    input. These rules do not change ``round``'s existing behavior.
+
+    **Differences from Spark:** Floating-point inputs are rounded on their
+    binary value, not through Java's decimal string representation, so results
+    can differ. For example, ``bround(cast(0.575 as DOUBLE), 2)`` returns
+    ``0.57`` in Velox and ``0.58`` in Spark. Extreme integral and floating-point
+    scales can also differ from Spark. Integrations requiring exact Spark
+    results should validate these cases and fall back to Spark.
+
+    See `Spark's BRound expression
+    <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala>`_.
+
+    ::
+
+        SELECT bround(cast(2.5 as DOUBLE));       -- 2.0
+        SELECT bround(cast(3.5 as DOUBLE));       -- 4.0
+        SELECT bround(cast(2.55 as DOUBLE), 1);   -- 2.6
+        SELECT bround(cast(1.245 as DOUBLE), 2);  -- 1.25
+
 .. spark:function:: cbrt(x) -> double
 
     Returns the cube root of ``x``.

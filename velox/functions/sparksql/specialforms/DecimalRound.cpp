@@ -198,15 +198,14 @@ class DecimalRoundFunction : public exec::VectorFunction {
   const std::string name_;
 };
 
-// Rounds ties away from zero using the shared decimal division implementation.
-struct RoundHalfUpPolicy {
+// Shares nearest-round scale handling across division policies.
+template <auto divideWithRounding>
+struct NearestRoundPolicy {
   static int128_t divide(int128_t input, std::optional<int128_t> divisor) {
     if (!divisor.has_value()) {
       return 0;
     }
-    int128_t result;
-    DecimalUtil::divideWithRoundUp(result, input, divisor.value(), false, 0, 0);
-    return result;
+    return divideWithRounding(input, divisor.value());
   }
 };
 
@@ -289,8 +288,14 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
 void registerDecimalRoundingForms() {
   exec::registerFunctionCallToSpecialForm(
       kRoundDecimal,
-      std::make_unique<DecimalRoundCallToSpecialForm<RoundHalfUpPolicy>>(
+      std::make_unique<DecimalRoundCallToSpecialForm<
+          NearestRoundPolicy<DecimalUtil::divideWithRoundHalfUp>>>(
           kRoundDecimal, true));
+  exec::registerFunctionCallToSpecialForm(
+      kBRoundDecimal,
+      std::make_unique<DecimalRoundCallToSpecialForm<
+          NearestRoundPolicy<DecimalUtil::divideWithRoundHalfEven>>>(
+          kBRoundDecimal, true));
   exec::registerFunctionCallToSpecialForm(
       kCeilDecimal,
       std::make_unique<

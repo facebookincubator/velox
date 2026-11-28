@@ -37,62 +37,52 @@
 
 namespace facebook::velox::functions {
 
-/// Round function
-/// When AlwaysRoundNegDec is false, presto semantics is followed which does not
-/// round negative decimals for integrals and round it otherwise
-/// Note that is is likely techinically impossible for this function to return
-/// expected results in all cases as the loss of precision plagues it on both
-/// paths: factor multiplication for large numbers and addition of truncated
-/// number to the rounded fraction for small numbers.
-/// We are trying to minimize the loss of precision by using the best path for
-/// the number, but the journey is likely not over yet.
-/// If set, 'scaleFactor' must equal std::pow(10, decimals). round() uses it in
-/// place of computing the power, and still branches on 'decimals', so a
-/// mismatched value returns a wrong result without an error. A caller whose
-/// 'decimals' is constant computes the power once instead of once per row.
-template <typename TNum, typename TDecimals, bool alwaysRoundNegDec = false>
-VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
-    const TNum& number,
-    const TDecimals& decimals = 0,
-    std::optional<double> scaleFactor = std::nullopt) {
-  static_assert(!std::is_same_v<TNum, bool> && "round not supported for bool");
+namespace detail {
 
-  if constexpr (std::is_integral_v<TNum>) {
-    if constexpr (alwaysRoundNegDec) {
-      if (decimals >= 0)
-        return number;
-    } else {
-      return number;
-    }
-  }
-  VELOX_DCHECK(
-      !scaleFactor.has_value() || *scaleFactor == std::pow(10, decimals),
-      "scaleFactor must be 10^decimals");
-
-  if (!std::isfinite(number)) {
-    return number;
-  }
-
-  // If we just need to get rid of all the decimals.
-  if (decimals == 0) {
+template <bool halfEven, typename TNum>
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE auto roundToNearest(TNum number) {
+  if constexpr (halfEven) {
+    return std::nearbyint(number);
+  } else {
     return std::round(number);
   }
+}
 
-  // For negative 'decimals', we aren't going to lose any precision - we divide
-  // first (multiply by factor which is < 1.0).
-  if (decimals < 0) {
-    const double factor = scaleFactor ? *scaleFactor : std::pow(10, decimals);
-    return std::round(number * factor) / factor;
+} // namespace detail
+
+/// Computes the scaling factor for native decimal-place rounding.
+/// HALF_UP uses 10^decimals; HALF_EVEN uses 10^abs(decimals) so negative scales
+/// divide before rounding. HALF_EVEN accepts scales no wider than INTEGER.
+template <bool halfEven, typename TDecimals>
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE double roundingScaleFactor(
+    TDecimals decimals) {
+  if constexpr (halfEven) {
+    static_assert(std::is_integral_v<TDecimals> && sizeof(TDecimals) <= 4);
+    const int64_t exponent =
+        decimals < 0 ? -static_cast<int64_t>(decimals) : decimals;
+    return std::pow(10.0, static_cast<double>(exponent));
+  } else {
+    return std::pow(10, decimals);
   }
+}
 
-  // Get the fraction part and return number 'as is' if fraction part is 0.
-  const TNum trancated = std::trunc(number);
-  const TNum fraction = number - trancated;
-  if (fraction == 0.0)
+/// Rounds at a positive scale without losing whole units at large magnitudes.
+/// The optional factor must be 10^decimals when supplied.
+template <bool halfEven, typename TNum, typename TDecimals>
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum roundWithPositiveScale(
+    const TNum& number,
+    const TDecimals& decimals,
+    std::optional<double> scaleFactor) {
+  const TNum truncated = std::trunc(number);
+  const TNum fraction = number - truncated;
+  if (fraction == 0.0) {
     return number;
+  }
 
   const double factor = scaleFactor ? *scaleFactor : std::pow(10, decimals);
 
+  // Scaling the whole value retains more precision for smaller magnitudes;
+  // scaling only the fraction protects whole units at larger magnitudes.
   if constexpr (!std::is_integral_v<TNum>) {
     const auto scaled = number * factor;
     // An infinite factor cannot establish the decimal quantum. The magnitude
@@ -111,24 +101,97 @@ VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
         return number;
       }
     }
-    // Smaller numbers are less affected by precision loss being multiplied by
-    // the factor, but more affected by precision loss by adding truncated
-    // number to the rounded fraction in the end. Because of that, we use factor
-    // multiplication path on the smaller numbers.
-    // The threshold is a somewhat arbitrary/empirical number taking up 44 bits
-    // in the integer form.
-    if (fabs(number) < 17592186044415.F) {
-      return std::round(scaled) / factor;
+    if (fabs(number) < 17'592'186'044'415.F) {
+      return detail::roundToNearest<halfEven>(scaled) / factor;
     }
   }
 
-  // We implement the algorithm below for positive 'decimals' nd the large
-  // numbers because on the large numbers we would have precision loss when
-  // multiplying number by the factor, which would lose or gain some [power of
-  // 2] whole units.
+  const TNum roundedFractions =
+      detail::roundToNearest<halfEven>(fraction * factor) / factor;
+  return truncated + roundedFractions;
+}
 
-  const TNum roundedFractions = std::round(fraction * factor) / factor;
-  return trancated + roundedFractions;
+/// Round function
+/// When AlwaysRoundNegDec is false, presto semantics is followed which does not
+/// round negative decimals for integrals and round it otherwise
+/// Note that is is likely techinically impossible for this function to return
+/// expected results in all cases as the loss of precision plagues it on both
+/// paths: factor multiplication for large numbers and addition of truncated
+/// number to the rounded fraction for small numbers.
+/// We are trying to minimize the loss of precision by using the best path for
+/// the number, but the journey is likely not over yet.
+/// If set, 'scaleFactor' must equal roundingScaleFactor<halfEven>(decimals).
+/// Uses it in place of computing the power, and still branches on 'decimals',
+/// so a mismatched value returns a wrong result without an error. A caller
+/// whose 'decimals' is constant computes the power once instead of once per
+/// row. HALF_EVEN widens REAL inputs to DOUBLE for its working precision,
+/// normalizes zero and preserves inputs when a positive-scale factor is
+/// infinite. HALF_UP retains its existing working precision, zero and
+/// extreme-scale behavior.
+template <
+    typename TNum,
+    typename TDecimals,
+    bool alwaysRoundNegDec = false,
+    bool halfEven = false>
+VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE TNum round(
+    const TNum& number,
+    const TDecimals& decimals = 0,
+    std::optional<double> scaleFactor = std::nullopt) {
+  static_assert(!std::is_same_v<TNum, bool> && "round not supported for bool");
+
+  if constexpr (std::is_integral_v<TNum>) {
+    if constexpr (alwaysRoundNegDec) {
+      if (decimals >= 0)
+        return number;
+    } else {
+      return number;
+    }
+  }
+  VELOX_DCHECK(
+      !scaleFactor.has_value() ||
+          *scaleFactor == roundingScaleFactor<halfEven>(decimals),
+      "scaleFactor must match the rounding mode and scale");
+
+  if (!std::isfinite(number)) {
+    return number;
+  }
+
+  TNum result;
+  if (decimals == 0) {
+    result = detail::roundToNearest<halfEven>(number);
+  } else if (decimals < 0) {
+    const double factor =
+        scaleFactor ? *scaleFactor : roundingScaleFactor<halfEven>(decimals);
+    if constexpr (halfEven) {
+      result = std::isfinite(factor)
+          ? static_cast<TNum>(
+                detail::roundToNearest<true>(
+                    static_cast<double>(number) / factor) *
+                factor)
+          : 0;
+    } else {
+      // Keep reciprocal multiplication for existing HALF_UP callers.
+      result = detail::roundToNearest<false>(number * factor) / factor;
+    }
+  } else {
+    if constexpr (halfEven) {
+      const double factor =
+          scaleFactor ? *scaleFactor : roundingScaleFactor<true>(decimals);
+      // An infinite factor cannot establish the decimal quantum.
+      result = std::isfinite(factor)
+          ? static_cast<TNum>(roundWithPositiveScale<true>(
+                static_cast<double>(number), decimals, factor))
+          : number;
+    } else {
+      result = roundWithPositiveScale<false>(number, decimals, scaleFactor);
+    }
+  }
+
+  if constexpr (halfEven) {
+    return result == 0 ? TNum{0} : result;
+  } else {
+    return result;
+  }
 }
 
 // This is used by Velox for floating points plus.

@@ -15,87 +15,80 @@
  */
 #pragma once
 
-#include <bit>
 #include <bitset>
 #include <cmath>
 #include <limits>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 
 #include "velox/common/base/Doubles.h"
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
+#include "velox/functions/lib/IntegralRounding.h"
 #include "velox/functions/lib/ToHex.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
-#include "velox/type/DecimalArithmetic.h"
 
 namespace facebook::velox::functions::sparksql {
 
-/// Rounds integral values using HALF_UP and the session's overflow policy.
+/// Rounds integral values using the selected mode and session overflow policy.
 /// Unlike Spark's JVM evaluator, extreme negative scales return zero without
 /// constructing large powers of ten, and nonnegative scales return the input.
 /// Spark can throw at INTEGER scale extremes, with interpreted and generated
 /// execution differing. Scale columns are a native extension; Spark requires a
-/// foldable scale. Integrations must guard offload to preserve Spark behavior.
-template <typename TExec>
-struct IntegralRoundFunction {
-  template <typename T>
-  void initialize(
-      const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
-      const T* value) {
-    initialize(inputTypes, config, value, nullptr);
-  }
-
+/// foldable scale. HALF_EVEN requires a constant scale to match that contract;
+/// HALF_UP preserves the existing scale-column extension.
+template <typename TExec, bool halfEven>
+struct IntegralRoundingFunction {
+  /// Captures the session's overflow policy for the unary form.
   template <typename T>
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
-      const T* /*value*/,
-      const int32_t* /*scale*/) {
+      const T* /*value*/) {
     ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
+  /// Captures the overflow policy and validates the scale contract.
+  template <typename T>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const T* value,
+      const int32_t* scale) {
+    initialize(inputTypes, config, value);
+    if constexpr (halfEven) {
+      VELOX_USER_CHECK_NOT_NULL(
+          scale,
+          "The second argument of bround must be a constant expression.");
+    }
+  }
+
+  /// Applies rounding with the overflow policy captured at initialization.
   template <typename T>
   FOLLY_ALWAYS_INLINE Status
   call(T& result, const T& value, const int32_t scale = 0) {
-    if (scale >= 0) {
-      result = value;
-      return Status::OK();
-    }
-    const auto digitsToDrop = -static_cast<int64_t>(scale);
-    if (digitsToDrop > std::numeric_limits<T>::digits10 + 1) {
-      result = 0;
-      return Status::OK();
-    }
-
-    // The divisor is at most 10^19, so division and rounding fit in int128_t.
-    const auto divisor = DecimalArithmetic::kPowersOfTen[digitsToDrop];
-    int128_t rounded;
-    DecimalArithmetic::divideWithRoundUp<int128_t, T, int128_t>(
-        rounded, value, divisor, false, 0, 0);
-    rounded *= divisor;
-    if (ansiEnabled_ &&
-        (rounded < std::numeric_limits<T>::min() ||
-         rounded > std::numeric_limits<T>::max())) {
-      if (threadSkipErrorDetails()) {
-        return Status::UserError();
-      }
-      return Status::UserError(
-          "Arithmetic overflow: round({}, {})",
-          static_cast<int64_t>(value),
-          scale);
-    }
-
-    // Unsigned conversion followed by bit_cast gives Java's two's-complement
-    // narrowing without signed overflow.
-    result = std::bit_cast<T>(static_cast<std::make_unsigned_t<T>>(rounded));
-    return Status::OK();
+    constexpr std::string_view functionName = halfEven ? "bround" : "round";
+    return functions::roundIntegral(
+        result,
+        value,
+        scale,
+        ansiEnabled_,
+        halfEven ? DecimalArithmetic::divideWithRoundHalfEven
+                 : DecimalArithmetic::divideWithRoundHalfUp,
+        functionName);
   }
 
  private:
+  // Retains the session policy even if the query context changes later.
   bool ansiEnabled_{false};
 };
+
+template <typename TExec>
+using IntegralRoundFunction = IntegralRoundingFunction<TExec, false>;
+
+template <typename TExec>
+using IntegralBRoundFunction = IntegralRoundingFunction<TExec, true>;
 
 // The abs implementation is used for primitive types except for decimal type.
 template <typename TExec>
