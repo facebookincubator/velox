@@ -15,17 +15,13 @@
  */
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/ElementAt.h"
 #include "velox/functions/sparksql/Map.h"
 #include "velox/functions/sparksql/MapFromArrays.h"
 #include "velox/functions/sparksql/MapFromEntries.h"
 #include "velox/functions/sparksql/TransformKeys.h"
 
 namespace facebook::velox::functions {
-extern void registerElementAtFunction(
-    const std::string& name,
-    bool enableCaching,
-    std::string_view defaultOwner = {});
-
 void registerSparkMapFunctions(const std::string& prefix) {
   sparksql::registerMapFromEntriesFunction(prefix + "map_from_entries");
   // Spark and Presto share map_filter and transform_values: the lambda
@@ -47,8 +43,7 @@ void registerMapFunctions(const std::string& prefix) {
   registerMapFunction(prefix + "map");
   registerMapFromArraysFunction(prefix + "map_from_arrays");
   registerTransformKeysFunction(prefix + "transform_keys");
-  // This is the semantics of spark.sql.ansi.enabled = false.
-  registerElementAtFunction(prefix + "element_at", true);
+  registerElementAtFunction(prefix + "element_at");
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions
