@@ -14,14 +14,19 @@
  * limitations under the License.
  */
 
+#include <array>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <random>
 #include <span>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
 
+#include <fmt/format.h>
+#include <folly/Random.h>
+#include <glog/logging.h>
 #include <gtest/gtest.h>
 #include <lz4.h>
 #include <zstd.h>
@@ -41,6 +46,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -446,6 +452,243 @@ TEST_F(StreamDataTest, releaseSharedDictionaryAlphabet) {
   stream.releaseSharedDictionaryAlphabet();
   ASSERT_TRUE(stream.hasEncoding());
   EXPECT_EQ(decodeInt32s(stream, 2), (std::vector<int32_t>{4, 5}));
+}
+
+namespace {
+
+// One payload of a stream: its encoded data and the row-count format it was
+// encoded with.
+struct StreamPayload {
+  std::string_view data;
+  bool useVarintRowCount;
+};
+
+// Random values of one of a few shapes, from `rng` alone so that a seed
+// reproduces them.
+template <typename T>
+Vector<T> makeRandomStreamValues(
+    memory::MemoryPool& pool,
+    std::mt19937& rng,
+    facebook::nimble::Buffer& buffer) {
+  const auto numRows = 1 + folly::Random::rand32(600, rng);
+  const auto randomValue = [&]() -> T {
+    if constexpr (std::is_same_v<T, std::string_view>) {
+      std::string value(folly::Random::rand32(24, rng), '\0');
+      for (auto& character : value) {
+        character = static_cast<char>('a' + folly::Random::rand32(4, rng));
+      }
+      return buffer.writeString(value);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      return folly::Random::oneIn(8, rng);
+    } else if constexpr (std::is_floating_point_v<T>) {
+      return static_cast<T>(folly::Random::rand32(1'000, rng)) / T{8};
+    } else {
+      return static_cast<T>(folly::Random::rand64(rng));
+    }
+  };
+  // Number of distinct values to draw rows from: one (constant), a few, or
+  // every row its own.
+  const std::array<uint32_t, 3> numDistinctChoices{1, 4, numRows};
+  const auto numDistinct = numDistinctChoices[folly::Random::rand32(3, rng)];
+  Vector<T> distinct{&pool};
+  for (uint32_t i = 0; i < numDistinct; ++i) {
+    distinct.push_back(randomValue());
+  }
+  Vector<T> values{&pool};
+  values.reserve(numRows);
+  for (uint32_t row = 0; row < numRows; ++row) {
+    values.push_back(distinct[folly::Random::rand32(numDistinct, rng)]);
+  }
+  return values;
+}
+
+// Encodes `values` with random encodings. Half of the time the payload, when
+// not nullable, takes the layout of `previous`, so that it rebinds.
+template <typename T>
+StreamPayload encodeRandomStreamPayload(
+    const Vector<T>& values,
+    const std::optional<StreamPayload>& previous,
+    bool useVarintRowCount,
+    memory::MemoryPool& pool,
+    std::mt19937& rng,
+    facebook::nimble::Buffer& buffer) {
+  Encoding::Options options;
+  options.useVarintRowCount = useVarintRowCount;
+  const std::span<const T> span{values.data(), values.size()};
+  if (previous.has_value() &&
+      previous->useVarintRowCount == useVarintRowCount &&
+      folly::Random::oneIn(2, rng)) {
+    try {
+      // Nested streams the layout lacks get random encodings.
+      auto sameLayoutPolicy = std::make_unique<
+          ReplayedEncodingSelectionPolicy<T>>(
+          EncodingLayoutCapture::capture(previous->data, options),
+          CompressionOptions{},
+          [factory =
+               facebook::nimble::testing::RandomEncodingSelectionPolicyFactory{
+                   rng()}](DataType dataType) {
+            return factory.createPolicy(dataType);
+          });
+      return {
+          EncodingFactory::encode<T>(
+              std::move(sameLayoutPolicy), span, buffer, options),
+          useVarintRowCount};
+    } catch (const NimbleUserError& e) {
+      if (e.errorCode() != facebook::nimble::error_code::IncompatibleEncoding) {
+        throw;
+      }
+    }
+  }
+  auto policy = std::make_unique<
+      facebook::nimble::testing::RandomEncodingSelectionPolicy<T>>(
+      rng(),
+      facebook::nimble::testing::RandomEncodingSelectionPolicyFactory::
+          defaultEncodingChoices());
+  if (!folly::Random::oneIn(4, rng)) {
+    return {
+        EncodingFactory::encode<T>(std::move(policy), span, buffer, options),
+        useVarintRowCount};
+  }
+  Vector<bool> nonNulls{&pool};
+  for (size_t row = 0; row < values.size(); ++row) {
+    nonNulls.push_back(!folly::Random::oneIn(3, rng));
+  }
+  return {
+      EncodingFactory::encodeNullable<T>(
+          std::move(policy),
+          span,
+          std::span<const bool>{nonNulls.data(), nonNulls.size()},
+          buffer,
+          options),
+      useVarintRowCount};
+}
+
+// Decodes the next `numRows` of both streams and expects the same values and
+// nulls.
+template <typename T>
+void expectSameStreamRows(
+    uint32_t numRows,
+    memory::MemoryPool& pool,
+    serde::StreamData& rebound,
+    serde::StreamData& rebuilt) {
+  constexpr uint32_t kWidth =
+      std::is_same_v<T, std::string_view> ? 0 : sizeof(T);
+  Vector<T> reboundValues{&pool, numRows};
+  Vector<T> rebuiltValues{&pool, numRows};
+  std::vector<uint64_t> reboundNulls(bits::nwords(numRows), ~0ULL);
+  std::vector<uint64_t> rebuiltNulls(bits::nwords(numRows), ~0ULL);
+  const auto reboundResult = rebound.decode(
+      reboundValues.data(), /*offset=*/0, numRows, kWidth, [&]() -> void* {
+        return reboundNulls.data();
+      });
+  const auto rebuiltResult = rebuilt.decode(
+      rebuiltValues.data(), /*offset=*/0, numRows, kWidth, [&]() -> void* {
+        return rebuiltNulls.data();
+      });
+  ASSERT_EQ(reboundResult.numOutputRows, rebuiltResult.numOutputRows);
+  ASSERT_EQ(reboundResult.nonNullOutputRows, rebuiltResult.nonNullOutputRows);
+  ASSERT_EQ(reboundNulls, rebuiltNulls);
+  for (uint32_t row = 0; row < numRows; ++row) {
+    if (bits::isBitSet(rebuiltNulls.data(), row)) {
+      ASSERT_EQ(
+          EncodingPhysicalType<T>::asEncodingPhysicalType(reboundValues[row]),
+          EncodingPhysicalType<T>::asEncodingPhysicalType(rebuiltValues[row]))
+          << "row " << row << " of " << numRows;
+    }
+  }
+}
+
+// Feeds one random sequence of payloads of a `T` stream through two
+// StreamData, one rebinding its encoding on reset() and one rebuilding it,
+// reads both through the same random skips and decodes, and expects the same
+// rows.
+template <typename T>
+void expectRebindDecodesLikeRebuild(
+    memory::MemoryPool& pool,
+    std::mt19937& rng) {
+  SCOPED_TRACE(toString(facebook::nimble::TypeTraits<T>::dataType));
+  facebook::nimble::Buffer buffer{pool};
+  const bool streamUsesVarintRowCount = folly::Random::oneIn(2, rng);
+  std::vector<StreamPayload> payloads;
+  const auto numPayloads = 2 + folly::Random::rand32(15, rng);
+  for (uint32_t i = 0; i < numPayloads; ++i) {
+    // Now and then a payload switches the row-count format.
+    const bool useVarintRowCount = folly::Random::oneIn(8, rng)
+        ? !streamUsesVarintRowCount
+        : streamUsesVarintRowCount;
+    const auto values = makeRandomStreamValues<T>(pool, rng, buffer);
+    payloads.push_back(
+        encodeRandomStreamPayload<T>(
+            values,
+            payloads.empty() ? std::nullopt
+                             : std::optional<StreamPayload>{payloads.back()},
+            useVarintRowCount,
+            pool,
+            rng,
+            buffer));
+  }
+
+  std::vector<BufferPtr> reboundStringBuffers;
+  std::vector<BufferPtr> rebuiltStringBuffers;
+  BufferPtr reboundDecompressionBuffer;
+  BufferPtr rebuiltDecompressionBuffer;
+  const auto makeStream = [&](std::vector<BufferPtr>& stringBuffers,
+                              BufferPtr& decompressionBuffer) {
+    return serde::StreamData(
+        payloads[0].data,
+        ScalarKind::Undefined,
+        stringBuffers,
+        &pool,
+        serde::StreamData::Options{
+            .streamEncodingUsesVarintRowCount = payloads[0].useVarintRowCount,
+            .decompressionBuffer = &decompressionBuffer});
+  };
+  auto rebound = makeStream(reboundStringBuffers, reboundDecompressionBuffer);
+  auto rebuilt = makeStream(rebuiltStringBuffers, rebuiltDecompressionBuffer);
+  for (size_t i = 0; i < payloads.size(); ++i) {
+    SCOPED_TRACE(fmt::format("payload {} of {}", i, payloads.size()));
+    if (i > 0) {
+      rebound.reset(
+          payloads[i].data,
+          {.useVarintRowCount = payloads[i].useVarintRowCount},
+          /*rebindEncoding=*/true);
+      rebuilt.reset(
+          payloads[i].data,
+          {.useVarintRowCount = payloads[i].useVarintRowCount},
+          /*rebindEncoding=*/false);
+    }
+    ASSERT_EQ(rebound.remainingRows(), rebuilt.remainingRows());
+    while (rebuilt.remainingRows() > 0) {
+      const auto runRows =
+          1 + folly::Random::rand32(rebuilt.remainingRows(), rng);
+      if (folly::Random::oneIn(3, rng)) {
+        rebound.skip(runRows);
+        rebuilt.skip(runRows);
+      } else {
+        expectSameStreamRows<T>(runRows, pool, rebound, rebuilt);
+      }
+    }
+  }
+}
+
+} // namespace
+
+// Draws one seed per process; repeat with --stress-runs.
+TEST_F(StreamDataTest, resetRebindDecodesLikeRebuild) {
+  const auto seed = folly::Random::rand32();
+  LOG(INFO) << "resetRebindDecodesLikeRebuild seed: " << seed;
+  SCOPED_TRACE(fmt::format("seed {}", seed));
+  std::mt19937 rng(seed);
+  expectRebindDecodesLikeRebuild<bool>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<int8_t>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<uint16_t>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<int32_t>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<uint32_t>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<int64_t>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<uint64_t>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<float>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<double>(*pool_, rng);
+  expectRebindDecodesLikeRebuild<std::string_view>(*pool_, rng);
 }
 
 // ---------------------------------------------------------------------------
