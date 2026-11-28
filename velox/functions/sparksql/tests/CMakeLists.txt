@@ -98,6 +98,7 @@ add_executable(
   UnBase64Test.cpp
   UnscaledValueFunctionTest.cpp
   UpperLowerTest.cpp
+  UrlDecodeTest.cpp
   UuidTest.cpp
   VarcharTypeWriteSideCheckTest.cpp
   XxHash64Test.cpp

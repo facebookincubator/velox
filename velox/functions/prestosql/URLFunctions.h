@@ -117,38 +117,43 @@ FOLLY_ALWAYS_INLINE void urlEscape(TOutString& output, const TInString& input) {
   output.resize(outIndex);
 }
 
-FOLLY_ALWAYS_INLINE char decodeByte(const char* p, const char* end) {
+/// Decodes the two hex digits that follow the '%' at ``p`` into ``result``.
+/// Returns a user error if fewer than two characters follow or they are not a
+/// valid non-negative hex number.
+FOLLY_ALWAYS_INLINE Status
+decodeByte(const char* p, const char* end, char& result) {
+  if (p + 2 >= end) {
+    return Status::UserError("Incomplete trailing escape (%) pattern");
+  }
+
   char buf[3];
+  buf[0] = p[1];
+  buf[1] = p[2];
   buf[2] = '\0';
 
-  if (p + 2 < end) {
-    buf[0] = p[1];
-    buf[1] = p[2];
-    p += 2;
+  char* endptr;
+  auto val = strtol(buf, &endptr, 16);
 
-    char* endptr;
-    auto val = strtol(buf, &endptr, 16);
-
-    VELOX_USER_CHECK(
-        endptr == buf + 2 && !std::isspace(buf[0]) && !std::isspace(buf[1]),
-        "Illegal hex characters in escape (%) pattern: {}",
-        buf);
-
-    VELOX_USER_CHECK_GE(
-        val,
-        0,
-        "Illegal hex characters in escape (%) pattern - negative value");
-
-    return val;
-  } else {
-    VELOX_USER_FAIL("Incomplete trailing escape (%) pattern");
+  if (endptr != buf + 2 || std::isspace(buf[0]) || std::isspace(buf[1])) {
+    return Status::UserError(
+        "Illegal hex characters in escape (%) pattern: {}", buf);
   }
+  if (val < 0) {
+    return Status::UserError(
+        "Illegal hex characters in escape (%) pattern - negative value");
+  }
+
+  result = val;
+  return Status::OK();
 }
 
+/// Decodes the percent-encoded ``input`` into ``output``, and '+' into a space
+/// when ``unescapePlus`` is true. Writes U+FFFD for decoded bytes that are not
+/// valid UTF-8. Returns a user error on a malformed escape, in which case
+/// ``output`` holds a partial result.
 template <typename TOutString, typename TInString, bool unescapePlus = false>
-FOLLY_ALWAYS_INLINE void urlUnescape(
-    TOutString& output,
-    const TInString& input) {
+FOLLY_ALWAYS_INLINE Status
+tryUrlUnescape(TOutString& output, const TInString& input) {
   auto inputSize = input.size();
   output.resize(inputSize);
 
@@ -164,7 +169,8 @@ FOLLY_ALWAYS_INLINE void urlUnescape(
       }
     }
     if (*p == '%') {
-      char firstByte = decodeByte(p, end);
+      char firstByte;
+      VELOX_RETURN_NOT_OK(decodeByte(p, end, firstByte));
       int32_t charLength = firstByteCharLength(&firstByte);
 
       if (charLength == 1) {
@@ -184,7 +190,8 @@ FOLLY_ALWAYS_INLINE void urlUnescape(
 
         // Iterate over each percent encoded byte of the UTF-8 character.
         while (charLengthRemaining > 0 && p + 3 < end && *(p + 3) == '%') {
-          char val = decodeByte(p + 3, end);
+          char val;
+          VELOX_RETURN_NOT_OK(decodeByte(p + 3, end, val));
 
           if (!utf_cont(val)) {
             // If the byte is not a continuation character this is not valid
@@ -231,6 +238,17 @@ FOLLY_ALWAYS_INLINE void urlUnescape(
     }
   }
   output.resize(outputBuffer - output.data());
+  return Status::OK();
+}
+
+/// Same as tryUrlUnescape, but throws a user error on a malformed escape.
+template <typename TOutString, typename TInString, bool unescapePlus = false>
+FOLLY_ALWAYS_INLINE void urlUnescape(
+    TOutString& output,
+    const TInString& input) {
+  const auto status =
+      tryUrlUnescape<TOutString, TInString, unescapePlus>(output, input);
+  VELOX_USER_CHECK(status.ok(), "{}", status.message());
 }
 
 } // namespace detail
