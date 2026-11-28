@@ -107,7 +107,7 @@ jobs:
       - name: Restore ccache
         continue-on-error: true
         timeout-minutes: 30
-        uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/restore@24694de13374ba623ae8fc839c90bbc6c3009e12
         id: restore-cache
         with:
           clean: true
