@@ -26,19 +26,22 @@ namespace facebook::velox::parquet {
 /// Decode plain-encoded boolean columns from Parquet.
 ///
 /// Parquet stores booleans as a packed bit stream in LSB-first order.
-/// The readWithVisitor fast path processes 8 booleans per byte when
-/// reading dense sequential values without nulls.
 class BooleanDecoder {
  public:
-  BooleanDecoder(const char* start, const char* /*end*/)
-      : bufferStart_(start) {}
+  BooleanDecoder(const char* start, const char* end)
+      : bufferStart_(start), bufferEnd_(end) {}
 
   /// Reset to decode from a new page buffer without reallocating.
-  void reset(const char* start, const char* /*end*/) {
+  void reset(const char* start, const char* end) {
     bufferStart_ = start;
+    bufferEnd_ = end;
     remainingBits_ = 0;
     reversedLastByte_ = 0;
   }
+
+  /// Decode consecutive non-null values into one byte per value, preserving
+  /// unread bits for the next read.
+  void readDense(int32_t numValues, int8_t* output);
 
   void skip(uint64_t numValues) {
     skip<false>(numValues, 0, nullptr);
@@ -202,6 +205,7 @@ class BooleanDecoder {
   size_t remainingBits_{0};
   uint8_t reversedLastByte_{0};
   const char* bufferStart_{nullptr};
+  const char* bufferEnd_{nullptr};
 };
 
 } // namespace facebook::velox::parquet

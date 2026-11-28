@@ -15,10 +15,7 @@
  */
 
 // Micro-benchmark for the Parquet BooleanDecoder.
-// Bypasses the full reader pipeline to isolate decoder performance.
-//
-// Decoders benchmarked:
-//   - BooleanDecoder (PLAIN boolean, bit-by-bit)
+// Compares visitor-based and direct output for dense PLAIN booleans.
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
@@ -90,16 +87,8 @@ class BenchmarkVisitor {
 
 constexpr int kBenchNumValues = 100'000;
 
-} // namespace
-
-// ===========================================================================
-// BooleanDecoder benchmark
-//
-// Baseline for the batch boolean decoding optimization.
-// Measures per-bit decode overhead.
-// ===========================================================================
-
-BENCHMARK(BooleanDecoder_100k) {
+template <bool useDenseOutput>
+void benchmarkBooleanDecoder() {
   folly::BenchmarkSuspender suspender;
 
   std::vector<bool> values(kBenchNumValues);
@@ -113,7 +102,11 @@ BENCHMARK(BooleanDecoder_100k) {
   suspender.dismiss();
 
   BooleanDecoder decoder(encoded.data(), encoded.data() + encoded.size());
-  decoder.readWithVisitor<false>(nullptr, visitor);
+  if constexpr (useDenseOutput) {
+    decoder.readDense(kBenchNumValues, output.data());
+  } else {
+    decoder.readWithVisitor<false>(nullptr, visitor);
+  }
 
   suspender.rehire();
 
@@ -124,6 +117,16 @@ BENCHMARK(BooleanDecoder_100k) {
     checksum += value;
   }
   folly::doNotOptimizeAway(checksum);
+}
+
+} // namespace
+
+BENCHMARK(BooleanDecoder_100k) {
+  benchmarkBooleanDecoder<false>();
+}
+
+BENCHMARK_RELATIVE(BooleanDecoderDense_100k) {
+  benchmarkBooleanDecoder<true>();
 }
 
 BENCHMARK_DRAW_LINE();
