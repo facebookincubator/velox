@@ -4222,6 +4222,80 @@ TEST_P(NimbleIndexProjectorTest, projectRowsReleasesRetainedNodeValues) {
   EXPECT_EQ(leafPool_->usedBytes(), bytesAfterFirst);
 }
 
+// Point lookups of neighboring rows return the array values of every flat map
+// key in the right map entries, including null and empty arrays and keys
+// missing from some rows.
+TEST_P(NimbleIndexProjectorTest, projectRowsReadsFlatMapArrayValues) {
+  constexpr vector_size_t kNumRows{16};
+  constexpr int32_t kNumKeys{4};
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(INTEGER(), ARRAY(BIGINT()))}});
+  // Key k is missing from the rows where (row + k) % 3 is 0, holds an array
+  // of (row + k) % 4 values elsewhere, and is null in row 5 for key 2.
+  std::vector<vector_size_t> offsets;
+  std::vector<int32_t> mapKeys;
+  std::vector<std::optional<std::vector<std::optional<int64_t>>>> mapValues;
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    offsets.push_back(static_cast<vector_size_t>(mapKeys.size()));
+    for (int32_t key = 1; key <= kNumKeys; ++key) {
+      if ((row + key) % 3 == 0) {
+        continue;
+      }
+      mapKeys.push_back(key);
+      if (row == 5 && key == 2) {
+        mapValues.emplace_back(std::nullopt);
+        continue;
+      }
+      const int32_t numValues = (row + key) % 4;
+      std::vector<std::optional<int64_t>> values;
+      values.reserve(numValues);
+      for (int32_t i = 0; i < numValues; ++i) {
+        values.emplace_back(row * 100 + key * 10 + i);
+      }
+      mapValues.emplace_back(std::move(values));
+    }
+  }
+  const auto features = vectorMaker_->mapVector(
+      offsets,
+      vectorMaker_->flatVector<int32_t>(mapKeys),
+      vectorMaker_->arrayVectorNullable<int64_t>(mapValues));
+  const auto batch = vectorMaker_->rowVector(
+      {"key", "features"},
+      {vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return static_cast<int64_t>(row); }),
+       features});
+  writeData({batch}, {"key"}, {{"features", {}}}, /*stripeSize=*/1 << 20);
+  std::vector<Subfield> subfields;
+  subfields.reserve(kNumKeys);
+  for (int32_t key = 1; key <= kNumKeys; ++key) {
+    subfields.emplace_back(fmt::format("features[{}]", key));
+  }
+  auto projector = createProjector(subfields);
+
+  const std::vector<int64_t> pointKeys{3, 4, 5, 4, 9};
+  std::vector<velox::serializer::EncodedKeyBounds> lookups;
+  lookups.reserve(pointKeys.size() + 1);
+  for (const auto key : pointKeys) {
+    lookups.push_back(makePointLookup(rowType, {"key"}, key));
+  }
+  lookups.push_back(makeRangeLookup(rowType, {"key"}, 10, 14));
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan(std::move(lookups));
+  const auto result = projectRows(*projector, *request, {});
+
+  const std::vector<vector_size_t> expectedRows{3, 4, 5, 4, 9, 10, 11, 12, 13};
+  auto expectedFeatures = BaseVector::create(
+      features->type(),
+      static_cast<vector_size_t>(expectedRows.size()),
+      leafPool_.get());
+  for (size_t i = 0; i < expectedRows.size(); ++i) {
+    expectedFeatures->copy(
+        features.get(), static_cast<vector_size_t>(i), expectedRows[i], 1);
+  }
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector({"features"}, {expectedFeatures}), result.values);
+}
+
 TEST_P(NimbleIndexProjectorTest, preservesStreamRowCountEncoding) {
   constexpr vector_size_t kNumRows{64};
   constexpr uint32_t kRequestStart{10};
