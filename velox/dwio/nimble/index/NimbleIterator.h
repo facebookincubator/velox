@@ -121,6 +121,16 @@ class NimbleIterator {
 
     /// Target minimum scalar streams per planned decode task.
     uint32_t minStreamsPerDecodeTask{1};
+
+    /// Decodes the strings that lie uncompressed in the loaded streams as
+    /// views over the loaded bytes instead of copies: each stripe binds the
+    /// stream reader with buffers that hold its loaded streams
+    /// (makeStreamBufferHolders()). The decoded rows then keep the loaded
+    /// bytes of their stripe alive, cached blocks included, for as long as the
+    /// rows live. Only a decode that covers at least a quarter of the rows of a
+    /// stream's chunks returns views. A point lookup decodes one row of each
+    /// stream, so it returns views only in chunks of at most four rows.
+    bool zeroCopyStrings{false};
   };
 
   /// Creates an iterator over the output entries that 'entryDecoder' decodes

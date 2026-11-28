@@ -231,6 +231,16 @@ class NimbleIndexProjector {
     /// Changing it between calls rebuilds the projector's StreamReader. See
     /// Encoding::Options::cacheEncodingView.
     bool cacheEncodingView{false};
+    /// Returns the strings that lie uncompressed in the loaded streams as
+    /// views over the loaded bytes instead of copies: co_projectRows() hands
+    /// its StreamReader buffers that hold the loaded streams of each stripe
+    /// (makeStreamBufferHolders()). The result then keeps the loaded bytes of
+    /// those stripes alive, cached blocks included, until it is released. Only
+    /// a read that covers at least a quarter of the rows of a stream's chunks
+    /// returns views; a sparser read copies its strings either way, as a point
+    /// lookup does in a chunk of more than four rows. Both settings return the
+    /// same rows.
+    bool zeroCopyStrings{false};
   };
 
   /// Serialized output for a single request.
