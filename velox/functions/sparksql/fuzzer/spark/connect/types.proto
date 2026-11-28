@@ -23,8 +23,8 @@ option java_multiple_files = true;
 option java_package = "org.apache.spark.connect.proto";
 option go_package = "internal/generated";
 
-// This message describes the logical [[DataType]] of something. It does not
-// carry the value itself but only describes it.
+// This message describes the logical [[DataType]] of something. It does not carry the value
+// itself but only describes it.
 message DataType {
   oneof kind {
     NULL null = 1;
@@ -62,12 +62,25 @@ message DataType {
     Array array = 20;
     Struct struct = 21;
     Map map = 22;
+    Variant variant = 25;
 
     // UserDefinedType
     UDT udt = 23;
 
+    // Geospatial types
+    Geometry geometry = 26;
+
+    Geography geography = 27;
+
     // UnparsedDataType
     Unparsed unparsed = 24;
+
+    Time time = 28;
+
+    // Nanosecond-capable timestamp types (precision 7..9). NTZ and LTZ are distinct kinds
+    // even though their physical value is identical, mirroring timestamp vs timestamp_ntz.
+    TimestampNTZNanos timestamp_ntz_nanos = 29;
+    TimestampLTZNanos timestamp_ltz_nanos = 30;
   }
 
   message Boolean {
@@ -100,6 +113,7 @@ message DataType {
 
   message String {
     uint32 type_variation_reference = 1;
+    string collation = 2;
   }
 
   message Binary {
@@ -120,6 +134,25 @@ message DataType {
 
   message TimestampNTZ {
     uint32 type_variation_reference = 1;
+  }
+
+  message Time {
+    optional int32 precision = 1;
+    uint32 type_variation_reference = 2;
+  }
+
+  // Timestamp without time zone with nanosecond-capable fractional-second precision.
+  message TimestampNTZNanos {
+    // Number of fractional-second digits. Valid values are 7, 8, and 9. If omitted, defaults to 9.
+    optional int32 precision = 1;
+    uint32 type_variation_reference = 2;
+  }
+
+  // Timestamp with local time zone with nanosecond-capable fractional-second precision.
+  message TimestampLTZNanos {
+    // Number of fractional-second digits. Valid values are 7, 8, and 9. If omitted, defaults to 9.
+    optional int32 precision = 1;
+    uint32 type_variation_reference = 2;
   }
 
   message CalendarInterval {
@@ -180,12 +213,30 @@ message DataType {
     uint32 type_variation_reference = 4;
   }
 
+  message Geometry {
+    int32 srid = 1;
+    uint32 type_variation_reference = 2;
+  }
+
+  message Geography {
+    int32 srid = 1;
+    uint32 type_variation_reference = 2;
+  }
+
+  message Variant {
+    uint32 type_variation_reference = 1;
+  }
+
   message UDT {
     string type = 1;
+    // Required for Scala/Java UDT
     optional string jvm_class = 2;
+    // Required for Python UDT
     optional string python_class = 3;
+    // Required for Python UDT
     optional string serialized_python_class = 4;
-    DataType sql_type = 5;
+    // Required for Python UDT
+    optional DataType sql_type = 5;
   }
 
   message Unparsed {

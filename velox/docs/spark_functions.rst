@@ -3,7 +3,7 @@ Spark Functions
 ***********************
 
 The semantics of Spark functions align with
-`Spark 3.5 <https://spark.apache.org/docs/3.5.0/api/sql/index.html>`_.
+`Spark 4.3 <https://spark.apache.org/docs/4.3.0/api/sql/>`_.
 In the function descriptions, a function is marked as *ANSI compliant*
 if it adheres to ANSI standard, subject to the :doc:`spark.ansi_enabled <configs>`
 configuration. Otherwise, it simply follows Spark's semantics in ANSI OFF mode.
