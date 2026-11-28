@@ -170,6 +170,11 @@ class SparseBoolEncoding final : public TypedEncoding<bool, bool> {
     return EncodingPrefix::kFixedPrefixSize + kPrefixSize + indicesEncodingSize;
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   // SparseBool stores one byte after the common encoding prefix to indicate
   // whether the sparse indices refer to set bits or unset bits.
@@ -177,7 +182,7 @@ class SparseBoolEncoding final : public TypedEncoding<bool, bool> {
 
   // If true, then indices give the position of the set bits; if false they give
   // the positions of the unset bits.
-  const bool sparseValue_;
+  bool sparseValue_;
   Vector<char> indicesUncompressed_;
   detail::BufferedEncoding<uint32_t, 32> indices_;
   uint32_t nextIndex_; // The current index (FBA value).

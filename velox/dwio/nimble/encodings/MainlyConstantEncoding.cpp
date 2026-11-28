@@ -43,6 +43,39 @@ MainlyConstantEncoding<std::string_view>::MainlyConstantEncoding(
   commonValue_ = std::string_view(stringBuffer, commonValue_.size());
 }
 
+bool MainlyConstantEncoding<std::string_view>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const char* const end = data.data() + data.size();
+  const char* pos = data.data() + this->dataOffset();
+  // Each size read below and the bytes it covers must lie within `data`.
+  const auto checkRemaining = [&](uint64_t bytes) {
+    NIMBLE_CHECK_FILE_GE(
+        static_cast<uint64_t>(end - pos),
+        bytes,
+        "Truncated mainly constant encoding");
+  };
+  checkRemaining(sizeof(uint32_t));
+  const uint32_t isCommonBytes = encoding::readUint32(pos);
+  checkRemaining(uint64_t{isCommonBytes} + sizeof(uint32_t));
+  isCommon_ = rebindChild(
+      {pos, isCommonBytes}, stringBufferFactory, std::move(isCommon_));
+  pos += isCommonBytes;
+  const uint32_t otherValuesBytes = encoding::readUint32(pos);
+  checkRemaining(uint64_t{otherValuesBytes} + sizeof(uint32_t));
+  otherValues_ = rebindChild(
+      {pos, otherValuesBytes}, stringBufferFactory, std::move(otherValues_));
+  pos += otherValuesBytes;
+  commonValue_ = encoding::read<physicalType>(pos);
+  dictionaryAlphabet_.resize(0);
+  NIMBLE_CHECK_EQ(pos, end, "Unexpected mainly constant encoding end");
+  auto stringBuffer =
+      static_cast<char*>(stringBufferFactory(commonValue_.size()));
+  std::memcpy(stringBuffer, commonValue_.data(), commonValue_.size());
+  commonValue_ = std::string_view(stringBuffer, commonValue_.size());
+  return true;
+}
+
 std::string_view MainlyConstantEncoding<std::string_view>::encode(
     EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
