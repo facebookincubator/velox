@@ -117,10 +117,6 @@ class SplitsStore {
       Split& split,
       ContinueFuture& future) = 0;
 
-  /// Return whether all splits has been consumed and there will be no more
-  /// splits.
-  virtual bool allSplitsConsumed() const = 0;
-
   /// Add new split into this store.  Some of the waiters previously waiting on
   /// the ContinueFuture after the nextSplit() call should be notified by the
   /// caller of this function by setting values on the `promises` output
