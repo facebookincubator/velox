@@ -4,7 +4,7 @@ Dynamic Loading of Velox Extensions
 
 This generic utility adds extensibility features to load User Defined Functions (UDFs) without having to fork and build Velox, through the use of shared libraries. Support for connectors and types will be added in the future.
 
-This mechanism relies on ABI compatibility, meaning it is only guarenteed to work if the shared libraries and the Velox build are based on the same Velox version.
+This mechanism relies on ABI compatibility, meaning it is only guaranteed to work if the shared libraries and the Velox build are based on the same Velox version.
 Using shared libraries built against a different version of Velox may result in undefined behavior or runtime errors due to ABI mismatches.
 
 Getting Started

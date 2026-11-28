@@ -140,7 +140,7 @@ These stats are reported only by TableWriter operator
      - The running wall time of a writer operator since its creation.
    * - numWrittenFiles
      -
-     - TThe number of files written by a writer operator
+     - The number of files written by a writer operator
    * - writeIOWallNanos
      - nanos
      - The file write IO walltime.

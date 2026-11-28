@@ -1182,7 +1182,7 @@ The available function with lowest rank is picked during function resolution.
 If there is more than one function with the same lowest rank, we count the number of concrete types in the signature
 and return the signature with highest concrete types count. (a concrete type is any type other than variadic or generic).
 
-For example: consider the two signatures bellow which are both of type 4.
+For example: consider the two signatures below which are both of type 4.
 
 .. code-block:: c++
 

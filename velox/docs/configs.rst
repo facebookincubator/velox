@@ -432,7 +432,7 @@ Expression Evaluation Configuration
    * - debug_lambda_function_evaluation_batch_size
      - integer
      - 10000
-     - Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size managable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets up tune those batch sizes. Setting this to zero is setting unlimited batch size.
+     - Some lambda functions over arrays and maps are evaluated in batches of the underlying elements that comprise the arrays/maps. This is done to make the batch size manageable as array vectors can have thousands of elements each and hit scaling limits as implementations typically expect BaseVectors to a couple of thousand entries. This lets us tune those batch sizes. Setting this to zero is setting unlimited batch size.
    * - debug_bing_tile_children_max_zoom_shift
      - integer
      - 5
@@ -894,7 +894,7 @@ Common Options
      - bool
      - false
      - True if reading the source file column names as lower case, and planner should guarantee
-       the input column name and filter is also lower case to achive case-insensitive read. Session: ``file_column_names_read_as_lower_case``.
+       the input column name and filter is also lower case to achieve case-insensitive read. Session: ``file_column_names_read_as_lower_case``.
    * - ``partition_path_as_lower_case``
      - bool
      - true

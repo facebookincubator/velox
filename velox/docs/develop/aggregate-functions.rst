@@ -216,7 +216,7 @@ scan.
 Vector Function Interface
 -------------------------
 
-Aggregation functions that cannot use the simple-function interface can be written as vector funcitons.
+Aggregation functions that cannot use the simple-function interface can be written as vector functions.
 
 Accumulator size
 ^^^^^^^^^^^^^^^^
