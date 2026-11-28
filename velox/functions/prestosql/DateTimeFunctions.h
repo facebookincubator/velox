@@ -77,6 +77,15 @@ struct TimePlusInterval {
       const arg_type<IntervalDayTime>& interval) {
     result = addToTime(time, interval);
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = util::pack(
+        addToTime(util::unpackMillisUtc(*time), interval),
+        util::unpackZoneOffset(*time));
+  }
 };
 
 template <typename T>
@@ -88,6 +97,15 @@ struct TimeMinusInterval {
       const arg_type<Time>& time,
       const arg_type<IntervalDayTime>& interval) {
     result = addToTime(time, -interval);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<TimeWithTimezone>& time,
+      const arg_type<IntervalDayTime>& interval) {
+    result = util::pack(
+        addToTime(util::unpackMillisUtc(*time), -interval),
+        util::unpackZoneOffset(*time));
   }
 };
 
@@ -112,6 +130,23 @@ struct TimeMinusFunction {
     // Simple subtraction returns interval in milliseconds
     result = a - b;
   }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<IntervalDayTime>& result,
+      const arg_type<TimeWithTimezone>& a,
+      const arg_type<TimeWithTimezone>& b) {
+    const int64_t millisUtcA = util::unpackMillisUtc(*a);
+    const int64_t millisUtcB = util::unpackMillisUtc(*b);
+    VELOX_USER_CHECK(
+        millisUtcA >= 0 && millisUtcA < kMillisInDay,
+        "TIME WITH TIME ZONE value {} is out of range [0, 86400000)",
+        millisUtcA);
+    VELOX_USER_CHECK(
+        millisUtcB >= 0 && millisUtcB < kMillisInDay,
+        "TIME WITH TIME ZONE value {} is out of range [0, 86400000)",
+        millisUtcB);
+    result = millisUtcA - millisUtcB;
+  }
 };
 
 template <typename T>
@@ -122,6 +157,15 @@ struct IntervalPlusTime {
       const arg_type<IntervalDayTime>& interval,
       const arg_type<Time>& time) {
     result = addToTime(time, interval);
+  }
+
+  FOLLY_ALWAYS_INLINE void call(
+      out_type<TimeWithTimezone>& result,
+      const arg_type<IntervalDayTime>& interval,
+      const arg_type<TimeWithTimezone>& time) {
+    result = util::pack(
+        addToTime(util::unpackMillisUtc(*time), interval),
+        util::unpackZoneOffset(*time));
   }
 };
 
@@ -166,6 +210,84 @@ struct MillisecondFromIntervalFunction {
       int64_t& result,
       const arg_type<IntervalDayTime>& millis) {
     result = millis % Timestamp::kMillisecondsInSecond;
+  }
+};
+
+namespace {
+
+// Converts a packed TIME WITH TIME ZONE value to local milliseconds since
+// midnight.
+FOLLY_ALWAYS_INLINE int64_t
+timeWithTimezoneToLocalMs(int64_t timeWithTimezone) {
+  const int64_t millisUtc = util::unpackMillisUtc(timeWithTimezone);
+  const int16_t encodedOffset = util::unpackZoneOffset(timeWithTimezone);
+  return util::utcToLocalTime(
+      millisUtc, util::decodeTimezoneOffset(encodedOffset));
+}
+
+} // namespace
+
+// Returns the hour-of-day (0–23) in the local time zone of a TIME WITH TIME
+// ZONE value.
+template <typename T>
+struct HourTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimeWithTimezone>& timeWithTimezone) {
+    result = std::chrono::duration_cast<std::chrono::hours>(
+                 std::chrono::milliseconds(
+                     timeWithTimezoneToLocalMs(*timeWithTimezone)))
+                 .count();
+  }
+};
+
+// Returns the minute-of-hour (0–59) in the local time zone of a TIME WITH TIME
+// ZONE value.
+template <typename T>
+struct MinuteTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimeWithTimezone>& timeWithTimezone) {
+    result = std::chrono::duration_cast<std::chrono::minutes>(
+                 std::chrono::milliseconds(
+                     timeWithTimezoneToLocalMs(*timeWithTimezone)))
+                 .count() %
+        kMinutesInHour;
+  }
+};
+
+// Returns the second-of-minute (0–59) in the local time zone of a TIME WITH
+// TIME ZONE value.
+template <typename T>
+struct SecondTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimeWithTimezone>& timeWithTimezone) {
+    result = std::chrono::duration_cast<std::chrono::seconds>(
+                 std::chrono::milliseconds(
+                     timeWithTimezoneToLocalMs(*timeWithTimezone)))
+                 .count() %
+        kSecondsInMinute;
+  }
+};
+
+// Returns the millisecond-of-second (0–999) in the local time zone of a TIME
+// WITH TIME ZONE value.
+template <typename T>
+struct MillisecondTimeWithTimezoneFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TimeWithTimezone>& timeWithTimezone) {
+    result = timeWithTimezoneToLocalMs(*timeWithTimezone) %
+        Timestamp::kMillisecondsInSecond;
   }
 };
 

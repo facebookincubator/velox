@@ -181,13 +181,37 @@ void registerSimpleFunctions(
   registerFunction<IntervalPlusTime, Time, IntervalDayTime, Time>(
       {prefix + "plus"}, {}, true, defaultOwner);
 
+  registerFunction<
+      TimePlusInterval,
+      TimeWithTimezone,
+      TimeWithTimezone,
+      IntervalDayTime>({prefix + "plus"}, {}, true, defaultOwner);
+
+  registerFunction<
+      IntervalPlusTime,
+      TimeWithTimezone,
+      IntervalDayTime,
+      TimeWithTimezone>({prefix + "plus"}, {}, true, defaultOwner);
+
   // Register Time - Interval function
   registerFunction<TimeMinusInterval, Time, Time, IntervalDayTime>(
       {prefix + "minus"}, {}, true, defaultOwner);
 
+  registerFunction<
+      TimeMinusInterval,
+      TimeWithTimezone,
+      TimeWithTimezone,
+      IntervalDayTime>({prefix + "minus"}, {}, true, defaultOwner);
+
   // Register Time - Time function (returns IntervalDayTime)
   registerFunction<TimeMinusFunction, IntervalDayTime, Time, Time>(
       {prefix + "minus"}, {}, true, defaultOwner);
+
+  registerFunction<
+      TimeMinusFunction,
+      IntervalDayTime,
+      TimeWithTimezone,
+      TimeWithTimezone>({prefix + "minus"}, {}, true, defaultOwner);
 
   // Use optimized vector function for Time + IntervalYearMonth (identity
   // function)
@@ -238,6 +262,8 @@ void registerSimpleFunctions(
       {prefix + "hour"}, {}, true, defaultOwner);
   registerFunction<HourFunction, int64_t, Time>(
       {prefix + "hour"}, {}, true, defaultOwner);
+  registerFunction<HourTimeWithTimezoneFunction, int64_t, TimeWithTimezone>(
+      {prefix + "hour"}, {}, true, defaultOwner);
   registerFunction<HourFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "hour"}, {}, true, defaultOwner);
 
@@ -256,6 +282,8 @@ void registerSimpleFunctions(
       {prefix + "minute"}, {}, true, defaultOwner);
   registerFunction<MinuteFunction, int64_t, Time>(
       {prefix + "minute"}, {}, true, defaultOwner);
+  registerFunction<MinuteTimeWithTimezoneFunction, int64_t, TimeWithTimezone>(
+      {prefix + "minute"}, {}, true, defaultOwner);
   registerFunction<MinuteFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "minute"}, {}, true, defaultOwner);
 
@@ -266,6 +294,8 @@ void registerSimpleFunctions(
   registerFunction<SecondFunction, int64_t, TimestampWithTimezone>(
       {prefix + "second"}, {}, true, defaultOwner);
   registerFunction<SecondFunction, int64_t, Time>(
+      {prefix + "second"}, {}, true, defaultOwner);
+  registerFunction<SecondTimeWithTimezoneFunction, int64_t, TimeWithTimezone>(
       {prefix + "second"}, {}, true, defaultOwner);
   registerFunction<SecondFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "second"}, {}, true, defaultOwner);
@@ -278,6 +308,10 @@ void registerSimpleFunctions(
       {prefix + "millisecond"}, {}, true, defaultOwner);
   registerFunction<MillisecondFunction, int64_t, Time>(
       {prefix + "millisecond"}, {}, true, defaultOwner);
+  registerFunction<
+      MillisecondTimeWithTimezoneFunction,
+      int64_t,
+      TimeWithTimezone>({prefix + "millisecond"}, {}, true, defaultOwner);
   registerFunction<MillisecondFromIntervalFunction, int64_t, IntervalDayTime>(
       {prefix + "millisecond"}, {}, true, defaultOwner);
 
