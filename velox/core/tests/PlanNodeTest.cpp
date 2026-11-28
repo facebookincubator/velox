@@ -243,6 +243,123 @@ TEST_F(PlanNodeTest, nestedLoopJoin) {
       "Join output column type must match the input type: VARCHAR vs. INTEGER");
 }
 
+TEST_F(PlanNodeTest, pythonCall) {
+  const auto values = std::make_shared<ValuesNode>(
+      "0",
+      std::vector<RowVectorPtr>{makeRowVector({makeFlatVector<int64_t>({1})})});
+  const auto c0 = std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0");
+  const auto lenOfC0 = std::make_shared<CallTypedExpr>(BIGINT(), "len", c0);
+  const auto strOfC0 = std::make_shared<CallTypedExpr>(VARCHAR(), "str", c0);
+  const folly::F14FastMap<std::string, PythonCallNode::Function> len{
+      {"len", {"len", "len code"}}};
+  const folly::F14FastMap<std::string, PythonCallNode::Function> lenAndStr{
+      {"len", {"len", "len code"}}, {"str", {"str", "str code"}}};
+  const auto pythonCall = [&](const auto& functions,
+                              std::vector<std::string> names,
+                              std::vector<CallTypedExprPtr> calls,
+                              RowTypePtr outputType) {
+    return std::make_shared<PythonCallNode>(
+        "1",
+        "file:///usr/bin/python3",
+        "3.12",
+        functions,
+        std::move(names),
+        std::move(calls),
+        std::move(outputType),
+        values);
+  };
+
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(len, {"n"}, {strOfC0}, ROW("n", VARCHAR())),
+      "Python call must name a function of the node: str");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(lenAndStr, {"n"}, {lenOfC0}, ROW("n", BIGINT())),
+      "Python function of the node must be called: str");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          len,
+          {"n"},
+          {std::make_shared<CallTypedExpr>(
+              BIGINT(),
+              "len",
+              std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c9"))},
+          ROW("n", BIGINT())),
+      "Python call argument must be a column of the input: c9");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(len, {"c0"}, {lenOfC0}, ROW("c0", BIGINT())),
+      "Python call name must differ from the input's columns: c0");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(len, {"n"}, {lenOfC0}, ROW("x", BIGINT())),
+      "PythonCallNode output must have each call's column: n");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          lenAndStr,
+          {"n"},
+          {std::make_shared<CallTypedExpr>(
+              BIGINT(),
+              "len",
+              std::make_shared<CallTypedExpr>(VARCHAR(), "try", strOfC0))},
+          ROW("n", BIGINT())),
+      "TRY must wrap a whole Python call, not an argument");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          len,
+          {"n"},
+          {std::make_shared<CallTypedExpr>(DOUBLE(), "try", lenOfC0)},
+          ROW("n", DOUBLE())),
+      "TRY type must match its Python call");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          lenAndStr,
+          {"n", "n"},
+          {lenOfC0, strOfC0},
+          ROW({{"n", BIGINT()}, {"n", VARCHAR()}})),
+      "Python call names must be unique: n");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          len,
+          {"n", "m"},
+          {lenOfC0, std::make_shared<CallTypedExpr>(INTEGER(), "len", c0)},
+          ROW({{"n", BIGINT()}, {"m", INTEGER()}})),
+      "Python calls of one function must have one result type: len");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          folly::F14FastMap<std::string, PythonCallNode::Function>{
+              {"len", {"len", ""}}},
+          {"n"},
+          {lenOfC0},
+          ROW("n", BIGINT())),
+      "Python function must have pickled code: len");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          folly::F14FastMap<std::string, PythonCallNode::Function>{
+              {"len", {"", "len code"}}},
+          {"n"},
+          {lenOfC0},
+          ROW("n", BIGINT())),
+      "Python function must have a name: len");
+  // A constant may be an argument.
+  pythonCall(
+      len,
+      {"n"},
+      {std::make_shared<CallTypedExpr>(
+          BIGINT(),
+          "len",
+          std::make_shared<ConstantTypedExpr>(VARCHAR(), Variant("abc")))},
+      ROW("n", BIGINT()));
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(len, {"n"}, {lenOfC0}, ROW("n", VARCHAR())),
+      "PythonCallNode output column type must match its call: n");
+  VELOX_ASSERT_USER_THROW(
+      pythonCall(
+          folly::F14FastMap<std::string, PythonCallNode::Function>{
+              {"try", {"try", "try code"}}},
+          {"n"},
+          {std::make_shared<CallTypedExpr>(BIGINT(), "try", c0)},
+          ROW("n", BIGINT())),
+      "TRY must wrap a Python call");
+}
+
 TEST_F(PlanNodeTest, indexLookupJoin) {
   const auto rowType = ROW({"name"}, {BIGINT()});
   const auto valueNode = std::make_shared<ValuesNode>("orderBy", rowData_);

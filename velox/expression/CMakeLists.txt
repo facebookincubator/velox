@@ -31,6 +31,7 @@ velox_add_library(
   SignatureBinder.cpp
   VectorFunctionListener.cpp
   HEADERS
+  ExprConstants.h
   FunctionMetadata.h
   FunctionSignature.h
   ReverseSignatureBinder.h
@@ -99,7 +100,6 @@ velox_add_library(
   EvalCtx.h
   Expr.h
   ExprCompiler.h
-  ExprConstants.h
   ExprOptimizer.h
   ExprRewriteRegistry.h
   ExprStats.h

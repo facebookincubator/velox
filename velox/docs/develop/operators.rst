@@ -65,6 +65,7 @@ RowNumberNode               RowNumber
 TopNRowNumberNode           TopNRowNumber
 MixedUnionNode              MixedUnion
 RPCNode                     RPC
+PythonCallNode              PythonCall
 ==========================  ==============================================   ===========================
 
 Plan Nodes
@@ -1277,6 +1278,69 @@ the RPC node reads them by name.
 .. note::
    ``streamingMode`` is what the query asked for, not what the function will do
    about it — see :ref:`Execution mode and dispatch path <RPCDispatchPath>`.
+
+.. _PythonCallNode:
+
+PythonCallNode
+~~~~~~~~~~~~~~
+
+The Python call operation evaluates Python functions, such as Python UDFs, on
+its input and outputs their results next to the input columns it passes
+through. The calls run in a Python worker process, one per driver, started in
+the node's Python environment. ``velox/exec/python/README.md`` defines the
+protocol between Velox and the worker, and how Velox values map to Python
+values. The corresponding operator is ``PythonCall``, built when Velox is built
+with ``VELOX_ENABLE_PYTHON_CALL``.
+
+An upstream ``ProjectNode`` computes argument expressions into columns;
+arguments may also be constants. A call whose argument is another Python call,
+as in ``f(g(x))``, runs both functions in the worker, and ``g``'s results reach
+``f`` without a round trip through Velox. Equal calls run once: calls of the
+same functions on the same arguments, when every function among them is
+deterministic. Each call that involves a nondeterministic function runs on its
+own.
+
+A query that runs Python calls sets the resolvers of its environment URIs on its
+``QueryCtx`` as a ``PythonEnvironmentResolvers`` registry. Each resolver turns
+the URIs of one scheme into a Python interpreter to start;
+``FileEnvironmentResolver`` handles ``file://<interpreter path>``.
+
+A row whose call fails, because the function raised or returned a value that is
+not of the declared type, fails the query. A call wrapped in ``try`` returns
+NULL for that row instead. A MAP result whose keys repeat under Velox's
+equality, such as REAL keys that differ in Python but are equal once stored,
+fails the same way.
+
+.. list-table::
+   :widths: 10 30
+   :align: left
+   :header-rows: 1
+
+   * - Property
+     - Description
+   * - environmentUri
+     - URI of the Python environment the worker runs in, such as
+       ``file:///usr/bin/python3``.
+   * - pythonVersion
+     - The Python major.minor version the functions were pickled with. The
+       environment's interpreter must run the same version.
+   * - functions
+     - The functions the calls run: each function's own name, used in error
+       messages, its pickled code, and whether it is deterministic. Each is
+       stored under a key unique in the node, which the calls use as their
+       name. A function's own name can't serve as the key: two functions can
+       share one, as Python lambdas, all named ``<lambda>``, do; and calls of
+       one key must have one result type, so a function called for two result
+       types needs two keys.
+   * - names
+     - Names of the calls' output columns, one per call.
+   * - calls
+     - The calls, each a ``CallTypedExpr`` that names a function in
+       ``functions``, possibly wrapped in ``try``. Their arguments are input
+       columns, constants, or other Python calls.
+   * - outputType
+     - The calls' columns and the input columns passed through, in any order
+       (stated explicitly to allow column pruning).
 
 GPU Operators (cuDF)
 --------------------

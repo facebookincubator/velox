@@ -24,6 +24,7 @@ Python values.
 """
 
 import argparse
+import bisect
 import datetime
 import decimal
 import importlib
@@ -32,6 +33,7 @@ import json
 import math
 import pickle
 import re
+import resource
 import socket
 import struct
 import sys
@@ -335,6 +337,8 @@ def parse_time_zone(name: str) -> datetime.tzinfo:
 def _column_values(array: pa.Array, zone: datetime.tzinfo) -> list[Any]:
     """Returns the values of 'array' as a function receives them. A value with
     no Python value, at any depth, makes its row's value an Unconvertible."""
+    if pa.types.is_run_end_encoded(array.type):
+        return _run_values(cast(pa.RunEndEncodedArray, array), zone)
     values = _values(array, zone)
     arrow_type = array.type
     if not (
@@ -344,6 +348,30 @@ def _column_values(array: pa.Array, zone: datetime.tzinfo) -> list[Any]:
     ):
         return values
     return [_first_unconvertible(value) or value for value in values]
+
+
+def _run_values(array: pa.RunEndEncodedArray, zone: datetime.tzinfo) -> list[Any]:
+    """Returns the values of a run-end encoded array, as a constant arrives:
+    each run's value, converted once and repeated for its rows. A value a
+    function can change in place, as a list, dict or bytearray, or a Row that
+    can hold one, is converted for each row instead, so a change stays in its
+    row."""
+    run_ends = array.run_ends.to_pylist()
+    # The run of each row: the first run ending after it.
+    runs = [
+        bisect.bisect_right(run_ends, row)
+        for row in range(array.offset, array.offset + len(array))
+    ]
+    value_type = cast(pa.RunEndEncodedType, array.type).value_type
+    if (
+        _is_list(value_type)
+        or pa.types.is_map(value_type)
+        or pa.types.is_struct(value_type)
+        or _is_binary(value_type)
+    ):
+        return _column_values(array.values.take(pa.array(runs, pa.int64())), zone)
+    values = _column_values(array.values, zone)
+    return [values[run] for run in runs]
 
 
 def _first_unconvertible(value: Any) -> Unconvertible | None:
@@ -1017,8 +1045,11 @@ def run_batch(session: Session, payload: bytes) -> bytes:
         argument.function for argument in arguments if argument.function is not None
     }
     for index in read:
-        check_supported(batch.column(index).type)
-        _check_readable(batch.column(index).type)
+        arrow_type = batch.column(index).type
+        if pa.types.is_run_end_encoded(arrow_type):
+            arrow_type = cast(pa.RunEndEncodedType, arrow_type).value_type
+        check_supported(arrow_type)
+        _check_readable(arrow_type)
     columns = {
         index: _column_values(batch.column(index), session.zone) for index in read
     }
@@ -1055,6 +1086,17 @@ def _result_batch(functions: list[Function], outcomes: list[Outcome]) -> pa.Reco
 # Serving.
 
 
+def _process_stats() -> dict[str, float | int]:
+    """Returns the worker process's CPU time and peak resident memory."""
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    # ru_maxrss is in kilobytes on Linux and in bytes on macOS.
+    scale = 1 if sys.platform == "darwin" else 1024
+    return {
+        "cpuSeconds": usage.ru_utime + usage.ru_stime,
+        "peakMemoryBytes": usage.ru_maxrss * scale,
+    }
+
+
 def serve(stream: io.BufferedIOBase) -> None:
     """Serves one session: SETUP, then BATCH messages until END."""
     message_type, payload = read_message(stream)
@@ -1071,7 +1113,7 @@ def serve(stream: io.BufferedIOBase) -> None:
         if message_type == BATCH:
             write_message(stream, RESULT, run_batch(session, payload))
         elif message_type == END:
-            write_message(stream, END, b"")
+            write_message(stream, END, json.dumps(_process_stats()).encode())
             return
         else:
             raise ProtocolError(f"Message must be BATCH or END: {message_type}")

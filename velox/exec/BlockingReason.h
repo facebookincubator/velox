@@ -62,6 +62,9 @@ enum class BlockingReason {
   /// Used by RPC operators, indicating that the operator is blocked waiting
   /// for an async RPC response (e.g., LLM inference, embedding lookups).
   kWaitForRPC,
+  /// Used by PythonCall, indicating that the operator is blocked waiting for
+  /// its Python worker to start or to return results.
+  kWaitForPythonWorker,
   /// Used by HashAggregation with a global grouping set: a driver waits for its
   /// peers so only the last one emits the default rows on empty input.
   kWaitForAggregationPeers,

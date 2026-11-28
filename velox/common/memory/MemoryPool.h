@@ -403,9 +403,9 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   /// unused reservations.
   virtual int64_t reservedBytes() const = 0;
 
-  /// Checks if it is likely that the reservation on this memory pool can be
-  /// incremented by 'size'. Returns false if this seems unlikely. Otherwise
-  /// attempts the reservation increment and returns true if succeeded.
+  /// Makes sure at least 'size' bytes of this pool's reservation are unused,
+  /// growing the reservation by the shortfall if that is likely to succeed.
+  /// Returns false if growing seems unlikely or fails.
   virtual bool maybeReserve(uint64_t size) = 0;
 
   /// If a minimum reservation has been set with maybeReserve(), resets the
