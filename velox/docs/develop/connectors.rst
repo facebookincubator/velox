@@ -56,6 +56,46 @@ The `next` API processes the split and returns a batch of rows. Users can contin
 HiveDataSource allows adding a dynamic filter using the `addDynamicFilter` API. This allows
 supporting :ref:`Dynamic Filter Pushdown<DynamicFilterPushdown>`.
 
+Filter Pushdown and MetadataFilter
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A TableScan's filters reach the file readers in two steps.
+
+First, HiveDataSource (via ``FileDataSource``) calls
+``ExprToSubfieldFilterParser::extractFilters`` on the table handle's remaining filter.
+Conjuncts that compare a single column or subfield with constants, such as ``a = 1 AND b > 0``,
+are turned into ``common::Filter`` objects and merged with the table handle's ``subfieldFilters``.
+They are attached to the matching ``ScanSpec`` nodes and applied by the column readers. ``NOT (x OR y)``
+is rewritten as ``(NOT x) AND (NOT y)``, and ``rand() < K`` conjuncts become a sample rate.
+Whatever cannot be extracted, for example ``a > 0 AND a < b``, is returned as the remaining filter
+(``a < b`` in that example). It is compiled and evaluated on the rows that the readers return.
+
+Second, if there is a remaining filter, ``FileDataSource`` also builds a ``common::MetadataFilter`` from it
+(``velox/dwio/common/MetadataFilter.h``). The MetadataFilter is only used to skip data: it never changes the
+rows that survive, because the full remaining filter is still evaluated afterwards. This matters for
+expressions that mix columns, such as ``a = 1 OR b = 2``. They cannot be turned into a single-column filter,
+but each leaf of the expression can still be tested against statistics:
+
+* ``MetadataFilter::Node::fromExpression`` walks the expression tree. ``and``, ``or`` and ``not`` become
+  internal nodes (``not`` is pushed down to the leaves by swapping AND and OR). Any other call is passed to
+  ``ExprToSubfieldFilterParser::leafCallToSubfieldFilter``. If that returns a subfield and a filter, a leaf node is
+  created. Otherwise, or if the conversion throws a ``VeloxException`` (it is logged as a warning), the
+  sub-expression is treated as unknown.
+* Each leaf filter is registered on the ScanSpec node of its subfield with ``ScanSpec::addMetadataFilter``,
+  separately from the node's regular filter.
+* When a reader prepares a file, it tests each leaf filter against the column statistics of each row group
+  (Parquet, ``ParquetData::filterRowGroups``; row groups that are already excluded are not tested) or stride
+  (DWRF, ``DwrfData::filterRowGroups``). A set bit in the leaf's bitmask means that the leaf cannot match
+  anything in that row group or stride.
+* ``MetadataFilter::eval`` combines the leaf bitmasks following the tree and ORs the result into the reader's
+  ``filterResult`` (called from ``ParquetRowReader::filterRowGroups`` and
+  ``DwrfRowReader::computeStridesToSkip``). An AND node marks a row group or stride for skipping when any
+  child can be skipped. An OR node does so only when every child can be skipped. An unknown child is ignored
+  under AND and disables skipping under OR.
+
+For example, with ``a = 1 OR b = 2`` a row group is skipped only if the statistics show that ``a = 1`` cannot
+hold and ``b = 2`` cannot hold in it. With ``a = 1 OR a < b``, the second branch is unknown, so nothing is skipped
+by the metadata filter.
+
 HiveDataSink
 ~~~~~~~~~~~~
 The HiveDataSink writes vectors to files on disk. The supported file formats are DWRF and Parquet.
