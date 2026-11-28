@@ -114,8 +114,8 @@ void registerMathFunctions(const std::string& prefix) {
   registerFunction<SignFunction, double, double>({prefix + "sign"});
 
   // Operators.
-  registerBinaryNumeric<PlusFunction>({prefix + "add"});
-  registerBinaryNumeric<MinusFunction>({prefix + "subtract"});
+  registerBinaryNumeric<AddFunction>({prefix + "add"});
+  registerBinaryNumeric<SubtractFunction>({prefix + "subtract"});
   registerBinaryNumeric<MultiplyFunction>({prefix + "multiply"});
   registerFunction<DivideFunction, double, double, double>({prefix + "divide"});
   registerBinaryNumeric<RemainderFunction>({prefix + "remainder"});
