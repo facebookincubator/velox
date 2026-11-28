@@ -377,14 +377,29 @@ void CastExpr::applyFloatingPointToDecimalCastKernel(
   auto rawResults =
       result->asUnchecked<FlatVector<TOutput>>()->mutableRawValues();
   const auto toPrecisionScale = getDecimalPrecisionScale(*toType);
+  const auto policy = hooks_->getPolicy();
+  const bool isSparkCast =
+      policy == SparkCastPolicy || policy == SparkTryCastPolicy;
 
   applyToSelectedNoThrowLocal(context, rows, result, [&](vector_size_t row) {
     TOutput output;
-    const auto status = DecimalUtil::rescaleFloatingPoint<TInput, TOutput>(
-        floatingInput->valueAt(row),
-        toPrecisionScale.first,
-        toPrecisionScale.second,
-        output);
+    const auto value = floatingInput->valueAt(row);
+    const auto status = [&]() {
+      if (isSparkCast && std::isfinite(value)) {
+        // Spark constructs the decimal from Double.toString, widening REAL
+        // first.
+        const auto text = fmt::format("{}", static_cast<double>(value));
+        const auto castStatus = DecimalUtil::castFromString<TOutput>(
+            StringView(text),
+            toPrecisionScale.first,
+            toPrecisionScale.second,
+            output);
+        return castStatus.ok() ? Status::OK()
+                               : Status::UserError("Result overflows.");
+      }
+      return DecimalUtil::rescaleFloatingPoint<TInput, TOutput>(
+          value, toPrecisionScale.first, toPrecisionScale.second, output);
+    }();
     if (status.ok()) {
       rawResults[row] = output;
     } else {

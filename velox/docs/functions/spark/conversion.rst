@@ -571,6 +571,12 @@ From floating-point types
 Casting a floating-point value to a decimal of given precision and scale is
 allowed. Supported types are real and double.
 
+REAL inputs are first widened to DOUBLE. The decimal is constructed from the
+DOUBLE's shortest round-trip decimal representation, then rounded to the target
+scale using HALF_UP (ties away from zero). Widening REAL preserves its binary
+value, so the result can contain more digits than the REAL's string
+representation.
+
 When ANSI mode is enabled, casting a value that overflows the target precision
 and scale or is not finite throws an error. Otherwise, such casts return NULL.
 
@@ -591,6 +597,9 @@ Valid examples
   SELECT cast(cast(-1.0 as double) as decimal(10, 4)); -- -1.0000
   SELECT cast(cast(10.03 as real) as decimal(10, 4)); -- 10.0300
   SELECT cast(cast(0.0 as real) as decimal(10, 4)); -- 0.0000
+  SELECT cast(0.1234567890123456D as decimal(38, 18)); -- 0.123456789012345600
+  SELECT cast(cast(0.1 as real) as decimal(38, 18)); -- 0.100000001490116120
+  SELECT cast(7.754818242684634E16D as decimal(21, 4)); -- 77548182426846340.0000
 
 Invalid examples
 
