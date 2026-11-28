@@ -71,6 +71,7 @@ add_library(
   views/DecodedStringBuffers.cpp
   views/DecodedStringBuffers.h
   views/EncodingView.cpp
+  views/DecodedFallbackEncodingView.h
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
   views/PartitionedEliasFanoEncodingView.h
