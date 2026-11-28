@@ -50,11 +50,24 @@ namespace facebook::nimble {
 /// too small. A decode that needs more room than it reserved finishes the room
 /// and reserves again, so that its strings can lie in several buffers and none
 /// is copied. Each new buffer takes twice the bytes of the one before, from
-/// 32 KB up to 1 MB, unless the reservation needs more.
+/// 32 KB up to 1 MB, unless the reservation needs more. A reservation larger
+/// than 1 MB takes a buffer of its own, which no later room shares, so that a
+/// caller that holds a later room for a few strings does not keep that buffer
+/// alive.
 class DecodedStringBuffers {
  public:
   /// Allocates the buffers from 'pool'.
   explicit DecodedStringBuffers(velox::memory::MemoryPool* pool);
+
+  ~DecodedStringBuffers() = default;
+
+  DecodedStringBuffers(const DecodedStringBuffers&) = delete;
+
+  DecodedStringBuffers& operator=(const DecodedStringBuffers&) = delete;
+
+  DecodedStringBuffers(DecodedStringBuffers&&) = delete;
+
+  DecodedStringBuffers& operator=(DecodedStringBuffers&&) = delete;
 
   /// Starts over for the views of other chunks, such as those of the next
   /// stripe of a stream: drops the last buffer, so that the next reserve()
@@ -64,8 +77,9 @@ class DecodedStringBuffers {
 
   /// Returns room of at least 'numReservedBytes' bytes for strings: the rest
   /// of the last buffer, right after the strings of the rooms before it, if it
-  /// has that many bytes, or else a new buffer. Fails until the room that the
-  /// last call returned finishes.
+  /// has that many bytes, or else a new buffer, which is a buffer of its own
+  /// when 'numReservedBytes' exceeds the 1 MB of the largest buffer. Fails
+  /// until the room that the last call returned finishes.
   std::span<char> reserve(size_t numReservedBytes);
 
   /// Finishes the room that the last reserve() returned, whose strings take
@@ -73,13 +87,18 @@ class DecodedStringBuffers {
   /// decode that fails passes zero.
   velox::BufferPtr finish(size_t numUsedBytes);
 
- private:
-  // The bytes that the first buffer and the largest take from the pool, with
-  // the header of the buffer. A power of two fits a size class of the
-  // allocators exactly. The largest bounds what a buffer that a caller holds
-  // for a few strings keeps alive.
-  static constexpr size_t kMinBufferBytes{32 << 10};
+  /// The bytes that the largest buffer takes from the pool, with the header of
+  /// the buffer: 1 MB, a power of two, which fits a size class of the
+  /// allocators exactly. It bounds what a buffer that a caller holds for a few
+  /// strings keeps alive, since a larger reservation takes a buffer of its
+  /// own. A decoder that would reserve more for the most bytes that its
+  /// strings can decode to counts the bytes that they decode to instead.
   static constexpr size_t kMaxBufferBytes{1 << 20};
+
+ private:
+  // The bytes that the first buffer takes from the pool, with the header of
+  // the buffer, a power of two like kMaxBufferBytes.
+  static constexpr size_t kMinBufferBytes{32 << 10};
 
   // Allocates the buffers.
   velox::memory::MemoryPool* const pool_;
@@ -95,6 +114,10 @@ class DecodedStringBuffers {
   // The bytes that the next buffer takes from the pool, unless the
   // reservation needs more.
   size_t nextBufferBytes_{kMinBufferBytes};
+
+  // The buffer of a room larger than kMaxBufferBytes, which no other room
+  // shares, until the room finishes. Null otherwise.
+  velox::BufferPtr oversizeBuffer_;
 
   // Whether reserve() returned room that has not finished.
   bool decoding_{false};

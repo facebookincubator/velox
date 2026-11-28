@@ -28,7 +28,6 @@
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/compression/Compression.h"
-#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/EncodingViewDecoder.h"
@@ -143,24 +142,68 @@ bool matchesPresenceKey(
   return true;
 }
 
-// Returns the field reader parameters that decode the fields of a stripe as
-// 'options' configure.
-FieldReaderParams toReaderParams(const StreamReader::Options& options) {
-  return FieldReaderParams{
+// Returns the field reader parameters that decode the fields of a stripe of
+// 'type' as 'options' configure, and update the counters in 'stats'. Each
+// column that options.readFlatMapFieldAsStruct names reads as a struct of the
+// keys that 'type' gives the column.
+FieldReaderParams toReaderParams(
+    const Type& type,
+    const StreamReader::Options& options,
+    FieldReader::Stats* stats) {
+  FieldReaderParams params{
+      .readFlatMapFieldAsStruct = options.readFlatMapFieldAsStruct,
       .decodeExecutor = options.decodeExecutor,
       .maxDecodeParallelism = options.maxDecodeParallelism,
       .minStreamsPerDecodeTask = options.minStreamsPerDecodeTask,
+      // Reuse is safe since rebuildReader() keeps every decoder it creates.
+      .reuseFlatMapKeyNodes = options.reuseFlatMapKeyNodes,
+      .stats = stats,
   };
-}
+  if (options.readFlatMapFieldAsStruct.empty()) {
+    return params;
+  }
 
-// Returns true when 'chunks', the chunks of one stream, hold strings, as the
-// data type in the prefix of the first chunk says. A chunk too short to have
-// a data type is left to the view that reads it, which rejects it.
-bool holdsStrings(std::span<const std::string_view> chunks) {
-  return !chunks.empty() &&
-      chunks.front().size() >
-      static_cast<size_t>(EncodingPrefix::kDataTypeOffset) &&
-      EncodingPrefix::dataType(chunks.front()) == DataType::String;
+  NIMBLE_USER_CHECK_EQ(
+      type.kind(),
+      Kind::Row,
+      "A schema that reads FlatMaps as structs must be a Row");
+  const auto& row = type.asRow();
+  for (const auto& name : options.readFlatMapFieldAsStruct) {
+    const auto column = row.findChild(name);
+    NIMBLE_USER_CHECK(
+        column.has_value(),
+        "A column read as a struct must be in the schema: {}",
+        name);
+    const auto& child = *row.childAt(column.value());
+    NIMBLE_USER_CHECK(
+        child.isFlatMap(),
+        "A column read as a struct must be a FlatMap: {}",
+        name);
+
+    // The struct reads every key of the schema, since the reader binds every
+    // stream of the schema. When a FlatMap is empty, the writer creates one
+    // child with an empty name to carry its value type, which is no key, as
+    // FieldReaderFactory treats it.
+    const auto& flatMap = child.asFlatMap();
+    auto numKeys = flatMap.childrenCount();
+    if (numKeys == 1 && flatMap.nameAt(0).empty()) {
+      numKeys = 0;
+    }
+    NIMBLE_USER_CHECK_GT(
+        numKeys, 0, "A FlatMap read as a struct must have a key: {}", name);
+    std::vector<std::string> keys;
+    keys.reserve(numKeys);
+    for (size_t key{0}; key < numKeys; ++key) {
+      keys.emplace_back(flatMap.nameAt(key));
+    }
+    params.flatMapFeatureSelector.emplace(
+        name,
+        FeatureSelection{
+            .features = std::move(keys),
+            .mode = SelectionMode::Include,
+        });
+  }
+  return params;
 }
 
 } // namespace
@@ -168,6 +211,13 @@ bool holdsStrings(std::span<const std::string_view> chunks) {
 struct StreamReader::CachedReader {
   // Decoders for present streams, keyed by stream id.
   folly::F14FastMap<uint32_t, std::unique_ptr<Decoder>> decodersByStreamId;
+
+  // Decoders of streams absent from the current stripe, keyed by stream id.
+  // rebuildReader() moves a decoder here when its stream leaves and back when
+  // the stream returns, so that a stream keeps one decoder across stripes,
+  // which lets the reader factory reuse the key nodes built over it.
+  folly::F14FastMap<uint32_t, std::unique_ptr<Decoder>>
+      sparseDecodersByStreamId;
 
   // Points to the same decoders in stream order, with null for absent streams.
   std::vector<EncodingViewDecoder*> streamDecoders;
@@ -185,6 +235,39 @@ struct StreamReader::CachedReader {
       }
     }
   }
+
+  // Moves the decoder of a stream that the stripe lacks, if the stream has
+  // one, to sparseDecodersByStreamId. The decoder must stay alive, since key
+  // nodes that the reader factory keeps point to it.
+  void keepDecoder(uint32_t streamId) {
+    const auto present = decodersByStreamId.find(streamId);
+    if (present == decodersByStreamId.end()) {
+      return;
+    }
+    NIMBLE_DEBUG_ONLY const bool kept =
+        sparseDecodersByStreamId.emplace(streamId, std::move(present->second))
+            .second;
+    NIMBLE_DCHECK(kept, "A stream must not have two decoders");
+    decodersByStreamId.erase(present);
+  }
+
+  // Returns the decoder of a stream that the stripe has, moving it back from
+  // sparseDecodersByStreamId when the stream returns, or null when the stream
+  // has no decoder yet.
+  EncodingViewDecoder* findDecoder(uint32_t streamId) {
+    const auto present = decodersByStreamId.find(streamId);
+    if (present != decodersByStreamId.end()) {
+      return static_cast<EncodingViewDecoder*>(present->second.get());
+    }
+    const auto sparse = sparseDecodersByStreamId.find(streamId);
+    if (sparse == sparseDecodersByStreamId.end()) {
+      return nullptr;
+    }
+    auto* decoder = static_cast<EncodingViewDecoder*>(sparse->second.get());
+    decodersByStreamId.emplace(streamId, std::move(sparse->second));
+    sparseDecodersByStreamId.erase(sparse);
+    return decoder;
+  }
 };
 
 StreamReader::StreamReader(
@@ -192,28 +275,30 @@ StreamReader::StreamReader(
     velox::memory::MemoryPool* pool,
     Options options)
     : type_{std::move(type)},
-      outputType_{convertToVeloxType(*velox::checkedNotNull(type_.get()))},
       pool_{velox::checkedNotNull(pool)},
-      readerOptions_{options},
+      readerOptions_{std::move(options)},
       cachedKey_{pool_} {
-  NIMBLE_CHECK_NOT_NULL(outputType_);
-
   init();
+  NIMBLE_CHECK_NOT_NULL(outputType_);
 }
 
 void StreamReader::init() {
   const auto typeWithId =
       std::shared_ptr<const velox::dwio::common::TypeWithId>{
-          velox::dwio::common::TypeWithId::create(outputType_)};
+          velox::dwio::common::TypeWithId::create(
+              convertToVeloxType(*velox::checkedNotNull(type_.get())))};
   std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
-      toReaderParams(readerOptions_),
+      toReaderParams(*type_, readerOptions_, &stats_),
       type_,
       typeWithId,
       readerOffsets,
       [](uint32_t /*nodeId*/) { return true; },
       pool_);
-  inputOffsets_ = projectionStreamOffsets(*type_);
+
+  // Types each FlatMap read as a struct as that struct, unlike typeWithId.
+  outputType_ = readerFactory_->veloxType();
+  inputOffsets_ = projectionStreamOffsets(*type_, &stringStreams_);
   validateFieldReaderOffsets(inputOffsets_, std::move(readerOffsets));
   decodedStringBuffers_.resize(inputOffsets_.size());
 }
@@ -274,11 +359,11 @@ StreamReader::CachedReader& StreamReader::reader() const {
 
 std::shared_ptr<const EncodingView> StreamReader::makeEncodingView(
     std::string_view encoding,
-    const velox::BufferPtr& inputStringBuffer) {
+    velox::Buffer* inputStringBuffer) {
   // Points options_ to the chunk's buffer only while the view is created,
   // which is safe because the streams bind one at a time, and spares a copy of
   // the options for each chunk.
-  options_.inputStringBuffer = inputStringBuffer.get();
+  options_.inputStringBuffer = inputStringBuffer;
   SCOPE_EXIT {
     options_.inputStringBuffer = nullptr;
   };
@@ -287,12 +372,10 @@ std::shared_ptr<const EncodingView> StreamReader::makeEncodingView(
 
 DecodedStringBuffers* StreamReader::ensureDecodedStringBuffers(
     size_t streamIndex) {
-  if (!holdsStrings(loadedChunks_)) {
-    return nullptr;
-  }
   auto& buffers = decodedStringBuffers_[streamIndex];
   if (buffers == nullptr) {
     buffers = std::make_unique<DecodedStringBuffers>(pool_);
+    stringBufferStreams_.push_back(streamIndex);
   }
   return buffers.get();
 }
@@ -314,20 +397,25 @@ void StreamReader::reset() {
     cachedReader_->reset();
   }
   streamsBound_ = false;
+  decompressedChunks_.clear();
   loadedChunkBufferHolders_.clear();
+  streamBufferHolders_.clear();
+
+  // Keeps the decoded string buffers, so that the strings of the next stripe
+  // go on after those of this one, which its outputs may hold.
+  if (readerOptions_.keepDecodedStringBuffersAcrossStripes) {
+    return;
+  }
 
   // Clears the decoded string buffers of the stripe, whose views are gone, for
   // the next stripe.
-  for (auto& buffers : decodedStringBuffers_) {
-    if (buffers != nullptr) {
-      buffers->clear();
-    }
+  for (const auto streamIndex : stringBufferStreams_) {
+    decodedStringBuffers_[streamIndex]->clear();
   }
 }
 
-void StreamReader::loadChunks(
-    std::string_view stream,
-    const velox::BufferPtr& streamBufferHolder) {
+void StreamReader::loadChunks(std::string_view stream, size_t streamIndex) {
+  const bool stringStream = stringStreams_[streamIndex];
   loadedChunks_.clear();
   loadedChunkBufferHolders_.clear();
   while (!stream.empty()) {
@@ -340,48 +428,58 @@ void StreamReader::loadChunks(
         length, stream.size(), "Chunk data exceeds stream boundary");
     const auto payload = stream.substr(0, length);
     stream.remove_prefix(length);
-    if (compressionType == CompressionType::Uncompressed) {
+    const bool compressed = compressionType != CompressionType::Uncompressed;
+    if (!compressed) {
       loadedChunks_.push_back(payload);
-      loadedChunkBufferHolders_.push_back(streamBufferHolder);
+    } else {
+      // ChunkedStreamWriter compresses chunks only with Zstd or Lz4.
+      NIMBLE_CHECK_FILE(
+          compressionType == CompressionType::Zstd ||
+              compressionType == CompressionType::Lz4,
+          "Unsupported chunk compression type: {}",
+          compressionType);
+      auto decompressed = Compression::uncompress(
+          // @lint-ignore NULLSAFECLANG nullable-dereference
+          *pool_,
+          compressionType,
+          DataType::String,
+          payload,
+          /*decompressCounter=*/nullptr);
+      loadedChunks_.emplace_back(
+          decompressed->as<char>(), decompressed->size());
+      decompressedChunks_.push_back(std::move(decompressed));
+    }
+    // Only string values can point into the bytes of their chunk, so only a
+    // stream of strings records the buffers of its chunks. A point lookup
+    // binds every stream of its stripe, most of which hold other values.
+    if (!stringStream) {
       continue;
     }
-
-    // ChunkedStreamWriter compresses chunks only with Zstd or Lz4.
-    NIMBLE_CHECK_FILE(
-        compressionType == CompressionType::Zstd ||
-            compressionType == CompressionType::Lz4,
-        "Unsupported chunk compression type: {}",
-        compressionType);
-    auto decompressed = Compression::uncompress(
-        // @lint-ignore NULLSAFECLANG nullable-dereference
-        *pool_,
-        compressionType,
-        DataType::String,
-        payload,
-        /*decompressCounter=*/nullptr);
-    loadedChunks_.emplace_back(decompressed->as<char>(), decompressed->size());
-    loadedChunkBufferHolders_.push_back(std::move(decompressed));
+    if (compressed) {
+      loadedChunkBufferHolders_.push_back(decompressedChunks_.back());
+    } else if (streamBufferHolders_.empty()) {
+      loadedChunkBufferHolders_.emplace_back();
+    } else {
+      loadedChunkBufferHolders_.push_back(streamBufferHolders_[streamIndex]);
+    }
   }
 }
 
 void StreamReader::bindStream(
-    std::span<const std::string_view> streams,
-    std::span<const velox::BufferPtr> streamBufferHolders,
+    std::string_view stream,
     size_t streamIndex,
     const SharedDictionaryAlphabets& alphabets,
     const std::function<void()>& bindDecoder) {
-  static const velox::BufferPtr kNoBufferHolder;
-  loadChunks(
-      streams[streamIndex],
-      streamBufferHolders.empty() ? kNoBufferHolder
-                                  : streamBufferHolders[streamIndex]);
+  loadChunks(stream, streamIndex);
 
   // Gives the views of the stream's chunks buffers to decode strings into
   // that only they share, so that a read of the stream holds a few buffers
   // instead of at least one for each chunk. The decoder creates the
   // views before it returns, and they keep a pointer to the buffers, which
   // the reader owns, so options_ points to them only meanwhile.
-  options_.decodedStringBuffers = ensureDecodedStringBuffers(streamIndex);
+  options_.decodedStringBuffers = stringStreams_[streamIndex]
+      ? ensureDecodedStringBuffers(streamIndex)
+      : nullptr;
   SCOPE_EXIT {
     options_.decodedStringBuffers = nullptr;
   };
@@ -404,12 +502,9 @@ void StreamReader::bindStream(
 
 void StreamReader::rebuildReader(
     std::span<const std::string_view> streams,
-    std::span<const velox::BufferPtr> streamBufferHolders,
     const SharedDictionaryAlphabets& alphabets) {
   const EncodingViewDecoder::EncodingViewFactory encodingViewFactory =
-      [this](
-          std::string_view encoding,
-          const velox::BufferPtr& inputStringBuffer) {
+      [this](std::string_view encoding, velox::Buffer* inputStringBuffer) {
         return makeEncodingView(encoding, inputStringBuffer);
       };
   auto& cachedReader = *cachedReader_;
@@ -418,14 +513,13 @@ void StreamReader::rebuildReader(
   for (size_t i{0}; i < streams.size(); ++i) {
     const auto streamId = inputOffsets_[i];
     if (streams[i].empty()) {
-      cachedReader.decodersByStreamId.erase(streamId);
+      cachedReader.keepDecoder(streamId);
       continue;
     }
 
-    const auto it = cachedReader.decodersByStreamId.find(streamId);
-    if (it != cachedReader.decodersByStreamId.end()) {
-      auto* decoder = static_cast<EncodingViewDecoder*>(it->second.get());
-      bindStream(streams, streamBufferHolders, i, alphabets, [&] {
+    if (auto* decoder = cachedReader.findDecoder(streamId);
+        decoder != nullptr) {
+      bindStream(streams[i], i, alphabets, [&] {
         // @lint-ignore NULLSAFECLANG nullable-dereference
         decoder->rebind(
             loadedChunks_, loadedChunkBufferHolders_, options_.bufferPool);
@@ -436,7 +530,7 @@ void StreamReader::rebuildReader(
 
     // TODO: Support encodings without an EncodingView.
     std::unique_ptr<EncodingViewDecoder> decoder;
-    bindStream(streams, streamBufferHolders, i, alphabets, [&] {
+    bindStream(streams[i], i, alphabets, [&] {
       decoder = std::make_unique<EncodingViewDecoder>(
           loadedChunks_,
           loadedChunkBufferHolders_,
@@ -461,6 +555,14 @@ void StreamReader::prepareRead(
       "Decoded string buffers must not be set, since the reader creates them for each stream of strings");
   reset();
   options_ = options;
+  if (!streamBufferHolders.empty()) {
+    streamBufferHolders_.resize(streamBufferHolders.size());
+    for (size_t i{0}; i < streamBufferHolders.size(); ++i) {
+      if (stringStreams_[i]) {
+        streamBufferHolders_[i] = streamBufferHolders[i];
+      }
+    }
+  }
   if (readerOptions_.parallelDecodeEnabled()) {
     // TODO: Make the encoding buffer pool safe for parallel decoding.
     options_.bufferPool = nullptr;
@@ -471,7 +573,7 @@ void StreamReader::prepareRead(
     // keeps the reader.
     for (size_t i{0}; i < streams.size(); ++i) {
       if (!streams[i].empty()) {
-        bindStream(streams, streamBufferHolders, i, alphabets, [&] {
+        bindStream(streams[i], i, alphabets, [&] {
           cachedReader_->streamDecoders[i]->rebind(
               loadedChunks_, loadedChunkBufferHolders_, options_.bufferPool);
         });
@@ -486,7 +588,7 @@ void StreamReader::prepareRead(
     // paired with another pattern's key.
     cachedReader_->root.reset();
     makePresenceKey(streams, cachedKey_);
-    rebuildReader(streams, streamBufferHolders, alphabets);
+    rebuildReader(streams, alphabets);
   }
   streamsBound_ = true;
 }

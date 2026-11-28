@@ -15,6 +15,7 @@
  */
 #include "velox/connectors/paimon/PaimonConnector.h"
 
+#include <fmt/ranges.h>
 #include <folly/init/Init.h>
 #include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
@@ -3187,6 +3188,119 @@ TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadSequenceField) {
               ROW("value", BIGINT()), rowType, testData.options))
           .split(makePaimonSplit(
               dataFiles,
+              PaimonTableType::kPrimaryKey,
+              /*rawConvertible=*/false))
+          .assertResults({makeRowVector(
+              {makeFlatVector<int64_t>(testData.expectedValues)})});
+    }
+  }
+}
+
+// Tables that look up keys in compaction merge the rows of a key in level 0
+// with only the first row of the lowest level above 0, as Paimon Java's
+// LookupMergeFunction does. A sequence field can order a row of a higher level
+// after one of a lower level, which shows the difference.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadLookup) {
+  const auto rowType = ROW({"id", "ts", "value"}, BIGINT());
+  const auto levelTwo = makeRowVector(
+      {"id", "ts", "value"},
+      {makeFlatVector<int64_t>({1, 2, 4, 6}),
+       makeFlatVector<int64_t>({30, 10, 1, 70}),
+       makeFlatVector<int64_t>({120, 220, 420, 620})});
+  const auto levelOne = makeRowVector(
+      {"id", "ts", "value"},
+      {makeFlatVector<int64_t>({1, 3, 4, 6}),
+       makeFlatVector<int64_t>({20, 25, 2, 60}),
+       makeFlatVector<int64_t>({110, 310, 410, 610})});
+  const auto levelZero = makeRowVector(
+      {"id", "ts", "value"},
+      {makeFlatVector<int64_t>({2, 3}),
+       makeFlatVector<int64_t>({15, 5}),
+       makeFlatVector<int64_t>({200, 300})});
+  // Flushed after levelZero, so its rows have larger sequence numbers.
+  const auto newerLevelZero = makeRowVector(
+      {"id", "ts", "value"},
+      {makeFlatVector<int64_t>({2, 4}),
+       makeFlatVector<int64_t>({5, 3}),
+       makeFlatVector<int64_t>({230, 430})});
+  struct TestParam {
+    std::unordered_map<std::string, std::string> options;
+    std::vector<int64_t> expectedValues;
+
+    std::string debugString() const {
+      std::vector<std::string> entries;
+      entries.reserve(options.size());
+      for (const auto& [key, value] : options) {
+        entries.push_back(fmt::format("{}={}", key, value));
+      }
+      std::sort(entries.begin(), entries.end());
+      return fmt::format("options [{}]", fmt::join(entries, ", "));
+    }
+  };
+  // The lookup merge keeps the row of the lowest level above 0 at its position
+  // in merge order among the level-0 rows:
+  // - Key 1 orders level 1 before level 2, so the lookup merge keeps the row
+  //   of level 1.
+  // - Key 2 orders the row of level 2 between two level-0 rows, so the later
+  //   level-0 row wins.
+  // - Key 3 orders the row of level 1 after the level-0 row, so it wins.
+  // - Key 4 ends with a level-0 DELETE, which drops the key unless
+  //   'ignore-delete' skips it and leaves the row of level 1.
+  // - Key 6 orders the DELETE of level 1 before the insert of level 2, so the
+  //   lookup merge drops the key, also with 'ignore-delete'.
+  // First-row tables look up keys too, but Paimon Java does not wrap their
+  // merge function, so they return the first row of each key by sequence
+  // number.
+  const std::vector<TestParam> testSettings{
+      {{{"sequence.field", "ts"}}, {120, 200, 310, 620}},
+      {{{"sequence.field", "ts"}, {"ignore-delete", "true"}},
+       {120, 200, 310, 410, 620}},
+      {{{"sequence.field", "ts"}, {"changelog-producer", "lookup"}},
+       {110, 200, 310}},
+      {{{"sequence.field", "ts"}, {"deletion-vectors.enabled", "true"}},
+       {110, 200, 310}},
+      {{{"sequence.field", "ts"}, {"force-lookup", "true"}}, {110, 200, 310}},
+      {{{"sequence.field", "ts"},
+        {"force-lookup", "true"},
+        {"ignore-delete", "true"}},
+       {110, 200, 310, 410}},
+      {{{"merge-engine", "first-row"}, {"ignore-delete", "true"}},
+       {120, 220, 310, 420, 620}},
+  };
+  for (auto format : fileFormats()) {
+    const auto files = makeFilePaths(4);
+    auto levelTwoFile = writePrimaryKeyFile(
+        files[0]->getPath(), levelTwo, {1, 2, 3, 4}, format);
+    levelTwoFile.level = 2;
+    auto levelOneFile = writePrimaryKeyFile(
+        files[1]->getPath(),
+        levelOne,
+        {5, 6, 7, 8},
+        format,
+        {PaimonRowKind::kInsert,
+         PaimonRowKind::kInsert,
+         PaimonRowKind::kInsert,
+         PaimonRowKind::kDelete});
+    levelOneFile.level = 1;
+    const auto levelZeroFile =
+        writePrimaryKeyFile(files[2]->getPath(), levelZero, {9, 10}, format);
+    const auto newerLevelZeroFile = writePrimaryKeyFile(
+        files[3]->getPath(),
+        newerLevelZero,
+        {11, 12},
+        format,
+        {PaimonRowKind::kInsert, PaimonRowKind::kDelete});
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}, format {}",
+              testData.debugString(),
+              dwio::common::FileFormatName::toName(format)));
+      exec::test::AssertQueryBuilder(
+          makePrimaryKeyScanPlan(
+              ROW("value", BIGINT()), rowType, testData.options))
+          .split(makePaimonSplit(
+              {levelTwoFile, levelOneFile, levelZeroFile, newerLevelZeroFile},
               PaimonTableType::kPrimaryKey,
               /*rawConvertible=*/false))
           .assertResults({makeRowVector(

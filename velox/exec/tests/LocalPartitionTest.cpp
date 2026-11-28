@@ -67,9 +67,15 @@ class LocalPartitionTest : public HiveConnectorTestBase {
       const std::shared_ptr<exec::Task>& task,
       int expected) {
     // Make sure there is only one reference to Task left, i.e. no Driver is
-    // blocked forever. Wait for a bit if that's not immediately the case.
-    if (task.use_count() > expected) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
+    // blocked forever. Each Driver holds the Task until it is destroyed, which
+    // can take more than a second after cancellation on a loaded machine, so
+    // wait up to 10 seconds.
+    constexpr uint64_t kWaitIntervalUs{1'000};
+    constexpr uint64_t kMaxWaitUs{10'000'000};
+    for (uint64_t waitUs = 0;
+         task.use_count() > expected && waitUs < kMaxWaitUs;
+         waitUs += kWaitIntervalUs) {
+      std::this_thread::sleep_for(std::chrono::microseconds(kWaitIntervalUs));
     }
     ASSERT_EQ(expected, task.use_count());
   }

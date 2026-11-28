@@ -89,7 +89,7 @@ std::string NimbleIndexProjector::Stats::toString() const {
       "Stats(numReadStripes={}, numLoadedStripes={}, numSlicedStripes={}, "
       "slicedStripePct={:.2f}%, numReadRows={}, numProjectedRows={}, "
       "numOutputBytes={}, numPlannedBytes={}, numMaxBytesTruncations={}, "
-      "numKeyStreamCoLoads={}, "
+      "numKeyStreamCoLoads={}, numReusedFlatMapKeyNodes={}, "
       "lookupTiming=[{}], prepareTiming=[{}], scanTiming=[{}], "
       "projectionTiming=[{}])",
       numReadStripes,
@@ -104,6 +104,7 @@ std::string NimbleIndexProjector::Stats::toString() const {
       velox::succinctBytes(numPlannedBytes),
       numMaxBytesTruncations,
       numKeyStreamCoLoads,
+      numReusedFlatMapKeyNodes,
       lookupTiming.toString(),
       prepareTiming.toString(),
       scanTiming.toString(),
@@ -139,7 +140,15 @@ void NimbleIndexProjector::setVerifyStreamChecksums(
 
 NimbleIndexProjector::Stats NimbleIndexProjector::stats() const {
   velox::tsan_lock_guard<std::mutex> lock(statsLock_);
-  return stats_;
+  auto stats = stats_;
+
+  // The stream reader counts the key nodes that it reuses, so a report reads
+  // its count instead of each projection adding to stats_.
+  if (streamReader_ != nullptr) {
+    stats.numReusedFlatMapKeyNodes =
+        streamReader_->stats().numReusedFlatMapKeyNodes();
+  }
+  return stats;
 }
 
 namespace {
@@ -239,6 +248,7 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
     TabletReaderCache& tabletReaderCache,
     const velox::FileHandle& fileHandle,
     const std::vector<Subfield>& projectedSubfields,
+    folly::F14FastSet<std::string> readFlatMapFieldAsStruct,
     BlockCache* blockCache,
     const velox::dwio::common::ReaderOptions& options) {
   validateReaderOptions(options);
@@ -259,6 +269,7 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       std::move(tablet),
       fileHandle,
       std::move(projection),
+      std::move(readFlatMapFieldAsStruct),
       blockCache,
       options);
 }
@@ -267,6 +278,7 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
     std::shared_ptr<TabletReader> tablet,
     const velox::FileHandle& fileHandle,
     std::shared_ptr<const NimbleTypeProjection> projection,
+    folly::F14FastSet<std::string> readFlatMapFieldAsStruct,
     BlockCache* blockCache,
     const velox::dwio::common::ReaderOptions& options) {
   validateReaderOptions(options);
@@ -277,6 +289,7 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
       fileHandle.file,
       createDataInput(fileHandle, options, blockCache),
       std::move(projection),
+      std::move(readFlatMapFieldAsStruct),
       &options.memoryPool(),
       options.dataIoStats(),
       options.verifyStreamChecksums(),
@@ -288,6 +301,7 @@ NimbleIndexProjector::NimbleIndexProjector(
     std::shared_ptr<velox::ReadFile> file,
     std::unique_ptr<DataInput> dataInput,
     std::shared_ptr<const NimbleTypeProjection> projection,
+    folly::F14FastSet<std::string> readFlatMapFieldAsStruct,
     velox::memory::MemoryPool* pool,
     std::shared_ptr<velox::io::IoStatistics> ioStats,
     bool verifyStreamChecksums,
@@ -306,6 +320,7 @@ NimbleIndexProjector::NimbleIndexProjector(
       coLoadStreamIds_{
           coLoadKeyStreams_ ? coLoadStreamIds(*projection_, *clusterIndex_)
                             : std::vector<uint32_t>{}},
+      readFlatMapFieldAsStruct_{std::move(readFlatMapFieldAsStruct)},
       dataInput_{std::move(dataInput)} {
   NIMBLE_CHECK(
       !tablet_->properties().hasTopLevelNulls(),
@@ -414,7 +429,7 @@ NimbleIndexProjector::co_projectRows(
   }
 
   const auto outputType = velox::checkedPointerCast<const velox::RowType>(
-      convertToVeloxType(*projection_->nimbleType));
+      streamReader_->outputType());
   result.values =
       velox::checkedPointerCast<velox::RowVector>(velox::BaseVector::create(
           outputType, static_cast<velox::vector_size_t>(totalRows), pool_));
@@ -653,8 +668,16 @@ void NimbleIndexProjector::ensureStreamReader() {
   if (streamReader_ != nullptr) {
     return;
   }
-  streamReader_ = std::make_unique<StreamReader>(
-      projection_->nimbleType, pool_, StreamReader::Options{});
+  auto streamReader = std::make_unique<StreamReader>(
+      projection_->nimbleType,
+      pool_,
+      StreamReader::Options{
+          .readFlatMapFieldAsStruct = readFlatMapFieldAsStruct_,
+      });
+
+  // stats() reads the stream reader, from any thread, under the stats lock.
+  velox::tsan_lock_guard<std::mutex> lock(statsLock_);
+  streamReader_ = std::move(streamReader);
 }
 
 void NimbleIndexProjector::setResumeKey(

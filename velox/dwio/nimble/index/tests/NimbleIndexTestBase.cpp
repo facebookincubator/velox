@@ -594,6 +594,7 @@ NimbleIndexProjectorTestBase::createProjectorWithFileHandle(
       *tabletReaderCache_,
       fileHandle,
       projectedSubfields,
+      /*readFlatMapFieldAsStruct=*/{},
       cacheData ? blockCache_ : nullptr,
       readerOptions);
 }

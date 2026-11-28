@@ -550,6 +550,62 @@ TEST_F(PaimonTableHandleTest, mergeOptions) {
   EXPECT_TRUE(copyOptions.sequenceSnapshotOrdering);
 }
 
+TEST_F(PaimonTableHandleTest, needLookup) {
+  const auto make = [](std::unordered_map<std::string, std::string> options) {
+    return PaimonTableHandle(
+        "test-paimon",
+        "orders",
+        0,
+        rowType(),
+        {7, 8, 20},
+        PaimonTableType::kPrimaryKey,
+        {"p"},
+        std::move(options));
+  };
+  struct TestParam {
+    std::unordered_map<std::string, std::string> options;
+    bool needLookup;
+
+    std::string debugString() const {
+      std::vector<std::string> entries;
+      entries.reserve(options.size());
+      for (const auto& [key, value] : options) {
+        entries.push_back(fmt::format("{}={}", key, value));
+      }
+      std::sort(entries.begin(), entries.end());
+      return fmt::format(
+          "options [{}], needLookup {}", fmt::join(entries, ", "), needLookup);
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {{}, false},
+      {{{"changelog-producer", "lookup"}}, true},
+      {{{"changelog-producer", "LOOKUP"}}, true},
+      {{{"changelog-producer", "none"}}, false},
+      {{{"changelog-producer", "input"}}, false},
+      {{{"changelog-producer", "full-compaction"}}, false},
+      {{{"deletion-vectors.enabled", "true"}}, true},
+      {{{"deletion-vectors.enabled", "false"}}, false},
+      {{{"force-lookup", "True"}}, true},
+      {{{"merge-engine", "first-row"}}, true},
+      {{{"merge-engine", "partial-update"}}, false},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    EXPECT_EQ(
+        make(testData.options).mergeOptions().needLookup, testData.needLookup);
+  }
+  VELOX_ASSERT_USER_THROW(
+      make({{"changelog-producer", "full_compaction"}}),
+      "Unknown Paimon changelog-producer: full_compaction");
+  VELOX_ASSERT_USER_THROW(
+      make({{"force-lookup", "1"}}),
+      "Paimon table option must be true or false: force-lookup");
+  VELOX_ASSERT_USER_THROW(
+      make({{"deletion-vectors.enabled", "yes"}}),
+      "Paimon table option must be true or false: deletion-vectors.enabled");
+}
+
 TEST_F(PaimonTableHandleTest, malformedWire) {
   const auto good = table()->serialize();
   auto obj = good;

@@ -226,11 +226,11 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
             cudf::hash_id::HASH_MURMUR3,
             kLocalExchangeHashSeed,
             stream,
-            get_temp_mr());
+            tempMrs());
       } else if (
           partitionFunctionType_ == PartitionFunctionType::kRoundRobinRow) {
         auto result = cudf::round_robin_partition(
-            tableView, numPartitions_, counter_, stream, get_temp_mr());
+            tableView, numPartitions_, counter_, stream, tempMrs());
         counter_ = (counter_ + cudfVector->size()) % numPartitions_;
         return result;
       }
@@ -266,7 +266,8 @@ void CudfLocalPartition::doAddInput(RowVectorPtr input) {
           pool(),
           outputType_,
           partitionData.num_rows(),
-          std::make_unique<cudf::table>(partitionData, stream, get_output_mr()),
+          std::make_unique<cudf::table>(
+              partitionData, stream, withTempMr(get_output_mr())),
           stream);
       enqueuePartition(i, partitionCudfVector);
     }

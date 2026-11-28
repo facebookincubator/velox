@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <span>
 
 #include <folly/Executor.h>
@@ -46,49 +47,33 @@ struct FeatureSelection {
   SelectionMode mode{SelectionMode::Include};
 };
 
-struct FieldReaderParams {
-  /// Allow selecting subset of features to be included/excluded in flat maps.
-  /// The key in the map is the flat map (top-level) column name.
-  folly::F14FastMap<std::string, FeatureSelection> flatMapFeatureSelector{};
-
-  /// Contains flatmap field name which we want to return as Struct
-  folly::F14FastSet<std::string> readFlatMapFieldAsStruct{};
-
-  /// Callback to populate feature projection stats when needed
-  std::function<void(velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
-      keySelectionCallback{nullptr};
-
-  /// Reports whether a Hybrid FlatMap group's value subtree has streams in
-  /// the current batch. The argument is the group's in-map stream offset.
-  /// Readers that reuse decoder instances across batches must provide this
-  /// callback; standalone readers may omit it because the factory infers
-  /// presence from the decoder map.
-  std::function<bool(uint32_t)> hybridFlatMapValueStreamsPresent{nullptr};
-
-  /// Executor for parallel decoding of child fields.
-  folly::Executor* decodeExecutor{nullptr};
-
-  /// Maximum planned decode parallelism across the field reader tree. Nested
-  /// scalar stream counts determine how many child-field tasks to create. 0
-  /// disables parallel decoding.
-  uint32_t maxDecodeParallelism{0};
-
-  /// Minimum number of nested scalar streams per planned decode task. Ensures
-  /// each coroutine task has enough work to amortize threading overhead.
-  uint32_t minStreamsPerDecodeTask{1};
-
-  /// Optional leaf pools distributed round-robin among independently decoded
-  /// row children and FlatMap-as-struct values. When provided, the pool count
-  /// must match maxDecodeParallelism. The caller must keep the pools alive
-  /// while returned vectors exist.
-  std::vector<velox::memory::MemoryPool*> decodePools{};
-};
-
 class FieldReader {
  public:
   struct Options {
     folly::Executor* decodeExecutor{nullptr};
     uint32_t numDecodeTasks{1};
+  };
+
+  /// Counts the work of field reader factories and their readers. It is
+  /// thread-safe, as velox::io::IoStatistics is, so that a caller can read it
+  /// while readers update it.
+  class Stats {
+   public:
+    /// Returns the FlatMap key nodes, the readers of one key, that FlatMap
+    /// reader factories reused instead of building, when
+    /// FieldReaderParams::reuseFlatMapKeyNodes is set.
+    uint64_t numReusedFlatMapKeyNodes() const {
+      return numReusedFlatMapKeyNodes_.load(std::memory_order_relaxed);
+    }
+
+    /// Counts one more reused FlatMap key node.
+    void incNumReusedFlatMapKeyNodes() {
+      numReusedFlatMapKeyNodes_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+   private:
+    // See numReusedFlatMapKeyNodes().
+    std::atomic_uint64_t numReusedFlatMapKeyNodes_{0};
   };
 
   FieldReader(
@@ -157,6 +142,56 @@ class FieldReader {
   // Reusable empty container satisfying the decoder API for non-string
   // streams, which never retain a buffer. Avoids a heap allocation per call.
   std::vector<velox::BufferPtr> stringBuffers_;
+};
+
+struct FieldReaderParams {
+  /// Allow selecting subset of features to be included/excluded in flat maps.
+  /// The key in the map is the flat map (top-level) column name.
+  folly::F14FastMap<std::string, FeatureSelection> flatMapFeatureSelector{};
+
+  /// Contains flatmap field name which we want to return as Struct
+  folly::F14FastSet<std::string> readFlatMapFieldAsStruct{};
+
+  /// Callback to populate feature projection stats when needed
+  std::function<void(velox::dwio::common::flatmap::FlatMapKeySelectionStats)>
+      keySelectionCallback{nullptr};
+
+  /// Reports whether a Hybrid FlatMap group's value subtree has streams in
+  /// the current batch. The argument is the group's in-map stream offset.
+  /// Readers that reuse decoder instances across batches must provide this
+  /// callback; standalone readers may omit it because the factory infers
+  /// presence from the decoder map.
+  std::function<bool(uint32_t)> hybridFlatMapValueStreamsPresent{nullptr};
+
+  /// Executor for parallel decoding of child fields.
+  folly::Executor* decodeExecutor{nullptr};
+
+  /// Maximum planned decode parallelism across the field reader tree. Nested
+  /// scalar stream counts determine how many child-field tasks to create. 0
+  /// disables parallel decoding.
+  uint32_t maxDecodeParallelism{0};
+
+  /// Minimum number of nested scalar streams per planned decode task. Ensures
+  /// each coroutine task has enough work to amortize threading overhead.
+  uint32_t minStreamsPerDecodeTask{1};
+
+  /// Optional leaf pools distributed round-robin among independently decoded
+  /// row children and FlatMap-as-struct values. When provided, the pool count
+  /// must match maxDecodeParallelism. The caller must keep the pools alive
+  /// while returned vectors exist.
+  std::vector<velox::memory::MemoryPool*> decodePools{};
+
+  /// Lets a FlatMap reader factory keep the key nodes of the readers it
+  /// created once they are destroyed, and reuse them in the next reader for
+  /// keys whose streams map to the same decoder instances. A caller may set it
+  /// only when it keeps the decoder of each stream alive across the readers
+  /// that it creates, as StreamReader does, and destroys every reader before
+  /// the factory, which owns the kept key nodes.
+  bool reuseFlatMapKeyNodes{false};
+
+  /// Counters that the factories and their readers update. Null counts
+  /// nothing. Must outlive the factories.
+  FieldReader::Stats* stats{nullptr};
 };
 
 class FieldReaderFactory {

@@ -309,21 +309,6 @@ struct StringView {
     return std::string(*this);
   }
 
-  /// Searches for 'key == strings[i]' for i >= 0 < numStrings.
-  ///
-  /// If 'indices' is given, searches for 'key == strings[indices[i]]'. Returns
-  /// the first i for which the strings match or -1 if no match is found. Uses
-  /// SIMD to accelerate the search.
-  ///
-  /// Accesses StringView bodies in 32 byte vectors, thus expects up to 31 bytes
-  /// of addressable padding after out of line strings. This is the case for
-  /// velox Buffers.
-  static int32_t linearSearch(
-      StringView key,
-      const StringView* strings,
-      const int32_t* indices,
-      int32_t numStrings);
-
  private:
   int64_t sizeAndPrefixAsInt64() const {
     return reinterpret_cast<const int64_t*>(this)[0];

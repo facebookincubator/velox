@@ -124,7 +124,8 @@ std::unique_ptr<cudf::table> CudfVector::release() {
       std::get<std::unique_ptr<cudf::packed_table>>(tableStorage_);
   // Using same memory resource as packed_table
   auto mr = packedPtr->data.gpu_data->memory_resource();
-  auto materializedTable = std::make_unique<cudf::table>(tabView_, stream_, mr);
+  auto materializedTable =
+      std::make_unique<cudf::table>(tabView_, stream_, withTempMr(mr));
   stream_.sync();
   // Clear the packed table since we've materialized
   packedPtr.reset();

@@ -39,7 +39,8 @@ class StructColumnReaderBase
             fileType,
             params,
             scanSpec,
-            isRoot),
+            isRoot,
+            params.generateLazyChildren()),
         rowSizeTracker_{params.rowSizeTracker()} {
     VELOX_CHECK_EQ(fileType_->id(), fileType->id());
   }

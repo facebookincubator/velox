@@ -34,11 +34,6 @@ class StringRetainer;
 // Holds the view of one chunk bound to an EncodingViewDecoder and where the
 // chunk ends in the stream.
 struct BoundChunk {
-  // Holds the bytes of the chunk, or null when no buffer does. The view's
-  // Encoding::Options::inputStringBuffer points to it, so it outlives the
-  // view, which is destroyed first.
-  velox::BufferPtr bufferHolder;
-
   // Random-access view over the chunk's encoded values.
   std::shared_ptr<const EncodingView> view;
 
@@ -67,21 +62,22 @@ class EncodingViewDecoder final : public Decoder {
   /// Creates an EncodingView over the encoding of one chunk.
   /// `inputStringBuffer` holds the bytes of the encoding, or is null when no
   /// buffer does. The factory points the view's
-  /// Encoding::Options::inputStringBuffer to it, and the decoder keeps it for
-  /// as long as the view is bound.
+  /// Encoding::Options::inputStringBuffer to it.
   using EncodingViewFactory = std::function<std::shared_ptr<const EncodingView>(
       std::string_view encoding,
-      const velox::BufferPtr& inputStringBuffer)>;
+      velox::Buffer* inputStringBuffer)>;
 
   /// Creates a decoder over the chunks of one stream, in stream order.
   /// `chunks` must be non-empty, and every chunk must store the same data type.
   /// `chunkBufferHolders` is empty, or holds for each chunk the buffer that
   /// holds its bytes, such as the stream it was split from or its
   /// decompressed bytes, or null for a chunk that no buffer holds. The decoder
-  /// passes each to `encodingViewFactory` with its chunk. `pool` and the views
-  /// returned by `encodingViewFactory` must be non-null. The decoder keeps the
-  /// factory to create the views of the chunks bound later with rebind().
-  /// `bufferPool` is as in rebind().
+  /// passes each to `encodingViewFactory` with its chunk, but does not keep
+  /// it: the caller keeps the buffers alive while the chunks are bound, as it
+  /// keeps the bytes of the chunks. `pool` and the views returned by
+  /// `encodingViewFactory` must be non-null. The decoder keeps the factory to
+  /// create the views of the chunks bound later with rebind(). `bufferPool` is
+  /// as in rebind().
   EncodingViewDecoder(
       std::span<const std::string_view> chunks,
       std::span<const velox::BufferPtr> chunkBufferHolders,
@@ -196,16 +192,13 @@ class EncodingViewDecoder final : public Decoder {
   detail::StringRetainer*
   stringRetainer(uint32_t numSelectedRows, uint32_t firstRow, uint32_t lastRow);
 
-  // Returns the retainer above for a read of 'rows' of 'dataType' values, or
-  // nullptr when the read selects no rows or reads no strings.
-  detail::StringRetainer* stringRetainer(
-      DataType dataType,
-      std::span<const uint32_t> rows);
+  // Returns the retainer above for a read of strings at 'rows', or nullptr
+  // when the read selects no rows.
+  detail::StringRetainer* stringRetainer(std::span<const uint32_t> rows);
 
   // Does the same as the method above for a read of the 'numRows' rows of
   // 'ranges'.
   detail::StringRetainer* stringRetainer(
-      DataType dataType,
       std::span<const RowRange> ranges,
       uint32_t numRows);
 

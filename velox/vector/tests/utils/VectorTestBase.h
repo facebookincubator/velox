@@ -19,11 +19,13 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/system/HardwareConcurrency.h>
 
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 #include <gtest/gtest.h>
 #include <optional>
+#include <span>
 #include <unordered_set>
 #include "velox/type/CppToType.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
@@ -761,6 +763,18 @@ class VectorTestBase {
       std::function<vector_size_t(vector_size_t)> indexAt) const;
 
   BufferPtr makeIndices(const std::vector<vector_size_t>& indices) const;
+
+  /// Returns a BufferView over 'bytes', which must outlive it.
+  static BufferPtr makeBufferView(std::span<const std::byte> bytes);
+
+  /// Copies 'values' to the end of 'page' and returns a BufferView over the
+  /// copy, so that a read past the last value faults.
+  template <typename T>
+  static BufferPtr copyToEndOfPage(
+      const common::testutil::PageBeforeGuard& page,
+      const std::vector<T>& values) {
+    return makeBufferView(std::as_bytes(page.copyToEnd(values)));
+  }
 
   BufferPtr makeOddIndices(vector_size_t size);
 

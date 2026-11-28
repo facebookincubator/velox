@@ -797,6 +797,12 @@ class NonPODAlignedBuffer : public Buffer {
   friend class AlignedBuffer;
 };
 
+/// Releaser for a BufferView over memory that its creator keeps alive.
+struct NoopReleaser {
+  void addRef() const {}
+  void release() const {}
+};
+
 // Immutable view over externally managed memory. When the last reference is
 // destroyed, release() is called on 'releaser'. Has no padding: the memory may
 // end at size() rounded up to the buffer's alignment. A BufferView held by a

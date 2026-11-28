@@ -515,48 +515,64 @@ void VectorHasher::lookupIdsRangeSimd(
   auto data = decoded.data<T>();
   uint64_t offset = min_ - 1;
   auto bits = rows.asMutableRange().bits();
-  bits::forBatches<xsimd::batch<T>::size>(
-      bits, rows.begin(), rows.end(), [&](auto index, auto /*mask*/) {
-        auto values = xsimd::batch<T>::load_unaligned(data + index);
-        uint64_t outOfRange =
-            simd::toBitMask(lower > values) | simd::toBitMask(values > upper);
-        if (outOfRange) {
-          bits[index / 64] &= ~(outOfRange << (index & 63));
-        }
-        if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
-          if constexpr (sizeof(T) == 8) {
-            auto unsignedValues =
-                simd::reinterpretBatch<typename std::make_unsigned<T>::type>(
-                    values);
-            if (multiplier_ == 1) {
-              (unsignedValues - offset).store_unaligned(result + index);
-            } else {
-              (xsimd::batch<uint64_t>::load_unaligned(result + index) +
-               ((unsignedValues - offset) * multiplier_))
-                  .store_unaligned(result + index);
-            }
-          } else {
-            // Widen 8 to 2 x 4 since result is always 64 bits wide.
-            auto first4 = simd::reinterpretBatch<uint64_t>(
-                              simd::getHalf<int64_t, 0>(values)) -
-                offset;
-            auto next4 = simd::reinterpretBatch<uint64_t>(
-                             simd::getHalf<int64_t, 1>(values)) -
-                offset;
-            if (multiplier_ == 1) {
-              first4.store_unaligned(result + index);
-              next4.store_unaligned(result + index + first4.size);
-            } else {
-              (xsimd::batch<uint64_t>::load_unaligned(result + index) +
-               (first4 * multiplier_))
-                  .store_unaligned(result + index);
-              (xsimd::batch<uint64_t>::load_unaligned(
-                   result + index + first4.size) +
-               (next4 * multiplier_))
-                  .store_unaligned(result + index + first4.size);
-            }
-          }
-        }
+  constexpr int32_t kWidth = xsimd::batch<T>::size;
+  // Looks up the batch of rows that starts at 'index', with its keys at 'keys'.
+  // A local copy: 'result' could alias 'multiplier_', which would then be
+  // reloaded after each store.
+  const uint64_t multiplier = multiplier_;
+  // Stores the ids of the batch of rows that starts at 'index', or adds them
+  // times 'multiplier' to the ids there.
+  auto storeIds = [&](xsimd::batch<uint64_t> ids,
+                      vector_size_t index) INLINE_LAMBDA {
+    if (multiplier == 1) {
+      ids.store_unaligned(result + index);
+    } else {
+      (xsimd::batch<uint64_t>::load_unaligned(result + index) +
+       ids * multiplier)
+          .store_unaligned(result + index);
+    }
+  };
+  auto lookupBatch = [&](const T* keys, vector_size_t index) INLINE_LAMBDA {
+    auto values = xsimd::batch<T>::load_unaligned(keys);
+    uint64_t outOfRange =
+        simd::toBitMask(lower > values) | simd::toBitMask(values > upper);
+    if (outOfRange) {
+      bits[index / 64] &= ~(outOfRange << (index & 63));
+    }
+    if (outOfRange != bits::lowMask(xsimd::batch<T>::size)) {
+      if constexpr (sizeof(T) == 8) {
+        storeIds(simd::reinterpretBatch<uint64_t>(values) - offset, index);
+      } else {
+        // Widen 8 to 2 x 4 since result is always 64 bits wide.
+        const auto first4 = simd::reinterpretBatch<uint64_t>(
+                                simd::getHalf<int64_t, 0>(values)) -
+            offset;
+        storeIds(first4, index);
+        storeIds(
+            simd::reinterpretBatch<uint64_t>(
+                simd::getHalf<int64_t, 1>(values)) -
+                offset,
+            index + first4.size);
+      }
+    }
+  };
+
+  const vector_size_t numKeys = decoded.base()->size();
+  // Full batches stay within 'data', which may have no padding.
+  const vector_size_t fullBatchesEnd =
+      std::min<vector_size_t>(rows.end(), numKeys / kWidth * kWidth);
+  // The last, partial batch loads its keys from a zero-filled copy. It runs
+  // first, so that no value stays live across the loop below.
+  if (fullBatchesEnd < rows.end() &&
+      bits::findFirstBit(
+          bits, std::max(rows.begin(), fullBatchesEnd), rows.end()) >= 0) {
+    T lastKeys[kWidth]{};
+    std::copy(data + fullBatchesEnd, data + numKeys, lastKeys);
+    lookupBatch(lastKeys, fullBatchesEnd);
+  }
+  bits::forBatches<kWidth>(
+      bits, rows.begin(), fullBatchesEnd, [&](auto index, auto /*mask*/) {
+        lookupBatch(data + index, index);
       });
 }
 

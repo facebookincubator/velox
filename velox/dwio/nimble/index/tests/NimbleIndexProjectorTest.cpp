@@ -2329,6 +2329,7 @@ TEST_P(NimbleIndexProjectorTest, blockCacheParameterControlsCaching) {
         *tabletReaderCache_,
         fileHandle,
         subfields,
+        /*readFlatMapFieldAsStruct=*/{},
         /*blockCache=*/nullptr,
         readerOptions);
     const auto first = projectRows(*projector, *request, {});
@@ -2342,7 +2343,12 @@ TEST_P(NimbleIndexProjectorTest, blockCacheParameterControlsCaching) {
   {
     auto* blockCache = getBlockCache(velox::checkedNotNull(dataCache()));
     auto projector = NimbleIndexProjector::create(
-        *tabletReaderCache_, fileHandle, subfields, blockCache, readerOptions);
+        *tabletReaderCache_,
+        fileHandle,
+        subfields,
+        /*readFlatMapFieldAsStruct=*/{},
+        blockCache,
+        readerOptions);
     const auto first = projectRows(*projector, *request, {});
     velox::test::assertEqualVectors(expected, first.values);
     const auto ramHitsAfterFirstRead = dataIoStats_->ramHit().count();
@@ -4025,6 +4031,134 @@ TEST_P(NimbleIndexProjectorTest, projectRowsKeepsNullFlatMapValues) {
   }
 }
 
+// A projector created with readFlatMapFieldAsStruct returns those FlatMaps as
+// structs of the keys that the projection selects, sorted by name, with null
+// where a row or the file lacks a key, on every call. A projector created
+// without them returns maps.
+TEST_P(NimbleIndexProjectorTest, projectRowsReadsFlatMapsAsStructs) {
+  constexpr vector_size_t kRowsPerStripe{4};
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(VARCHAR(), BIGINT())}});
+  using MapEntries = std::vector<std::pair<StringView, std::optional<int64_t>>>;
+  // Each stripe holds four rows. Key "a" is in the first and last stripes, and
+  // key "b" in the last two. Row 9 holds a null map.
+  const std::vector<std::vector<std::optional<MapEntries>>> stripeMaps{
+      {MapEntries{{"a", 0}},
+       MapEntries{{"a", std::nullopt}},
+       MapEntries{{"a", 2}},
+       MapEntries{{"a", std::nullopt}}},
+      {MapEntries{{"b", 40}},
+       MapEntries{},
+       MapEntries{{"b", 60}},
+       MapEntries{{"b", 70}}},
+      {MapEntries{{"a", 8}, {"b", 80}},
+       std::nullopt,
+       MapEntries{{"a", 10}},
+       MapEntries{{"a", std::nullopt}, {"b", 110}}},
+  };
+  std::vector<RowVectorPtr> batches;
+  std::vector<std::optional<MapEntries>> allMaps;
+  for (size_t stripe = 0; stripe < stripeMaps.size(); ++stripe) {
+    const auto keyBase = static_cast<int64_t>(stripe * kRowsPerStripe);
+    batches.push_back(vectorMaker_->rowVector(
+        {"key", "features"},
+        {vectorMaker_->flatVector<int64_t>(
+             kRowsPerStripe, [&](auto row) { return keyBase + row; }),
+         vectorMaker_->mapVector<StringView, int64_t>(stripeMaps[stripe])}));
+    allMaps.insert(
+        allMaps.end(), stripeMaps[stripe].begin(), stripeMaps[stripe].end());
+  }
+  writeData(batches, {"key"}, {{"features", {}}}, /*stripeSize=*/1);
+  const auto maps = vectorMaker_->mapVector<StringView, int64_t>(allMaps);
+
+  // Requests the keys out of order, and "c", which the file lacks.
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"c\"]");
+  subfields.emplace_back("features[\"b\"]");
+  subfields.emplace_back("features[\"a\"]");
+  auto mapProjector = createProjector(subfields);
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  configureReaderOptions(
+      readerOptions,
+      /*setDataIoStats=*/true,
+      /*setMetadataIoStats=*/true,
+      /*setIndexIoStats=*/true,
+      /*cacheData=*/false,
+      /*verifyStreamChecksums=*/false);
+  ensureTabletReaderCache();
+  auto structProjector = NimbleIndexProjector::create(
+      *tabletReaderCache_,
+      makeFileHandle(),
+      subfields,
+      /*readFlatMapFieldAsStruct=*/{"features"},
+      /*blockCache=*/nullptr,
+      readerOptions);
+  // Rows 1 to 5 span the first two stripes, and rows 7 to 10 the last two.
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 1, 6),
+       makeRangeLookup(rowType, {"key"}, 7, 11)});
+  // The first row and the number of rows of each request.
+  const std::array<std::pair<vector_size_t, vector_size_t>, 2> requestRows{
+      {{1, 5}, {7, 4}}};
+  // Returns the structs of 'size' maps from row 'offset': the value of each
+  // key, or null where a map lacks the key, and null for a null map.
+  const auto makeStructs = [&](vector_size_t offset, vector_size_t size) {
+    std::vector<VectorPtr> fields;
+    for (const auto* key : {"a", "b"}) {
+      std::vector<std::optional<int64_t>> values(size);
+      for (vector_size_t row = 0; row < size; ++row) {
+        const auto& map = allMaps[offset + row];
+        if (!map.has_value()) {
+          continue;
+        }
+        for (const auto& [mapKey, value] : map.value()) {
+          if (mapKey == StringView(key)) {
+            values[row] = value;
+          }
+        }
+      }
+      fields.push_back(vectorMaker_->flatVectorNullable<int64_t>(values));
+    }
+    fields.push_back(vectorMaker_->flatVectorNullable<int64_t>(
+        std::vector<std::optional<int64_t>>(size)));
+    auto structs = vectorMaker_->rowVector({"a", "b", "c"}, fields);
+    for (vector_size_t row = 0; row < size; ++row) {
+      if (!allMaps[offset + row].has_value()) {
+        structs->setNull(row, true);
+      }
+    }
+    return structs;
+  };
+  const auto structType =
+      ROW("features", ROW({"a", "b", "c"}, BIGINT()))->toString();
+  const auto mapType = ROW("features", MAP(VARCHAR(), BIGINT()))->toString();
+
+  // Reads with the struct projector again after the map projector, which
+  // reuses the struct projector's stream reader.
+  for (const bool asStruct : {true, false, true}) {
+    SCOPED_TRACE(fmt::format("asStruct={}", asStruct));
+    auto& projector = asStruct ? *structProjector : *mapProjector;
+
+    const auto result = projectRows(projector, *request, {});
+
+    EXPECT_EQ(
+        result.values->type()->toString(), asStruct ? structType : mapType);
+    ASSERT_EQ(result.responses.size(), requestRows.size());
+    for (size_t i = 0; i < requestRows.size(); ++i) {
+      SCOPED_TRACE(fmt::format("request={}", i));
+      const auto [offset, size] = requestRows[i];
+      const auto& response = result.responses[i];
+      ASSERT_EQ(response.size, size);
+      velox::test::assertEqualVectors(
+          vectorMaker_->rowVector(
+              {"features"},
+              {asStruct ? VectorPtr{makeStructs(offset, size)}
+                        : maps->slice(offset, size)}),
+          result.values->slice(response.offset, response.size));
+    }
+  }
+}
+
 // Repeated reads through one projector must not accumulate retained output:
 // node values reset between reads, so pool usage stays flat instead of
 // growing with every call.
@@ -4086,6 +4220,80 @@ TEST_P(NimbleIndexProjectorTest, projectRowsReleasesRetainedNodeValues) {
             repeated.responses[0].offset, repeated.responses[0].size));
   }
   EXPECT_EQ(leafPool_->usedBytes(), bytesAfterFirst);
+}
+
+// Point lookups of neighboring rows return the array values of every flat map
+// key in the right map entries, including null and empty arrays and keys
+// missing from some rows.
+TEST_P(NimbleIndexProjectorTest, projectRowsReadsFlatMapArrayValues) {
+  constexpr vector_size_t kNumRows{16};
+  constexpr int32_t kNumKeys{4};
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(INTEGER(), ARRAY(BIGINT()))}});
+  // Key k is missing from the rows where (row + k) % 3 is 0, holds an array
+  // of (row + k) % 4 values elsewhere, and is null in row 5 for key 2.
+  std::vector<vector_size_t> offsets;
+  std::vector<int32_t> mapKeys;
+  std::vector<std::optional<std::vector<std::optional<int64_t>>>> mapValues;
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    offsets.push_back(static_cast<vector_size_t>(mapKeys.size()));
+    for (int32_t key = 1; key <= kNumKeys; ++key) {
+      if ((row + key) % 3 == 0) {
+        continue;
+      }
+      mapKeys.push_back(key);
+      if (row == 5 && key == 2) {
+        mapValues.emplace_back(std::nullopt);
+        continue;
+      }
+      const int32_t numValues = (row + key) % 4;
+      std::vector<std::optional<int64_t>> values;
+      values.reserve(numValues);
+      for (int32_t i = 0; i < numValues; ++i) {
+        values.emplace_back(row * 100 + key * 10 + i);
+      }
+      mapValues.emplace_back(std::move(values));
+    }
+  }
+  const auto features = vectorMaker_->mapVector(
+      offsets,
+      vectorMaker_->flatVector<int32_t>(mapKeys),
+      vectorMaker_->arrayVectorNullable<int64_t>(mapValues));
+  const auto batch = vectorMaker_->rowVector(
+      {"key", "features"},
+      {vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return static_cast<int64_t>(row); }),
+       features});
+  writeData({batch}, {"key"}, {{"features", {}}}, /*stripeSize=*/1 << 20);
+  std::vector<Subfield> subfields;
+  subfields.reserve(kNumKeys);
+  for (int32_t key = 1; key <= kNumKeys; ++key) {
+    subfields.emplace_back(fmt::format("features[{}]", key));
+  }
+  auto projector = createProjector(subfields);
+
+  const std::vector<int64_t> pointKeys{3, 4, 5, 4, 9};
+  std::vector<velox::serializer::EncodedKeyBounds> lookups;
+  lookups.reserve(pointKeys.size() + 1);
+  for (const auto key : pointKeys) {
+    lookups.push_back(makePointLookup(rowType, {"key"}, key));
+  }
+  lookups.push_back(makeRangeLookup(rowType, {"key"}, 10, 14));
+  const auto request =
+      index::IndexLookup::LookupRequest::rangeScan(std::move(lookups));
+  const auto result = projectRows(*projector, *request, {});
+
+  const std::vector<vector_size_t> expectedRows{3, 4, 5, 4, 9, 10, 11, 12, 13};
+  auto expectedFeatures = BaseVector::create(
+      features->type(),
+      static_cast<vector_size_t>(expectedRows.size()),
+      leafPool_.get());
+  for (size_t i = 0; i < expectedRows.size(); ++i) {
+    expectedFeatures->copy(
+        features.get(), static_cast<vector_size_t>(i), expectedRows[i], 1);
+  }
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector({"features"}, {expectedFeatures}), result.values);
 }
 
 TEST_P(NimbleIndexProjectorTest, preservesStreamRowCountEncoding) {
@@ -6540,13 +6748,14 @@ TEST_P(NimbleIndexProjectorTest, statsToString) {
   stats.numPlannedBytes = 16'384;
   stats.numMaxBytesTruncations = 2;
   stats.numKeyStreamCoLoads = 4;
+  stats.numReusedFlatMapKeyNodes = 6;
   EXPECT_EQ(
       stats.toString(),
       "Stats(numReadStripes=3, numLoadedStripes=5, numSlicedStripes=1, "
       "slicedStripePct=33.33%, numReadRows=1000, numProjectedRows=800, "
       "numOutputBytes=8.00KB, numPlannedBytes=16.00KB, "
       "numMaxBytesTruncations=2, "
-      "numKeyStreamCoLoads=4, "
+      "numKeyStreamCoLoads=4, numReusedFlatMapKeyNodes=6, "
       "lookupTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "prepareTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "scanTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
@@ -7377,6 +7586,7 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
         *tabletReaderCache_,
         fileHandle,
         subfields,
+        /*readFlatMapFieldAsStruct=*/{},
         /*blockCache=*/nullptr,
         readerOptions);
   };

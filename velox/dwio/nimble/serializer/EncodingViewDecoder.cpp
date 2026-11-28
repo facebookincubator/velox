@@ -104,24 +104,33 @@ uint32_t readSelected(
   }
   NIMBLE_CHECK_NOT_NULL(output);
 
-  void* outputNulls{nullptr};
-  const auto setNull = [&](uint32_t outputIndex) {
+  // Holds the state of setNull, so that setNull captures a single reference.
+  // The reads of the views take setNull as a std::function, which stores a
+  // callable of at most two pointers in place and allocates a larger one on
+  // each read.
+  struct OutputNulls {
+    const std::function<void*()>& getNulls;
+    const uint32_t numRows{0};
+    void* nulls{nullptr};
+  } outputNulls{getOutputNulls, numRows};
+  const auto setNull = [&outputNulls](uint32_t outputIndex) {
     NIMBLE_CHECK_NOT_NULL(
-        getOutputNulls, "Nullable selected read requires output nulls");
-    if (outputNulls == nullptr) {
-      outputNulls = getOutputNulls();
+        outputNulls.getNulls, "Nullable selected read requires output nulls");
+    if (outputNulls.nulls == nullptr) {
+      outputNulls.nulls = outputNulls.getNulls();
       velox::bits::fillBits(
-          static_cast<uint64_t*>(outputNulls),
+          static_cast<uint64_t*>(outputNulls.nulls),
           0,
-          static_cast<velox::vector_size_t>(numRows),
+          static_cast<velox::vector_size_t>(outputNulls.numRows),
           velox::bits::kNotNull);
     }
-    velox::bits::clearBit(static_cast<uint64_t*>(outputNulls), outputIndex);
+    velox::bits::clearBit(
+        static_cast<uint64_t*>(outputNulls.nulls), outputIndex);
   };
 
   const auto numNonNulls = readFunction(setNull);
   if (dataType == DataType::String) {
-    retainFunction(outputNulls);
+    retainFunction(outputNulls.nulls);
   }
   return numNonNulls;
 }
@@ -273,8 +282,7 @@ void checkHoldsChunk(
 // Creates the view of each of 'chunks' with 'encodingViewFactory', which it
 // passes the chunk and the buffer that holds it: the chunk's entry of
 // 'chunkBufferHolders', or null when that is empty. Appends each view, with
-// that buffer and the stream row where its chunk ends, to 'boundChunks', which
-// must be empty.
+// the stream row where its chunk ends, to 'boundChunks', which must be empty.
 void bindChunks(
     std::span<const std::string_view> chunks,
     std::span<const velox::BufferPtr> chunkBufferHolders,
@@ -287,12 +295,11 @@ void bindChunks(
         chunks.size(),
         "Chunk buffer holders must align with the chunks");
   }
-  static const velox::BufferPtr kNoBufferHolder;
   uint32_t endRow{0};
   for (size_t i{0}; i < chunks.size(); ++i) {
     const auto chunk = chunks[i];
-    const auto& bufferHolder =
-        chunkBufferHolders.empty() ? kNoBufferHolder : chunkBufferHolders[i];
+    auto* bufferHolder =
+        chunkBufferHolders.empty() ? nullptr : chunkBufferHolders[i].get();
     if (bufferHolder != nullptr) {
       checkHoldsChunk(*bufferHolder, chunk);
     }
@@ -311,7 +318,7 @@ void bindChunks(
         std::numeric_limits<uint32_t>::max() - endRow,
         "Stream rows must fit in uint32_t");
     endRow += view.rowCount();
-    boundChunks.push_back({bufferHolder, std::move(encodingView), endRow});
+    boundChunks.push_back({std::move(encodingView), endRow});
   }
 }
 
@@ -325,8 +332,8 @@ EncodingViewDecoder::EncodingViewDecoder(
     const EncodingViewFactory& encodingViewFactory)
     : pool_{velox::checkedNotNull(pool)},
       encodingViewFactory_{encodingViewFactory} {
-  NIMBLE_CHECK(
-      encodingViewFactory_ != nullptr,
+  NIMBLE_CHECK_NOT_NULL(
+      encodingViewFactory_,
       "EncodingViewDecoder requires an EncodingView factory");
   rebind(chunks, chunkBufferHolders, bufferPool);
 }
@@ -366,8 +373,13 @@ bool EncodingViewDecoder::holdsStringBuffers(
       static_cast<uint64_t>(lastRow - firstRow) + 1) {
     return false;
   }
-  const uint64_t numSpannedRows = chunks_[findChunkIndex(lastRow)].endRow -
-      chunkStartRow(findChunkIndex(firstRow));
+
+  // A decoder of one chunk, as for each stream of a point lookup, spans it
+  // without a search.
+  const uint64_t numSpannedRows = chunks_.size() == 1
+      ? chunks_.front().endRow
+      : chunks_[findChunkIndex(lastRow)].endRow -
+          chunkStartRow(findChunkIndex(firstRow));
   return numSelectedRows * kMaxSpannedRowsPerSelectedRow >= numSpannedRows;
 }
 
@@ -387,9 +399,8 @@ detail::StringRetainer* EncodingViewDecoder::stringRetainer(
 
 // @lint-ignore CLANGTIDY facebook-hte-NullableReturn
 detail::StringRetainer* EncodingViewDecoder::stringRetainer(
-    DataType dataType,
     std::span<const uint32_t> rows) {
-  if (dataType != DataType::String || rows.empty()) {
+  if (rows.empty()) {
     return nullptr;
   }
 
@@ -403,10 +414,9 @@ detail::StringRetainer* EncodingViewDecoder::stringRetainer(
 
 // @lint-ignore CLANGTIDY facebook-hte-NullableReturn
 detail::StringRetainer* EncodingViewDecoder::stringRetainer(
-    DataType dataType,
     std::span<const RowRange> ranges,
     uint32_t numRows) {
-  if (dataType != DataType::String || numRows == 0) {
+  if (numRows == 0) {
     return nullptr;
   }
   return stringRetainer(
@@ -557,7 +567,18 @@ uint32_t EncodingViewDecoder::read(
       dataType,
       "EncodingView data type does not match FieldReader");
   const auto numRows = static_cast<uint32_t>(rows.size());
-  auto* retainer = stringRetainer(dataType, rows);
+  if (dataType != DataType::String) {
+    return readSelected(
+        numRows,
+        dataType,
+        output,
+        getOutputNulls,
+        [&](const auto& setNull) {
+          return readRows(rows, setNull, addStringBufferOf(nullptr), output);
+        },
+        /*retainFunction=*/[](const void* /*outputNulls*/) {});
+  }
+  auto* retainer = stringRetainer(rows);
   SCOPE_EXIT {
     if (retainer != nullptr) {
       retainer->reset();
@@ -588,7 +609,19 @@ uint32_t EncodingViewDecoder::read(
       this->dataType(),
       dataType,
       "EncodingView data type does not match FieldReader");
-  auto* retainer = stringRetainer(dataType, ranges, numRows);
+  if (dataType != DataType::String) {
+    return readSelected(
+        numRows,
+        dataType,
+        output,
+        getOutputNulls,
+        [&](const auto& setNull) {
+          return readRanges(
+              ranges, setNull, addStringBufferOf(nullptr), output);
+        },
+        /*retainFunction=*/[](const void* /*outputNulls*/) {});
+  }
+  auto* retainer = stringRetainer(ranges, numRows);
   SCOPE_EXIT {
     if (retainer != nullptr) {
       retainer->reset();

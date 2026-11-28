@@ -90,6 +90,21 @@ bool parseBooleanOption(std::string_view key, std::string_view value) {
   return false;
 }
 
+// Returns 'value' of the 'changelog-producer' table option in lower case, after
+// checking that it is a PaimonChangelogProducer value in any capitalization.
+std::string parseChangelogProducer(std::string_view value) {
+  std::string lower{value};
+  folly::toLowerAscii(lower);
+  VELOX_USER_CHECK(
+      lower == PaimonChangelogProducer::kNone ||
+          lower == PaimonChangelogProducer::kInput ||
+          lower == PaimonChangelogProducer::kFullCompaction ||
+          lower == PaimonChangelogProducer::kLookup,
+      "Unknown Paimon changelog-producer: {}",
+      value);
+  return lower;
+}
+
 // Parses the merge-on-read options of a primary-key table as Paimon Java's
 // CoreOptions does, and checks them as its SchemaValidation does.
 PaimonTableHandle::MergeOptions parseMergeOptions(
@@ -100,20 +115,22 @@ PaimonTableHandle::MergeOptions parseMergeOptions(
   if (tableType != PaimonTableType::kPrimaryKey) {
     return mergeOptions;
   }
-  if (auto it = options.find("merge-engine"); it != options.end()) {
+  if (auto it = options.find(PaimonTableOptions::kMergeEngine);
+      it != options.end()) {
     mergeOptions.mergeEngine = paimonMergeEngineFromString(it->second);
   }
   for (const auto* key :
-       {"ignore-delete",
-        "first-row.ignore-delete",
-        "deduplicate.ignore-delete",
-        "partial-update.ignore-delete"}) {
+       {PaimonTableOptions::kIgnoreDelete,
+        PaimonTableOptions::kFirstRowIgnoreDelete,
+        PaimonTableOptions::kDeduplicateIgnoreDelete,
+        PaimonTableOptions::kPartialUpdateIgnoreDelete}) {
     if (auto it = options.find(key); it != options.end()) {
       mergeOptions.ignoreDelete = parseBooleanOption(key, it->second);
       break;
     }
   }
-  if (auto it = options.find("sequence.field"); it != options.end()) {
+  if (auto it = options.find(PaimonTableOptions::kSequenceField);
+      it != options.end()) {
     // Java's String.split drops trailing empty fields before each field is
     // trimmed.
     std::vector<std::string_view> fields;
@@ -135,7 +152,7 @@ PaimonTableHandle::MergeOptions parseMergeOptions(
       mergeOptions.sequenceFields.push_back(std::move(name));
     }
   }
-  if (auto it = options.find("sequence.field.sort-order");
+  if (auto it = options.find(PaimonTableOptions::kSequenceFieldSortOrder);
       it != options.end()) {
     std::string order{it->second};
     folly::toLowerAscii(order);
@@ -145,7 +162,7 @@ PaimonTableHandle::MergeOptions parseMergeOptions(
         it->second);
     mergeOptions.sequenceFieldsAscending = order == "ascending";
   }
-  if (auto it = options.find("sequence.snapshot-ordering");
+  if (auto it = options.find(PaimonTableOptions::kSequenceSnapshotOrdering);
       it != options.end()) {
     mergeOptions.sequenceSnapshotOrdering =
         parseBooleanOption(it->first, it->second);
@@ -154,6 +171,22 @@ PaimonTableHandle::MergeOptions parseMergeOptions(
       mergeOptions.sequenceFields.empty() ||
           mergeOptions.mergeEngine != PaimonMergeEngine::kFirstRow,
       "Paimon first-row merge engine does not support sequence.field");
+
+  // Paimon Java's CoreOptions.lookupStrategy().
+  mergeOptions.needLookup =
+      mergeOptions.mergeEngine == PaimonMergeEngine::kFirstRow;
+  if (auto it = options.find(PaimonTableOptions::kChangelogProducer);
+      it != options.end()) {
+    mergeOptions.needLookup |=
+        parseChangelogProducer(it->second) == PaimonChangelogProducer::kLookup;
+  }
+  for (const auto* key :
+       {PaimonTableOptions::kDeletionVectorsEnabled,
+        PaimonTableOptions::kForceLookup}) {
+    if (auto it = options.find(key); it != options.end()) {
+      mergeOptions.needLookup |= parseBooleanOption(key, it->second);
+    }
+  }
   return mergeOptions;
 }
 

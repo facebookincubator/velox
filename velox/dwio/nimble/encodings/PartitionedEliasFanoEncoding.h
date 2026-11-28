@@ -362,6 +362,11 @@ class PartitionedEliasFanoEncoding final
   /// Returns the partition and group counts after the common description.
   std::string debugString(int offset) const final;
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   static_assert(
       std::is_integral_v<T> && !std::is_same_v<T, bool>,
@@ -396,6 +401,13 @@ class PartitionedEliasFanoEncoding final
       uint32_t endRow,
       Buffer& buffer,
       const Encoding::Options& options) const;
+
+  // Decodes and validates the partition and group directories of 'data', the
+  // current payload's encoded data, into 'partitions_', 'numGroups_' and the
+  // partition hints.
+  void readPartitions(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory);
 
   // Fills 'partitionHints_' and 'hintShift_' from 'partitions_'.
   void buildPartitionHints();
@@ -464,6 +476,24 @@ PartitionedEliasFanoEncoding<T>::PartitionedEliasFanoEncoding(
     : TypedEncoding<T, physicalType>{pool, data, options},
       partitionHints_{&pool},
       partitions_{&pool} {
+  readPartitions(data, stringBufferFactory);
+}
+
+template <typename T>
+bool PartitionedEliasFanoEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  readPartitions(data, stringBufferFactory);
+  row_ = 0;
+  return true;
+}
+
+template <typename T>
+void PartitionedEliasFanoEncoding<T>::readPartitions(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  auto& pool = *this->pool_;
+  const auto& options = this->options_;
   const auto rowCount = this->rowCount();
   NIMBLE_CHECK_FILE_GT(
       rowCount, 0, "PartitionedEliasFano encoding requires at least one row.");

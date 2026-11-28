@@ -20,6 +20,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <span>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/fuzzer/Utils.h"
@@ -1687,14 +1688,7 @@ TEST_F(VectorTest, wrapInConstantSharesLargeStrings) {
 
   // A view has no memory pool, so its bytes are copied.
   {
-    struct NoopReleaser {
-      void addRef() const {}
-      void release() const {}
-    };
-    auto view = BufferView<NoopReleaser>::create(
-        reinterpret_cast<const uint8_t*>(large.data()),
-        large.size(),
-        NoopReleaser{});
+    auto view = makeBufferView(std::as_bytes(std::span(large)));
     auto viewed = makeFlatVector<StringView>(1);
     viewed->setNoCopy(0, StringView(large));
     viewed->addStringBuffer(view);

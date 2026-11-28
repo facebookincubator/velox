@@ -19,6 +19,7 @@
 #include <array>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/PageBeforeGuard.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -1334,6 +1335,69 @@ TEST_F(VectorHasherTest, simdRange) {
           result[i]);
     }
   }
+}
+
+TEST_F(VectorHasherTest, simdRangeAtEndOfMapping) {
+  // Keys that wrap external memory may end right before an unmapped page. The
+  // range lookup over them gives the same rows and ids as over the same keys
+  // followed by a full batch of other keys, which only full batches look up.
+  auto test = [&]<typename T>(const TypePtr& type) {
+    for (const vector_size_t numRows : {1, 5, 8, 13, 17}) {
+      for (const uint64_t multiplier : {1, 3}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "{} numRows {} multiplier {}",
+                type->toString(),
+                numRows,
+                multiplier));
+        // Keys in and out of the range [1, 8].
+        std::vector<T> keys(numRows);
+        for (auto i = 0; i < numRows; ++i) {
+          keys[i] = i % 11;
+        }
+        common::testutil::PageBeforeGuard page;
+        auto keysAtEnd = std::make_shared<FlatVector<T>>(
+            pool(),
+            type,
+            nullptr,
+            numRows,
+            copyToEndOfPage(page, keys),
+            std::vector<BufferPtr>{});
+        auto longerKeys = keys;
+        longerKeys.resize(numRows + xsimd::batch<T>::size, 1);
+        auto regularKeys = makeFlatVector<T>(longerKeys);
+
+        auto hasher = exec::VectorHasher::create(type, 0);
+        auto sample = makeFlatVector<T>({1, 2, 3, 4, 5, 6, 7, 8});
+        SelectivityVector sampleRows(sample->size());
+        raw_vector<uint64_t> sampleIds(sample->size());
+        hasher->decode(*sample, sampleRows);
+        hasher->computeValueIds(sampleRows, sampleIds);
+        hasher->enableValueRange(multiplier, 0);
+
+        auto lookup = [&](const BaseVector& keyVector, SelectivityVector rows) {
+          // Room for the last batch's ids past 'numRows'.
+          raw_vector<uint64_t> ids(numRows + xsimd::batch<T>::size);
+          std::fill(ids.begin(), ids.end(), 5);
+          exec::VectorHasher::ScratchMemory scratch;
+          hasher->lookupValueIds(keyVector, rows, scratch, ids);
+          // 'ids' is unspecified at the rows that the lookup removes.
+          std::vector<uint64_t> selectedIds;
+          rows.applyToSelected(
+              [&](auto row) { selectedIds.push_back(ids[row]); });
+          return std::make_pair(rows, selectedIds);
+        };
+        // All rows, and every other row.
+        for (const auto& rows :
+             {SelectivityVector(numRows), makeOddRows(numRows)}) {
+          EXPECT_EQ(lookup(*keysAtEnd, rows), lookup(*regularKeys, rows));
+        }
+      }
+    }
+  };
+
+  test.template operator()<int64_t>(BIGINT());
+  test.template operator()<int32_t>(INTEGER());
 }
 
 TEST_F(VectorHasherTest, lookupValueIdsDictionaryWithLargerBase) {

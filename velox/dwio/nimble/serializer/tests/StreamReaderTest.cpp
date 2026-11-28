@@ -18,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
@@ -206,6 +207,32 @@ class StreamReaderTest : public ::testing::Test {
     return result;
   }
 
+  // Returns a Row with one FlatMap column, "attributes", with a BIGINT value
+  // under each of 'keys'. Its streams, in the layout of co_read(), are the row
+  // nulls, the map nulls, then the values and the in-map stream of each key.
+  static std::shared_ptr<const RowType> makeFlatMapRowType(
+      const std::vector<std::string>& keys) {
+    std::vector<std::unique_ptr<StreamDescriptor>> inMapDescriptors;
+    std::vector<std::shared_ptr<const Type>> valueTypes;
+    for (uint32_t key{0}; key < keys.size(); ++key) {
+      inMapDescriptors.push_back(
+          std::make_unique<StreamDescriptor>(2 + 2 * key, ScalarKind::Bool));
+      valueTypes.push_back(
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{3 + 2 * key, ScalarKind::Int64}));
+    }
+    const auto flatMapType = std::make_shared<const FlatMapType>(
+        StreamDescriptor{1, ScalarKind::Bool},
+        ScalarKind::String,
+        keys,
+        std::move(inMapDescriptors),
+        std::move(valueTypes));
+    return std::make_shared<const RowType>(
+        StreamDescriptor{0, ScalarKind::Bool},
+        std::vector<std::string>{"attributes"},
+        std::vector<std::shared_ptr<const Type>>{flatMapType});
+  }
+
   std::vector<std::optional<std::vector<std::pair<std::string, int64_t>>>>
   readMaps(
       const velox::VectorPtr& output,
@@ -286,6 +313,36 @@ class StreamReaderTest : public ::testing::Test {
         continue;
       }
       result.emplace_back(values->valueAt(row));
+    }
+    return result;
+  }
+
+  // Returns the values of the BIGINT fields of each struct, or nullopt for a
+  // null struct.
+  std::vector<std::optional<std::vector<std::optional<int64_t>>>> readStructs(
+      const velox::VectorPtr& output,
+      velox::vector_size_t offset,
+      velox::vector_size_t count) {
+    const auto* structs = output->as<velox::RowVector>();
+    NIMBLE_CHECK_NOT_NULL(structs);
+    std::vector<std::vector<std::optional<int64_t>>> fields;
+    fields.reserve(structs->childrenSize());
+    for (const auto& child : structs->children()) {
+      fields.emplace_back(readScalars(child, offset, count));
+    }
+    std::vector<std::optional<std::vector<std::optional<int64_t>>>> result;
+    result.reserve(count);
+    for (velox::vector_size_t row{0}; row < count; ++row) {
+      if (structs->isNullAt(offset + row)) {
+        result.emplace_back(std::nullopt);
+        continue;
+      }
+      std::vector<std::optional<int64_t>> values;
+      values.reserve(fields.size());
+      for (const auto& field : fields) {
+        values.emplace_back(field[row]);
+      }
+      result.emplace_back(std::move(values));
     }
     return result;
   }
@@ -1931,6 +1988,101 @@ TEST_F(StreamReaderTest, keepsStringsInStreamBufferHolders) {
           "sixth long string"));
 }
 
+TEST_F(StreamReaderTest, keepsStreamBufferHoldersUntilTheBindingEnds) {
+  const auto stream = encodeChunk<std::string_view>(
+      std::vector<std::string_view>{"first long string", "second long string"},
+      EncodingType::Trivial);
+  auto holder =
+      velox::AlignedBuffer::allocate<char>(stream.size(), pool_.get());
+  std::copy(stream.begin(), stream.end(), holder->asMutable<char>());
+  const std::array<std::string_view, 1> streams{
+      std::string_view{holder->as<char>(), holder->size()}};
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::String});
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  auto* rawHolder = holder.get();
+  {
+    // The caller drops every reference to the buffer once the streams bind,
+    // so that the reader alone keeps its bytes alive.
+    const std::array<velox::BufferPtr, 1> holders{std::move(holder)};
+    reader.setStreams(streams, holders, /*alphabets=*/{}, /*options=*/{});
+  }
+  ASSERT_GT(rawHolder->refCount(), 0);
+
+  auto output = velox::BaseVector::create(velox::VARCHAR(), 2, pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 2}}};
+  runRead(reader, ranges, /*outputOffset=*/0, output);
+  const auto* flat = output->asFlatVector<velox::StringView>();
+  ASSERT_NE(flat, nullptr);
+  EXPECT_THAT(
+      flat->stringBuffers(), testing::Contains(velox::BufferPtr{rawHolder}));
+
+  // The output keeps the buffer after the binding ends.
+  reader.reset();
+  EXPECT_EQ(rawHolder->refCount(), 1);
+  EXPECT_EQ(flat->valueAt(0).str(), "first long string");
+  EXPECT_EQ(flat->valueAt(1).str(), "second long string");
+}
+
+TEST_F(StreamReaderTest, keepsStreamBufferHoldersOfStringsOnly) {
+  // Only the views of the chunks of a stream of strings point to the buffer of
+  // their stream, so the reader keeps the buffer of the stream of strings and
+  // not that of the stream of integers.
+  const auto makeHolder = [&](std::string_view stream) {
+    auto holder =
+        velox::AlignedBuffer::allocate<char>(stream.size(), pool_.get());
+    std::copy(stream.begin(), stream.end(), holder->asMutable<char>());
+    return holder;
+  };
+  const auto stringHolder = makeHolder(
+      encodeChunk<std::string_view>(
+          std::vector<std::string_view>{
+              "first long string", "second long string"},
+          EncodingType::Trivial));
+  const auto integerHolder = makeHolder(
+      encodeChunk<int64_t>(
+          std::vector<int64_t>{10, 11}, EncodingType::Trivial));
+  const std::array<std::string_view, 3> streams{
+      std::string_view{},
+      std::string_view{stringHolder->as<char>(), stringHolder->size()},
+      std::string_view{integerHolder->as<char>(), integerHolder->size()}};
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"name", "count"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::String}),
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{2, ScalarKind::Int64}),
+      });
+  StreamReader reader{type, pool_.get(), /*options=*/{}};
+  {
+    const std::array<velox::BufferPtr, 3> holders{
+        nullptr, stringHolder, integerHolder};
+    reader.setStreams(streams, holders, /*alphabets=*/{}, /*options=*/{});
+  }
+  EXPECT_EQ(stringHolder->refCount(), 2);
+  EXPECT_EQ(integerHolder->refCount(), 1);
+
+  auto output = velox::BaseVector::create(
+      velox::ROW({{"name", velox::VARCHAR()}, {"count", velox::BIGINT()}}),
+      2,
+      pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 2}}};
+  runRead(reader, ranges, /*outputOffset=*/0, output);
+  reader.reset();
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  const auto* names = row->childAt(0)->asFlatVector<velox::StringView>();
+  ASSERT_NE(names, nullptr);
+  EXPECT_EQ(names->valueAt(0).str(), "first long string");
+  EXPECT_EQ(names->valueAt(1).str(), "second long string");
+  const auto* counts = row->childAt(1)->asFlatVector<int64_t>();
+  ASSERT_NE(counts, nullptr);
+  EXPECT_EQ(counts->valueAt(0), 10);
+  EXPECT_EQ(counts->valueAt(1), 11);
+}
+
 TEST_F(StreamReaderTest, keepsStringsOfStreamChunksInOneBuffer) {
   // Three FSST chunks, whose views decode their strings into the buffers that
   // the reader gives the stream, cached or not. Their strings fit in the first
@@ -2000,6 +2152,90 @@ TEST_F(StreamReaderTest, keepsStringsOfStreamChunksInOneBuffer) {
       EXPECT_TRUE(value.data() >= begin && value.data() + value.size() <= end)
           << "row " << row;
     }
+  }
+}
+
+TEST_F(StreamReaderTest, keepsDecodedStringBuffersAcrossStripes) {
+  // Three FSST chunks, whose strings fit twice in the first buffer, of 32 KB.
+  constexpr uint32_t kChunkRows{100};
+  constexpr uint32_t kNumRows{3 * kChunkRows};
+  std::vector<std::string> storage;
+  storage.reserve(kNumRows);
+  for (uint32_t row{0}; row < kNumRows; ++row) {
+    storage.push_back(
+        fmt::format("https://www.example.com/experiments/{}", row % 97));
+  }
+  std::string stream;
+  for (uint32_t chunk{0}; chunk < 3; ++chunk) {
+    const std::vector<std::string_view> values(
+        storage.begin() + chunk * kChunkRows,
+        storage.begin() + (chunk + 1) * kChunkRows);
+    stream += encodeChunk<std::string_view>(
+        values,
+        EncodingType::Fsst,
+        {.type = CompressionType::Uncompressed},
+        {.fsstCompressionTargetRatio = 10.0});
+  }
+  const auto type = std::make_shared<const ScalarType>(
+      StreamDescriptor{0, ScalarKind::String});
+  const std::array<std::string_view, 1> streams{stream};
+  const std::array<RowRange, 1> ranges{{{0, kNumRows}}};
+
+  struct TestParam {
+    std::string debugString() const {
+      return fmt::format(
+          "cacheEncodingView {}, keepDecodedStringBuffersAcrossStripes {}",
+          cacheEncodingView,
+          keepDecodedStringBuffersAcrossStripes);
+    }
+
+    bool cacheEncodingView;
+    bool keepDecodedStringBuffersAcrossStripes;
+  };
+
+  // Reads every row of the stream in two stripes, with cached views and
+  // without, each into an output of its own, which holds one buffer: the views
+  // decode their strings into the buffers that the reader gives the stream. A
+  // reader that keeps the buffers across stripes decodes the strings of the
+  // second stripe after those of the first in the same buffer. Otherwise the
+  // second stripe takes a new buffer. The strings of the first stripe stay
+  // intact either way.
+  const std::vector<TestParam> testSettings{
+      {true, true}, {true, false}, {false, true}, {false, false}};
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    StreamReader reader{
+        type,
+        pool_.get(),
+        {.keepDecodedStringBuffersAcrossStripes =
+             testData.keepDecodedStringBuffersAcrossStripes}};
+    std::array<velox::VectorPtr, 2> outputs;
+    for (auto& output : outputs) {
+      output =
+          velox::BaseVector::create(velox::VARCHAR(), kNumRows, pool_.get());
+      reader.setStreams(
+          streams,
+          /*streamBufferHolders=*/{},
+          /*alphabets=*/{},
+          {.cacheEncodingView = testData.cacheEncodingView});
+      runRead(reader, ranges, /*outputOffset=*/0, output);
+      reader.reset();
+    }
+
+    std::array<const velox::Buffer*, 2> buffers{};
+    for (size_t stripe{0}; stripe < outputs.size(); ++stripe) {
+      const auto* flat = outputs[stripe]->asFlatVector<velox::StringView>();
+      ASSERT_NE(flat, nullptr);
+      for (velox::vector_size_t row{0}; row < flat->size(); ++row) {
+        ASSERT_EQ(flat->valueAt(row).str(), storage[row])
+            << "stripe " << stripe << ", row " << row;
+      }
+      ASSERT_EQ(flat->stringBuffers().size(), 1);
+      buffers[stripe] = flat->stringBuffers()[0].get();
+    }
+    EXPECT_EQ(
+        buffers[0] == buffers[1],
+        testData.keepDecodedStringBuffersAcrossStripes);
   }
 }
 
@@ -2962,6 +3198,435 @@ TEST_F(StreamReaderTest, readsSelectedFlatMaps) {
           NullableMap{MapEntries{{"a", 10}}},
           NullableMap{std::nullopt},
           NullableMap{MapEntries{}}));
+}
+
+TEST_F(StreamReaderTest, readsSelectedFlatMapsAsStructs) {
+  const auto type = makeFlatMapRowType({"a", "b", "c"});
+  StreamReader reader{
+      type, pool_.get(), {.readFlatMapFieldAsStruct = {"attributes"}}};
+  const auto outputType =
+      velox::ROW("attributes", velox::ROW({"a", "b", "c"}, velox::BIGINT()));
+  EXPECT_EQ(reader.outputType()->toString(), outputType->toString());
+
+  // Row 1 is a null map. "a" is present in rows 0 and 3, and its row 3 value
+  // decodes as null. "b" is present only in row 2, which no range selects,
+  // and "c" in rows 0 and 3.
+  const auto mapPresence = encodeChunk<bool>(
+      std::array<bool, 4>{true, false, true, true}, EncodingType::Trivial);
+  const auto inMapA = encodeChunk<bool>(
+      std::array<bool, 3>{true, false, true}, EncodingType::Trivial);
+  const auto valuesA =
+      encodeNullableChunk<int64_t>({10, std::nullopt}, EncodingType::Trivial);
+  const auto inMapB = encodeChunk<bool>(
+      std::array<bool, 3>{false, true, false}, EncodingType::Trivial);
+  const auto valuesB =
+      encodeChunk<int64_t>(std::array<int64_t, 1>{22}, EncodingType::Trivial);
+  const auto inMapC = encodeChunk<bool>(
+      std::array<bool, 3>{true, false, true}, EncodingType::Trivial);
+  const auto valuesC = encodeChunk<int64_t>(
+      std::array<int64_t, 2>{30, 33}, EncodingType::Trivial);
+  const std::array<std::string_view, 8> streams{
+      std::string_view{},
+      mapPresence,
+      valuesA,
+      inMapA,
+      valuesB,
+      inMapB,
+      valuesC,
+      inMapC};
+  auto output = velox::BaseVector::create(outputType, 3, pool_.get());
+  const std::array<RowRange, 2> ranges{{{0, 2}, {3, 4}}};
+
+  runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  using Struct = std::optional<std::vector<std::optional<int64_t>>>;
+  EXPECT_THAT(
+      readStructs(row->childAt(0), /*offset=*/0, /*count=*/3),
+      ::testing::ElementsAre(
+          Struct{{10, std::nullopt, 30}},
+          Struct{std::nullopt},
+          Struct{{std::nullopt, std::nullopt, 33}}));
+}
+
+TEST_F(StreamReaderTest, readsFlatMapsAsStructsAcrossStripesWithOtherKeys) {
+  const std::vector<std::string> keys{"a", "b", "c"};
+  const auto type = makeFlatMapRowType(keys);
+  StreamReader reader{
+      type, pool_.get(), {.readFlatMapFieldAsStruct = {"attributes"}}};
+  const auto& outputType = reader.outputType();
+
+  // The keys of each stripe, in rows 0 and 1. Key a leaves in the second
+  // stripe and returns in the third.
+  using InMap = std::array<bool, 2>;
+  const std::vector<std::map<std::string, InMap>> stripes{
+      {{"a", {true, false}}, {"b", {true, true}}},
+      {{"b", {false, true}}, {"c", {true, true}}},
+      {{"a", {true, true}}, {"b", {true, false}}},
+  };
+  // Key nodes reused by the end of each stripe: b in the second stripe, a and
+  // b in the third.
+  const std::array<uint64_t, 3> expectedReusedKeyNodes{0, 1, 3};
+  using Struct = std::optional<std::vector<std::optional<int64_t>>>;
+  for (size_t stripe{0}; stripe < stripes.size(); ++stripe) {
+    SCOPED_TRACE(::testing::Message() << "stripe=" << stripe);
+    std::vector<std::string> encoded;
+    encoded.reserve(2 * keys.size());
+    std::vector<std::string_view> streams{std::string_view{}, {}};
+    std::array<std::vector<std::optional<int64_t>>, 2> expected;
+    for (auto& values : expected) {
+      values.resize(keys.size());
+    }
+    for (uint32_t key{0}; key < keys.size(); ++key) {
+      const auto it = stripes[stripe].find(keys[key]);
+      if (it == stripes[stripe].end()) {
+        streams.insert(streams.end(), {std::string_view{}, {}});
+        continue;
+      }
+      std::vector<int64_t> values;
+      for (uint32_t row{0}; row < 2; ++row) {
+        if (it->second[row]) {
+          const auto value =
+              static_cast<int64_t>(stripe * 100 + key * 10 + row);
+          values.push_back(value);
+          expected[row][key] = value;
+        }
+      }
+      encoded.push_back(encodeChunk<int64_t>(values, EncodingType::Trivial));
+      encoded.push_back(encodeChunk<bool>(it->second, EncodingType::Trivial));
+      streams.insert(
+          streams.end(),
+          {encoded[encoded.size() - 2], encoded[encoded.size() - 1]});
+    }
+    auto output = velox::BaseVector::create(outputType, 2, pool_.get());
+    const std::array<RowRange, 1> ranges{{{0, 2}}};
+
+    runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+    const auto* row = output->as<velox::RowVector>();
+    ASSERT_NE(row, nullptr);
+    EXPECT_THAT(
+        readStructs(row->childAt(0), /*offset=*/0, /*count=*/2),
+        ::testing::ElementsAre(Struct{expected[0]}, Struct{expected[1]}));
+    EXPECT_EQ(
+        reader.stats().numReusedFlatMapKeyNodes(),
+        expectedReusedKeyNodes[stripe]);
+  }
+}
+
+// Reads as structs only the FlatMap columns that the options name, and writes
+// the rows of each stripe at its output offset, as the index projector does
+// when it reads several stripes into one result.
+TEST_F(StreamReaderTest, readsNamedFlatMapsAsStructsAtOutputOffsets) {
+  // A FlatMap of BIGINT values whose nulls stream is at 'nullsOffset', followed
+  // by the in-map and value streams of each key.
+  const auto makeFlatMapType = [](offset_size nullsOffset,
+                                  const std::vector<std::string>& keys) {
+    std::vector<std::unique_ptr<StreamDescriptor>> inMapDescriptors;
+    std::vector<std::shared_ptr<const Type>> valueTypes;
+    for (offset_size key{0}; key < keys.size(); ++key) {
+      inMapDescriptors.push_back(
+          std::make_unique<StreamDescriptor>(
+              nullsOffset + 1 + 2 * key, ScalarKind::Bool));
+      valueTypes.push_back(
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{nullsOffset + 2 + 2 * key, ScalarKind::Int64}));
+    }
+    return std::make_shared<const FlatMapType>(
+        StreamDescriptor{nullsOffset, ScalarKind::Bool},
+        ScalarKind::String,
+        keys,
+        std::move(inMapDescriptors),
+        std::move(valueTypes));
+  };
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"id", "attributes", "tags"},
+      std::vector<std::shared_ptr<const Type>>{
+          std::make_shared<const ScalarType>(
+              StreamDescriptor{1, ScalarKind::Int64}),
+          makeFlatMapType(2, {"a", "b"}),
+          makeFlatMapType(7, {"x"}),
+      });
+  StreamReader reader{
+      type, pool_.get(), {.readFlatMapFieldAsStruct = {"attributes"}}};
+  EXPECT_EQ(
+      reader.outputType()->toString(),
+      velox::ROW({{"id", velox::BIGINT()},
+                  {"attributes", velox::ROW({"a", "b"}, velox::BIGINT())},
+                  {"tags", velox::MAP(velox::VARCHAR(), velox::BIGINT())}})
+          ->toString());
+
+  // The streams of each stripe of two rows, in the layout of co_read(): the
+  // row nulls, the ids, the attributes nulls, the values and in-map stream of
+  // "a" then of "b", the tags nulls, then the values and in-map stream of "x".
+  // The first stripe has key "a" in row 0 only. The second stripe has a null
+  // attributes map in row 0, and no stream for "a".
+  const std::vector<std::vector<std::string>> stripes{
+      {
+          std::string{},
+          encodeChunk<int64_t>(
+              std::array<int64_t, 2>{1, 2}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{true, true}, EncodingType::Trivial),
+          encodeChunk<int64_t>(
+              std::array<int64_t, 1>{10}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{true, false}, EncodingType::Trivial),
+          encodeChunk<int64_t>(
+              std::array<int64_t, 2>{20, 21}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{true, true}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{true, true}, EncodingType::Trivial),
+          encodeChunk<int64_t>(
+              std::array<int64_t, 1>{100}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{true, false}, EncodingType::Trivial),
+      },
+      {
+          std::string{},
+          encodeChunk<int64_t>(
+              std::array<int64_t, 2>{3, 4}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{false, true}, EncodingType::Trivial),
+          std::string{},
+          std::string{},
+          encodeChunk<int64_t>(
+              std::array<int64_t, 1>{31}, EncodingType::Trivial),
+          encodeChunk<bool>(std::array<bool, 1>{true}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{true, true}, EncodingType::Trivial),
+          encodeChunk<int64_t>(
+              std::array<int64_t, 1>{101}, EncodingType::Trivial),
+          encodeChunk<bool>(
+              std::array<bool, 2>{false, true}, EncodingType::Trivial),
+      },
+  };
+  auto output = velox::BaseVector::create(reader.outputType(), 4, pool_.get());
+  const std::array<RowRange, 1> ranges{{{0, 2}}};
+  for (size_t stripe{0}; stripe < stripes.size(); ++stripe) {
+    const std::vector<std::string_view> streams{
+        stripes[stripe].begin(), stripes[stripe].end()};
+    reader.setStreams(
+        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
+    runRead(
+        reader,
+        ranges,
+        /*outputOffset=*/static_cast<velox::vector_size_t>(2 * stripe),
+        output);
+    reader.reset();
+  }
+
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  EXPECT_THAT(
+      readScalars(row->childAt(0), /*offset=*/0, /*count=*/4),
+      ::testing::ElementsAre(1, 2, 3, 4));
+  using Struct = std::optional<std::vector<std::optional<int64_t>>>;
+  EXPECT_THAT(
+      readStructs(row->childAt(1), /*offset=*/0, /*count=*/4),
+      ::testing::ElementsAre(
+          Struct{{10, 20}},
+          Struct{{std::nullopt, 21}},
+          Struct{std::nullopt},
+          Struct{{std::nullopt, 31}}));
+  using MapEntries = std::vector<std::pair<std::string, int64_t>>;
+  using NullableMap = std::optional<MapEntries>;
+  EXPECT_THAT(
+      readMaps(row->childAt(2), /*offset=*/0, /*count=*/4),
+      ::testing::ElementsAre(
+          NullableMap{MapEntries{{"x", 100}}},
+          NullableMap{MapEntries{}},
+          NullableMap{MapEntries{}},
+          NullableMap{MapEntries{{"x", 101}}}));
+}
+
+DEBUG_ONLY_TEST_F(StreamReaderTest, decodesFlatMapStructFieldsInParallel) {
+  const auto type = makeFlatMapRowType({"a", "b", "c"});
+  // Every key is in every row.
+  const auto mapPresence = encodeChunk<bool>(
+      std::array<bool, 3>{true, true, true}, EncodingType::Trivial);
+  const auto inMap = encodeChunk<bool>(
+      std::array<bool, 3>{true, true, true}, EncodingType::Trivial);
+  const auto valuesA = encodeChunk<int64_t>(
+      std::array<int64_t, 3>{10, 11, 12}, EncodingType::Trivial);
+  const auto valuesB = encodeChunk<int64_t>(
+      std::array<int64_t, 3>{20, 21, 22}, EncodingType::Trivial);
+  const auto valuesC = encodeChunk<int64_t>(
+      std::array<int64_t, 3>{30, 31, 32}, EncodingType::Trivial);
+  const std::array<std::string_view, 8> streams{
+      std::string_view{},
+      mapPresence,
+      valuesA,
+      inMap,
+      valuesB,
+      inMap,
+      valuesC,
+      inMap};
+  folly::CPUThreadPoolExecutor executor{2};
+
+  // The root has one column, so only the struct splits its keys into tasks.
+  // Sequential reads decode child fields in parallel, while reads of row
+  // ranges decode them one after another.
+  velox::common::testutil::TestValue::enable();
+  std::atomic_uint32_t parallelFieldReads{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::decodeChildRanges",
+      std::function<void(const uint32_t*)>([&](const uint32_t* count) {
+        EXPECT_EQ(*count, 3);
+        ++parallelFieldReads;
+      }));
+  StreamReader reader{
+      type,
+      pool_.get(),
+      {.decodeExecutor = &executor,
+       .maxDecodeParallelism = 4,
+       .readFlatMapFieldAsStruct = {"attributes"}}};
+  velox::VectorPtr output;
+  reader.setStreams(
+      streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, /*options=*/{});
+
+  folly::coro::blockingWait(reader.co_next(3, output));
+
+  EXPECT_EQ(parallelFieldReads, 1);
+  EXPECT_EQ(output->type()->toString(), reader.outputType()->toString());
+  const auto* row = output->as<velox::RowVector>();
+  ASSERT_NE(row, nullptr);
+  using Struct = std::optional<std::vector<std::optional<int64_t>>>;
+  EXPECT_THAT(
+      readStructs(row->childAt(0), /*offset=*/0, /*count=*/3),
+      ::testing::ElementsAre(
+          Struct{{10, 20, 30}}, Struct{{11, 21, 31}}, Struct{{12, 22, 32}}));
+}
+
+TEST_F(StreamReaderTest, rejectsInvalidStructColumns) {
+  {
+    const auto type = makeFlatMapRowType({"a", "b"});
+    NIMBLE_ASSERT_USER_THROW(
+        (StreamReader{
+            type, pool_.get(), {.readFlatMapFieldAsStruct = {"missing"}}}),
+        "A column read as a struct must be in the schema: missing");
+  }
+  {
+    const auto type = std::make_shared<const RowType>(
+        StreamDescriptor{0, ScalarKind::Bool},
+        std::vector<std::string>{"value"},
+        std::vector<std::shared_ptr<const Type>>{
+            std::make_shared<const ScalarType>(
+                StreamDescriptor{1, ScalarKind::Int64}),
+        });
+    NIMBLE_ASSERT_USER_THROW(
+        (StreamReader{
+            type, pool_.get(), {.readFlatMapFieldAsStruct = {"value"}}}),
+        "A column read as a struct must be a FlatMap: value");
+  }
+  {
+    // An empty FlatMap has one unnamed key, which carries its value type.
+    const auto type = makeFlatMapRowType({""});
+    NIMBLE_ASSERT_USER_THROW(
+        (StreamReader{
+            type, pool_.get(), {.readFlatMapFieldAsStruct = {"attributes"}}}),
+        "A FlatMap read as a struct must have a key: attributes");
+  }
+  {
+    const auto type = std::make_shared<const ScalarType>(
+        StreamDescriptor{0, ScalarKind::Int64});
+    NIMBLE_ASSERT_USER_THROW(
+        (StreamReader{
+            type, pool_.get(), {.readFlatMapFieldAsStruct = {"value"}}}),
+        "A schema that reads FlatMaps as structs must be a Row");
+  }
+}
+
+TEST_F(StreamReaderTest, readsFlatMapKeysThatLeaveAndReturn) {
+  const std::vector<std::string> keys{"a", "b", "c"};
+  std::vector<std::unique_ptr<StreamDescriptor>> inMapDescriptors;
+  std::vector<std::shared_ptr<const Type>> valueTypes;
+  for (uint32_t key{0}; key < keys.size(); ++key) {
+    inMapDescriptors.push_back(
+        std::make_unique<StreamDescriptor>(2 + 2 * key, ScalarKind::Bool));
+    valueTypes.push_back(
+        std::make_shared<const ScalarType>(
+            StreamDescriptor{3 + 2 * key, ScalarKind::Int64}));
+  }
+  const auto flatMapType = std::make_shared<const FlatMapType>(
+      StreamDescriptor{1, ScalarKind::Bool},
+      ScalarKind::String,
+      keys,
+      std::move(inMapDescriptors),
+      std::move(valueTypes));
+  const auto type = std::make_shared<const RowType>(
+      StreamDescriptor{0, ScalarKind::Bool},
+      std::vector<std::string>{"attributes"},
+      std::vector<std::shared_ptr<const Type>>{flatMapType});
+  const auto outputType =
+      velox::ROW("attributes", velox::MAP(velox::VARCHAR(), velox::BIGINT()));
+
+  // The keys of each stripe, in rows 0 and 1. Key a leaves in the second
+  // stripe and returns in the third, over the decoders the reader kept for
+  // it, and the fourth stripe repeats the pattern of the third.
+  using InMap = std::array<bool, 2>;
+  const std::vector<std::map<std::string, InMap>> stripes{
+      {{"a", {true, false}}, {"b", {true, true}}},
+      {{"b", {false, true}}, {"c", {true, true}}},
+      {{"a", {true, true}}, {"b", {true, false}}},
+      {{"a", {false, true}}, {"b", {true, true}}},
+  };
+  // Key nodes reused by the end of each stripe: b in the second stripe, a and
+  // b in the third. The fourth stripe keeps the reader of the third.
+  const std::array<uint64_t, 4> expectedReusedKeyNodes{0, 1, 3, 3};
+  using MapEntries = std::vector<std::pair<std::string, int64_t>>;
+  using NullableMap = std::optional<MapEntries>;
+  // Without reuse, the reader builds every key node, and returns the same maps.
+  for (const bool reuseFlatMapKeyNodes : {true, false}) {
+    SCOPED_TRACE(fmt::format("reuseFlatMapKeyNodes={}", reuseFlatMapKeyNodes));
+    StreamReader reader{
+        type, pool_.get(), {.reuseFlatMapKeyNodes = reuseFlatMapKeyNodes}};
+    for (size_t stripe{0}; stripe < stripes.size(); ++stripe) {
+      SCOPED_TRACE(::testing::Message() << "stripe=" << stripe);
+      std::vector<std::string> encoded;
+      encoded.reserve(2 * keys.size());
+      std::vector<std::string_view> streams{std::string_view{}, {}};
+      std::array<MapEntries, 2> expected;
+      for (uint32_t key{0}; key < keys.size(); ++key) {
+        const auto it = stripes[stripe].find(keys[key]);
+        if (it == stripes[stripe].end()) {
+          streams.insert(streams.end(), {std::string_view{}, {}});
+          continue;
+        }
+        std::vector<int64_t> values;
+        for (uint32_t row{0}; row < 2; ++row) {
+          if (it->second[row]) {
+            const auto value =
+                static_cast<int64_t>(stripe * 100 + key * 10 + row);
+            values.push_back(value);
+            expected[row].emplace_back(keys[key], value);
+          }
+        }
+        encoded.push_back(encodeChunk<int64_t>(values, EncodingType::Trivial));
+        encoded.push_back(encodeChunk<bool>(it->second, EncodingType::Trivial));
+        streams.insert(
+            streams.end(),
+            {encoded[encoded.size() - 2], encoded[encoded.size() - 1]});
+      }
+      auto output = velox::BaseVector::create(outputType, 2, pool_.get());
+      const std::array<RowRange, 1> ranges{{{0, 2}}};
+
+      runRead(reader, streams, ranges, /*outputOffset=*/0, output);
+
+      const auto* row = output->as<velox::RowVector>();
+      ASSERT_NE(row, nullptr);
+      EXPECT_THAT(
+          readMaps(row->childAt(0), /*offset=*/0, /*count=*/2),
+          ::testing::ElementsAre(
+              NullableMap{expected[0]}, NullableMap{expected[1]}));
+      EXPECT_EQ(
+          reader.stats().numReusedFlatMapKeyNodes(),
+          reuseFlatMapKeyNodes ? expectedReusedKeyNodes[stripe] : 0);
+    }
+  }
 }
 
 TEST_F(StreamReaderTest, readsRandomNestedSchemaNodes) {

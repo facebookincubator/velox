@@ -521,7 +521,9 @@ void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
         /*lazyColumnIo=*/false,
         /*dictionaryAwareReads=*/options_.nimbleDictionaryAwareReads(),
         /*scanFastPath=*/options_.nimbleScanFastPath(),
-        &flatMapKeyNodePool_);
+        &flatMapKeyNodePool_,
+        // produceOutput() copies every row right away, so fields read eagerly.
+        /*generateLazyChildren=*/false);
 
     columnReader_ = buildColumnReader(
         fileOutputType_,
@@ -727,7 +729,12 @@ SelectiveNimbleIndexReader::produceOutput() {
       totalOutputRows, readerBase_->pool());
   auto* rawInputHits = inputHits->asMutable<vector_size_t>();
 
-  // Build output for all ready requests.
+  // Build output for all ready requests. Collects the rows that each output
+  // chunk gives, indexed like 'outputSegments_', so that one copyRanges() call
+  // per chunk grows the nested children of 'output' once instead of once per
+  // request.
+  std::vector<std::vector<BaseVector::CopyRange>> chunkRanges(
+      outputSegments_.size());
   vector_size_t outputOffset = 0;
   for (auto requestIdx = nextOutputRequest_;
        requestIdx <= lastReadyOutputRequest_;
@@ -738,10 +745,13 @@ SelectiveNimbleIndexReader::produceOutput() {
     }
 
     for (const auto& ref : state.outputRefs) {
-      auto& chunk = outputSegments_[ref.chunkIndex];
-      const auto numRows = ref.rowRange.endRow - ref.rowRange.startRow;
-      output->copy(
-          chunk.data.get(), outputOffset, ref.rowRange.startRow, numRows);
+      const auto numRows = static_cast<vector_size_t>(
+          ref.rowRange.endRow - ref.rowRange.startRow);
+      chunkRanges[ref.chunkIndex].push_back({
+          static_cast<vector_size_t>(ref.rowRange.startRow),
+          outputOffset,
+          numRows,
+      });
 
       // Fill inputHits with the request index for each output row.
       std::fill(
@@ -750,10 +760,21 @@ SelectiveNimbleIndexReader::produceOutput() {
           requestIdx);
 
       outputOffset += numRows;
-      chunk.dropRef();
     }
   }
   NIMBLE_CHECK_EQ(outputOffset, totalOutputRows);
+
+  for (size_t chunkIndex = 0; chunkIndex < chunkRanges.size(); ++chunkIndex) {
+    const auto& ranges = chunkRanges[chunkIndex];
+    if (ranges.empty()) {
+      continue;
+    }
+    auto& chunk = outputSegments_[chunkIndex];
+    output->copyRanges(chunk.data.get(), ranges);
+    for (size_t i = 0; i < ranges.size(); ++i) {
+      chunk.dropRef();
+    }
+  }
 
   nextOutputRequest_ = lastReadyOutputRequest_ + 1;
   readyOutputRows_ = 0;

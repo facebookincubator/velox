@@ -123,7 +123,8 @@ class SubstrFunction : public CudfFunction {
     const auto end =
         hasEnd_ ? std::optional<cudf::size_type>{end_} : std::nullopt;
     const auto step = std::optional<cudf::size_type>{1};
-    return cudf::strings::slice_strings(inputCol, start, end, step, stream, mr);
+    return cudf::strings::slice_strings(
+        inputCol, start, end, step, stream, withTempMr(mr));
   }
 
  private:
@@ -180,12 +181,11 @@ class StrposFunction : public CudfFunction {
     // determines the output row count even when the string argument is
     // constant.
     const auto outputRowCount = asView(inputColumns[0]).size();
-    const auto tempMr = get_temp_mr();
     const auto makeAllNullPositions = [&]() {
       const auto nullPosition =
-          cudf::numeric_scalar<int64_t>(0, false, stream, tempMr);
+          cudf::numeric_scalar<int64_t>(0, false, stream, tempMrs());
       return cudf::make_column_from_scalar(
-          nullPosition, outputRowCount, stream, mr);
+          nullPosition, outputRowCount, stream, withTempMr(mr));
     };
 
     // strpos(NULL, x) and strpos(x, NULL) are NULL for every row;
@@ -201,9 +201,9 @@ class StrposFunction : public CudfFunction {
     cudf::column_view stringColumn;
     if (stringIsConstant_) {
       // A null constant string returned the all-null result above.
-      cudf::string_scalar stringScalar(string_, true, stream, tempMr);
+      cudf::string_scalar stringScalar(string_, true, stream, tempMrs());
       stringHolder = cudf::make_column_from_scalar(
-          stringScalar, outputRowCount, stream, tempMr);
+          stringScalar, outputRowCount, stream, tempMrs());
       stringColumn = stringHolder->view();
     } else {
       stringColumn = asView(inputColumns[nextInput++]);
@@ -214,9 +214,9 @@ class StrposFunction : public CudfFunction {
     // in either operand propagate to a null result, matching Velox.
     std::unique_ptr<cudf::column> found;
     if (targetIsConstant_) {
-      cudf::string_scalar targetScalar(target_, true, stream, tempMr);
-      found =
-          cudf::strings::find(stringsView, targetScalar, 0, -1, stream, tempMr);
+      cudf::string_scalar targetScalar(target_, true, stream, tempMrs());
+      found = cudf::strings::find(
+          stringsView, targetScalar, 0, -1, stream, tempMrs());
     } else {
       const cudf::strings_column_view targetView(
           asView(inputColumns[nextInput]));
@@ -233,27 +233,28 @@ class StrposFunction : public CudfFunction {
       // host-side data pointer, so it needs no device synchronization.
       if (targetView.chars_begin(stream) == nullptr) {
         const auto firstPosition =
-            cudf::numeric_scalar<int64_t>(1, true, stream, tempMr);
+            cudf::numeric_scalar<int64_t>(1, true, stream, tempMrs());
         auto positions = cudf::make_column_from_scalar(
-            firstPosition, outputRowCount, stream, mr);
+            firstPosition, outputRowCount, stream, withTempMr(mr));
         mergeNullSourceNullsIntoResult(
             *positions, {stringColumn, targetView.parent()}, stream, mr);
         return positions;
       }
-      found = cudf::strings::find(stringsView, targetView, 0, stream, tempMr);
+      found =
+          cudf::strings::find(stringsView, targetView, 0, stream, tempMrs());
     }
 
     // Shift to Presto's 1-based position (not-found -1 becomes 0) and widen to
     // bigint in a single kernel. Adding a valid scalar preserves nulls, so null
     // rows stay null.
-    const auto one = cudf::numeric_scalar<int32_t>(1, true, stream, tempMr);
+    const auto one = cudf::numeric_scalar<int32_t>(1, true, stream, tempMrs());
     return cudf::binary_operation(
         found->view(),
         one,
         cudf::binary_operator::ADD,
         cudf::data_type{cudf::type_id::INT64},
         stream,
-        mr);
+        withTempMr(mr));
   }
 
  private:

@@ -19,11 +19,13 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include <folly/Executor.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <folly/coro/Task.h>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
@@ -32,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/views/DecodedStringBuffers.h"
 #include "velox/dwio/nimble/reader/Decoder.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -69,6 +72,33 @@ class StreamReader {
     /// task has enough work to amortize scheduling it.
     uint32_t minStreamsPerDecodeTask{1};
 
+    /// Names the top-level FlatMap columns of the projected schema, which must
+    /// then be a Row, that the reader returns as structs instead of maps. A
+    /// struct has one field per key that the schema gives its column, in the
+    /// schema's key order, typed as the map's values. A field is null in a row
+    /// that lacks its key. For example, a column "features" whose keys in the
+    /// schema are "a" and "b" reads as ROW(a, b), and the map {"b": 2} reads
+    /// as {a: null, b: 2}.
+    folly::F14FastSet<std::string> readFlatMapFieldAsStruct{};
+
+    /// Keeps the buffers that the strings of each stream decode into from one
+    /// binding to the next, so that the strings of the next stripe go on in
+    /// the last buffer instead of a new one of 32 KB, and the buffers keep
+    /// growing to 1 MB across stripes instead of starting over in each. Suits
+    /// a scan, whose stripes decode many strings each. Between bindings the
+    /// reader then holds the last buffer of each stream of strings, up to
+    /// 1 MB, and the outputs of consecutive stripes can share a buffer, which
+    /// keeps the strings of both alive. Off, each binding starts over and the
+    /// reader holds no buffer between bindings, which suits a reader that
+    /// waits between point lookups.
+    bool keepDecodedStringBuffersAcrossStripes{false};
+
+    /// Reuses the key nodes of FlatMap readers across stripes, for keys whose
+    /// streams keep their decoders, instead of building them for each stripe
+    /// with another stream presence pattern. stats() counts the reused nodes.
+    /// See FieldReaderParams::reuseFlatMapKeyNodes.
+    bool reuseFlatMapKeyNodes{true};
+
     /// Returns true when the reader can decode child fields in parallel.
     bool parallelDecodeEnabled() const {
       return decodeExecutor != nullptr && maxDecodeParallelism > 1;
@@ -83,6 +113,13 @@ class StreamReader {
       Options options);
 
   ~StreamReader();
+
+  /// Returns the Velox type of the rows that the reader returns: that of the
+  /// projected schema, with each column that Options::readFlatMapFieldAsStruct
+  /// names typed as a ROW of its keys.
+  const velox::TypePtr& outputType() const {
+    return outputType_;
+  }
 
   /// Decodes source ranges contiguously starting at `outputOffset`.
   /// Source ranges must be non-empty, ordered by `startRow`, and disjoint.
@@ -114,10 +151,11 @@ class StreamReader {
   ///
   /// `streamBufferHolders` holds the bytes of the streams: it is empty, or has
   /// one buffer per stream, aligned with `streams`, null for a stream without
-  /// one. Streams can share a buffer, which must hold all of each stream. A
-  /// read of strings that covers at least a quarter of the rows of the chunks
-  /// it spans keeps the values that lie in its stream's buffer, or in the
-  /// buffers that the encodings' views decompress or decode them into, by
+  /// one. Streams can share a buffer, which must hold all of each stream. The
+  /// reader keeps the buffers of the streams of strings until the binding
+  /// ends. A read of strings that covers at least a quarter of the rows of the
+  /// chunks it spans keeps the values that lie in its stream's buffer, or in
+  /// the buffers that the encodings' views decompress or decode them into, by
   /// holding the buffers in the output instead of copying the values (see
   /// EncodingViewDecoder). Without a buffer, the values that lie in the
   /// stream are copied.
@@ -137,10 +175,11 @@ class StreamReader {
   /// reset(), the next binding or the destruction of the reader, and must not
   /// serve another thread until then. The views of the chunks of each stream
   /// of strings, cached or not, decode strings into buffers that they share,
-  /// which the reader creates for each stream of each binding, so that a read
-  /// of a stream holds a few buffers instead of at least one for each chunk.
-  /// A dense read of FSST strings, such as a scan, decodes its rows straight
-  /// into them, and holds just the buffers of its rows.
+  /// which the reader keeps for each stream and starts over at each binding,
+  /// unless Options::keepDecodedStringBuffersAcrossStripes is set, so that a
+  /// read of a stream holds a few buffers instead of at least one for each
+  /// chunk. A dense read of FSST strings, such as a scan, decodes its rows
+  /// straight into them, and holds just the buffers of its rows.
   /// `options.decodedStringBuffers` must be null.
   void setStreams(
       std::span<const std::string_view> streams,
@@ -159,15 +198,22 @@ class StreamReader {
   folly::coro::Task<void> co_skip(uint32_t numRows);
 
   /// Releases the currently bound stripe. The cached reader stays for the next
-  /// stripe.
+  /// stripe, and so do the buffers that strings decode into with
+  /// Options::keepDecodedStringBuffersAcrossStripes.
   void reset();
+
+  /// Returns the counters of the field readers of this reader, across the
+  /// stripes that it read.
+  const FieldReader::Stats& stats() const {
+    return stats_;
+  }
 
  private:
   // Keeps the decoders of the present streams together with the FieldReader
   // tree built over them for one stream-presence pattern. Binding another
   // stripe with the same pattern replaces the decoders' views and keeps the
-  // tree. Another pattern keeps the decoders of the streams that stay present
-  // and rebuilds the tree.
+  // tree. Another pattern rebuilds the tree, and keeps the decoder of each
+  // stream that the stripe lacks for when the stream returns.
   struct CachedReader;
 
   // Initializes the schema-derived reader factory and stream offsets.
@@ -176,58 +222,58 @@ class StreamReader {
   // Binds one stripe's streams with 'options' and 'alphabets',
   // reusing the cached reader for their stream-presence pattern when there is
   // one. Requires one stream per projected stream. 'streamBufferHolders' is
-  // empty, or has one buffer or null per stream, as in setStreams().
+  // empty, or has one buffer or null per stream, as in setStreams(). Keeps
+  // those of the streams of strings in streamBufferHolders_ until the binding
+  // ends.
   void prepareRead(
       std::span<const std::string_view> streams,
       std::span<const velox::BufferPtr> streamBufferHolders,
       const SharedDictionaryAlphabets& alphabets,
       const Encoding::Options& options);
 
-  // Splits one stream into the encodings of its chunks, in stream order, and
-  // stores them in loadedChunks_, and the buffer that holds each in
-  // loadedChunkBufferHolders_: 'streamBufferHolder', which can be null, for
-  // an uncompressed chunk, and its decompressed bytes for a compressed chunk.
-  void loadChunks(
-      std::string_view stream,
-      const velox::BufferPtr& streamBufferHolder);
+  // Splits 'stream', the stream at 'streamIndex' in the layout of co_read(),
+  // into the encodings of its chunks, in stream order, and stores them in
+  // loadedChunks_. Decompresses the encodings of compressed chunks into
+  // buffers that stay alive until the next reset(). For a stream of strings,
+  // also stores the buffer that holds each chunk in loadedChunkBufferHolders_:
+  // the stream's buffer in streamBufferHolders_, or null, for an uncompressed
+  // chunk, and its decompressed bytes for a compressed chunk.
+  void loadChunks(std::string_view stream, size_t streamIndex);
 
   // Rebuilds the FieldReader tree over one stripe's streams in the cached
-  // reader. Rebinds the decoders of the streams that stay present, creates the
-  // decoders of new streams and drops those of absent streams.
+  // reader. Rebinds the decoders of the present streams, creating those of
+  // streams that it has not seen, and keeps the decoders of absent streams
+  // for when the streams return.
   void rebuildReader(
       std::span<const std::string_view> streams,
-      std::span<const velox::BufferPtr> streamBufferHolders,
       const SharedDictionaryAlphabets& alphabets);
 
-  // Loads the chunks of the stream at 'streamIndex' in 'streams', laid out as
-  // in co_read(), with its buffer in 'streamBufferHolders', and runs
-  // 'bindDecoder' to bind a decoder to them. Meanwhile options_ carries the
-  // stream's alphabet in 'alphabets' if it has one, so the views that the
-  // decoder creates read SharedDictionary chunks with it. The views keep the
-  // alphabet, and options_ drops it on return, so nothing refers to the map
-  // after this call. Meanwhile options_ also points to the stream's buffers
-  // from ensureDecodedStringBuffers(), if any, which the views of the
-  // stream's chunks share.
+  // Loads the chunks of 'stream', the stream at 'streamIndex' in the layout of
+  // co_read(), and runs 'bindDecoder' to bind a decoder to them. Meanwhile
+  // options_ carries the stream's alphabet in 'alphabets' if it has one, so
+  // the views that the decoder creates read SharedDictionary chunks with it.
+  // The views keep the alphabet, and options_ drops it on return, so nothing
+  // refers to the map after this call. Meanwhile options_ also points to the
+  // stream's buffers from ensureDecodedStringBuffers(), if any, which the
+  // views of the stream's chunks share.
   void bindStream(
-      std::span<const std::string_view> streams,
-      std::span<const velox::BufferPtr> streamBufferHolders,
+      std::string_view stream,
       size_t streamIndex,
       const SharedDictionaryAlphabets& alphabets,
       const std::function<void()>& bindDecoder);
 
   // Creates the view of the encoding of one chunk for the decoders, with
   // options_ and 'inputStringBuffer', the buffer that holds the chunk or null,
-  // as what its Encoding::Options::inputStringBuffer points to. The decoder
-  // keeps the buffer while the view is bound.
+  // as what its Encoding::Options::inputStringBuffer points to. The reader
+  // keeps the buffer until the binding ends.
   std::shared_ptr<const EncodingView> makeEncodingView(
       std::string_view encoding,
-      const velox::BufferPtr& inputStringBuffer);
+      velox::Buffer* inputStringBuffer);
 
   // Returns the buffers that the views of the chunks in loadedChunks_, those
-  // of the stream at 'streamIndex', share to decode strings into, cached or
-  // not, which it creates at the first binding of the stream and reuses after.
-  // Returns null for a stream of values other than strings, whose views do not
-  // use them.
+  // of the stream of strings at 'streamIndex', share to decode strings into,
+  // cached or not. Creates them at the first binding of the stream and reuses
+  // them after.
   DecodedStringBuffers* ensureDecodedStringBuffers(size_t streamIndex);
 
   // Returns true when a stripe is bound to the cached reader.
@@ -248,9 +294,6 @@ class StreamReader {
   // Projected schema shared by every stream set decoded by this instance.
   const std::shared_ptr<const Type> type_;
 
-  // Velox counterpart of type_, used when allocating each result.
-  const velox::TypePtr outputType_;
-
   // Owns all buffers allocated while decoding.
   velox::memory::MemoryPool* const pool_;
 
@@ -264,15 +307,47 @@ class StreamReader {
   // Descriptor offsets corresponding positionally to input projection streams.
   std::vector<uint32_t> inputOffsets_;
 
+  // See stats(). Declared before readerFactory_, whose factories update it.
+  FieldReader::Stats stats_;
+
   // Builds a FieldReader tree for each stream binding.
   std::unique_ptr<FieldReaderFactory> readerFactory_;
+
+  // Velox type of the rows that readerFactory_ decodes, used when allocating
+  // each result. Set by init().
+  velox::TypePtr outputType_;
 
   // Holds the buffers that the views of the chunks of each stream of strings
   // decode strings into, in the layout of co_read(), or null for a stream
   // that has bound no strings. ensureDecodedStringBuffers() creates them, and
-  // reset() clears them for the next stripe. Declared before cachedReader_, so
-  // that they outlive the views that point to them.
+  // reset() clears them for the next stripe unless readerOptions_ keeps them
+  // across stripes. Declared before cachedReader_, so that they outlive the
+  // views that point to them.
   std::vector<std::unique_ptr<DecodedStringBuffers>> decodedStringBuffers_;
+
+  // The indices of the streams whose entry of decodedStringBuffers_ is set, so
+  // that reset() clears those without visiting every stream.
+  std::vector<size_t> stringBufferStreams_;
+
+  // Whether the stream at each index, in the layout of co_read(), holds
+  // strings, from the scalar kind of its descriptor in type_. Bindings of a
+  // stream of other values, such as most of those of each point lookup, skip
+  // the chunk buffer holders and the decoded string buffers.
+  std::vector<bool> stringStreams_;
+
+  // Keeps the buffers that setStreams() got for the streams of strings of the
+  // bound stripe alive until reset(), because the views of their chunks point
+  // to them. Null for a stream of other values, whose views never do. Empty
+  // when setStreams() got none. Declared before cachedReader_, so that they
+  // outlive the views that point to them.
+  std::vector<velox::BufferPtr> streamBufferHolders_;
+
+  // Keeps the decompressed bytes of compressed chunks alive until reset(),
+  // because the decoders' views point into them. Buffers from every stream of
+  // the bound stripe accumulate in load order. Nothing looks them up, so the
+  // order has no meaning. Declared before cachedReader_, so that they outlive
+  // the views that point into them.
+  std::vector<velox::BufferPtr> decompressedChunks_;
 
   // Holds the reader of the most recently bound stream-presence pattern. A
   // stripe with the same pattern reuses it, and a stripe with any other pattern
@@ -284,14 +359,16 @@ class StreamReader {
   Vector<uint8_t> cachedKey_;
 
   // Holds the encodings of the stream that loadChunks() split last, one per
-  // chunk in stream order, for the decoder that binds them next. Reused across
-  // calls to avoid an allocation per stream. Owns no bytes: each view points
-  // into the stream or into a buffer in loadedChunkBufferHolders_.
+  // chunk in stream order, for the decoder that binds them next, which creates
+  // the view of each chunk from them whatever values the stream holds. Reused
+  // across calls to avoid an allocation per stream. Owns no bytes: each view
+  // points into the stream or into a buffer in decompressedChunks_.
   std::vector<std::string_view> loadedChunks_;
 
   // Holds the buffer that holds each of loadedChunks_, or null, for the
-  // decoder that binds them next. The views of the chunks keep their buffers,
-  // which outlive this list, which reset() empties.
+  // decoder that binds them next, when they hold strings: a buffer of
+  // streamBufferHolders_ or decompressedChunks_. Empty for a stream of other
+  // values.
   std::vector<velox::BufferPtr> loadedChunkBufferHolders_;
 
   // Set while a stripe is bound to cachedReader_.

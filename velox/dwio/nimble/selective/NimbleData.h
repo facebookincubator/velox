@@ -216,7 +216,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
       bool lazyColumnIo = false,
       bool dictionaryAwareReads = false,
       bool scanFastPath = false,
-      FlatMapKeyNodePool* flatMapKeyNodePool = nullptr)
+      FlatMapKeyNodePool* flatMapKeyNodePool = nullptr,
+      bool generateLazyChildren = true)
       : FormatParams(pool, stats),
         nimbleType_(nimbleType),
         streams_(&streams),
@@ -228,6 +229,7 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         dictionaryAwareReads_{dictionaryAwareReads},
         scanFastPath_{scanFastPath},
         flatMapKeyNodePool_{flatMapKeyNodePool},
+        generateLazyChildren_{generateLazyChildren},
         lazyColumnIo_(lazyColumnIo) {}
 
   std::unique_ptr<velox::dwio::common::FormatData> toFormatData(
@@ -248,7 +250,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         lazyColumnIo_,
         dictionaryAwareReads_,
         scanFastPath_,
-        flatMapKeyNodePool_);
+        flatMapKeyNodePool_,
+        generateLazyChildren_);
     return childParams;
   }
 
@@ -310,6 +313,13 @@ class NimbleParams : public velox::dwio::common::FormatParams {
     return scanFastPath_;
   }
 
+  /// Returns true if the struct readers built with these params return the
+  /// fields that they read as top level as lazy vectors, as DWRF's struct
+  /// reader does unless it is built without lazy children.
+  bool generateLazyChildren() const {
+    return generateLazyChildren_;
+  }
+
  private:
   const std::shared_ptr<const Type> nimbleType_;
   StripeStreams* const streams_{nullptr};
@@ -325,6 +335,11 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   // from them, rebind the key readers kept in it, and keeps theirs when they
   // are destroyed. Null builds every key reader anew.
   FlatMapKeyNodePool* const flatMapKeyNodePool_{nullptr};
+
+  // When false, the struct readers built with these params, or with params
+  // derived from them, read their top-level fields eagerly, which suits a
+  // reader that copies every row that it reads right away.
+  const bool generateLazyChildren_{true};
 
   // When true, enqueue() routes to the lazy input clone instead of the
   // main eager input. Set for lazy columns; propagated to children via

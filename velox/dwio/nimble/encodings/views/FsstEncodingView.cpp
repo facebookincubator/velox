@@ -16,16 +16,17 @@
 
 #include "velox/dwio/nimble/encodings/views/FsstEncodingView.h"
 
+#include <folly/container/F14Set.h>
 #include <algorithm>
 #include <array>
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <optional>
 #include <span>
 #include <utility>
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/Casts.h"
 #include "velox/dwio/nimble/encodings/views/DecodedStringBuffers.h"
 
 namespace facebook::nimble {
@@ -272,6 +273,10 @@ uint32_t FsstEncodingView::read(
   NIMBLE_CHECK_LE(indices.size(), std::numeric_limits<uint32_t>::max());
   this->checkReadIndices(indices);
   auto* values = static_cast<std::string_view*>(output);
+  if (indices.size() > this->rowCount_) {
+    decodeDistinctRows(indices, addStringBuffer, values);
+    return static_cast<uint32_t>(indices.size());
+  }
   if (cachesDecodedChunks()) {
     decodeRows(indices, addStringBuffer, values);
     return static_cast<uint32_t>(indices.size());
@@ -329,28 +334,32 @@ uint32_t FsstEncodingView::read(
     return numRows;
   }
 
-  // Returns whether a chunk that the ranges ask for rows of is decoded, so
-  // that the read takes the strings of those rows from the chunk.
-  const auto spansDecodedChunk = [&] {
-    const auto chunks = decodedChunks_.rlock();
-    for (const auto& range : ranges) {
-      for (auto chunkIndex = rowChunk(range.startRow);
-           chunkIndex <= rowChunk(range.endRow - 1);
-           ++chunkIndex) {
-        if ((*chunks)[chunkIndex] != nullptr) {
-          return true;
-        }
+  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
+  const auto lastChunkIndex = rowChunk(ranges.back().endRow - 1);
+  if (addStringBuffer != nullptr) {
+    // Takes the rows of the chunks that are decoded already from them, and
+    // neither decodes nor caches a chunk, so that what the read keeps does not
+    // depend on earlier reads.
+    std::vector<std::shared_ptr<const DecodedChunk>> chunks(
+        lastChunkIndex - firstChunkIndex + 1);
+    bool anyChunkDecoded{false};
+    {
+      const auto decodedChunks = decodedChunks_.rlock();
+      for (uint32_t i{0}; i < chunks.size(); ++i) {
+        chunks[i] = (*decodedChunks)[firstChunkIndex + i];
+        anyChunkDecoded |= chunks[i] != nullptr;
       }
     }
-    return false;
-  };
-  if (addStringBuffer != nullptr && !spansDecodedChunk()) {
-    decodeRanges(ranges, /*chunks=*/{}, addStringBuffer, values);
+    decodeRanges(
+        ranges,
+        anyChunkDecoded
+            ? std::span<const std::shared_ptr<const DecodedChunk>>{chunks}
+            : std::span<const std::shared_ptr<const DecodedChunk>>{},
+        addStringBuffer,
+        values);
     return numRows;
   }
 
-  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
-  const auto lastChunkIndex = rowChunk(ranges.back().endRow - 1);
   ScopedVector<uint32_t> numChunkRows{
       lastChunkIndex - firstChunkIndex + 1,
       this->pool_,
@@ -367,19 +376,6 @@ uint32_t FsstEncodingView::read(
     }
   }
   prepareChunks(firstChunkIndex, {numChunkRows.data(), numChunkRows.size()});
-  if (addStringBuffer != nullptr) {
-    // Decides for each chunk once, as the loop below does, whether the read
-    // takes its rows from the chunk.
-    std::vector<std::shared_ptr<const DecodedChunk>> chunks(
-        numChunkRows.size());
-    for (uint32_t i{0}; i < numChunkRows.size(); ++i) {
-      if (numChunkRows[i] > 0) {
-        chunks[i] = chunkForRead(firstChunkIndex + i, numChunkRows[i]);
-      }
-    }
-    decodeRanges(ranges, chunks, addStringBuffer, values);
-    return numRows;
-  }
 
   // The rows of the current chunk that the read decodes alone, as one batch.
   // decodeRowBatch() decodes them under one lock when the read leaves the
@@ -614,25 +610,56 @@ void FsstEncodingView::prepareChunks(
   }
 }
 
+namespace {
+
+// Returns how many bytes 'compressed' decodes to with 'decoder', in one pass
+// over its codes and without decoding it. A code below FSST_ESC stands for the
+// symbol of decoder.len[code] bytes. FSST_ESC is followed by a literal byte,
+// which decodes to itself. 'compressed' can hold several validated strings one
+// after another: a validated string does not end inside an escape, so the pass
+// counts each string as a pass over it alone would.
+size_t getDecodedBytes(
+    const fsst_decoder_t& decoder,
+    std::string_view compressed) {
+  size_t numBytes{0};
+  for (size_t i{0}; i < compressed.size(); ++i) {
+    const auto code = static_cast<uint8_t>(compressed[i]);
+    if (code == FSST_ESC) {
+      // An escape is followed by a byte that decodes to itself.
+      ++numBytes;
+      ++i;
+    } else {
+      numBytes += decoder.len[code];
+    }
+  }
+  return numBytes;
+}
+
+} // namespace
+
 namespace detail {
 
-// Decodes FSST strings one after another, without a pass that sums their
-// decoded lengths first, into buffers that a DecodedStringBuffers gives:
+// Decodes FSST strings one after another into buffers: rooms of
 // 'sharedBuffers', which the view shares with other views, when it is not
-// null, or else an instance of its own, whose buffers no other view shares.
+// null, or else buffers of its own.
 //
-// The decoder writes into the rest of a buffer, the room that
-// DecodedStringBuffers::reserve() returns, without asking for more until the
-// next string may not fit. It then finishes the buffer, passes it to
+// The decoder writes into the rest of a buffer without asking for more until
+// the next string may not fit. It then finishes the buffer, passes it to
 // 'addBuffer', and reserves a new one, so that the strings of a decode can lie
-// in several buffers and none is copied. A caller that needs some strings in
-// one buffer, such as the rows of a chunk, reserves room for all of them
-// first.
+// in several buffers and none is copied. A room of the shared buffers is the
+// rest of one of them, and later decodes take the bytes that a decode does not
+// use. A buffer of its own takes exactly the bytes reserved, so a caller
+// without shared buffers reserves the bytes that its strings decode to before
+// it decodes them: the buffer then holds no more than they take. A caller
+// that needs some strings in one buffer, such as the rows of a chunk, reserves
+// room for all of them first too. A string that may not fit takes room for
+// the bytes that it decodes to, not the most bytes that it can decode to,
+// which can exceed a room of the shared buffers.
 class BulkStringDecoder {
  public:
-  // 'maxSymbolLength' is the most bytes that one code decodes to. 'addBuffer'
-  // takes each buffer that holds strings when the decoder finishes it, and
-  // must outlive the decoder.
+  // 'maxSymbolLength' is the most bytes that one code decodes to. 'pool'
+  // allocates the buffers of its own. 'addBuffer' takes each buffer that holds
+  // strings when the decoder finishes it, and must outlive the decoder.
   BulkStringDecoder(
       const fsst_decoder_t& decoder,
       size_t maxSymbolLength,
@@ -641,10 +668,9 @@ class BulkStringDecoder {
       const std::function<void(velox::BufferPtr)>& addBuffer)
       : decoder_{decoder},
         maxSymbolLength_{maxSymbolLength},
-        addBuffer_{addBuffer},
-        buffers_{
-            sharedBuffers != nullptr ? sharedBuffers
-                                     : &ownBuffers_.emplace(pool)} {
+        sharedBuffers_{sharedBuffers},
+        pool_{velox::checkedNotNull(pool)},
+        addBuffer_{addBuffer} {
     NIMBLE_CHECK_NOT_NULL(
         addBuffer_, "A decoder must get a callback that takes its buffers.");
   }
@@ -654,23 +680,39 @@ class BulkStringDecoder {
   BulkStringDecoder(BulkStringDecoder&&) = delete;
   BulkStringDecoder& operator=(BulkStringDecoder&&) = delete;
 
-  // Finishes the buffer of a decode that failed before finish(), so that the
-  // buffers serve the next decode.
+  // Ends the room of the shared buffers that a decode leaves open when it
+  // throws between a reservation and finish(), such as when an allocation in
+  // decodeChunks() fails. 'buffer_' is empty otherwise, since every caller
+  // calls finish() after a decode that succeeds, and finish() empties it. The
+  // room ends with no bytes used, since its strings reach no holder before
+  // finish(). The shared buffers outlive the decoder, and their reserve()
+  // fails while a room is open, which their clear() does not end, so without
+  // this every later decode with them would fail. A buffer of its own needs
+  // nothing, since 'ownBuffer_' frees it.
   ~BulkStringDecoder() {
-    if (buffer_.data() != nullptr) {
-      buffers_->finish(0);
+    if (buffer_.data() != nullptr && sharedBuffers_ != nullptr) {
+      sharedBuffers_->finish(0);
     }
   }
 
-  // Makes sure that the buffer has room after its strings for strings of
-  // 'numCompressedBytes' compressed bytes, however long they decode: finishes
-  // the buffer and reserves a new one when it does not. Always inlined, as
-  // decode() is.
-  FOLLY_ALWAYS_INLINE void reserve(size_t numCompressedBytes) {
-    const size_t numBytes =
-        numCompressedBytes * maxSymbolLength_ + kDecoderPadding;
-    if (buffer_.size() - usedBytes_ < numBytes) {
-      newBuffer(numBytes);
+  // Returns whether the decoder takes its buffers from shared buffers.
+  bool sharesBuffers() const {
+    return sharedBuffers_ != nullptr;
+  }
+
+  // Returns the most bytes that strings of 'numCompressedBytes' compressed
+  // bytes decode to.
+  size_t maxDecompressedBytes(size_t numCompressedBytes) const {
+    return numCompressedBytes * maxSymbolLength_;
+  }
+
+  // Makes sure that the buffer has room after its strings for strings that
+  // decode to 'numBytes' bytes: finishes the buffer and reserves a new one
+  // when it does not. Strings that decode to no bytes need no room.
+  void reserve(size_t numBytes) {
+    if (numBytes > 0 &&
+        buffer_.size() - usedBytes_ < numBytes + kDecoderPadding) {
+      newBuffer(numBytes + kDecoderPadding);
     }
   }
 
@@ -684,7 +726,14 @@ class BulkStringDecoder {
     if (compressed.empty()) {
       return {};
     }
-    reserve(compressed.size());
+    if (buffer_.size() - usedBytes_ <
+        maxDecompressedBytes(compressed.size()) + kDecoderPadding) {
+      // Reserves the bytes that the string decodes to. The rest of a
+      // reservation of the caller for exactly the bytes of its strings then
+      // holds its last strings, and a new room or buffer takes no more than
+      // the string needs.
+      reserve(getDecodedBytes(decoder_, compressed));
+    }
     auto* decoded = buffer_.data() + usedBytes_;
     const auto decodedSize = nimble_fsst_decompress(
         &decoder_,
@@ -716,7 +765,8 @@ class BulkStringDecoder {
     // Empties the state before 'addBuffer' runs, so that the destructor does
     // not finish the buffer again when 'addBuffer' throws.
     buffer_ = {};
-    auto buffer = buffers_->finish(usedBytes_);
+    auto buffer = sharedBuffers_ != nullptr ? sharedBuffers_->finish(usedBytes_)
+                                            : std::move(ownBuffer_);
     if (usedBytes_ > 0) {
       usedBytes_ = 0;
       addBuffer_(std::move(buffer));
@@ -725,18 +775,24 @@ class BulkStringDecoder {
 
  private:
   // Finishes the buffer and reserves a new one with room for at least
-  // 'numBytes' bytes. Kept out of decode(), which rarely calls it.
+  // 'numBytes' bytes: a room of the shared buffers, or else a buffer of its
+  // own of that many bytes. Kept out of decode(), which rarely calls it.
   FOLLY_NOINLINE void newBuffer(size_t numBytes) {
     finish();
-    buffer_ = buffers_->reserve(numBytes);
+    if (sharedBuffers_ != nullptr) {
+      buffer_ = sharedBuffers_->reserve(numBytes);
+      return;
+    }
+    ownBuffer_ = velox::AlignedBuffer::allocate<char>(numBytes, pool_);
+    buffer_ = {ownBuffer_->asMutable<char>(), ownBuffer_->size()};
   }
 
-  // A code decodes to at most 'maxSymbolLength_' bytes, so room for that many
-  // bytes per code plus this padding keeps fsst_decompress in
-  // velox/external/fsst/fsst.h bounded by its input rather than its output:
-  // its four-symbol loop and three-code tail then never stop early and read an
-  // escape as a symbol. They guard their 8-byte stores with posOut + 32 <= size
-  // and posOut + 24 <= size, so a final one-byte symbol needs 31 spare bytes.
+  // Room for this many bytes past the bytes that the strings decode to keeps
+  // fsst_decompress in velox/external/fsst/fsst.h bounded by its input rather
+  // than its output: its four-symbol loop and three-code tail then never stop
+  // early and read an escape as a symbol. They guard their 8-byte stores with
+  // posOut + 32 <= size and posOut + 24 <= size, so a final one-byte symbol
+  // needs 31 spare bytes.
   static constexpr size_t kDecoderPadding{31};
 
   // The symbol table of the view.
@@ -744,17 +800,21 @@ class BulkStringDecoder {
 
   const size_t maxSymbolLength_;
 
+  // Gives the rooms when not null.
+  DecodedStringBuffers* const sharedBuffers_;
+
+  // Allocates the buffers of its own, without shared buffers.
+  velox::memory::MemoryPool* const pool_;
+
   const std::function<void(velox::BufferPtr)>& addBuffer_;
 
-  // Set only without shared buffers. Declared before 'buffers_', which points
-  // to it then.
-  std::optional<DecodedStringBuffers> ownBuffers_;
+  // The buffer of its own that 'buffer_' lies in, without shared buffers,
+  // until it finishes.
+  velox::BufferPtr ownBuffer_;
 
-  DecodedStringBuffers* const buffers_;
-
-  // The rest of the buffer that the strings go into, which
-  // DecodedStringBuffers::reserve() returned. Empty before the first buffer
-  // and after finish().
+  // The rest of the buffer that the strings go into: a room of the shared
+  // buffers, or 'ownBuffer_'. Empty before the first buffer and after
+  // finish().
   std::span<char> buffer_;
 
   // The bytes of the strings in 'buffer_', from its start.
@@ -765,24 +825,27 @@ class BulkStringDecoder {
 
 namespace {
 
-// Passes the buffer of each of 'chunks', the decoded chunks that a read took
-// strings from or null, to 'addStringBuffer', once for each run of chunks that
-// share it.
-template <typename Chunks>
-void addChunkBuffers(
-    const Chunks& chunks,
-    const std::function<void(velox::BufferPtr)>& addStringBuffer) {
-  const velox::Buffer* prevData{nullptr};
-  for (const auto& chunk : chunks) {
-    if (chunk != nullptr && chunk->data != nullptr &&
-        chunk->data.get() != prevData) {
-      addStringBuffer(chunk->data);
-      prevData = chunk->data.get();
-    }
+// Passes 'buffer', the buffer of a decoded chunk that a read takes strings
+// from, to 'addStringBuffer' unless 'chunkBufferSet' holds it, and adds it
+// there: chunks can share a buffer, which a read passes once.
+void addChunkBuffer(
+    const velox::BufferPtr& buffer,
+    const std::function<void(velox::BufferPtr)>& addStringBuffer,
+    folly::F14FastSet<const velox::Buffer*>& chunkBufferSet) {
+  if (buffer != nullptr && chunkBufferSet.insert(buffer.get()).second) {
+    addStringBuffer(buffer);
   }
 }
 
 } // namespace
+
+size_t FsstEncodingView::decodedBytes(uint32_t startRow, uint32_t endRow)
+    const {
+  const auto startOffset = compressedOffsets_[startRow];
+  return getDecodedBytes(
+      decoder_,
+      {blob_.data() + startOffset, compressedOffsets_[endRow] - startOffset});
+}
 
 detail::BulkStringDecoder FsstEncodingView::makeBulkStringDecoder(
     const std::function<void(velox::BufferPtr)>& addBuffer) const {
@@ -794,12 +857,46 @@ detail::BulkStringDecoder FsstEncodingView::makeBulkStringDecoder(
       addBuffer};
 }
 
+void FsstEncodingView::reserveDecodeBuffer(
+    std::span<const RowRange> ranges,
+    std::span<const std::shared_ptr<const DecodedChunk>> chunks,
+    detail::BulkStringDecoder& stringDecoder) const {
+  if (stringDecoder.sharesBuffers()) {
+    return;
+  }
+  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
+  size_t numBytes{0};
+  for (const auto& range : ranges) {
+    // Adds up the rows of the range chunk by chunk, but for the rows of the
+    // chunks that 'chunks' holds, which the read takes from them.
+    auto startRow = range.startRow;
+    while (startRow < range.endRow) {
+      const auto chunkIndex = rowChunk(startRow);
+      const auto endRow = std::min(
+          range.endRow, chunkIndex * kRowsPerChunk + chunkRows(chunkIndex));
+      if (chunks.empty() || chunks[chunkIndex - firstChunkIndex] == nullptr) {
+        numBytes += decodedBytes(startRow, endRow);
+      }
+      startRow = endRow;
+    }
+  }
+  stringDecoder.reserve(numBytes);
+}
+
 void FsstEncodingView::decodeRanges(
     std::span<const RowRange> ranges,
     std::span<const std::shared_ptr<const DecodedChunk>> chunks,
     const std::function<void(velox::BufferPtr)>& addStringBuffer,
     std::string_view* output) const {
+  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
+  if (!chunks.empty()) {
+    NIMBLE_CHECK_EQ(
+        chunks.size(),
+        rowChunk(ranges.back().endRow - 1) - firstChunkIndex + 1,
+        "Chunks must hold an entry for each chunk that the ranges span.");
+  }
   auto stringDecoder = makeBulkStringDecoder(addStringBuffer);
+  reserveDecodeBuffer(ranges, chunks, stringDecoder);
   if (chunks.empty()) {
     uint32_t outputOffset{0};
     for (const auto& range : ranges) {
@@ -811,33 +908,65 @@ void FsstEncodingView::decodeRanges(
     return;
   }
 
-  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
-  NIMBLE_CHECK_EQ(
-      chunks.size(),
-      rowChunk(ranges.back().endRow - 1) - firstChunkIndex + 1,
-      "Chunks must hold an entry for each chunk that the ranges span.");
+  folly::F14FastSet<const velox::Buffer*> chunkBufferSet;
+  const DecodedChunk* prevChunk{nullptr};
   uint32_t outputOffset{0};
   for (const auto& range : ranges) {
     for (auto row = range.startRow; row < range.endRow; ++row) {
       const auto& chunk = chunks[rowChunk(row) - firstChunkIndex];
-      output[outputOffset++] = chunk != nullptr
-          ? valueAt(*chunk, row % kRowsPerChunk)
-          : stringDecoder.decode(compressedValue(row));
+      if (chunk == nullptr) {
+        output[outputOffset++] = stringDecoder.decode(compressedValue(row));
+        continue;
+      }
+      if (chunk.get() != prevChunk) {
+        addChunkBuffer(chunk->data, addStringBuffer, chunkBufferSet);
+        prevChunk = chunk.get();
+      }
+      output[outputOffset++] = valueAt(*chunk, row % kRowsPerChunk);
     }
   }
   stringDecoder.finish();
-  addChunkBuffers(chunks, addStringBuffer);
+}
+
+void FsstEncodingView::reserveDecodeBuffer(
+    std::span<const uint32_t> indices,
+    std::span<const size_t> runEnds,
+    std::span<const DecodedChunk* const> runChunks,
+    detail::BulkStringDecoder& stringDecoder) const {
+  if (stringDecoder.sharesBuffers()) {
+    return;
+  }
+  size_t numBytes{0};
+  size_t runBegin{0};
+  for (size_t run{0}; run < runEnds.size(); ++run) {
+    if (runChunks[run] == nullptr) {
+      for (auto i = runBegin; i < runEnds[run]; ++i) {
+        numBytes += decodedBytes(indices[i], indices[i] + 1);
+      }
+    }
+    runBegin = runEnds[run];
+  }
+  stringDecoder.reserve(numBytes);
 }
 
 void FsstEncodingView::decodeRows(
     std::span<const uint32_t> indices,
     const std::function<void(velox::BufferPtr)>& addStringBuffer,
     std::string_view* output) const {
-  // Splits the indices into runs in one chunk, as readPhysicalAt() does. Keeps
-  // where each run ends, and the chunk that the read takes the strings of the
-  // run from, or null when it decodes them itself.
-  std::vector<size_t> runEnds;
-  std::vector<std::shared_ptr<const DecodedChunk>> runChunks;
+  // Splits the indices into runs in one chunk, as readPhysicalAt() does, and
+  // decides for each run whether the read takes its strings from the chunk
+  // before it decodes any string, since a chunk that chunkForRead() decodes
+  // takes a room of the shared buffers. Keeps where each run ends, and the
+  // chunk of the run, or null when the read decodes its strings itself. The
+  // cache keeps every chunk that chunkForRead() returns while the view lives.
+  ScopedVector<size_t> runEnds{
+      indices.size(), this->pool_, this->options_.bufferPool};
+  ScopedVector<const DecodedChunk*> runChunks{
+      indices.size(), this->pool_, this->options_.bufferPool};
+
+  // Both start empty, and keep the capacity, which the runs never exceed.
+  runEnds.resize(0);
+  runChunks.resize(0);
   size_t runBegin{0};
   while (runBegin < indices.size()) {
     const auto chunkIndex = rowChunk(indices[runBegin]);
@@ -847,14 +976,24 @@ void FsstEncodingView::decodeRows(
     }
     runEnds.push_back(runEnd);
     runChunks.push_back(
-        chunkForRead(chunkIndex, static_cast<uint32_t>(runEnd - runBegin)));
+        chunkForRead(chunkIndex, static_cast<uint32_t>(runEnd - runBegin))
+            .get());
     runBegin = runEnd;
   }
   auto stringDecoder = makeBulkStringDecoder(addStringBuffer);
+  reserveDecodeBuffer(
+      indices,
+      {runEnds.data(), runEnds.size()},
+      {runChunks.data(), runChunks.size()},
+      stringDecoder);
+  folly::F14FastSet<const velox::Buffer*> chunkBufferSet;
   size_t outputIndex{0};
   for (size_t run{0}; run < runEnds.size(); ++run) {
     // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-    const auto& chunk = runChunks[run];
+    const auto* chunk = runChunks[run];
+    if (chunk != nullptr) {
+      addChunkBuffer(chunk->data, addStringBuffer, chunkBufferSet);
+    }
     for (; outputIndex < runEnds[run]; ++outputIndex) {
       const auto row = indices[outputIndex];
       output[outputIndex] = chunk != nullptr
@@ -863,7 +1002,21 @@ void FsstEncodingView::decodeRows(
     }
   }
   stringDecoder.finish();
-  addChunkBuffers(runChunks, addStringBuffer);
+}
+
+void FsstEncodingView::reserveDecodeBuffer(
+    std::span<const uint64_t> offsets,
+    std::span<const uint32_t> sizes,
+    detail::BulkStringDecoder& stringDecoder) const {
+  if (stringDecoder.sharesBuffers()) {
+    return;
+  }
+  size_t numBytes{0};
+  for (size_t i{0}; i < sizes.size(); ++i) {
+    numBytes +=
+        getDecodedBytes(decoder_, {blob_.data() + offsets[i], sizes[i]});
+  }
+  stringDecoder.reserve(numBytes);
 }
 
 void FsstEncodingView::decodeRows(
@@ -879,10 +1032,73 @@ void FsstEncodingView::decodeRows(
         sizes.subspan(i, 1), blob_, static_cast<size_t>(offsets[i]));
   }
   auto stringDecoder = makeBulkStringDecoder(addStringBuffer);
+  reserveDecodeBuffer(offsets, sizes, stringDecoder);
   for (size_t i{0}; i < sizes.size(); ++i) {
     output[i] = stringDecoder.decode({blob_.data() + offsets[i], sizes[i]});
   }
   stringDecoder.finish();
+}
+
+void FsstEncodingView::decodeDistinctRows(
+    std::span<const uint32_t> indices,
+    const std::function<void(velox::BufferPtr)>& addStringBuffer,
+    std::string_view* output) const {
+  constexpr auto kUnread = std::numeric_limits<uint32_t>::max();
+
+  // Marks the rows that 'indices' ask for, then gives each its position among
+  // them, in row order.
+  ScopedVector<uint32_t> positions{
+      this->rowCount_, this->pool_, this->options_.bufferPool};
+  std::fill(positions.begin(), positions.end(), kUnread);
+  for (const auto index : indices) {
+    positions[index] = 0;
+  }
+  ScopedVector<uint32_t> rows{
+      this->rowCount_, this->pool_, this->options_.bufferPool};
+
+  // Starts empty, and keeps the capacity, which the rows never exceed.
+  rows.resize(0);
+  for (uint32_t row{0}; row < this->rowCount_; ++row) {
+    if (positions[row] != kUnread) {
+      positions[row] = static_cast<uint32_t>(rows.size());
+      rows.push_back(row);
+    }
+  }
+  ScopedVector<std::string_view> values{
+      rows.size(), this->pool_, this->options_.bufferPool};
+
+  // A row that the read set null would be a position among 'rows', not among
+  // 'indices', so the caller's setNull must not take it.
+  const std::function<void(uint32_t)> setNull = [](uint32_t row) {
+    NIMBLE_UNREACHABLE("An FSST view must not set a null: {}", row);
+  };
+  read(
+      std::span<const uint32_t>{rows.data(), rows.size()},
+      setNull,
+      addStringBuffer,
+      values.data());
+  for (size_t i{0}; i < indices.size(); ++i) {
+    output[i] = values[positions[indices[i]]];
+  }
+}
+
+void FsstEncodingView::reserveDecodeBuffer(
+    std::span<const uint32_t> chunkIndices,
+    size_t numCompressedBytes,
+    detail::BulkStringDecoder& stringDecoder) const {
+  const auto maxDecompressedBytes =
+      stringDecoder.maxDecompressedBytes(numCompressedBytes);
+  if (stringDecoder.sharesBuffers() &&
+      maxDecompressedBytes <= DecodedStringBuffers::kMaxBufferBytes) {
+    stringDecoder.reserve(maxDecompressedBytes);
+    return;
+  }
+  size_t numBytes{0};
+  for (const auto chunkIndex : chunkIndices) {
+    const auto firstRow = chunkIndex * kRowsPerChunk;
+    numBytes += decodedBytes(firstRow, firstRow + chunkRows(chunkIndex));
+  }
+  stringDecoder.reserve(numBytes);
 }
 
 std::vector<std::shared_ptr<FsstEncodingView::DecodedChunk>>
@@ -907,9 +1123,7 @@ FsstEncodingView::decodeChunks(std::span<const uint32_t> chunkIndices) const {
 
   // Reserves room for every string of the chunks, so that they lie in the one
   // buffer that every chunk holds.
-  if (numCompressedBytes > 0) {
-    stringDecoder.reserve(numCompressedBytes);
-  }
+  reserveDecodeBuffer(chunkIndices, numCompressedBytes, stringDecoder);
   std::vector<std::shared_ptr<DecodedChunk>> chunks;
   chunks.reserve(chunkIndices.size());
   for (const auto chunkIndex : chunkIndices) {
