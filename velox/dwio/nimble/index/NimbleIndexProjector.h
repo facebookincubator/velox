@@ -405,6 +405,9 @@ class NimbleIndexProjector {
     /// Number of loads that read cluster index key streams in the same load as
     /// stripe streams.
     uint32_t numKeyStreamCoLoads{0};
+    /// Number of FlatMap key nodes, the readers of one key, that row
+    /// projections reused from an earlier stripe instead of building them.
+    uint64_t numReusedFlatMapKeyNodes{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming;

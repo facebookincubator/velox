@@ -143,17 +143,21 @@ bool matchesPresenceKey(
 }
 
 // Returns the field reader parameters that decode the fields of a stripe of
-// 'type' as 'options' configure. Each column that
-// options.readFlatMapFieldAsStruct names reads as a struct of the keys that
-// 'type' gives the column.
+// 'type' as 'options' configure, and update the counters in 'stats'. Each
+// column that options.readFlatMapFieldAsStruct names reads as a struct of the
+// keys that 'type' gives the column.
 FieldReaderParams toReaderParams(
     const Type& type,
-    const StreamReader::Options& options) {
+    const StreamReader::Options& options,
+    FieldReader::Stats* stats) {
   FieldReaderParams params{
       .readFlatMapFieldAsStruct = options.readFlatMapFieldAsStruct,
       .decodeExecutor = options.decodeExecutor,
       .maxDecodeParallelism = options.maxDecodeParallelism,
       .minStreamsPerDecodeTask = options.minStreamsPerDecodeTask,
+      // Reuse is safe since rebuildReader() keeps every decoder it creates.
+      .reuseFlatMapKeyNodes = options.reuseFlatMapKeyNodes,
+      .stats = stats,
   };
   if (options.readFlatMapFieldAsStruct.empty()) {
     return params;
@@ -208,6 +212,13 @@ struct StreamReader::CachedReader {
   // Decoders for present streams, keyed by stream id.
   folly::F14FastMap<uint32_t, std::unique_ptr<Decoder>> decodersByStreamId;
 
+  // Decoders of streams absent from the current stripe, keyed by stream id.
+  // rebuildReader() moves a decoder here when its stream leaves and back when
+  // the stream returns, so that a stream keeps one decoder across stripes,
+  // which lets the reader factory reuse the key nodes built over it.
+  folly::F14FastMap<uint32_t, std::unique_ptr<Decoder>>
+      sparseDecodersByStreamId;
+
   // Points to the same decoders in stream order, with null for absent streams.
   std::vector<EncodingViewDecoder*> streamDecoders;
 
@@ -223,6 +234,39 @@ struct StreamReader::CachedReader {
         decoder->release();
       }
     }
+  }
+
+  // Moves the decoder of a stream that the stripe lacks, if the stream has
+  // one, to sparseDecodersByStreamId. The decoder must stay alive, since key
+  // nodes that the reader factory keeps point to it.
+  void keepDecoder(uint32_t streamId) {
+    const auto present = decodersByStreamId.find(streamId);
+    if (present == decodersByStreamId.end()) {
+      return;
+    }
+    NIMBLE_DEBUG_ONLY const bool kept =
+        sparseDecodersByStreamId.emplace(streamId, std::move(present->second))
+            .second;
+    NIMBLE_DCHECK(kept, "A stream must not have two decoders");
+    decodersByStreamId.erase(present);
+  }
+
+  // Returns the decoder of a stream that the stripe has, moving it back from
+  // sparseDecodersByStreamId when the stream returns, or null when the stream
+  // has no decoder yet.
+  EncodingViewDecoder* findDecoder(uint32_t streamId) {
+    const auto present = decodersByStreamId.find(streamId);
+    if (present != decodersByStreamId.end()) {
+      return static_cast<EncodingViewDecoder*>(present->second.get());
+    }
+    const auto sparse = sparseDecodersByStreamId.find(streamId);
+    if (sparse == sparseDecodersByStreamId.end()) {
+      return nullptr;
+    }
+    auto* decoder = static_cast<EncodingViewDecoder*>(sparse->second.get());
+    decodersByStreamId.emplace(streamId, std::move(sparse->second));
+    sparseDecodersByStreamId.erase(sparse);
+    return decoder;
   }
 };
 
@@ -245,7 +289,7 @@ void StreamReader::init() {
               convertToVeloxType(*velox::checkedNotNull(type_.get())))};
   std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
-      toReaderParams(*type_, readerOptions_),
+      toReaderParams(*type_, readerOptions_, &stats_),
       type_,
       typeWithId,
       readerOffsets,
@@ -469,13 +513,12 @@ void StreamReader::rebuildReader(
   for (size_t i{0}; i < streams.size(); ++i) {
     const auto streamId = inputOffsets_[i];
     if (streams[i].empty()) {
-      cachedReader.decodersByStreamId.erase(streamId);
+      cachedReader.keepDecoder(streamId);
       continue;
     }
 
-    const auto it = cachedReader.decodersByStreamId.find(streamId);
-    if (it != cachedReader.decodersByStreamId.end()) {
-      auto* decoder = static_cast<EncodingViewDecoder*>(it->second.get());
+    if (auto* decoder = cachedReader.findDecoder(streamId);
+        decoder != nullptr) {
       bindStream(streams[i], i, alphabets, [&] {
         // @lint-ignore NULLSAFECLANG nullable-dereference
         decoder->rebind(

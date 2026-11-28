@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/views/DecodedStringBuffers.h"
 #include "velox/dwio/nimble/reader/Decoder.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 
@@ -91,6 +92,12 @@ class StreamReader {
     /// reader holds no buffer between bindings, which suits a reader that
     /// waits between point lookups.
     bool keepDecodedStringBuffersAcrossStripes{false};
+
+    /// Reuses the key nodes of FlatMap readers across stripes, for keys whose
+    /// streams keep their decoders, instead of building them for each stripe
+    /// with another stream presence pattern. stats() counts the reused nodes.
+    /// See FieldReaderParams::reuseFlatMapKeyNodes.
+    bool reuseFlatMapKeyNodes{true};
 
     /// Returns true when the reader can decode child fields in parallel.
     bool parallelDecodeEnabled() const {
@@ -195,12 +202,18 @@ class StreamReader {
   /// Options::keepDecodedStringBuffersAcrossStripes.
   void reset();
 
+  /// Returns the counters of the field readers of this reader, across the
+  /// stripes that it read.
+  const FieldReader::Stats& stats() const {
+    return stats_;
+  }
+
  private:
   // Keeps the decoders of the present streams together with the FieldReader
   // tree built over them for one stream-presence pattern. Binding another
   // stripe with the same pattern replaces the decoders' views and keeps the
-  // tree. Another pattern keeps the decoders of the streams that stay present
-  // and rebuilds the tree.
+  // tree. Another pattern rebuilds the tree, and keeps the decoder of each
+  // stream that the stripe lacks for when the stream returns.
   struct CachedReader;
 
   // Initializes the schema-derived reader factory and stream offsets.
@@ -228,8 +241,9 @@ class StreamReader {
   void loadChunks(std::string_view stream, size_t streamIndex);
 
   // Rebuilds the FieldReader tree over one stripe's streams in the cached
-  // reader. Rebinds the decoders of the streams that stay present, creates the
-  // decoders of new streams and drops those of absent streams.
+  // reader. Rebinds the decoders of the present streams, creating those of
+  // streams that it has not seen, and keeps the decoders of absent streams
+  // for when the streams return.
   void rebuildReader(
       std::span<const std::string_view> streams,
       const SharedDictionaryAlphabets& alphabets);
@@ -292,6 +306,9 @@ class StreamReader {
 
   // Descriptor offsets corresponding positionally to input projection streams.
   std::vector<uint32_t> inputOffsets_;
+
+  // See stats(). Declared before readerFactory_, whose factories update it.
+  FieldReader::Stats stats_;
 
   // Builds a FieldReader tree for each stream binding.
   std::unique_ptr<FieldReaderFactory> readerFactory_;

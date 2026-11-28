@@ -4627,14 +4627,21 @@ class RowFieldReaderFactory final : public FieldReaderFactory {
 template <typename T>
 class FlatMapKeyNode {
  public:
+  // 'keyIndex' is the index of the key among the keys of the factory, and
+  // 'streamDecoders' the decoders of the key's streams, as the factory lists
+  // them when it reuses key nodes, or empty otherwise.
   FlatMapKeyNode(
       velox::memory::MemoryPool& memoryPool,
       std::unique_ptr<FieldReader> valueReader,
       Decoder* inMapDecoder,
-      const velox::dwio::common::flatmap::KeyValue<T>& key)
+      const velox::dwio::common::flatmap::KeyValue<T>& key,
+      uint32_t keyIndex,
+      std::vector<const Decoder*> streamDecoders)
       : key_{key},
         valueReader_{std::move(valueReader)},
         inMapDecoder_{inMapDecoder},
+        keyIndex_{keyIndex},
+        streamDecoders_{std::move(streamDecoders)},
         inMapData_{&memoryPool},
         mergedNulls_{&memoryPool} {}
 
@@ -4760,6 +4767,20 @@ class FlatMapKeyNode {
     valueReader_->reset();
   }
 
+  uint32_t keyIndex() const {
+    return keyIndex_;
+  }
+
+  const std::vector<const Decoder*>& streamDecoders() const {
+    return streamDecoders_;
+  }
+
+  // Values that a merged FlatMap read decodes for this key before it copies
+  // them into the map values. A reused node keeps them, and their buffers.
+  velox::VectorPtr& values() {
+    return values_;
+  }
+
  private:
   // Merge the mapNulls and inMapData into mergedNulls
   uint32_t mergeNulls(
@@ -4791,6 +4812,15 @@ class FlatMapKeyNode {
   const velox::dwio::common::flatmap::KeyValue<T>& key_;
   const std::unique_ptr<FieldReader> valueReader_;
   Decoder* const inMapDecoder_;
+
+  // Index of the key among the keys of the factory, under which the factory
+  // keeps the node for reuse.
+  const uint32_t keyIndex_;
+
+  // Decoders of the streams of the key, which the readers of the node keep
+  // pointers to. The factory reuses the node only over the same decoders.
+  const std::vector<const Decoder*> streamDecoders_;
+
   Vector<bool> inMapData_;
   uint32_t numValues_;
   // nulls buffer used in parallel read cases.
@@ -4800,21 +4830,58 @@ class FlatMapKeyNode {
   // Reusable empty container satisfying the decoder API for the in-map
   // stream, which never retains a buffer.
   std::vector<velox::BufferPtr> stringBuffers_;
+
+  // See values().
+  velox::VectorPtr values_;
+};
+
+// Key nodes of destroyed FlatMap readers, by key index, which their factory
+// reuses in the next reader it creates. The factory owns them, and its readers
+// return their key nodes here when they are destroyed, so every reader must be
+// destroyed before its factory.
+template <typename T>
+struct FlatMapKeyNodePool {
+  std::vector<std::unique_ptr<FlatMapKeyNode<T>>> nodes;
 };
 
 template <typename T, bool hasNull>
 class FlatMapFieldReaderBase : public FieldReader {
  public:
+  // 'keyNodePool' takes the key nodes when the reader is destroyed, for
+  // the next reader of the factory that owns it. Null destroys them.
   FlatMapFieldReaderBase(
       velox::memory::MemoryPool& pool,
       velox::TypePtr type,
       Decoder* decoder,
       std::vector<std::unique_ptr<FlatMapKeyNode<T>>> keyNodes,
       Vector<bool>& boolBuffer,
+      FlatMapKeyNodePool<T>* keyNodePool,
       const FieldReader::Options& options = {})
       : FieldReader{pool, std::move(type), decoder, options},
+        keyNodePool_{keyNodePool},
         keyNodes_{std::move(keyNodes)},
         boolBuffer_{boolBuffer} {}
+
+  FlatMapFieldReaderBase(const FlatMapFieldReaderBase&) = delete;
+  FlatMapFieldReaderBase& operator=(const FlatMapFieldReaderBase&) = delete;
+  FlatMapFieldReaderBase(FlatMapFieldReaderBase&&) = delete;
+  FlatMapFieldReaderBase& operator=(FlatMapFieldReaderBase&&) = delete;
+
+  // Returns the key nodes to keyNodePool_, if set.
+  ~FlatMapFieldReaderBase() override {
+    if (keyNodePool_ == nullptr) {
+      return;
+    }
+    for (auto& node : keyNodes_) {
+      if (node != nullptr) {
+        // The destructor must not throw, and the factory built the node for
+        // one of the keys that its pool has a slot for.
+        const auto keyIndex = node->keyIndex();
+        NIMBLE_DCHECK_LT(keyIndex, keyNodePool_->nodes.size());
+        keyNodePool_->nodes[keyIndex] = std::move(node);
+      }
+    }
+  }
 
   uint32_t loadNulls(uint32_t rowCount, velox::BaseVector* vector) {
     if constexpr (hasNull) {
@@ -4918,6 +4985,9 @@ class FlatMapFieldReaderBase : public FieldReader {
   }
 
  protected:
+  // Takes the key nodes when the reader is destroyed, or null.
+  FlatMapKeyNodePool<T>* const keyNodePool_;
+
   std::vector<std::unique_ptr<FlatMapKeyNode<T>>> keyNodes_;
   // Scratch presence flags, one byte per row, shared with the owning reader.
   Vector<bool>& boolBuffer_;
@@ -4940,14 +5010,18 @@ inline bool hasDecoderStream(
 template <typename T>
 class FlatMapFieldReaderFactoryBase : public FieldReaderFactory {
  public:
+  // Reuses the key nodes of destroyed readers when
+  // params.reuseFlatMapKeyNodes is set.
   FlatMapFieldReaderFactoryBase(
       velox::TypePtr veloxType,
       const Type* type,
       std::vector<const StreamDescriptor*> inMapDescriptors,
       std::vector<std::unique_ptr<FieldReaderFactory>> valueReaders,
       const std::vector<size_t>& selectedChildren,
+      const FieldReaderParams& params,
       velox::memory::MemoryPool* pool)
       : FieldReaderFactory{std::move(veloxType), type, pool},
+        stats_{params.stats},
         inMapDescriptors_{std::move(inMapDescriptors)},
         valueReaders_{std::move(valueReaders)},
         boolBuffer_{pool_} {
@@ -4971,6 +5045,20 @@ class FlatMapFieldReaderFactoryBase : public FieldReaderFactory {
           velox::dwio::common::flatmap::parseKeyValue<T>(
               flatMap.nameAt(childIdx)));
       valueTypes_.emplace_back(flatMap.childAt(childIdx).get());
+    }
+    if (!params.reuseFlatMapKeyNodes) {
+      return;
+    }
+
+    keyNodePool_ = std::make_unique<FlatMapKeyNodePool<T>>();
+    keyNodePool_->nodes.resize(valueTypes_.size());
+    valueStreamOffsets_.reserve(valueTypes_.size());
+    for (const auto* valueType : valueTypes_) {
+      // The value type is a subtree of the schema of the factory, so its
+      // descriptors carry the offsets under which the decoders map of
+      // createReader() holds the decoders of their streams.
+      valueStreamOffsets_.push_back(
+          projectionStreamOffsets(*valueType, /*stringStreams=*/nullptr));
     }
   }
 
@@ -5000,16 +5088,7 @@ class FlatMapFieldReaderFactoryBase : public FieldReaderFactory {
                 *valueTypes_[currentIdx], [&decoders](offset_size offset) {
                   return hasDecoderStream(offset, decoders);
                 })) {
-          keyNodes.emplace_back(
-              std::make_unique<FlatMapKeyNode<T>>(
-                  *pool_,
-                  // @lint-ignore CLANGTIDY
-                  // facebook-hte-MemberUncheckedArrayBounds
-                  valueReaders_[currentIdx]->createReader(decoders),
-                  decoder,
-                  // @lint-ignore CLANGTIDY
-                  // facebook-hte-MemberUncheckedArrayBounds
-                  keyValues_[currentIdx]));
+          keyNodes.emplace_back(makeKeyNode(currentIdx, decoder, decoders));
           continue;
         }
       }
@@ -5025,6 +5104,7 @@ class FlatMapFieldReaderFactoryBase : public FieldReaderFactory {
           nulls,
           std::move(keyNodes),
           boolBuffer_,
+          keyNodePool_.get(),
           pool_,
           std::forward<Args>(args)...);
     }
@@ -5034,11 +5114,72 @@ class FlatMapFieldReaderFactoryBase : public FieldReaderFactory {
         nulls,
         std::move(keyNodes),
         boolBuffer_,
+        keyNodePool_.get(),
         pool_,
         std::forward<Args>(args)...);
   }
 
  protected:
+  // Returns the key node of the key at 'keyIndex' over 'decoders': the node of
+  // an earlier reader when the factory kept one over the same decoders,
+  // otherwise a new node.
+  std::unique_ptr<FlatMapKeyNode<T>> makeKeyNode(
+      uint32_t keyIndex,
+      Decoder* inMapDecoder,
+      const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>>&
+          decoders) {
+    if (keyNodePool_ == nullptr) {
+      return std::make_unique<FlatMapKeyNode<T>>(
+          *pool_,
+          valueReaders_.at(keyIndex)->createReader(decoders),
+          inMapDecoder,
+          keyValues_.at(keyIndex),
+          keyIndex,
+          /*streamDecoders=*/std::vector<const Decoder*>{});
+    }
+
+    // Lists the decoders of the key's streams: its in-map stream, then each
+    // stream of its values, null for a stream that 'decoders' lacks.
+    const auto& offsets = valueStreamOffsets_.at(keyIndex);
+    std::vector<const Decoder*> streamDecoders;
+    streamDecoders.reserve(offsets.size() + 1);
+    streamDecoders.push_back(inMapDecoder);
+    for (const auto offset : offsets) {
+      const auto it = decoders.find(offset);
+      streamDecoders.push_back(
+          it == decoders.end() ? nullptr : it->second.get());
+    }
+
+    // The readers of a node keep pointers to the decoders of the key's streams
+    // and read whatever stripe those decoders are bound to. A caller that
+    // reuses key nodes keeps one decoder per stream across readers and rebinds
+    // it to each stripe, as StreamReader does, so a node built for an earlier
+    // stripe reads a later one through the same pointers. The decoders differ
+    // when a stream of the key is present in only one of the two stripes, such
+    // as the nulls stream of its values: the node built without the stream
+    // has no reader for it, or a reader of a decoder that the stripe lacks, so
+    // the key gets a new node.
+    auto& reusable = keyNodePool_->nodes.at(keyIndex);
+    if (reusable != nullptr && reusable->streamDecoders() == streamDecoders) {
+      if (stats_ != nullptr) {
+        stats_->incNumReusedFlatMapKeyNodes();
+      }
+      auto node = std::move(reusable);
+      node->reset();
+      return node;
+    }
+    return std::make_unique<FlatMapKeyNode<T>>(
+        *pool_,
+        valueReaders_.at(keyIndex)->createReader(decoders),
+        inMapDecoder,
+        keyValues_.at(keyIndex),
+        keyIndex,
+        std::move(streamDecoders));
+  }
+
+  // Counters to update, or null.
+  FieldReader::Stats* const stats_;
+
   std::vector<const StreamDescriptor*> inMapDescriptors_;
   std::vector<std::unique_ptr<FieldReaderFactory>> valueReaders_;
   std::vector<velox::dwio::common::flatmap::KeyValue<T>> keyValues_;
@@ -5046,6 +5187,13 @@ class FlatMapFieldReaderFactoryBase : public FieldReaderFactory {
   // exist when the in-map decoder is missing.
   std::vector<const Type*> valueTypes_;
   Vector<bool> boolBuffer_;
+
+  // Key nodes of destroyed readers, for reuse. Null when the factory does not
+  // reuse key nodes.
+  std::unique_ptr<FlatMapKeyNodePool<T>> keyNodePool_;
+
+  // Stream offsets of the values of each key, set when keyNodePool_ is.
+  std::vector<std::vector<uint32_t>> valueStreamOffsets_;
 };
 
 template <typename T, bool hasNull>
@@ -5056,6 +5204,7 @@ class StructFlatMapFieldReader : public FlatMapFieldReaderBase<T, hasNull> {
       Decoder* decoder,
       std::vector<std::unique_ptr<FlatMapKeyNode<T>>> keyNodes,
       Vector<bool>& boolBuffer,
+      FlatMapKeyNodePool<T>* keyNodePool,
       velox::memory::MemoryPool* pool,
       Vector<char>& mergedNulls,
       const FieldReader::Options& options)
@@ -5065,6 +5214,7 @@ class StructFlatMapFieldReader : public FlatMapFieldReaderBase<T, hasNull> {
             decoder,
             std::move(keyNodes),
             boolBuffer,
+            keyNodePool,
             options),
         mergedNulls_{mergedNulls} {}
 
@@ -5238,6 +5388,7 @@ class StructFlatMapFieldReaderFactory final
             std::move(inMapDescriptors),
             std::move(valueReaders),
             selectedChildren,
+            params,
             pool),
         decodeExecutor_{params.decodeExecutor},
         decodeTaskPlan_{std::move(decodeTaskPlan)},
@@ -5280,13 +5431,15 @@ class MergedFlatMapFieldReader final
       Decoder* decoder,
       std::vector<std::unique_ptr<FlatMapKeyNode<T>>> keyNodes,
       Vector<bool>& boolBuffer,
+      FlatMapKeyNodePool<T>* keyNodePool,
       velox::memory::MemoryPool* pool)
       : FlatMapFieldReaderBase<T, hasNull>(
             *pool,
             std::move(type),
             decoder,
             std::move(keyNodes),
-            boolBuffer),
+            boolBuffer,
+            keyNodePool),
         nextElementOffsets_{pool} {}
 
   std::optional<std::pair<uint32_t, uint64_t>> estimatedRowSize() const final {
@@ -5566,12 +5719,12 @@ class MergedFlatMapFieldReader final
       co_return;
     }
 
-    this->nodeValues_.resize(this->keyNodes_.size());
     for (size_t i{0}; i < this->keyNodes_.size(); ++i) {
       NIMBLE_CHECK_NOT_NULL(
           this->keyNodes_[i],
           "Merged FlatMap readers require existing key nodes");
-      auto& nodeValue = this->nodeValues_[i];
+      // The values live in the key node, so a reused node keeps them.
+      auto& nodeValue = this->keyNodes_[i]->values();
       if (nodeValue == nullptr) {
         nodeValue = velox::BaseVector::create(
             this->keyNodes_[i]->valueReader()->type(),
@@ -5637,7 +5790,8 @@ class MergedFlatMapFieldReader final
           });
         }
       }
-      valuesVector->copyRanges(this->nodeValues_[i].get(), this->copyRanges_);
+      valuesVector->copyRanges(
+          this->keyNodes_[i]->values().get(), this->copyRanges_);
     }
     vector->setKeysAndValues(std::move(keysVector), std::move(valuesVector));
     co_return;
@@ -6668,6 +6822,7 @@ std::unique_ptr<FieldReaderFactory> createFlatMapReaderFactory(
           std::move(inMapDescriptors),                                     \
           std::move(valueReaders),                                         \
           selectedChildren,                                                \
+          params,                                                          \
           pool);                                                           \
     }                                                                      \
   }
