@@ -212,6 +212,7 @@ void PaimonSplitReader::maybeCreateDeletionVectorReader() {
 std::vector<std::unique_ptr<PaimonMergeStream>>
 PaimonSplitReader::openMergeStreams(
     const PaimonTableHandle& tableHandle,
+    const RowTypePtr& valueColumns,
     uint64_t batchSize) {
   VELOX_CHECK_GT(batchSize, 0);
   const auto& dataFiles = paimonSplit_->dataFiles();
@@ -221,10 +222,11 @@ PaimonSplitReader::openMergeStreams(
       fileConfig_->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx_->sessionProperties()) &&
       dataFiles.front().fileFormat != dwio::common::FileFormat::NIMBLE;
-  const auto mergeColumns = std::make_shared<const PaimonMergeColumns>(
-      PaimonMergeColumns::create(tableHandle, lowerCaseSystemColumns));
+  const auto layout =
+      std::make_shared<const PaimonMergeLayout>(PaimonMergeLayout::create(
+          tableHandle, valueColumns, lowerCaseSystemColumns));
   const auto mergeTableHandle =
-      std::make_shared<MergeTableHandle>(tableHandle, mergeColumns->type);
+      std::make_shared<MergeTableHandle>(tableHandle, layout->type);
   // Merge reads have no filters, so they skip no file.
   dwio::common::RuntimeStats mergeRuntimeStats;
 
@@ -239,10 +241,10 @@ PaimonSplitReader::openMergeStreams(
     // the MergeTableHandle TODO describes. 'outputSubfields' stays empty, since
     // the merge compares whole keys and sequence fields.
     const auto scanSpec = connector::FileDataSource::makeScanSpec(
-        mergeColumns->type,
+        layout->type,
         /*outputSubfields=*/{},
         /*subfieldFilters=*/{},
-        mergeColumns->type,
+        layout->type,
         /*partitionKeys=*/{},
         /*infoColumns=*/{},
         /*specialColumns=*/{},
@@ -254,7 +256,7 @@ PaimonSplitReader::openMergeStreams(
         partitionKeys_,
         connectorQueryCtx_,
         fileConfig_,
-        mergeColumns->type,
+        layout->type,
         dataIoStats_,
         metadataIoStats_,
         ioStats_,
@@ -277,7 +279,7 @@ PaimonSplitReader::openMergeStreams(
             dataFile,
             std::move(reader),
             std::move(deletionVectorReader),
-            mergeColumns,
+            layout,
             batchSize,
             pool_));
   }

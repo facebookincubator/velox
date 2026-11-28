@@ -68,6 +68,27 @@ class PaimonTableOptions {
   /// Whether compaction looks up keys in higher levels even if no other option
   /// asks for it.
   static constexpr const char* kForceLookup = "force-lookup";
+
+  /// Aggregate function of the columns of an aggregation table that do not set
+  /// one with fieldAggregateFunction(), one of the PaimonAggregateFunction
+  /// values.
+  static constexpr const char* kFieldsDefaultAggregateFunction =
+      "fields.default-aggregate-function";
+
+  /// Whether a DELETE row of an aggregation table replaces the merged row of
+  /// its key.
+  static constexpr const char* kAggregationRemoveRecordOnDelete =
+      "aggregation.remove-record-on-delete";
+
+  /// Returns the name of the option that sets the aggregate function of
+  /// 'column' in an aggregation table, 'fields.<column>.aggregate-function'.
+  /// Its value is one of the PaimonAggregateFunction values.
+  static std::string fieldAggregateFunction(std::string_view column);
+
+  /// Returns the name of the option that makes the aggregate function of
+  /// 'column' in an aggregation table keep its value on DELETE and
+  /// UPDATE_BEFORE rows, 'fields.<column>.ignore-retract'.
+  static std::string fieldIgnoreRetract(std::string_view column);
 };
 
 /// Values of the PaimonTableOptions::kChangelogProducer table option, which
@@ -86,6 +107,82 @@ class PaimonChangelogProducer {
   /// Writes changelog files with lookup compaction, which looks up keys in
   /// higher levels.
   static constexpr const char* kLookup = "lookup";
+};
+
+/// Names of the aggregate functions of the columns of an aggregation table, the
+/// values of the PaimonTableOptions::fieldAggregateFunction() and
+/// PaimonTableOptions::kFieldsDefaultAggregateFunction options, as Paimon
+/// Java's FieldAggregatorFactory implementations name them.
+class PaimonAggregateFunction {
+ public:
+  /// Takes the value of the last row. Paimon gives it to primary key columns,
+  /// whose rows of a key share one value.
+  static constexpr const char* kPrimaryKey = "primary-key";
+
+  /// Takes the value of the last row, even if it is null.
+  static constexpr const char* kLastValue = "last_value";
+
+  /// Takes the last non-null value. Columns take it when neither
+  /// PaimonTableOptions::fieldAggregateFunction() nor
+  /// PaimonTableOptions::kFieldsDefaultAggregateFunction sets their function.
+  static constexpr const char* kLastNonNullValue = "last_non_null_value";
+
+  /// Takes the value of the first row, even if it is null.
+  static constexpr const char* kFirstValue = "first_value";
+
+  /// Takes the first non-null value.
+  static constexpr const char* kFirstNonNullValue = "first_non_null_value";
+
+  /// Legacy name of kFirstNonNullValue.
+  static constexpr const char* kFirstNotNullValue = "first_not_null_value";
+
+  /// Adds the values.
+  static constexpr const char* kSum = "sum";
+
+  /// Multiplies the values.
+  static constexpr const char* kProduct = "product";
+
+  /// Takes the smallest value.
+  static constexpr const char* kMin = "min";
+
+  /// Takes the largest value.
+  static constexpr const char* kMax = "max";
+
+  /// Takes the logical AND of the values.
+  static constexpr const char* kBoolAnd = "bool_and";
+
+  /// Takes the logical OR of the values.
+  static constexpr const char* kBoolOr = "bool_or";
+
+  /// Concatenates strings with a delimiter.
+  static constexpr const char* kListAgg = "listagg";
+
+  /// Collects the elements of arrays into one array.
+  static constexpr const char* kCollect = "collect";
+
+  /// Merges maps.
+  static constexpr const char* kMergeMap = "merge_map";
+
+  /// Merges maps of rows, keeping for each key the row with the latest time.
+  static constexpr const char* kMergeMapWithKeyTime = "merge_map_with_keytime";
+
+  /// Updates a nested table, an array of rows.
+  static constexpr const char* kNestedUpdate = "nested_update";
+
+  /// Updates some columns of the rows of a nested table, an array of rows.
+  static constexpr const char* kNestedPartialUpdate = "nested_partial_update";
+
+  /// Unions 32-bit Roaring bitmaps.
+  static constexpr const char* kRoaringBitmap32 = "rbm32";
+
+  /// Unions 64-bit Roaring bitmaps.
+  static constexpr const char* kRoaringBitmap64 = "rbm64";
+
+  /// Unions HyperLogLog sketches.
+  static constexpr const char* kHllSketch = "hll_sketch";
+
+  /// Unions Theta sketches.
+  static constexpr const char* kThetaSketch = "theta_sketch";
 };
 
 /// Table handle for Paimon scans. Stores the fixed table definition and scan
@@ -162,6 +259,29 @@ class PaimonTableHandle final : public connector::FileTableHandle {
     /// is 'lookup', 'deletion-vectors.enabled' or 'force-lookup' is true, or
     /// the merge engine is first-row.
     bool needLookup{false};
+
+    /// Aggregate function of a column, from the 'fields.<column>.*' options.
+    struct FieldAggregation {
+      /// Name of the function, e.g. 'sum'.
+      std::string function;
+
+      /// The 'fields.<column>.ignore-retract' option: whether the function
+      /// keeps its value on DELETE and UPDATE_BEFORE rows.
+      bool ignoreRetract{false};
+    };
+
+    /// Aggregate functions of the columns of an aggregation table by column
+    /// name, for every table column. As in Paimon Java, sequence fields take
+    /// 'last_value' and primary keys 'primary-key'. Other columns take
+    /// 'fields.<column>.aggregate-function', or else
+    /// 'fields.default-aggregate-function', or else 'last_non_null_value'.
+    /// Empty for other merge engines.
+    std::unordered_map<std::string, FieldAggregation> fieldAggregations;
+
+    /// The 'aggregation.remove-record-on-delete' option: whether a DELETE row
+    /// of an aggregation table replaces the merged row of its key, which the
+    /// key returns as a DELETE when that row comes last.
+    bool aggregationRemoveRecordOnDelete{false};
   };
 
   /// rowType includes partition columns; fieldIds follow its column order.

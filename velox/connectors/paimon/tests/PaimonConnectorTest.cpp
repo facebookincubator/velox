@@ -4082,6 +4082,463 @@ TEST_F(PaimonConnectorTest, primaryKeyMixedRawAndMergeSplits) {
   }
 }
 
+// The aggregation merge engine aggregates each column over the rows of a key in
+// merge order and retracts DELETE and UPDATE_BEFORE rows, as Paimon Java's
+// AggregateMergeFunction does. A key with one row returns the row unmerged
+// unless it is a DELETE or UPDATE_BEFORE row.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadAggregation) {
+  const auto rowType = ROW(
+      {{"id", BIGINT()},
+       {"total", BIGINT()},
+       {"low", DOUBLE()},
+       {"name", VARCHAR()}});
+  const auto older = makeRowVector(
+      {"id", "total", "low", "name"},
+      {makeFlatVector<int64_t>({1, 2, 3, 5}),
+       makeFlatVector<int64_t>({10, 20, 30, 50}),
+       makeFlatVector<double>({1.5, 2.5, 3.5, 5.5}),
+       makeNullableFlatVector<std::string>({"a", "b", std::nullopt, "e"})});
+  // Key 6 has only a DELETE row.
+  const auto newer = makeRowVector(
+      {"id", "total", "low", "name"},
+      {makeFlatVector<int64_t>({1, 2, 4, 5, 6}),
+       makeFlatVector<int64_t>({1, 2, 4, 5, 6}),
+       makeFlatVector<double>({0.5, 9.5, 4.5, 0.25, 6.5}),
+       makeNullableFlatVector<std::string>(
+           {std::nullopt, "B", "d", "E", "f"})});
+  const auto makeExpected =
+      [&](const std::vector<int64_t>& ids,
+          const std::vector<int64_t>& totals,
+          const std::vector<std::optional<double>>& lows,
+          const std::vector<std::optional<std::string>>& names) {
+        return makeRowVector(
+            {"id", "total", "low", "name"},
+            {makeFlatVector<int64_t>(ids),
+             makeFlatVector<int64_t>(totals),
+             makeNullableFlatVector<double>(lows),
+             makeNullableFlatVector<std::string>(names)});
+      };
+  struct TestParam {
+    std::unordered_map<std::string, std::string> options;
+    RowVectorPtr expected;
+
+    std::string debugString() const {
+      std::vector<std::string> entries;
+      entries.reserve(options.size());
+      for (const auto& [key, value] : options) {
+        entries.push_back(fmt::format("{}={}", key, value));
+      }
+      std::sort(entries.begin(), entries.end());
+      return fmt::format("options [{}]", fmt::join(entries, ", "));
+    }
+  };
+  // 'name' takes the default 'last_non_null_value'. With
+  // 'aggregation.remove-record-on-delete', the DELETE of key 5 removes it.
+  const std::vector<TestParam> testSettings{
+      {{{"merge-engine", "aggregation"},
+        {"fields.total.aggregate-function", "sum"},
+        {"fields.low.aggregate-function", "min"},
+        {"fields.low.ignore-retract", "true"}},
+       makeExpected(
+           {1, 2, 3, 4, 5},
+           {11, 18, 30, 4, 45},
+           {0.5, 2.5, 3.5, 4.5, 5.5},
+           {"a", std::nullopt, std::nullopt, "d", std::nullopt})},
+      {{{"merge-engine", "aggregation"},
+        {"fields.total.aggregate-function", "sum"},
+        {"fields.low.aggregate-function", "last_value"},
+        {"aggregation.remove-record-on-delete", "true"}},
+       makeExpected(
+           {1, 2, 3, 4},
+           {11, 18, 30, 4},
+           {0.5, std::nullopt, 3.5, 4.5},
+           {"a", std::nullopt, std::nullopt, "d"})},
+  };
+  for (auto format : fileFormats()) {
+    const auto files = makeFilePaths(2);
+    const auto split = makePaimonSplit(
+        {writePrimaryKeyFile(files[0]->getPath(), older, {1, 2, 3, 4}, format),
+         writePrimaryKeyFile(
+             files[1]->getPath(),
+             newer,
+             {5, 6, 7, 8, 9},
+             format,
+             {PaimonRowKind::kInsert,
+              PaimonRowKind::kUpdateBefore,
+              PaimonRowKind::kInsert,
+              PaimonRowKind::kDelete,
+              PaimonRowKind::kDelete})},
+        PaimonTableType::kPrimaryKey,
+        /*rawConvertible=*/false);
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}, format {}",
+              testData.debugString(),
+              dwio::common::FileFormatName::toName(format)));
+      exec::test::AssertQueryBuilder(
+          makePrimaryKeyScanPlan(rowType, rowType, testData.options))
+          .split(split)
+          .assertResults({testData.expected});
+    }
+  }
+}
+
+// Aggregation tables that look up keys in compaction aggregate the rows of a
+// key in level 0 with only the first row of the lowest level above 0, as Paimon
+// Java's LookupMergeFunction does. Rows a deletion vector deletes take no
+// part.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadAggregationLookup) {
+  const auto rowType = ROW({"id", "total"}, BIGINT());
+  const auto levelTwo = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({100, 200, 300})});
+  const auto levelOne = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({1, 3, 4}),
+       makeFlatVector<int64_t>({10, 30, 40})});
+  const auto levelZero = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({1, 2})});
+  // Deletes key 4 from level 1.
+  const auto deletionFiles = writeDeletionVectors({{2}}, /*version=*/1);
+  struct TestParam {
+    std::unordered_map<std::string, std::string> options;
+    std::vector<int64_t> expectedTotals;
+
+    std::string debugString() const {
+      std::vector<std::string> entries;
+      entries.reserve(options.size());
+      for (const auto& [key, value] : options) {
+        entries.push_back(fmt::format("{}={}", key, value));
+      }
+      std::sort(entries.begin(), entries.end());
+      return fmt::format("options [{}]", fmt::join(entries, ", "));
+    }
+  };
+  // Key 3 has rows in levels 1 and 2 only, so the lookup merge aggregates the
+  // row of level 1 alone.
+  const std::vector<TestParam> testSettings{
+      {{{"merge-engine", "aggregation"},
+        {"fields.total.aggregate-function", "sum"}},
+       {111, 202, 330}},
+      {{{"merge-engine", "aggregation"},
+        {"fields.total.aggregate-function", "sum"},
+        {"deletion-vectors.enabled", "true"}},
+       {11, 202, 30}},
+      {{{"merge-engine", "aggregation"},
+        {"fields.total.aggregate-function", "sum"},
+        {"changelog-producer", "lookup"}},
+       {11, 202, 30}},
+  };
+  for (auto format : fileFormats()) {
+    const auto files = makeFilePaths(3);
+    auto levelTwoFile =
+        writePrimaryKeyFile(files[0]->getPath(), levelTwo, {1, 2, 3}, format);
+    levelTwoFile.level = 2;
+    auto levelOneFile =
+        writePrimaryKeyFile(files[1]->getPath(), levelOne, {4, 5, 6}, format);
+    levelOneFile.level = 1;
+    levelOneFile.deletionFile = deletionFiles[0];
+    const auto levelZeroFile =
+        writePrimaryKeyFile(files[2]->getPath(), levelZero, {7, 8}, format);
+    for (const auto& testData : testSettings) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}, format {}",
+              testData.debugString(),
+              dwio::common::FileFormatName::toName(format)));
+      exec::test::AssertQueryBuilder(
+          makePrimaryKeyScanPlan(rowType, rowType, testData.options))
+          .split(makePaimonSplit(
+              {levelTwoFile, levelOneFile, levelZeroFile},
+              PaimonTableType::kPrimaryKey,
+              /*rawConvertible=*/false))
+          .assertResults({makeRowVector(
+              {"id", "total"},
+              {makeFlatVector<int64_t>({1, 2, 3}),
+               makeFlatVector<int64_t>(testData.expectedTotals)})});
+    }
+  }
+}
+
+// Filters apply to aggregated rows, and a scan can filter on a column it does
+// not return.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadAggregationFilters) {
+  const auto rowType = ROW({"id", "total"}, BIGINT());
+  const std::unordered_map<std::string, std::string> options{
+      {"merge-engine", "aggregation"},
+      {"fields.total.aggregate-function", "sum"}};
+  const auto older = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({1, 2, 3}),
+       makeFlatVector<int64_t>({10, 20, 30})});
+  const auto newer = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({10, 1})});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(2);
+    const auto split = makePaimonSplit(
+        {writePrimaryKeyFile(files[0]->getPath(), older, {1, 2, 3}, format),
+         writePrimaryKeyFile(
+             files[1]->getPath(),
+             newer,
+             {4, 5},
+             format,
+             {PaimonRowKind::kInsert, PaimonRowKind::kUpdateBefore})},
+        PaimonTableType::kPrimaryKey,
+        /*rawConvertible=*/false);
+    // Merged totals are 20, 19 and 30. No row of key 1 passes alone.
+    {
+      common::SubfieldFilters filters;
+      filters.emplace(
+          common::Subfield("total"),
+          std::make_unique<common::BigintRange>(20, 29, false));
+      exec::test::AssertQueryBuilder(
+          makePrimaryKeyScanPlan(
+              ROW("id", BIGINT()), rowType, options, std::move(filters)))
+          .split(split)
+          .assertResults({makeRowVector({makeFlatVector<int64_t>({1})})});
+    }
+    exec::test::AssertQueryBuilder(makePrimaryKeyScanPlan(
+                                       ROW("id", BIGINT()),
+                                       rowType,
+                                       options,
+                                       {},
+                                       parseExpr("total % 10 = 9", rowType)))
+        .split(split)
+        .assertResults({makeRowVector({makeFlatVector<int64_t>({2})})});
+  }
+}
+
+// Keys span the batches of the file reads and of the output.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadAggregationAcrossBatches) {
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  const auto rowType = ROW({"id", "total"}, BIGINT());
+  const auto table = makePaimonTableHandle(
+      rowType,
+      /*subfieldFilters=*/{},
+      /*remainingFilter=*/nullptr,
+      /*partitionNames=*/{},
+      /*filterColumns=*/{},
+      {{"merge-engine", "aggregation"},
+       {"fields.total.aggregate-function", "sum"}},
+      PaimonTableType::kPrimaryKey,
+      /*primaryKeys=*/{"id"});
+  // File 'step - 1' holds the keys below 50 divisible by 'step', with totals
+  // and sequence numbers that grow with 'step'. The last file retracts its
+  // even keys.
+  constexpr int64_t kNumKeys = 50;
+  constexpr int32_t kNumFiles = 3;
+  std::vector<RowVectorPtr> inputs;
+  std::vector<std::vector<int64_t>> sequenceNumbers;
+  std::vector<std::vector<PaimonRowKind>> rowKinds;
+  for (int64_t step = 1; step <= kNumFiles; ++step) {
+    std::vector<int64_t> ids;
+    std::vector<int64_t> totals;
+    sequenceNumbers.emplace_back();
+    rowKinds.emplace_back();
+    for (int64_t id = 0; id < kNumKeys; id += step) {
+      ids.push_back(id);
+      totals.push_back(1'000 * (step - 1) + id);
+      sequenceNumbers.back().push_back(100 * (step - 1) + id);
+      rowKinds.back().push_back(
+          step == kNumFiles && id % 2 == 0 ? PaimonRowKind::kUpdateBefore
+                                           : PaimonRowKind::kInsert);
+    }
+    inputs.push_back(makeRowVector(
+        {"id", "total"},
+        {makeFlatVector<int64_t>(ids), makeFlatVector<int64_t>(totals)}));
+  }
+  std::vector<int64_t> expectedIds;
+  std::vector<int64_t> expectedTotals;
+  for (int64_t id = 0; id < kNumKeys; ++id) {
+    int64_t total = id;
+    if (id % 2 == 0) {
+      total += 1'000 + id;
+    }
+    if (id % 3 == 0) {
+      total += (id % 2 == 0 ? -1 : 1) * (2'000 + id);
+    }
+    expectedIds.push_back(id);
+    expectedTotals.push_back(total);
+  }
+  const auto expected = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>(expectedIds),
+       makeFlatVector<int64_t>(expectedTotals)});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(kNumFiles);
+    std::vector<PaimonDataFile> dataFiles;
+    dataFiles.reserve(inputs.size());
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      dataFiles.push_back(writePrimaryKeyFile(
+          files[i]->getPath(),
+          inputs[i],
+          sequenceNumbers[i],
+          format,
+          rowKinds[i]));
+    }
+    auto source = ConnectorRegistry::tryGet(kPaimonConnectorId)
+                      ->createDataSource(
+                          rowType,
+                          table,
+                          makePaimonColumnHandles(rowType),
+                          context.get());
+    source->addSplit(makePaimonSplit(
+        dataFiles, PaimonTableType::kPrimaryKey, /*rawConvertible=*/false));
+    std::vector<RowVectorPtr> results;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    for (;;) {
+      auto result = source->next(7, future);
+      ASSERT_TRUE(result.has_value());
+      if (*result == nullptr) {
+        break;
+      }
+      ASSERT_LE((*result)->size(), 7);
+      results.push_back(
+          std::static_pointer_cast<RowVector>(BaseVector::copy(**result)));
+    }
+    ASSERT_TRUE(exec::test::assertEqualResults({expected}, results));
+  }
+}
+
+// A key that only other files hold can fall between two keys that one file
+// holds in consecutive rows. Its merged row then lies between the copies of
+// those rows in the output.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadAggregationInterleavedKeys) {
+  const auto rowType = ROW({"id", "total"}, BIGINT());
+  const auto outerKeys = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({1, 3}), makeFlatVector<int64_t>({10, 30})});
+  const auto middleKey = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({2}), makeFlatVector<int64_t>({20})});
+  const auto newerMiddleKey = makeRowVector(
+      {"id", "total"},
+      {makeFlatVector<int64_t>({2}), makeFlatVector<int64_t>({5})});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(3);
+    exec::test::AssertQueryBuilder(
+        makePrimaryKeyScanPlan(
+            rowType,
+            rowType,
+            {{"merge-engine", "aggregation"},
+             {"fields.total.aggregate-function", "sum"}}))
+        .split(makePaimonSplit(
+            {writePrimaryKeyFile(
+                 files[0]->getPath(), outerKeys, {1, 2}, format),
+             writePrimaryKeyFile(files[1]->getPath(), middleKey, {3}, format),
+             writePrimaryKeyFile(
+                 files[2]->getPath(), newerMiddleKey, {4}, format)},
+            PaimonTableType::kPrimaryKey,
+            /*rawConvertible=*/false))
+        .assertResults({makeRowVector(
+            {"id", "total"},
+            {makeFlatVector<int64_t>({1, 2, 3}),
+             makeFlatVector<int64_t>({10, 25, 30})})});
+  }
+}
+
+// Partition columns of an aggregated split come from the split, and a filter on
+// a partition column skips the split. A raw split read after an aggregated one
+// reads its columns from its file again.
+TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadAggregationPartitionedTable) {
+  const auto rowType =
+      ROW({{"p", VARCHAR()}, {"id", BIGINT()}, {"total", BIGINT()}});
+  auto assignments = makePaimonColumnHandles(rowType);
+  assignments["p"] = std::make_shared<PaimonColumnHandle>(
+      "p",
+      10,
+      connector::FileColumnHandle::ColumnType::kPartitionKey,
+      VARCHAR());
+  const auto makePlan = [&](common::SubfieldFilters filters) {
+    return exec::test::PlanBuilder()
+        .startTableScan()
+        .connectorId(kPaimonConnectorId)
+        .outputType(rowType)
+        .tableHandle(makePaimonTableHandle(
+            rowType,
+            std::move(filters),
+            /*remainingFilter=*/nullptr,
+            /*partitionNames=*/{"p"},
+            /*filterColumns=*/{},
+            {{"merge-engine", "aggregation"},
+             {"fields.total.aggregate-function", "sum"}},
+            PaimonTableType::kPrimaryKey,
+            /*primaryKeys=*/{"p", "id"}))
+        .assignments(assignments)
+        .endTableScan()
+        .planNode();
+  };
+  const auto older = makeRowVector(
+      {"p", "id", "total"},
+      {makeFlatVector<std::string>({"x", "x"}),
+       makeFlatVector<int64_t>({1, 2}),
+       makeFlatVector<int64_t>({10, 20})});
+  const auto newer = makeRowVector(
+      {"p", "id", "total"},
+      {makeFlatVector<std::string>({"x"}),
+       makeFlatVector<int64_t>({2}),
+       makeFlatVector<int64_t>({5})});
+  const auto compacted = makeRowVector(
+      {"p", "id", "total"},
+      {makeFlatVector<std::string>({"y", "y"}),
+       makeFlatVector<int64_t>({1, 3}),
+       makeFlatVector<int64_t>({100, 300})});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(3);
+    const auto mergeSplit = std::make_shared<PaimonConnectorSplit>(
+        kPaimonConnectorId,
+        /*snapshotId=*/1,
+        PaimonTableType::kPrimaryKey,
+        std::vector<PaimonDataFile>{
+            writePrimaryKeyFile(files[0]->getPath(), older, {1, 2}, format),
+            writePrimaryKeyFile(files[1]->getPath(), newer, {3}, format)},
+        std::unordered_map<std::string, std::optional<std::string>>{{"p", "x"}},
+        /*tableBucketNumber=*/std::nullopt,
+        /*rawConvertible=*/false);
+    const auto rawSplit = std::make_shared<PaimonConnectorSplit>(
+        kPaimonConnectorId,
+        /*snapshotId=*/1,
+        PaimonTableType::kPrimaryKey,
+        std::vector<PaimonDataFile>{writePrimaryKeyFile(
+            files[2]->getPath(), compacted, {4, 5}, format)},
+        std::unordered_map<std::string, std::optional<std::string>>{{"p", "y"}},
+        /*tableBucketNumber=*/std::nullopt,
+        /*rawConvertible=*/true);
+    exec::test::AssertQueryBuilder(makePlan({}))
+        .splits({mergeSplit, rawSplit})
+        .assertResults({makeRowVector(
+            {"p", "id", "total"},
+            {makeFlatVector<std::string>({"x", "x", "y", "y"}),
+             makeFlatVector<int64_t>({1, 2, 1, 3}),
+             makeFlatVector<int64_t>({10, 25, 100, 300})})});
+    common::SubfieldFilters filters;
+    filters.emplace(
+        common::Subfield("p"),
+        std::make_unique<common::BytesValues>(
+            std::vector<std::string>{"y"}, false));
+    exec::test::AssertQueryBuilder(makePlan(std::move(filters)))
+        .splits({mergeSplit, rawSplit})
+        .assertResults({makeRowVector(
+            {"p", "id", "total"},
+            {makeFlatVector<std::string>({"y", "y"}),
+             makeFlatVector<int64_t>({1, 3}),
+             makeFlatVector<int64_t>({100, 300})})});
+  }
+}
+
 // Merging reads the primary keys, _SEQUENCE_NUMBER and _VALUE_KIND, so it fails
 // on a file that lacks one of them or has a null in one.
 TEST_F(PaimonConnectorTest, primaryKeyMergeOnReadRequiresKeyAndSystemColumns) {
@@ -4233,9 +4690,6 @@ TEST_F(PaimonConnectorTest, mergeOnReadValidationBeforeFileOpen) {
        {"id"},
        "Paimon merge-on-read does not support the merge engine: "
        "partial-update"},
-      {{"merge-engine", "aggregation"},
-       {"id"},
-       "Paimon merge-on-read does not support the merge engine: aggregation"},
       {{"sequence.snapshot-ordering", "true"},
        {"id"},
        "Paimon merge-on-read does not support the table option: "

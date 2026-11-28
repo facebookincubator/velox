@@ -24,23 +24,6 @@
 namespace facebook::velox::connector::paimon {
 namespace {
 
-// Returns true if row 'row' of 'batch' and row 'otherRow' of 'otherBatch' have
-// the same key, which is in the first 'numKeys' columns of both.
-bool sameKey(
-    const RowVector& batch,
-    vector_size_t row,
-    const RowVector& otherBatch,
-    vector_size_t otherRow,
-    column_index_t numKeys) {
-  for (column_index_t i = 0; i < numKeys; ++i) {
-    if (!batch.childAt(i)->equalValueAt(
-            otherBatch.childAt(i).get(), row, otherRow)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // Position of a row among the data files of a split.
 struct FileRow {
   size_t fileIndex;
@@ -214,7 +197,11 @@ const uint64_t* PaimonMergeSplitReader::rowSelection() const {
 
 void PaimonMergeSplitReader::mergeKeys(uint64_t batchSize) {
   const auto& dataFiles = paimonSplit_->dataFiles();
-  auto streams = openMergeStreams(*paimonTableHandle_, batchSize);
+  // Picking whole rows needs only the merge columns.
+  auto streams = openMergeStreams(
+      *paimonTableHandle_,
+      ROW(std::vector<std::string>{}, std::vector<TypePtr>{}),
+      batchSize);
   std::vector<BufferPtr> rowSelections;
   rowSelections.reserve(streams.size());
   for (const auto& stream : streams) {
@@ -228,8 +215,6 @@ void PaimonMergeSplitReader::mergeKeys(uint64_t batchSize) {
             0));
   }
 
-  const auto numKeys = static_cast<column_index_t>(
-      paimonTableHandle_->nonPartitionPrimaryKeys().size());
   TreeOfLosers<PaimonMergeStream> merge(std::move(streams));
   MergeFunction mergeFunction(dataFiles, paimonTableHandle_->mergeOptions());
   const auto finishKey = [&]() {
@@ -243,8 +228,7 @@ void PaimonMergeSplitReader::mergeKeys(uint64_t batchSize) {
   RowVectorPtr keyBatch;
   vector_size_t keyRow{0};
   while (auto* stream = merge.next()) {
-    if (keyBatch == nullptr ||
-        !sameKey(*keyBatch, keyRow, *stream->batch(), stream->row(), numKeys)) {
+    if (keyBatch == nullptr || !stream->hasSameKey(*keyBatch, keyRow)) {
       finishKey();
       keyBatch = stream->batch();
       keyRow = stream->row();

@@ -105,11 +105,56 @@ std::string parseChangelogProducer(std::string_view value) {
   return lower;
 }
 
+bool contains(const std::vector<std::string>& names, const std::string& name) {
+  return std::find(names.begin(), names.end(), name) != names.end();
+}
+
+// Resolves the aggregate function of every column of an aggregation table as
+// Paimon Java's AggregateMergeFunction.getAggFuncName does.
+std::unordered_map<
+    std::string,
+    PaimonTableHandle::MergeOptions::FieldAggregation>
+parseFieldAggregations(
+    const RowTypePtr& rowType,
+    const std::vector<std::string>& primaryKeys,
+    const std::vector<std::string>& sequenceFields,
+    const std::unordered_map<std::string, std::string>& options) {
+  const auto defaultIt =
+      options.find(PaimonTableOptions::kFieldsDefaultAggregateFunction);
+  std::unordered_map<
+      std::string,
+      PaimonTableHandle::MergeOptions::FieldAggregation>
+      fieldAggregations;
+  for (const auto& name : rowType->names()) {
+    auto& aggregation = fieldAggregations[name];
+    if (contains(sequenceFields, name)) {
+      aggregation.function = PaimonAggregateFunction::kLastValue;
+    } else if (contains(primaryKeys, name)) {
+      aggregation.function = PaimonAggregateFunction::kPrimaryKey;
+    } else if (auto it = options.find(
+                   PaimonTableOptions::fieldAggregateFunction(name));
+               it != options.end()) {
+      aggregation.function = it->second;
+    } else if (defaultIt != options.end()) {
+      aggregation.function = defaultIt->second;
+    } else {
+      aggregation.function = PaimonAggregateFunction::kLastNonNullValue;
+    }
+    const auto ignoreRetractKey = PaimonTableOptions::fieldIgnoreRetract(name);
+    if (auto it = options.find(ignoreRetractKey); it != options.end()) {
+      aggregation.ignoreRetract =
+          parseBooleanOption(ignoreRetractKey, it->second);
+    }
+  }
+  return fieldAggregations;
+}
+
 // Parses the merge-on-read options of a primary-key table as Paimon Java's
 // CoreOptions does, and checks them as its SchemaValidation does.
 PaimonTableHandle::MergeOptions parseMergeOptions(
     PaimonTableType tableType,
     const RowTypePtr& rowType,
+    const std::vector<std::string>& primaryKeys,
     const std::unordered_map<std::string, std::string>& options) {
   PaimonTableHandle::MergeOptions mergeOptions;
   if (tableType != PaimonTableType::kPrimaryKey) {
@@ -187,10 +232,32 @@ PaimonTableHandle::MergeOptions parseMergeOptions(
       mergeOptions.needLookup |= parseBooleanOption(key, it->second);
     }
   }
+
+  if (mergeOptions.mergeEngine == PaimonMergeEngine::kAggregation) {
+    mergeOptions.fieldAggregations = parseFieldAggregations(
+        rowType, primaryKeys, mergeOptions.sequenceFields, options);
+    if (auto it =
+            options.find(PaimonTableOptions::kAggregationRemoveRecordOnDelete);
+        it != options.end()) {
+      mergeOptions.aggregationRemoveRecordOnDelete =
+          parseBooleanOption(it->first, it->second);
+    }
+  }
   return mergeOptions;
 }
 
 } // namespace
+
+// static
+std::string PaimonTableOptions::fieldAggregateFunction(
+    std::string_view column) {
+  return fmt::format("fields.{}.aggregate-function", column);
+}
+
+// static
+std::string PaimonTableOptions::fieldIgnoreRetract(std::string_view column) {
+  return fmt::format("fields.{}.ignore-retract", column);
+}
 
 PaimonTableHandle::PaimonTableHandle(
     std::string connectorId,
@@ -226,7 +293,8 @@ PaimonTableHandle::PaimonTableHandle(
       primaryKeys_(std::move(primaryKeys)),
       nonPartitionPrimaryKeys_(
           checkPrimaryKeys(tableType_, rowType_, primaryKeys_, partitionKeys_)),
-      mergeOptions_(parseMergeOptions(tableType_, rowType_, options_)) {
+      mergeOptions_(
+          parseMergeOptions(tableType_, rowType_, primaryKeys_, options_)) {
   VELOX_USER_CHECK_GE(schemaId_, 0, "Paimon schema ID must be nonnegative");
   VELOX_USER_CHECK_EQ(
       fieldIds_.size(),

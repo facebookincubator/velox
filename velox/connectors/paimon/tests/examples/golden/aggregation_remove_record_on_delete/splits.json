@@ -1,0 +1,46 @@
+[ {
+  "name" : "PaimonConnectorSplit",
+  "connectorId" : "paimon",
+  "snapshotId" : 3,
+  "tableType" : "PRIMARY_KEY",
+  "rawConvertible" : false,
+  "dataFiles" : [ {
+    "filePath" : "data/data-be4a02b1-2f7f-4778-8be8-4d85e931bc54-0.nimble",
+    "fileFormat" : "nimble",
+    "fileSize" : 2617,
+    "rowCount" : 2,
+    "level" : 0,
+    "minSequenceNumber" : 6,
+    "maxSequenceNumber" : 7,
+    "deleteRowCount" : 0,
+    "creationTimeMs" : 1795757723804,
+    "fileType" : "DATA",
+    "sourceType" : "APPEND"
+  }, {
+    "filePath" : "data/data-9623a720-dcd9-43f6-86bf-e6af09e80bea-0.nimble",
+    "fileFormat" : "nimble",
+    "fileSize" : 2847,
+    "rowCount" : 3,
+    "level" : 0,
+    "minSequenceNumber" : 3,
+    "maxSequenceNumber" : 5,
+    "deleteRowCount" : 3,
+    "creationTimeMs" : 1795757723674,
+    "fileType" : "DATA",
+    "sourceType" : "APPEND"
+  }, {
+    "filePath" : "data/data-477ee0c2-4e78-4a70-ad65-694930b30366-0.nimble",
+    "fileFormat" : "nimble",
+    "fileSize" : 2720,
+    "rowCount" : 3,
+    "level" : 0,
+    "minSequenceNumber" : 0,
+    "maxSequenceNumber" : 2,
+    "deleteRowCount" : 0,
+    "creationTimeMs" : 1795757723548,
+    "fileType" : "DATA",
+    "sourceType" : "APPEND"
+  } ],
+  "partitionKeys" : { },
+  "tableBucketNumber" : 0
+} ]

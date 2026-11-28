@@ -44,6 +44,33 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  add_executable(
+    velox_paimon_merge_function_test
+    PaimonFieldAggregatorTest.cpp
+    PaimonMergeFunctionTest.cpp
+  )
+  add_test(velox_paimon_merge_function_test velox_paimon_merge_function_test)
+  target_link_libraries(
+    velox_paimon_merge_function_test
+    velox_paimon_merge_function
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_paimon_merge_stream_test PaimonMergeStreamTest.cpp)
+  add_test(velox_paimon_merge_stream_test velox_paimon_merge_stream_test)
+  target_link_libraries(
+    velox_paimon_merge_stream_test
+    velox_paimon_connector
+    velox_hive_connector
+    velox_hive_iceberg_splitreader
+    velox_exec_test_lib
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+  )
+
   add_executable(velox_paimon_connector_test PaimonConnectorTest.cpp)
   add_test(velox_paimon_connector_test velox_paimon_connector_test)
   target_link_libraries(

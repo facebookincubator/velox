@@ -1,0 +1,53 @@
+{
+  "schemaId" : 0,
+  "columns" : [ {
+    "name" : "id",
+    "type" : "bigint",
+    "id" : 0
+  }, {
+    "name" : "total",
+    "type" : "bigint",
+    "id" : 1
+  }, {
+    "name" : "count",
+    "type" : "int",
+    "id" : 2
+  }, {
+    "name" : "low",
+    "type" : "double",
+    "id" : 3
+  }, {
+    "name" : "high",
+    "type" : "double",
+    "id" : 4
+  }, {
+    "name" : "last",
+    "type" : "string",
+    "id" : 5
+  }, {
+    "name" : "first",
+    "type" : "string",
+    "id" : 6
+  }, {
+    "name" : "flag",
+    "type" : "boolean",
+    "id" : 7
+  }, {
+    "name" : "latest",
+    "type" : "string",
+    "id" : 8
+  } ],
+  "primaryKeys" : [ "id" ],
+  "partitionKeys" : [ ],
+  "options" : {
+    "bucket" : "1",
+    "fields.total.aggregate-function" : "sum",
+    "fields.first.aggregate-function" : "first_value",
+    "merge-engine" : "aggregation",
+    "aggregation.remove-record-on-delete" : "true",
+    "write-only" : "true",
+    "fields.count.aggregate-function" : "sum",
+    "manifest.format" : "parquet",
+    "file.format" : "nimble"
+  }
+}

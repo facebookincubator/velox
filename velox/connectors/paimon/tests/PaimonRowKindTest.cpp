@@ -69,6 +69,13 @@ TEST(PaimonRowKindTest, rowKindValues) {
   EXPECT_EQ(static_cast<int8_t>(PaimonRowKind::kDelete), 3);
 }
 
+TEST(PaimonRowKindTest, isRetract) {
+  EXPECT_FALSE(isRetract(PaimonRowKind::kInsert));
+  EXPECT_TRUE(isRetract(PaimonRowKind::kUpdateBefore));
+  EXPECT_FALSE(isRetract(PaimonRowKind::kUpdateAfter));
+  EXPECT_TRUE(isRetract(PaimonRowKind::kDelete));
+}
+
 TEST(PaimonRowKindTest, changelogModeStringAndParse) {
   EXPECT_EQ(paimonChangelogModeString(PaimonChangelogMode::kNone), "NONE");
   EXPECT_EQ(paimonChangelogModeString(PaimonChangelogMode::kInput), "INPUT");

@@ -63,6 +63,12 @@ enum class PaimonRowKind : int8_t {
 std::string paimonRowKindString(PaimonRowKind kind);
 PaimonRowKind paimonRowKindFromValue(int8_t value);
 
+/// Returns true for the kinds that withdraw a row, UPDATE_BEFORE and DELETE,
+/// as Paimon Java's RowKind.isRetract() does.
+constexpr bool isRetract(PaimonRowKind kind) {
+  return kind == PaimonRowKind::kUpdateBefore || kind == PaimonRowKind::kDelete;
+}
+
 FOLLY_ALWAYS_INLINE std::ostream& operator<<(
     std::ostream& os,
     PaimonRowKind kind) {

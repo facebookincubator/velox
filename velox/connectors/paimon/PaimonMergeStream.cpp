@@ -47,22 +47,22 @@ bool hasNulls(const BaseVector& vector) {
 // primary keys are not null, and null keys would merge every row into one key.
 void checkMergeColumnsNotNull(
     const RowVector& batch,
-    const PaimonMergeColumns& mergeColumns,
+    const PaimonMergeLayout& layout,
     std::string_view path) {
-  for (column_index_t i = 0; i < mergeColumns.numKeys; ++i) {
+  for (column_index_t i = 0; i < layout.numKeys; ++i) {
     VELOX_USER_CHECK(
         !hasNulls(*batch.childAt(i)),
         "Paimon primary-key file must have a non-null {} column: {}",
-        mergeColumns.type->nameOf(i),
+        layout.type->nameOf(i),
         path);
   }
   VELOX_USER_CHECK(
-      !hasNulls(*batch.childAt(mergeColumns.sequenceNumberChannel())),
+      !hasNulls(*batch.childAt(layout.sequenceNumberChannel())),
       "Paimon primary-key file must have a non-null _SEQUENCE_NUMBER "
       "column: {}",
       path);
   VELOX_USER_CHECK(
-      !hasNulls(*batch.childAt(mergeColumns.valueKindChannel())),
+      !hasNulls(*batch.childAt(layout.valueKindChannel())),
       "Paimon primary-key file must have a non-null _VALUE_KIND column: {}",
       path);
 }
@@ -70,8 +70,9 @@ void checkMergeColumnsNotNull(
 } // namespace
 
 // static
-PaimonMergeColumns PaimonMergeColumns::create(
+PaimonMergeLayout PaimonMergeLayout::create(
     const PaimonTableHandle& tableHandle,
+    const RowTypePtr& valueColumns,
     bool lowerCaseSystemColumns) {
   const auto& rowType = tableHandle.rowType();
   const auto& keys = tableHandle.nonPartitionPrimaryKeys();
@@ -82,15 +83,15 @@ PaimonMergeColumns PaimonMergeColumns::create(
     return std::find(names.begin(), names.end(), name) != names.end();
   };
 
-  PaimonMergeColumns columns;
+  PaimonMergeLayout layout;
   std::vector<std::string> names;
   std::vector<TypePtr> types;
   for (const auto& key : keys) {
     names.push_back(key);
     types.push_back(rowType->findChild(key));
-    columns.compareFlags.push_back({.nullsFirst = true, .ascending = true});
+    layout.compareFlags.push_back({.nullsFirst = true, .ascending = true});
   }
-  columns.numKeys = static_cast<column_index_t>(keys.size());
+  layout.numKeys = static_cast<column_index_t>(keys.size());
   // Keys compare equal within a key, and partition columns within a split.
   for (const auto& field : options.sequenceFields) {
     if (contains(keys, field) || contains(partitionKeys, field)) {
@@ -99,17 +100,24 @@ PaimonMergeColumns PaimonMergeColumns::create(
     names.push_back(field);
     types.push_back(rowType->findChild(field));
     // Paimon Java puts nulls first in either order.
-    columns.compareFlags.push_back(
+    layout.compareFlags.push_back(
         {.nullsFirst = true, .ascending = options.sequenceFieldsAscending});
   }
   names.push_back(
       systemColumnName(kSequenceNumberColumn, lowerCaseSystemColumns));
   types.push_back(BIGINT());
-  columns.compareFlags.push_back({.nullsFirst = true, .ascending = true});
+  layout.compareFlags.push_back({.nullsFirst = true, .ascending = true});
   names.push_back(systemColumnName(kValueKindColumn, lowerCaseSystemColumns));
   types.push_back(TINYINT());
-  columns.type = ROW(std::move(names), std::move(types));
-  return columns;
+  for (column_index_t i = 0; i < valueColumns->size(); ++i) {
+    const auto& name = valueColumns->nameOf(i);
+    VELOX_CHECK(
+        !contains(names, name), "Duplicate Paimon merge column: {}", name);
+    names.push_back(name);
+    types.push_back(valueColumns->childAt(i));
+  }
+  layout.type = ROW(std::move(names), std::move(types));
+  return layout;
 }
 
 PaimonMergeStream::PaimonMergeStream(
@@ -117,13 +125,13 @@ PaimonMergeStream::PaimonMergeStream(
     const PaimonDataFile& dataFile,
     std::unique_ptr<connector::FileSplitReader> reader,
     std::unique_ptr<PaimonDeletionVectorReader> deletionVectorReader,
-    std::shared_ptr<const PaimonMergeColumns> mergeColumns,
+    std::shared_ptr<const PaimonMergeLayout> layout,
     uint64_t batchSize,
     memory::MemoryPool* pool)
     : fileIndex_(fileIndex),
       dataFile_(dataFile),
       reader_(std::move(reader)),
-      mergeColumns_(std::move(mergeColumns)),
+      layout_(std::move(layout)),
       batchSize_(batchSize),
       pool_(pool),
       deletionVectorReader_(std::move(deletionVectorReader)),
@@ -141,7 +149,7 @@ PaimonMergeStream::PaimonMergeStream(
 
 int32_t PaimonMergeStream::compare(const MergeStream& other) const {
   const auto& otherStream = static_cast<const PaimonMergeStream&>(other);
-  const auto& compareFlags = mergeColumns_->compareFlags;
+  const auto& compareFlags = layout_->compareFlags;
   for (column_index_t i = 0; i < compareFlags.size(); ++i) {
     const auto result = orderColumns_[i]
                             ->compare(
@@ -163,9 +171,18 @@ int32_t PaimonMergeStream::compare(const MergeStream& other) const {
   return fileIndex_ < otherStream.fileIndex_ ? -1 : 1;
 }
 
+bool PaimonMergeStream::hasSameKey(const RowVector& batch, vector_size_t row)
+    const {
+  for (column_index_t i = 0; i < layout_->numKeys; ++i) {
+    if (!batch_->childAt(i)->equalValueAt(batch.childAt(i).get(), row_, row)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool PaimonMergeStream::isRetract() const {
-  const auto kind = paimonRowKindFromValue(rowKinds_->valueAt(row_));
-  return kind == PaimonRowKind::kDelete || kind == PaimonRowKind::kUpdateBefore;
+  return paimon::isRetract(rowKind());
 }
 
 void PaimonMergeStream::skipDeletedRows() {
@@ -188,7 +205,7 @@ bool PaimonMergeStream::loadBatch() {
   // Reuses the previous batch unless the current key still refers to it.
   VectorPtr output = std::move(batch_);
   if (output == nullptr || output.use_count() > 1) {
-    output = BaseVector::create(mergeColumns_->type, 0, pool_);
+    output = BaseVector::create(layout_->type, 0, pool_);
   }
   numBatchRows_ = static_cast<vector_size_t>(reader_->next(batchSize_, output));
   // The row count in the metadata of the file sizes its row selection, so the
@@ -212,11 +229,11 @@ bool PaimonMergeStream::loadBatch() {
   for (auto& child : batch_->children()) {
     child = BaseVector::loadedVectorShared(child);
   }
-  checkMergeColumnsNotNull(*batch_, *mergeColumns_, dataFile_.path);
-  rowKinds_ = batch_->childAt(mergeColumns_->valueKindChannel())
+  checkMergeColumnsNotNull(*batch_, *layout_, dataFile_.path);
+  rowKinds_ = batch_->childAt(layout_->valueKindChannel())
                   ->asChecked<SimpleVector<int8_t>>();
   orderColumns_.clear();
-  for (column_index_t i = 0; i < mergeColumns_->compareFlags.size(); ++i) {
+  for (column_index_t i = 0; i < layout_->compareFlags.size(); ++i) {
     orderColumns_.push_back(batch_->childAt(i).get());
   }
 

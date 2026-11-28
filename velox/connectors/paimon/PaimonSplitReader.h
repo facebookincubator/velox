@@ -94,9 +94,11 @@ class PaimonSplitReader : public connector::FileSplitReader {
   }
 
   // Opens a merge stream of each data file, in file order, which reads the
-  // merge columns of 'tableHandle' 'batchSize' rows at a time with no filters.
+  // merge columns of 'tableHandle' and then 'valueColumns' 'batchSize' rows at
+  // a time with no filters.
   std::vector<std::unique_ptr<PaimonMergeStream>> openMergeStreams(
       const PaimonTableHandle& tableHandle,
+      const RowTypePtr& valueColumns,
       uint64_t batchSize);
 
  private:

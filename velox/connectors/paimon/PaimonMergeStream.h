@@ -25,17 +25,20 @@
 
 namespace facebook::velox::connector::paimon {
 
-/// Columns the merge reads of primary-key files return: the primary keys that
-/// are not partition columns, the sequence fields, _SEQUENCE_NUMBER and
-/// _VALUE_KIND. All but _VALUE_KIND order the rows of a split, since Paimon
-/// Java orders the rows of a key by sequence fields and then by sequence
-/// number.
-struct PaimonMergeColumns {
-  /// Builds the merge columns of 'tableHandle'. 'lowerCaseSystemColumns'
-  /// requests _SEQUENCE_NUMBER and _VALUE_KIND in lowercase, for file readers
-  /// that read file column names as lowercase.
-  static PaimonMergeColumns create(
+/// Layout of the rows the merge reads from primary-key files: the merge
+/// columns of the table, which are the primary keys that are not partition
+/// columns, the sequence fields, _SEQUENCE_NUMBER and _VALUE_KIND, and then
+/// value columns. The merge columns before _VALUE_KIND order the rows of a
+/// split, since Paimon Java orders the rows of a key by sequence fields and
+/// then by sequence number.
+struct PaimonMergeLayout {
+  /// Builds the layout of the merge columns of 'tableHandle' followed by
+  /// 'valueColumns', which must not repeat a merge column.
+  /// 'lowerCaseSystemColumns' requests _SEQUENCE_NUMBER and _VALUE_KIND in
+  /// lowercase, for file readers that read file column names as lowercase.
+  static PaimonMergeLayout create(
       const PaimonTableHandle& tableHandle,
+      const RowTypePtr& valueColumns,
       bool lowerCaseSystemColumns);
 
   /// Index of the _SEQUENCE_NUMBER column, the last column that orders rows.
@@ -64,16 +67,16 @@ struct PaimonMergeColumns {
 /// deleted by the deletion vector of the file.
 class PaimonMergeStream final : public MergeStream {
  public:
-  /// 'dataFile' must outlive the stream. 'reader' reads 'mergeColumns' from
-  /// the file. 'deletionVectorReader' is null if the file has no deletion
-  /// vector. Fails if the file does not have the number of rows its metadata
-  /// counts.
+  /// 'dataFile' must outlive the stream. 'reader' reads the columns of
+  /// 'layout' from the file. 'deletionVectorReader' is null if the file has no
+  /// deletion vector. Fails if the file does not have the number of rows its
+  /// metadata counts.
   PaimonMergeStream(
       size_t fileIndex,
       const PaimonDataFile& dataFile,
       std::unique_ptr<connector::FileSplitReader> reader,
       std::unique_ptr<PaimonDeletionVectorReader> deletionVectorReader,
-      std::shared_ptr<const PaimonMergeColumns> mergeColumns,
+      std::shared_ptr<const PaimonMergeLayout> layout,
       uint64_t batchSize,
       memory::MemoryPool* pool);
 
@@ -117,6 +120,16 @@ class PaimonMergeStream final : public MergeStream {
     return row_;
   }
 
+  /// Returns true if the current row has the same primary key as row 'row' of
+  /// 'batch', a batch of a stream of the same split. Compares the leading
+  /// PaimonMergeLayout::numKeys columns.
+  bool hasSameKey(const RowVector& batch, vector_size_t row) const;
+
+  /// Kind of the current row.
+  PaimonRowKind rowKind() const {
+    return paimonRowKindFromValue(rowKinds_->valueAt(row_));
+  }
+
   /// Returns true if the current row is a DELETE or UPDATE_BEFORE.
   bool isRetract() const;
 
@@ -132,10 +145,10 @@ class PaimonMergeStream final : public MergeStream {
   const size_t fileIndex_;
   // File the stream reads, named in error messages.
   const PaimonDataFile& dataFile_;
-  // Reads the merge columns of the file.
+  // Reads the columns of 'layout_' from the file.
   const std::unique_ptr<connector::FileSplitReader> reader_;
-  // Merge columns, shared by the streams of a split.
-  const std::shared_ptr<const PaimonMergeColumns> mergeColumns_;
+  // Layout of the rows 'reader_' returns, shared by the streams of a split.
+  const std::shared_ptr<const PaimonMergeLayout> layout_;
   // Maximum number of rows a read returns.
   const uint64_t batchSize_;
   // Pool of the batches the reads return.
