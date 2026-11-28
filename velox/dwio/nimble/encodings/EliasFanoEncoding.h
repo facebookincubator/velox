@@ -147,6 +147,11 @@ class EliasFanoEncoding final
     return list_;
   }
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   static_assert(
       std::is_integral_v<T> && !std::is_same_v<T, bool>,
@@ -230,6 +235,10 @@ class EliasFanoEncoding final
     return counter.fetch_add(1, std::memory_order_relaxed);
   }
 
+  // Validates the header and list payload of 'data', the current payload's
+  // encoded data, and points 'list_' at them.
+  void readList(std::string_view data);
+
   // Reads and advances the stateful sequential cursor.
   physicalType readNextValue();
 
@@ -240,7 +249,9 @@ class EliasFanoEncoding final
   List list_;
 
   // Identifies this parsed stream in the per-thread random-read cache.
-  const uint64_t encodingId_{nextEncodingId()};
+  // rebind() assigns a new one, as the next payload's encoded data may land at
+  // the same address.
+  uint64_t encodingId_{nextEncodingId()};
 
   // Cursor created on demand for the stateful Encoding interface. Every
   // sequential operation checks 'row_' against the row count first.
@@ -353,6 +364,22 @@ EliasFanoEncoding<T>::EliasFanoEncoding(
     const std::function<void*(uint32_t)>& /*stringBufferFactory*/,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options} {
+  readList(data);
+}
+
+template <typename T>
+bool EliasFanoEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& /*stringBufferFactory*/) {
+  readList(data);
+  encodingId_ = nextEncodingId();
+  reader_.reset();
+  row_ = 0;
+  return true;
+}
+
+template <typename T>
+void EliasFanoEncoding<T>::readList(std::string_view data) {
   NIMBLE_CHECK_FILE_GT(
       this->rowCount(), 0, "EliasFano encoding requires at least one row.");
   const auto dataOffset = this->dataOffset();

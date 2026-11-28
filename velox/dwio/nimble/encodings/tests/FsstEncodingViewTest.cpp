@@ -572,6 +572,103 @@ TEST_P(FsstEncodingViewTest, viewsDecodeIntoTheBuffersTheyShare) {
   EXPECT_TRUE(liesIn(secondOutput, buffers));
 }
 
+TEST_P(FsstEncodingViewTest, chunksTooLargeForSharedBufferTakeWhatTheyNeed) {
+  // Strings of pseudo-random letters, which FSST barely compresses, so that the
+  // most bytes that two chunks of them can decode to, 8 for each compressed
+  // byte, exceed the largest buffer of the shared buffers.
+  std::vector<std::string> storage;
+  storage.reserve(2'048);
+  Vector<std::string_view> values{pool_.get()};
+  uint32_t state{1};
+  size_t decodedBytes{0};
+  for (uint32_t row = 0; row < 2'048; ++row) {
+    std::string value(200, ' ');
+    for (auto& letter : value) {
+      state = state * 1'103'515'245 + 12'345;
+      letter = static_cast<char>('a' + (state >> 16) % 26);
+    }
+    storage.push_back(std::move(value));
+    values.push_back(storage.back());
+    decodedBytes += storage.back().size();
+  }
+  const auto encoded = encodeFsst(values);
+  DecodedStringBuffers decodedStringBuffers{pool_.get()};
+  Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  options.decodedStringBuffers = &decodedStringBuffers;
+  const auto view = createEncodingView(encoded, pool_.get(), options);
+
+  // A read without addStringBuffer of every row of a cached view decodes both
+  // chunks into one buffer of their own, of exactly the bytes that their
+  // strings decode to and the room that the decoder needs past them.
+  std::vector<std::string_view> output(values.size());
+  view->read(0, 2'048, output.data());
+  EXPECT_TRUE(std::equal(output.begin(), output.end(), values.begin()));
+  if (!cacheEncodingView()) {
+    return;
+  }
+
+  // A read given an addStringBuffer takes the rows from the chunks, and passes
+  // their buffer once.
+  std::vector<velox::BufferPtr> addedBuffers;
+  view->read(
+      std::array<RowRange, 1>{RowRange{0, 2'048}},
+      [](uint32_t) {},
+      appendTo(addedBuffers),
+      output.data());
+  EXPECT_TRUE(std::equal(output.begin(), output.end(), values.begin()));
+  ASSERT_EQ(addedBuffers.size(), 1);
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+  EXPECT_GE(addedBuffers[0]->size(), decodedBytes);
+  EXPECT_LT(addedBuffers[0]->size(), decodedBytes + 4'096);
+}
+
+TEST_P(FsstEncodingViewTest, longStringsReadWithSharedBuffersTakeWhatTheyNeed) {
+  // A string of pseudo-random letters, which FSST barely compresses, so that
+  // the most bytes that it can decode to, 8 for each compressed byte, exceed a
+  // room of the shared buffers, while the bytes that it decodes to fit in one.
+  std::string longValue(300'000, ' ');
+  uint32_t state{1};
+  for (auto& letter : longValue) {
+    state = state * 1'103'515'245 + 12'345;
+    letter = static_cast<char>('a' + (state >> 16) % 26);
+  }
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 100);
+  values[50] = longValue;
+  const auto encoded = encodeFsst(values);
+  DecodedStringBuffers decodedStringBuffers{pool_.get()};
+  Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  options.decodedStringBuffers = &decodedStringBuffers;
+  const auto view = createEncodingView(encoded, pool_.get(), options);
+
+  // A read of every row given an addStringBuffer decodes each string into the
+  // shared buffers. The long string takes room for exactly the bytes that it
+  // decodes to, in a buffer of the shared buffers, instead of a buffer of its
+  // own for the most bytes that it can decode to.
+  std::vector<std::string_view> output(values.size());
+  std::vector<velox::BufferPtr> addedBuffers;
+  view->read(
+      std::array<RowRange, 1>{RowRange{0, view->rowCount()}},
+      [](uint32_t) {},
+      appendTo(addedBuffers),
+      output.data());
+  EXPECT_TRUE(std::equal(output.begin(), output.end(), values.begin()));
+  EXPECT_TRUE(liesIn(output, addedBuffers));
+  for (const auto& buffer : addedBuffers) {
+    EXPECT_LE(buffer->size(), DecodedStringBuffers::kMaxBufferBytes);
+  }
+  const auto longBuffer = std::find_if(
+      addedBuffers.begin(),
+      addedBuffers.end(),
+      [&](const velox::BufferPtr& buffer) {
+        return liesIn(
+            std::span<const std::string_view>{&output[50], 1},
+            std::span<const velox::BufferPtr>{&buffer, 1});
+      });
+  ASSERT_NE(longBuffer, addedBuffers.end());
+  EXPECT_LT((*longBuffer)->size(), longValue.size() + 1'024);
+}
+
 TEST_P(
     FsstEncodingViewTest,
     readWithAddStringBufferDecodesRowsIntoBuffersOfItsOwn) {

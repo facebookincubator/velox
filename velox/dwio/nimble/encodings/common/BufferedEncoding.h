@@ -46,6 +46,12 @@ class BufferedEncoding {
     return encoding_->rowCount();
   }
 
+  /// Takes out the wrapped encoding, e.g. to rebind it to the next payload's
+  /// encoded data; the buffer is unusable afterwards.
+  std::unique_ptr<Encoding> releaseEncoding() {
+    return std::move(encoding_);
+  }
+
  private:
   FOLLY_ALWAYS_INLINE void refill() {
     auto numRows = std::min<uint32_t>(
@@ -54,7 +60,7 @@ class BufferedEncoding {
     bufferPosition_ = 0;
   }
 
-  const std::unique_ptr<Encoding> encoding_;
+  std::unique_ptr<Encoding> encoding_;
   // Position within the current page buffer (0..BufferSize-1).
   // Reset to BufferSize to trigger a refill on the next read.
   uint16_t bufferPosition_{BufferSize};
@@ -95,6 +101,12 @@ class BufferedDictEncoding {
     return encoding_->dictionaryEntries();
   }
 
+  /// Takes out the wrapped encoding, e.g. to rebind it to the next payload's
+  /// encoded data; the buffer is unusable afterwards.
+  std::unique_ptr<Encoding> releaseEncoding() {
+    return std::move(encoding_);
+  }
+
  private:
   FOLLY_ALWAYS_INLINE void refill() {
     auto numRows = std::min<uint32_t>(
@@ -112,7 +124,7 @@ class BufferedDictEncoding {
     bufferPosition_ = 0;
   }
 
-  const std::unique_ptr<Encoding> encoding_;
+  std::unique_ptr<Encoding> encoding_;
   // Position within the current page buffer (0..BufferSize-1).
   // Reset to BufferSize to trigger a refill on the next read.
   uint16_t bufferPosition_{BufferSize};

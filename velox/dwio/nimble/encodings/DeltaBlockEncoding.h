@@ -95,6 +95,11 @@ class DeltaBlockEncoding final
 
   std::string debugString(int offset) const final;
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   static_assert(
       std::is_integral_v<T> && !std::is_same_v<T, bool>,
@@ -198,6 +203,44 @@ DeltaBlockEncoding<T>::DeltaBlockEncoding(
     blockOffsets_[i] = varint::readVarint32(&pos);
   }
   packedData_ = pos;
+}
+
+template <typename T>
+bool DeltaBlockEncoding<T>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& /*stringBufferFactory*/) {
+  std::string_view body = data.substr(this->dataOffset());
+  blockSize_ = static_cast<uint16_t>(encoding::readVarint32(body));
+  numBlocks_ = encoding::readVarint32(body);
+  NIMBLE_CHECK_GT(blockSize_, 0);
+  NIMBLE_CHECK_EQ(
+      numBlocks_,
+      velox::bits::divRoundUp(this->rowCount(), blockSize_),
+      "Invalid DeltaBlock block count.");
+
+  const char* const end = data.data() + data.size();
+  const char* pos = body.data();
+  blockBases_.resize(numBlocks_);
+  for (uint32_t i = 0; i < numBlocks_; ++i) {
+    NIMBLE_CHECK_FILE(pos < end, "Truncated DeltaBlock block bases.");
+    blockBases_[i] = fromOrdered<T>(varint::readVarint64(&pos));
+  }
+  NIMBLE_CHECK_FILE(
+      pos <= end && numBlocks_ <= static_cast<uint64_t>(end - pos),
+      "Truncated DeltaBlock bit widths.");
+
+  bitWidths_.resize(numBlocks_);
+  std::memcpy(bitWidths_.data(), pos, numBlocks_ * sizeof(uint8_t));
+  pos += numBlocks_ * sizeof(uint8_t);
+
+  body = {pos, static_cast<size_t>(end - pos)};
+  blockOffsets_.resize(numBlocks_);
+  for (uint32_t i = 0; i < numBlocks_; ++i) {
+    blockOffsets_[i] = encoding::readVarint32(body);
+  }
+  packedData_ = body.data();
+  reset();
+  return true;
 }
 
 template <typename T>

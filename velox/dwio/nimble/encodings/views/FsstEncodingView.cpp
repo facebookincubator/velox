@@ -656,7 +656,9 @@ namespace detail {
 // without shared buffers reserves the bytes that its strings decode to before
 // it decodes them: the buffer then holds no more than they take. A caller
 // that needs some strings in one buffer, such as the rows of a chunk, reserves
-// room for all of them first too.
+// room for all of them first too. A string that may not fit takes room for
+// the bytes that it decodes to, not the most bytes that it can decode to,
+// which can exceed a room of the shared buffers.
 class BulkStringDecoder {
  public:
   // 'maxSymbolLength' is the most bytes that one code decodes to. 'pool'
@@ -730,14 +732,11 @@ class BulkStringDecoder {
     }
     if (buffer_.size() - usedBytes_ <
         maxDecompressedBytes(compressed.size()) + kDecoderPadding) {
-      // A room of the shared buffers takes the most bytes that the string can
-      // decode to, since later strings take the bytes that it does not use. A
-      // buffer of its own needs room for the bytes that the string decodes to,
-      // which the reservation of the caller holds, so that it takes a new
-      // buffer only for a string that the caller did not reserve.
-      reserve(
-          sharesBuffers() ? maxDecompressedBytes(compressed.size())
-                          : getDecodedBytes(decoder_, compressed));
+      // Reserves the bytes that the string decodes to. The rest of a
+      // reservation of the caller for exactly the bytes of its strings then
+      // holds its last strings, and a new room or buffer takes no more than
+      // the string needs.
+      reserve(getDecodedBytes(decoder_, compressed));
     }
     auto* decoded = buffer_.data() + usedBytes_;
     const auto decodedSize = nimble_fsst_decompress(
@@ -1029,9 +1028,11 @@ void FsstEncodingView::reserveDecodeBuffer(
     std::span<const uint32_t> chunkIndices,
     size_t numCompressedBytes,
     detail::BulkStringDecoder& stringDecoder) const {
-  if (stringDecoder.sharesBuffers()) {
-    stringDecoder.reserve(
-        stringDecoder.maxDecompressedBytes(numCompressedBytes));
+  const auto maxDecompressedBytes =
+      stringDecoder.maxDecompressedBytes(numCompressedBytes);
+  if (stringDecoder.sharesBuffers() &&
+      maxDecompressedBytes <= DecodedStringBuffers::kMaxBufferBytes) {
+    stringDecoder.reserve(maxDecompressedBytes);
     return;
   }
   size_t numBytes{0};
