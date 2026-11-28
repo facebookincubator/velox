@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <atomic>
+
 #include <folly/stop_watch.h>
 
 #include "velox/common/base/TreeOfLosers.h"
@@ -319,6 +321,9 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   void start();
 
+  /// Stops scheduling further reads. A read already in progress may finish.
+  void close();
+
   RowVectorPtr getOutput(
       std::vector<ContinueFuture>& sourceBlockingFutures,
       bool& atEnd);
@@ -342,7 +347,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
 
   void finishSource(size_t streamIdx) const;
 
-  void readFromSpillFileStream(
+  static void readFromSpillFileStream(
       const std::weak_ptr<SpillMerger>& mergeHolder,
       size_t streamIdx);
 
@@ -360,6 +365,7 @@ class SpillMerger : public std::enable_shared_from_this<SpillMerger> {
   folly::Executor* const executor_;
   const std::shared_ptr<exec::SpillStats> spillStats_;
   const std::shared_ptr<memory::MemoryPool> pool_;
+  std::atomic<bool> closed_{false};
 
   std::vector<std::shared_ptr<MergeSource>> sources_;
   std::vector<std::unique_ptr<BatchStream>> batchStreams_;
