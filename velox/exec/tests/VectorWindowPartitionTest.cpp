@@ -251,7 +251,7 @@ TEST_F(
   std::vector<vector_size_t> frameBounds(3);
   SelectivityVector validFrames(3, true);
   partition.computeKRangeFrameBounds(
-      true, true, 1, 2, 3, peerStarts.data(), frameBounds.data(), validFrames);
+      true, 1, 2, 3, peerStarts.data(), frameBounds.data(), validFrames);
 
   EXPECT_THAT(peerStarts, ::testing::ElementsAre(2, 3, 4));
   EXPECT_THAT(peerEnds, ::testing::ElementsAre(2, 3, 4));
@@ -288,7 +288,7 @@ TEST_F(VectorWindowPartitionTest, computesKRangeFrameBoundsForNullOrderValues) {
   std::vector<vector_size_t> frameBounds(4);
   SelectivityVector validFrames(4, true);
   partition.computeKRangeFrameBounds(
-      true, true, 1, 0, 4, peerStarts.data(), frameBounds.data(), validFrames);
+      true, 1, 0, 4, peerStarts.data(), frameBounds.data(), validFrames);
 
   EXPECT_THAT(peerStarts, ::testing::ElementsAre(0, 0, 2, 3));
   EXPECT_THAT(peerEnds, ::testing::ElementsAre(1, 1, 2, 3));
@@ -321,10 +321,78 @@ TEST_F(VectorWindowPartitionTest, computesKRangeFrameBoundsAcrossBlocks) {
   std::vector<vector_size_t> frameBounds(4);
   SelectivityVector validFrames(4, true);
   partition.computeKRangeFrameBounds(
-      true, false, 1, 0, 4, peerStarts.data(), frameBounds.data(), validFrames);
+      true, 1, 0, 4, peerStarts.data(), frameBounds.data(), validFrames);
 
   EXPECT_THAT(frameBounds, ::testing::ElementsAre(0, 0, 2, 3));
   EXPECT_TRUE(validFrames.isAllSelected());
+}
+
+// Keys with many peers across blocks, and a bound column whose values go
+// backward and fall on either side of the current row. The bounds are computed
+// in consecutive calls, as for consecutive output batches.
+TEST_F(
+    VectorWindowPartitionTest,
+    computesKRangeFrameBoundsForUnorderedBoundsAndManyPeers) {
+  auto firstBlock = makeRowVector(
+      {"s", "bound"},
+      {
+          makeFlatVector<int64_t>({1, 1, 1, 1, 2}),
+          makeFlatVector<int64_t>({0, 3, 1, 5, 4}),
+      });
+  auto secondBlock = makeRowVector(
+      {"s", "bound"},
+      {
+          makeFlatVector<int64_t>({2, 2, 4, 4}),
+          makeFlatVector<int64_t>({0, 2, 6, 1}),
+      });
+  auto thirdBlock = makeRowVector(
+      {"s", "bound"},
+      {
+          makeFlatVector<int64_t>({4, 5, 5}),
+          makeFlatVector<int64_t>({3, 9, -1}),
+      });
+
+  auto partition = makePartition({0, 1}, {{0, core::SortOrder{true, true}}});
+  partition.addRows(firstBlock, 0, firstBlock->size());
+  partition.addRows(secondBlock, 0, secondBlock->size());
+  partition.addRows(thirdBlock, 0, thirdBlock->size());
+
+  constexpr vector_size_t kNumRows = 12;
+  std::vector<vector_size_t> peerStarts(kNumRows);
+  std::vector<vector_size_t> peerEnds(kNumRows);
+  partition.computePeerBuffers(
+      0, kNumRows, 0, 0, peerStarts.data(), peerEnds.data());
+
+  const auto computeFrameBounds = [&](bool isStartBound) {
+    const auto& peerBounds = isStartBound ? peerStarts : peerEnds;
+    std::vector<vector_size_t> frameBounds(kNumRows);
+    SelectivityVector validFrames(kNumRows, true);
+    for (const auto& [start, end] :
+         std::vector<std::pair<vector_size_t, vector_size_t>>{
+             {0, 5}, {5, 8}, {8, kNumRows}}) {
+      partition.computeKRangeFrameBounds(
+          isStartBound,
+          1,
+          start,
+          end - start,
+          peerBounds.data() + start,
+          frameBounds.data() + start,
+          validFrames);
+    }
+    EXPECT_TRUE(validFrames.isAllSelected());
+    return frameBounds;
+  };
+
+  // The first row whose key is at or after the bound, or 13 (partition end + 1)
+  // if there is none.
+  EXPECT_THAT(
+      computeFrameBounds(true),
+      ::testing::ElementsAre(0, 7, 0, 10, 7, 0, 4, 13, 0, 7, 13, 0));
+  // The last row whose key is at or before the bound, -1 if there is none, or
+  // 13 if every key is.
+  EXPECT_THAT(
+      computeFrameBounds(false),
+      ::testing::ElementsAre(-1, 6, 3, 13, 9, -1, 6, 13, 3, 6, 13, -1));
 }
 
 } // namespace

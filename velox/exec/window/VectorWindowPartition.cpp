@@ -340,7 +340,6 @@ bool VectorWindowPartition::isNanAt(const VectorPtr& vector, vector_size_t row)
 
 void VectorWindowPartition::computeKRangeFrameBounds(
     bool isStartBound,
-    bool isPreceding,
     column_index_t frameColumn,
     vector_size_t startRow,
     vector_size_t numRows,
@@ -358,7 +357,6 @@ void VectorWindowPartition::computeKRangeFrameBounds(
   KRangeFrameBound::compute(
       rows,
       isStartBound,
-      isPreceding,
       frameColumn,
       sortOrder,
       frameType,

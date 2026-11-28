@@ -23,6 +23,7 @@
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/TypeAliases.h"
 
+#include <algorithm>
 #include <type_traits>
 
 namespace facebook::velox::exec::window {
@@ -35,7 +36,6 @@ class KRangeFrameBound {
   static void compute(
       const Rows& rows,
       bool isStartBound,
-      bool isPreceding,
       column_index_t frameColumn,
       const core::SortOrder& sortOrder,
       const TypePtr& frameType,
@@ -56,7 +56,6 @@ class KRangeFrameBound {
       computeTyped<float>(
           rows,
           isStartBound,
-          isPreceding,
           flags,
           frameColumn,
           startRow,
@@ -68,7 +67,6 @@ class KRangeFrameBound {
       computeTyped<double>(
           rows,
           isStartBound,
-          isPreceding,
           flags,
           frameColumn,
           startRow,
@@ -80,7 +78,6 @@ class KRangeFrameBound {
       computeTyped<void>(
           rows,
           isStartBound,
-          isPreceding,
           flags,
           frameColumn,
           startRow,
@@ -92,68 +89,55 @@ class KRangeFrameBound {
   }
 
  private:
-  template <WindowPartitionAccessor Rows>
-  static vector_size_t linearSearch(
-      const Rows& rows,
-      bool firstMatch,
-      vector_size_t start,
-      vector_size_t end,
-      vector_size_t frameValueRow,
-      column_index_t frameColumn,
-      const CompareFlags& flags) {
-    if (start >= end) {
-      return end == rows.partitionEnd() ? rows.partitionEnd() + 1 : -1;
-    }
+  // Returns the first row in [begin, end) for which 'isAfter' is true, or
+  // 'end' if there is none. 'isAfter' must be false before the result and true
+  // from it on. Checks rows 1, 2, 4, ... away from 'hint', then binary searches
+  // the last gap. Positions are int64_t so that the steps cannot overflow
+  // vector_size_t.
+  template <typename IsAfter>
+  static vector_size_t
+  gallop(int64_t begin, int64_t end, int64_t hint, const IsAfter& isAfter) {
+    hint = std::clamp(hint, begin, end);
 
-    for (auto row = start; row < end; ++row) {
-      const auto compareResult =
-          rows.compareFrameValue(row, frameValueRow, frameColumn, flags);
-      if (compareResult.has_value() && compareResult.value() == 0) {
-        if (firstMatch) {
-          return row;
+    // Brackets the result in [low, high], where 'high' is 'end' or a row for
+    // which 'isAfter' is true.
+    int64_t low = begin;
+    int64_t high = end;
+    if (hint < end && !isAfter(hint)) {
+      low = hint + 1;
+      for (int64_t step = 1; hint + step < end; step *= 2) {
+        if (isAfter(hint + step)) {
+          high = hint + step;
+          break;
         }
+        low = hint + step + 1;
       }
-
-      if (compareResult.has_value() && compareResult.value() > 0) {
-        return firstMatch ? row : row - 1;
+    } else {
+      high = hint;
+      for (int64_t step = 1; hint - step >= begin; step *= 2) {
+        if (!isAfter(hint - step)) {
+          low = hint - step + 1;
+          break;
+        }
+        high = hint - step;
       }
     }
 
-    return end == rows.partitionEnd() ? rows.partitionEnd() + 1 : -1;
-  }
-
-  template <WindowPartitionAccessor Rows>
-  static vector_size_t search(
-      const Rows& rows,
-      bool firstMatch,
-      vector_size_t start,
-      vector_size_t end,
-      vector_size_t frameValueRow,
-      column_index_t frameColumn,
-      const CompareFlags& flags) {
-    auto begin = start;
-    auto finish = end;
-
-    while (finish - begin >= 2) {
-      const auto mid = begin + (finish - begin) / 2;
-      const auto compareResult =
-          rows.compareFrameValue(mid, frameValueRow, frameColumn, flags);
-      if (!compareResult.has_value() || compareResult.value() >= 0) {
-        finish = mid;
+    while (low < high) {
+      const auto mid = low + (high - low) / 2;
+      if (isAfter(mid)) {
+        high = mid;
       } else {
-        begin = mid;
+        low = mid + 1;
       }
     }
-
-    return linearSearch(
-        rows, firstMatch, begin, end, frameValueRow, frameColumn, flags);
+    return static_cast<vector_size_t>(low);
   }
 
   template <typename T, WindowPartitionAccessor Rows>
   static void computeTyped(
       const Rows& rows,
       bool isStartBound,
-      bool isPreceding,
       const CompareFlags& flags,
       column_index_t frameColumn,
       vector_size_t startRow,
@@ -161,6 +145,9 @@ class KRangeFrameBound {
       const vector_size_t* rawPeerBounds,
       vector_size_t* rawFrameBounds,
       SelectivityVector& validFrames) {
+    // Successive rows have nearby frame bounds, so each search starts at the
+    // previous one.
+    vector_size_t hint = startRow;
     for (auto i = 0; i < numRows; ++i) {
       const auto currentRow = startRow + i;
 
@@ -181,22 +168,29 @@ class KRangeFrameBound {
           rows.compareFrameValue(currentRow, currentRow, frameColumn, flags);
       if (compareResult.has_value() && compareResult.value() == 0) {
         rawFrameBounds[i] = rawPeerBounds[i];
+        continue;
+      }
+
+      // The first row at or after the bound value for a start bound, or
+      // strictly after it for an end bound.
+      const auto position =
+          gallop(rows.startRow(), rows.partitionEnd(), hint, [&](int64_t row) {
+            const auto result = rows.compareFrameValue(
+                static_cast<vector_size_t>(row),
+                currentRow,
+                frameColumn,
+                flags);
+            // 'flags' compare nulls as values, so the result is always
+            // ordered.
+            VELOX_CHECK(result.has_value());
+            return isStartBound ? result.value() >= 0 : result.value() > 0;
+          });
+      hint = position;
+      // A bound value after every row is reported as partitionEnd() + 1.
+      if (position == rows.partitionEnd()) {
+        rawFrameBounds[i] = rows.partitionEnd() + 1;
       } else {
-        // The bound value defines the frame wherever it falls, so search on
-        // the side of the current row the value is on.
-        const bool boundPrecedes =
-            compareResult.has_value() ? compareResult.value() > 0 : isPreceding;
-        const auto searchStart = boundPrecedes ? rows.startRow() : currentRow;
-        const auto searchEnd =
-            boundPrecedes ? currentRow + 1 : rows.partitionEnd();
-        rawFrameBounds[i] = search(
-            rows,
-            isStartBound,
-            searchStart,
-            searchEnd,
-            currentRow,
-            frameColumn,
-            flags);
+        rawFrameBounds[i] = isStartBound ? position : position - 1;
       }
     }
   }

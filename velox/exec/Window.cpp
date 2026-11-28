@@ -499,7 +499,6 @@ void Window::updateFrameBounds(
       } else {
         currentPartition_->computeKRangeFrameBounds(
             isStartBound,
-            true,
             frameArg.value().index,
             startRow,
             numRows,
@@ -516,7 +515,6 @@ void Window::updateFrameBounds(
       } else {
         currentPartition_->computeKRangeFrameBounds(
             isStartBound,
-            false,
             frameArg.value().index,
             startRow,
             numRows,

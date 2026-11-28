@@ -305,7 +305,6 @@ std::pair<vector_size_t, vector_size_t> WindowPartition::computePeerBuffers(
 
 void WindowPartition::computeKRangeFrameBounds(
     bool isStartBound,
-    bool isPreceding,
     column_index_t frameColumn,
     vector_size_t startRow,
     vector_size_t numRows,
@@ -319,7 +318,6 @@ void WindowPartition::computeKRangeFrameBounds(
   window::KRangeFrameBound::compute(
       rows,
       isStartBound,
-      isPreceding,
       frameColumn,
       sortOrder,
       frameType,
