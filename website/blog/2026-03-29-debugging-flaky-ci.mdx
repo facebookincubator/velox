@@ -148,7 +148,7 @@ values, and value ranges. Our first test attempts only hit array mode because
 the key domain was small. We had to study the mode selection logic in
 `decideHashMode()` to find key configurations that force each mode. This
 analysis was time-consuming enough that we
-[documented the hash modes](https://facebookincubator.github.io/velox/develop/hash-table.html)
+[documented the hash modes](https://docs.velox-lib.io/develop/hash-table.html)
 ([#16953](https://github.com/facebookincubator/velox/pull/16953)) to spare
 other developers the same exercise. The key configurations we found:
 

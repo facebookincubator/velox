@@ -34,7 +34,7 @@ found here](https://velox-lib.io/docs/community/components-and-maintainers).
 ## Documentation
 
 Help the community understand how to use the Velox library by proposing
-additions to our [docs](https://facebookincubator.github.io/velox/index.html) or pointing
+additions to our [docs](https://docs.velox-lib.io/index.html) or pointing
 out outdated or missing pieces.
 
 ## Bug Reports
@@ -325,7 +325,7 @@ guidelines presented above, review the
 checklist covering documentation, registration, and implementation.
 Here are specific guidelines for contributing functions:
 
-1. Read [How to add a scalar function?](https://facebookincubator.github.io/velox/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated
+1. Read [How to add a scalar function?](https://docs.velox-lib.io/develop/scalar-functions.html) guide. When implementing a function, simple function is preferred unless the implementation of vector function provides a significant performance gain which can be demonstrated
 with a benchmark.
 
 2. Follow the PR title convention from the
@@ -351,7 +351,7 @@ with a benchmark.
    * Functions in documentation are listed in alphabetical order. Make sure to
    place the new function so that the order is preserved.
 
-6. Run [Fuzzer](https://facebookincubator.github.io/velox/develop/testing/fuzzer.html)
+6. Run [Fuzzer](https://docs.velox-lib.io/develop/testing/fuzzer.html)
    to test new the function in isolation as well as in combination with other functions.
    Note: Fuzzer is under active development and the commands below may not work as is.
    Consult the CircleCI configuration in .circleci/config.yml for the up-to-date command

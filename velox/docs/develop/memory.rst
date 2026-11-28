@@ -30,7 +30,7 @@ current capacity, the memory arbitration either increases the query’s capacity
 by reclaiming the used memory from the other queries with larger capacities, or
 reclaiming from the query itself if it exceeds per-query memory limit, to free
 up space within its current capacity. The memory reclaim is achieved through
-techniques like `disk spilling <https://facebookincubator.github.io/velox/develop/spilling.html>`_.
+techniques like `disk spilling <https://docs.velox-lib.io/develop/spilling.html>`_.
 
 Velox provides transparent file cache to accelerate table scan through the hot
 data reuse and prefetch. The file cache is integrated with the memory system to
@@ -78,7 +78,7 @@ used memory from the other queries which has the largest capacity in the
 system, or reclaiming from the request query pool itself to free up space
 within its current capacity if it exceeds the per-query memory limit or it has
 the largest capacity in the system. The used memory reclaim is achieved through
-techniques like `disk spilling <https://facebookincubator.github.io/velox/develop/spilling.html>`_. If the memory arbitration succeeds, the leaf
+techniques like `disk spilling <https://docs.velox-lib.io/develop/spilling.html>`_. If the memory arbitration succeeds, the leaf
 operator pool can proceed with the actual memory allocation from memory
 allocator. However, if the memory arbitration fails, then the query which has
 the largest capacity in the system is chosen to fail with query memory capacity
@@ -132,7 +132,7 @@ queries. It ensures the total allocated query memory capacity is within the
 query memory limit (specified by *MemoryManager::Options::arbitratorCapacity*). The
 memory arbitrator also prevents each individual query running out of its
 per-query memory limit (specified by *QueryConfig::query_max_memory_per_node*) by
-reclaiming overused memory through `disk spilling <https://facebookincubator.github.io/velox/develop/spilling.html>`_ (refer to `memory arbitrator
+reclaiming overused memory through `disk spilling <https://docs.velox-lib.io/develop/spilling.html>`_ (refer to `memory arbitrator
 section <#memory-arbitrator>`_ for details).
 
 After setting up the Velox memory system, the memory manager manages the memory
@@ -160,11 +160,11 @@ by the query pool’s destructor to remove itself from the tracked list
 alive until the query finishes.
 
 The memory manager creates and owns a system root pool for Velox internal
-operations such as `disk spilling <https://facebookincubator.github.io/velox/develop/spilling.html>`_. The difference between system root pool and
+operations such as `disk spilling <https://docs.velox-lib.io/develop/spilling.html>`_. The difference between system root pool and
 user created query root pool is that there is no per-query memory limit for the
 system root pool so it doesn’t participate in the memory arbitration. The
 reason is that the system operations are not executed on behalf of a particular
-user query. Take `disk spilling <https://facebookincubator.github.io/velox/develop/spilling.html>`_ for example, it is triggered by memory
+user query. Take `disk spilling <https://docs.velox-lib.io/develop/spilling.html>`_ for example, it is triggered by memory
 arbitration to free up used memory from the queries. We don’t expect
 significant memory usage during a system operation, and eventually the memory
 allocator guarantees the actual allocated memory are within the system memory
@@ -533,7 +533,7 @@ The memory arbitrator is used to arbitrate the memory capacity across running
 queries to achieve fair memory sharing and prevent a query from running out of
 its memory limit. To arbitrate memory capacity between running queries, the
 memory arbitrator needs to be able to reclaim the used memory from a query
-through techniques such as `disk spilling <https://facebookincubator.github.io/velox/develop/spilling.html>`_, and then transfer the freed memory
+through techniques such as `disk spilling <https://docs.velox-lib.io/develop/spilling.html>`_, and then transfer the freed memory
 between queries by adjusting their memory pool’s capacities accordingly (see
 `memory arbitration process section <#memory-arbitration-process>`_ for detail).
 

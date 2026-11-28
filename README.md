@@ -22,19 +22,19 @@ Velox provides the following high-level components:
 * **Type**: a generic typing system that supports scalar, complex, and nested
   types, such as structs, maps, arrays, etc.
 * **Vector**: an [Arrow-compatible columnar memory layout
-  module](https://facebookincubator.github.io/velox/develop/vectors.html),
+  module](https://docs.velox-lib.io/develop/vectors.html),
   providing encodings such as Flat, Dictionary, Constant, and Sequence/RLE, in
   addition to a lazy materialization pattern and support for out-of-order
   writes.
 * **Expression Eval**: a [fully vectorized expression evaluation
-  engine](https://facebookincubator.github.io/velox/develop/expression-evaluation.html)
+  engine](https://docs.velox-lib.io/develop/expression-evaluation.html)
   that allows expressions to be efficiently executed on top of Vector/Arrow
   encoded data.
 * **Functions**: sets of vectorized scalar, aggregates, and window functions
   implementations following the Presto and Spark semantic.
 * **Operators**: implementation of relational operators such as scans, writes,
   projections, filtering, grouping, ordering, shuffle/exchange, [hash, merge,
-  and nested loop joins](https://facebookincubator.github.io/velox/develop/joins.html),
+  and nested loop joins](https://docs.velox-lib.io/develop/joins.html),
   unnest, and more.
 * **I/O**: a connector interface for extensible data sources and sinks,
   supporting different file formats (ORC/DWRF, Parquet, Nimble), and storage
@@ -45,7 +45,7 @@ Velox provides the following high-level components:
   and Spark's UnsafeRow.
 * **Resource Management**: a collection of primitives for handling
   computational resources, such as [memory
-  arenas](https://facebookincubator.github.io/velox/develop/arena.html) and
+  arenas](https://docs.velox-lib.io/develop/arena.html) and
   buffer management, tasks, drivers, and thread pools for CPU and thread
   execution, spilling, and caching.
 
@@ -53,8 +53,8 @@ Velox is extensible and allows developers to define their own engine-specific
 specializations, including:
 
 1. Custom types
-2. [Simple and vectorized functions](https://facebookincubator.github.io/velox/develop/scalar-functions.html)
-3. [Aggregate functions](https://facebookincubator.github.io/velox/develop/aggregate-functions.html)
+2. [Simple and vectorized functions](https://docs.velox-lib.io/develop/scalar-functions.html)
+3. [Aggregate functions](https://docs.velox-lib.io/develop/aggregate-functions.html)
 4. Window functions
 5. Operators
 6. File formats
@@ -69,7 +69,7 @@ found here](velox/examples)
 ## Documentation
 
 Developer guides detailing many aspects of the library, in addition to the list
-of available functions [can be found here.](https://facebookincubator.github.io/velox)
+of available functions [can be found here.](https://docs.velox-lib.io)
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
@@ -263,7 +263,7 @@ Note that,
 * On Arm CPUs, Velox supports Apple Silicon with `CPU_TARGET=arm64` and Linux
   AArch64 with `CPU_TARGET=aarch64`.
 
-Build metrics for Velox are published at <https://facebookincubator.github.io/velox/bm-report/>
+Build metrics for Velox are published at <https://docs.velox-lib.io/bm-report/>
 
 ### Building Velox with docker-compose
 

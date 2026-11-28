@@ -7,15 +7,15 @@ tags: [tech-blog,functions]
 
 SQL functions sometimes use regular expressions under the hood in ways that
 surprise users. Two common examples are the
-<a href="https://facebookincubator.github.io/velox/functions/presto/regexp.html#like">LIKE</a>
+<a href="https://docs.velox-lib.io/functions/presto/regexp.html#like">LIKE</a>
 operator and Spark's
-<a href="https://facebookincubator.github.io/velox/functions/spark/string.html#split">split</a>
+<a href="https://docs.velox-lib.io/functions/spark/string.html#split">split</a>
 function.
 
 In Presto,
-<a href="https://facebookincubator.github.io/velox/functions/presto/string.html#split">split</a>
+<a href="https://docs.velox-lib.io/functions/presto/string.html#split">split</a>
 takes a literal string delimiter and
-<a href="https://facebookincubator.github.io/velox/functions/presto/regexp.html#regexp_split">regexp_split</a>
+<a href="https://docs.velox-lib.io/functions/presto/regexp.html#regexp_split">regexp_split</a>
 is a separate function for regex-based splitting. Spark's `split`, however,
 always treats the delimiter as a regular expression.
 
@@ -71,12 +71,12 @@ interpreted as wildcards, producing wrong results.
 
 ## Spark's split treats delimiters as regex
 
-In Presto, the <a href="https://facebookincubator.github.io/velox/functions/presto/string.html#split">split</a>
+In Presto, the <a href="https://docs.velox-lib.io/functions/presto/string.html#split">split</a>
 function takes a literal string delimiter, while
-<a href="https://facebookincubator.github.io/velox/functions/presto/regexp.html#regexp_split">regexp_split</a>
+<a href="https://docs.velox-lib.io/functions/presto/regexp.html#regexp_split">regexp_split</a>
 is a separate function for regex-based splitting. This distinction makes the intent clear.
 
-Spark's <a href="https://facebookincubator.github.io/velox/functions/spark/string.html#split">split</a>
+Spark's <a href="https://docs.velox-lib.io/functions/spark/string.html#split">split</a>
 function, however, always treats the delimiter as a regular expression.
 Users rarely realize this, and a common pattern is to split a string using a
 value from another column:
@@ -120,7 +120,7 @@ compilations — each one expensive and none of them necessary.
 
 Velox limits the number of compiled regular expressions per function instance
 per thread of execution via the
-<a href="https://facebookincubator.github.io/velox/configs.html#expression-evaluation-configuration">expression.max_compiled_regexes</a>
+<a href="https://docs.velox-lib.io/configs.html#expression-evaluation-configuration">expression.max_compiled_regexes</a>
 configuration property (default: 100). When this limit is reached, the query fails with an
 error.
 
@@ -154,7 +154,7 @@ query from wasting shared cluster resources.
 **For users:** replace LIKE with literal string operations when checking for
 substrings. Use `strpos(x, y) > 0` or `contains(x, y)` instead of
 `x LIKE '%' || y || '%'`. For Spark's split with literal delimiters, use
-`substr` or other <a href="https://facebookincubator.github.io/velox/functions/spark/string.html">string functions</a> that don't involve regex.
+`substr` or other <a href="https://docs.velox-lib.io/functions/spark/string.html">string functions</a> that don't involve regex.
 
 **For engine developers:** optimize the functions to avoid regex when it isn't
 needed. Velox's LIKE implementation already does this. As described in

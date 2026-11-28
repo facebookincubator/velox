@@ -71,7 +71,7 @@ Build System
 * Upgrade cmake to 3.28.3 (from 3.14).
 * Upgrade simdjson to 3.9.3 (from 3.8.0).
 * Add support for docker image with Spark Connect server to use with Fuzzer. :pr:`9759`
-* Add dashboard with `build time metrics <https://facebookincubator.github.io/velox/bm-report/>`_.
+* Add dashboard with `build time metrics <https://docs.velox-lib.io/bm-report/>`_.
 
 Credits
 =======
