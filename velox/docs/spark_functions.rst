@@ -27,6 +27,7 @@ configuration. Otherwise, it simply follows Spark's semantics in ANSI OFF mode.
     functions/spark/conversion
     functions/spark/url
     functions/spark/json
+    functions/spark/csv
 
 Here is a list of all scalar and aggregate Spark functions available in Velox.
 Function names link to function descriptions. Check out coverage maps
@@ -119,6 +120,7 @@ for :doc:`all <functions/spark/coverage>` functions.
     :spark:func:`checked_div`                           :spark:func:`log10`                                 :spark:func:`timestamp_seconds`
     :spark:func:`checked_divide`                        :spark:func:`log1p`                                 :spark:func:`timestampadd`
     :spark:func:`checked_multiply`                      :spark:func:`log2`                                  :spark:func:`timestampdiff`
+                                                                                                            :spark:func:`to_csv`
     :spark:func:`checked_multiply_deny_precision_loss`  :spark:func:`lower`                                 :spark:func:`to_json`
     :spark:func:`checked_subtract`                      :spark:func:`lpad`                                  :spark:func:`to_pretty_string`
     :spark:func:`checked_subtract_deny_precision_loss`  :spark:func:`ltrim`                                 :spark:func:`to_unix_timestamp`

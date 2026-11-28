@@ -54,6 +54,7 @@ velox_add_library(
   Size.cpp
   String.cpp
   TimestampUtils.cpp
+  ToCsv.cpp
   Transform.cpp
   TransformKeys.cpp
   UnscaledValueFunction.cpp
@@ -119,6 +120,7 @@ velox_add_library(
   String.h
   StringToMap.h
   TimestampUtils.h
+  ToCsv.h
   ToJson.h
   ToPrettyString.h
   TransformKeys.h
@@ -136,6 +138,7 @@ velox_link_libraries(
   velox_functions_spark_specialforms
   velox_functions_util
   Folly::folly
+  double-conversion::double-conversion
   simdjson::simdjson
 )
 
