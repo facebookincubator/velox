@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/tests/utils/CudfHiveConnectorTestBase.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/config/Config.h"
 
@@ -116,6 +117,47 @@ TEST_F(CudfSplitReaderTest, setsPushdownFilterAfterReadingMetadata) {
   EXPECT_EQ(reader.splitFilter(), &splitFilter);
   EXPECT_TRUE(reader.hasSplitFilter());
   EXPECT_EQ(runtimeStats.processedSplits, 1);
+}
+
+TEST_F(CudfSplitReaderTest, timestampConfigRejectsDays) {
+  const auto days =
+      std::to_string(static_cast<int32_t>(cudf::type_id::TIMESTAMP_DAYS));
+  const config::ConfigBase emptySession(
+      std::unordered_map<std::string, std::string>{});
+  const config::ConfigBase daysSession(
+      std::unordered_map<std::string, std::string>{
+          {CudfHiveConfig::kTimestampTypeSession, days}});
+  const CudfHiveConfig daysConfig(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {CudfHiveConfig::kTimestampType, days}}));
+  VELOX_ASSERT_THROW(
+      daysConfig.timestampType(), "TIMESTAMP_DAYS is not supported");
+  VELOX_ASSERT_THROW(
+      daysConfig.timestampTypeSession(&emptySession),
+      "TIMESTAMP_DAYS is not supported");
+
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_SECONDS,
+        cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    const auto value = std::to_string(static_cast<int32_t>(unit));
+    const CudfHiveConfig supported(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {CudfHiveConfig::kTimestampType, value}}));
+    const config::ConfigBase session(
+        std::unordered_map<std::string, std::string>{
+            {CudfHiveConfig::kTimestampTypeSession, value}});
+    EXPECT_EQ(supported.timestampType().id(), unit);
+    EXPECT_EQ(supported.timestampTypeSession(&emptySession).id(), unit);
+    // A valid session override still takes precedence over the connector.
+    EXPECT_EQ(daysConfig.timestampTypeSession(&session).id(), unit);
+    VELOX_ASSERT_THROW(
+        supported.timestampTypeSession(&daysSession),
+        "TIMESTAMP_DAYS is not supported");
+  }
 }
 
 // The reader casts file timestamps to the session's
