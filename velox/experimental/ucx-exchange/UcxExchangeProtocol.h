@@ -17,6 +17,7 @@
 
 #include <cinttypes>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,8 +35,8 @@ namespace facebook::velox::ucx_exchange {
 // first:
 // - Bits 63..32 (4 bytes): FNV-1a hash of the producing taskId, which is
 //   unique within a cluster.
-// - Bits 31..24 (1 byte): Operation type (metadata, data, or handshake
-//   response).
+// - Bits 31..24 (1 byte): Operation type (metadata, data, handshake response,
+//   or close).
 // - Bits 23..0  (3 bytes): Sequence number of the chunk exchanged between 2
 //   tasks.
 
@@ -43,6 +44,7 @@ namespace facebook::velox::ucx_exchange {
 constexpr uint64_t METADATA_TAG = 0x02000000;
 constexpr uint64_t DATA_TAG = 0x03000000;
 constexpr uint64_t HANDSHAKE_RESPONSE_TAG = 0x04000000;
+constexpr uint64_t CLOSE_TAG = 0x05000000;
 
 // Implementation of the fowler-noll-vo hash function for 32 bits.
 uint32_t fnv1a_32(std::string_view s);
@@ -63,6 +65,13 @@ inline uint64_t getDataTag(uint64_t taskHash, uint64_t sequenceNumber) {
 // Note: taskHash is implicitly converted to 64 bits.
 inline uint64_t getHandshakeResponseTag(uint64_t taskHash) {
   return (taskHash << 32) | HANDSHAKE_RESPONSE_TAG;
+}
+
+// Gets the tag of the message a source sends its server when it closes before
+// its stream ended. The message is one byte, whose value is unused.
+// Note: taskHash is implicitly converted to 64 bits.
+inline uint64_t getCloseTag(uint64_t taskHash) {
+  return (taskHash << 32) | CLOSE_TAG;
 }
 
 /// @brief Request that is sent from the client (UcxExchangeSource) to the
@@ -88,9 +97,16 @@ struct HandshakeResponse {
   /// True if server and source are on the same node (same Communicator).
   /// When true, source should use IntraNodeTransferRegistry instead of UCXX.
   bool isIntraNodeTransfer{false};
+  /// True if the server closes when its source sends the close message, see
+  /// getCloseTag(). Servers built before it was added send 0 here, so their
+  /// sources do not send it.
+  bool acceptsClose{false};
   /// Padding for alignment
-  uint8_t padding[7]{};
+  uint8_t padding[6]{};
 };
+static_assert(
+    sizeof(HandshakeResponse) == 8,
+    "HandshakeResponse must keep the size that older builds send and expect");
 
 constexpr uint32_t kMagicNumber = 0x12345678;
 /// Maximum metadata buffer size for receiving. This should be large enough
@@ -105,6 +121,9 @@ constexpr uint32_t kMetaHeaderSize = sizeof(kMagicNumber) + sizeof(uint32_t);
 /// Wire-format types for MetadataMsg serialization. Using shared type aliases
 /// ensures serialize() and deserializeMetadataMsg() agree on field widths.
 using WireLengthType = uint64_t;
+/// Length of MetadataMsg::producerError on the wire. Signed, because -1 means
+/// there is no producer error, while 0 is an error with an empty message.
+using WireErrorLengthType = int64_t;
 using WireDataSizeType = int64_t;
 using WireRemainingElementType = int64_t;
 /// A cuDF table's row count is a cudf::size_type, so it cannot exceed
@@ -125,6 +144,10 @@ struct MetadataMsg {
   std::vector<WireRemainingElementType> remainingBytes;
   bool atEnd;
 
+  /// Why the producer ended before sending all its output; set only with
+  /// 'atEnd'. The consumer fails instead of treating the stream as complete.
+  std::optional<std::string> producerError;
+
   uint32_t getSerializedSize() const {
     // The header: the magic number and the metadata length.
     uint32_t totalSize = sizeof(kMagicNumber) + sizeof(totalSize);
@@ -141,6 +164,11 @@ struct MetadataMsg {
     totalSize += remainingBytes.size() * sizeof(remainingBytes[0]);
     // atEnd, encoded in a byte.
     totalSize += sizeof(uint8_t);
+    // producerError: its length, -1 if absent, then the text.
+    totalSize += sizeof(WireErrorLengthType);
+    if (producerError.has_value()) {
+      totalSize += producerError->size();
+    }
 
     return totalSize;
   }

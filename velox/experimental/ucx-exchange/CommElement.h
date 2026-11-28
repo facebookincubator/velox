@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <memory>
 #include <stdexcept>
+#include <string_view>
 
 // The CommElement is the abstract base class of both the
 // per-client context on the exchange server side as well as the
@@ -41,9 +43,10 @@ class CommElement {
   /// specific communication pattern.
   virtual void process() = 0;
 
-  // Called when the underlying endpoint was closed
-  // or the communicator is finished.
-  virtual void close() = 0;
+  /// @brief Called on the Communicator thread when the endpoint this element
+  /// communicates over closed, for instance because the peer died. 'reason'
+  /// names the endpoint's close status.
+  virtual void onEndpointClosed(std::string_view reason) = 0;
 
  protected:
   const std::shared_ptr<Communicator> communicator_;

@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
+
+#include <fmt/format.h>
+
 #include "velox/experimental/ucx-exchange/Communicator.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -26,6 +29,7 @@ void EndpointRef::onClose(ucs_status_t status, std::shared_ptr<void> arg) {
   // Communicator loop via deferEndpointCleanup().
 
   std::shared_ptr<EndpointRef> ep = std::static_pointer_cast<EndpointRef>(arg);
+  ep->closeStatus_ = status;
 
   // Defer ALL cleanup to the main progress loop.
   // The main loop will:
@@ -70,9 +74,11 @@ void EndpointRef::closeAndDrainCommunicators() {
   }
 
   // Now iterate the local copy -- no lock held, no contention.
+  const auto reason =
+      fmt::format("UCX endpoint closed: {}", ucs_status_string(closeStatus_));
   for (auto& weakElem : localCopy) {
     if (std::shared_ptr<CommElement> spt = weakElem.lock()) {
-      spt->close();
+      spt->onEndpointClosed(reason);
     }
   }
   // localCopy is destroyed here, releasing all weak_ptrs.

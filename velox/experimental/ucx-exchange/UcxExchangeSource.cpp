@@ -19,6 +19,7 @@
 #include <cudf/contiguous_split.hpp>
 #include <folly/String.h>
 #include <folly/Uri.h>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -114,22 +115,34 @@ void UcxExchangeSource::process() {
 
   switch (state_) {
     case ReceiverState::Created: {
-      // Get the endpoint.
+      // Get the endpoint. Creating it throws when the address does not
+      // resolve; the exception must not leave the Communicator thread.
       HostPort hp{host_, port_};
       std::shared_ptr<UcxExchangeSource> selfPtr = getSelfPtr();
-      auto epRef = communicator_->assocEndpointRef(selfPtr, hp);
-      if (epRef) {
-        setEndpoint(epRef);
-        setStateIf(
-            ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
-        sendHandshake();
-      } else {
-        // connection failed.
-        VLOG(0) << toString() << " Failed to connect to " << host_ << ":"
-                << std::to_string(port_);
-        deliverEndMarker();
-        setState(ReceiverState::Done);
+      std::shared_ptr<EndpointRef> epRef;
+      std::optional<std::string> connectError;
+      try {
+        epRef = communicator_->assocEndpointRef(selfPtr, hp);
+        if (epRef == nullptr) {
+          connectError = "no endpoint";
+        }
+      } catch (const std::exception& e) {
+        connectError = e.what();
       }
+      if (connectError.has_value()) {
+        failSource(
+            fmt::format(
+                "Failed to connect to producer, host {}:{}, task {}: {}",
+                host_,
+                port_,
+                partitionKey_.toString(),
+                *connectError));
+        break;
+      }
+      setEndpoint(epRef);
+      setStateIf(
+          ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
+      sendHandshake();
       communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ReceiverState::WaitingForHandshakeComplete:
@@ -197,6 +210,14 @@ void UcxExchangeSource::cleanUp() {
             << " In UcxExchangeSource::cleanUp state == " << value;
   }
 
+  bool tellServer = serverAcceptsClose_ && !streamEnded_ && !endpointClosed_ &&
+      endpointRef_ != nullptr;
+  common::testutil::TestValue::adjust(
+      "facebook::velox::ucx_exchange::UcxExchangeSource::cleanUp", &tellServer);
+  if (tellServer) {
+    sendCloseMessage();
+  }
+
   // Cancel any outstanding request. With weak_ptr callbacks, the callback
   // will safely no-op if we're destroyed before it completes.
   if (request_ && !request_->isCompleted()) {
@@ -248,6 +269,45 @@ void UcxExchangeSource::close() {
   // Let the Communicator progress thread do the actual clean-up.
   setState(ReceiverState::Done);
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeSource::sendCloseMessage() {
+  auto message = std::make_shared<uint8_t>(0);
+  auto request = endpointRef_->endpoint_
+                     ->tagSendBuilder(
+                         message.get(),
+                         sizeof(*message),
+                         ucxx::Tag{getCloseTag(partitionKeyHash_)})
+                     .callbackFunction([key = partitionKey_.toString()](
+                                           ucs_status_t status,
+                                           std::shared_ptr<void> /*arg*/) {
+                       if (status != UCS_OK) {
+                         VLOG(1) << "Failed to send close message for " << key
+                                 << ": " << ucs_status_string(status);
+                       }
+                     })
+                     .callbackData(message)
+                     .build();
+  // Keeps the request, and with it the message, until UCX is done with it.
+  communicator_->deferRequestCleanup(std::move(request));
+}
+
+void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
+  endpointClosed_ = true;
+  if (closed_.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (atEnd_) {
+    close();
+    return;
+  }
+  failSource(
+      fmt::format(
+          "Connection to producer closed before it sent all its data, host {}:{}, task {}: {}",
+          host_,
+          port_,
+          partitionKey_.toString(),
+          reason));
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {
@@ -336,6 +396,14 @@ void UcxExchangeSource::deliverEndMarker() {
   enqueue(nullptr);
 }
 
+void UcxExchangeSource::failSource(std::string_view reason) {
+  VLOG(0) << toString() << " " << reason;
+  queue_->setError(reason);
+  deliverEndMarker();
+  setState(ReceiverState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
+}
+
 void UcxExchangeSource::setEndpoint(std::shared_ptr<EndpointRef> endpointRef) {
   endpointRef_ = std::move(endpointRef);
 }
@@ -408,11 +476,7 @@ void UcxExchangeSource::onHandshake(
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
   } else {
     VLOG(3) << toString() << "+ onHandshake " << ucs_status_string(status);
     // Now wait for the HandshakeResponse from the server
@@ -478,11 +542,7 @@ void UcxExchangeSource::onMetadata(
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
   } else {
     VELOX_CHECK_NOT_NULL(arg, "Didn't get metadata");
 
@@ -492,11 +552,35 @@ void UcxExchangeSource::onMetadata(
 
     auto ptr = std::make_shared<DataAndMetadata>();
 
-    ptr->metadata =
-        std::move(MetadataMsg::deserializeMetadataMsg(metadataMsg->data()));
+    // Runs in a UCX callback on the Communicator thread, which must not throw.
+    // A producer of another build sends a message this one cannot decode.
+    try {
+      ptr->metadata = MetadataMsg::deserializeMetadataMsg(metadataMsg->data());
+    } catch (const std::exception& e) {
+      failSource(
+          fmt::format(
+              "Cannot decode metadata from producer, which must run the same build as its consumer, host {}:{}, task {}: {}",
+              host_,
+              port_,
+              partitionKey_.toString(),
+              e.what()));
+      return;
+    }
 
     VLOG(3) << toString()
             << " Datasize bytes == " << ptr->metadata.dataSizeBytes;
+
+    streamEnded_ = ptr->metadata.atEnd;
+    if (ptr->metadata.atEnd && ptr->metadata.producerError.has_value()) {
+      failSource(
+          fmt::format(
+              "Producer failed before sending all its data, host {}:{}, task {}: {}",
+              host_,
+              port_,
+              partitionKey_.toString(),
+              *ptr->metadata.producerError));
+      return;
+    }
 
     if (ptr->metadata.atEnd) {
       // It seems that all data has been transferred
@@ -524,11 +608,7 @@ void UcxExchangeSource::onMetadata(
           cudf::get_current_device_resource_ref());
     } catch (const rmm::bad_alloc& e) {
       VLOG(0) << toString() << " *** RMM  failed to allocate: " << e.what();
-      queue_->setError("Failed to alloc GPU memory"); // Let the operator know
-                                                      // via the queue
-      deliverEndMarker();
-      setState(ReceiverState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
+      failSource("Failed to alloc GPU memory");
       return;
     }
 
@@ -593,10 +673,8 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << toString() << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
+    failSource(errorMsg);
+    return;
   } else {
     VLOG(3) << toString() << "+ onData " << ucs_status_string(status)
             << " got chunk: " << sequenceNumber_;
@@ -683,11 +761,7 @@ void UcxExchangeSource::onHandshakeResponse(
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
     return;
   }
 
@@ -695,6 +769,7 @@ void UcxExchangeSource::onHandshakeResponse(
       std::static_pointer_cast<HandshakeResponse>(arg);
 
   isIntraNodeTransfer_ = response->isIntraNodeTransfer;
+  serverAcceptsClose_ = response->acceptsClose;
 
   VLOG(3) << toString() << " + onHandshakeResponse isIntraNodeTransfer="
           << isIntraNodeTransfer_;
@@ -731,17 +806,34 @@ void UcxExchangeSource::waitForIntraNodeData() {
   }
 
   intraNodePollCount_ = 0;
-  onIntraNodeData(std::move(result->data), result->numRows, result->atEnd);
+  onIntraNodeData(
+      std::move(result->data),
+      result->numRows,
+      result->atEnd,
+      std::move(result->producerError));
 }
 
 void UcxExchangeSource::onIntraNodeData(
     std::shared_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    bool atEnd) {
+    bool atEnd,
+    std::optional<std::string> producerError) {
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onIntraNodeData called after close, ignoring";
     deliverEndMarker();
+    return;
+  }
+
+  streamEnded_ = atEnd;
+  if (atEnd && producerError.has_value()) {
+    failSource(
+        fmt::format(
+            "Producer failed before sending all its data, host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            *producerError));
     return;
   }
 
@@ -763,11 +855,7 @@ void UcxExchangeSource::onIntraNodeData(
         partitionKey_.taskId,
         partitionKey_.destination,
         sequenceNumber_);
-    VLOG(0) << toString() << " " << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
     return;
   }
 

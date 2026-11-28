@@ -16,6 +16,7 @@
 #include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
 #include <glog/logging.h>
 #include "cuda_runtime.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -110,8 +111,19 @@ void UcxExchangeServer::process() {
   if (closed_.load(std::memory_order_acquire)) {
     return;
   }
+  if (sourceClosed_.load(std::memory_order_acquire)) {
+    VLOG(1) << toString() << " source closed before its stream ended";
+    consumerGone_ = true;
+    close();
+    if (endpointRef_) {
+      endpointRef_->removeCommElem(getSelfPtr());
+      endpointRef_ = nullptr;
+    }
+    return;
+  }
   switch (state_) {
     case ServerState::Created:
+      receiveCloseMessage();
       setState(ServerState::ReadyToTransfer);
       communicator_->addToWorkQueue(getSelfPtr());
       break;
@@ -125,38 +137,47 @@ void UcxExchangeServer::process() {
       // Use weak_ptr to prevent use-after-free if close() is called during
       // callback
       std::weak_ptr<UcxExchangeServer> weakQueue = weak_from_this();
-      queueMgr_->getData(
-          partitionKey_.taskId,
-          partitionKey_.destination,
-          [weakQueue](
-              std::shared_ptr<cudf::packed_columns> data,
-              vector_size_t numRows,
-              std::vector<int64_t> remainingBytes) {
-            auto self = weakQueue.lock();
-            if (!self) {
-              return; // Object was destroyed, safe to ignore
-            }
-            // Check if close() was called - avoid processing if we're shutting
-            // down
-            if (self->closed_.load(std::memory_order_acquire)) {
-              VLOG(3) << "@" << self->partitionKey_.taskId
-                      << " getData callback called after close, ignoring";
-              return;
-            }
-            // This upcall may be called from another thread than the
-            // communicator thread. It is called
-            // when data on the queue becomes available.
-            VLOG(3) << "@" << self->partitionKey_.taskId
-                    << " Found data for client: "
-                    << self->partitionKey_.toString();
-            std::lock_guard<std::recursive_mutex> lock(self->dataMutex_);
-            VELOX_CHECK_NULL(
-                self->dataPtr_, "Data pointer exists: Illegal state!");
-            self->dataPtr_ = std::move(data);
-            self->dataNumRows_ = numRows;
-            self->setState(ServerState::DataReady);
-            self->communicator_->addToWorkQueue(self);
-          });
+      // An intra-node server delivers through IntraNodeTransferRegistry, which
+      // drops pages when the producer is removed. getIntraNodeData() counts
+      // each page as undelivered from the moment it leaves the queue until
+      // the source reads it from the registry, so removal in between fails
+      // the consumer.
+      auto onData = [weakQueue](
+                        std::shared_ptr<cudf::packed_columns> data,
+                        vector_size_t numRows,
+                        std::vector<int64_t> remainingBytes,
+                        std::optional<std::string> producerError) {
+        auto self = weakQueue.lock();
+        if (!self) {
+          return; // Object was destroyed, safe to ignore
+        }
+        // Check if close() was called - avoid processing if we're shutting
+        // down
+        if (self->closed_.load(std::memory_order_acquire)) {
+          VLOG(3) << "@" << self->partitionKey_.taskId
+                  << " getData callback called after close, ignoring";
+          return;
+        }
+        // This upcall may be called from another thread than the
+        // communicator thread. It is called
+        // when data on the queue becomes available.
+        VLOG(3) << "@" << self->partitionKey_.taskId
+                << " Found data for client: " << self->partitionKey_.toString();
+        std::lock_guard<std::recursive_mutex> lock(self->dataMutex_);
+        VELOX_CHECK_NULL(self->dataPtr_, "Data pointer exists: Illegal state!");
+        self->dataPtr_ = std::move(data);
+        self->dataNumRows_ = numRows;
+        self->producerError_ = std::move(producerError);
+        self->setState(ServerState::DataReady);
+        self->communicator_->addToWorkQueue(self);
+      };
+      if (isIntraNodeTransfer_) {
+        queueMgr_->getIntraNodeData(
+            partitionKey_.taskId, partitionKey_.destination, std::move(onData));
+      } else {
+        queueMgr_->getData(
+            partitionKey_.taskId, partitionKey_.destination, std::move(onData));
+      }
       this->communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ServerState::WaitingForDataFromQueue:
@@ -223,6 +244,20 @@ void UcxExchangeServer::close() {
     dataRequest_->cancel();
   }
 
+  if (closeRequest_ && !closeRequest_->isCompleted()) {
+    closeRequest_->cancel();
+  }
+
+  // A server that waits for data leaves its callback in the producer's queue.
+  // For a placeholder of a producer that never arrives, nothing else would
+  // remove it. A consumer that is gone no longer reads the destination's
+  // results, so the producer must not keep them.
+  const bool deleteResults = consumerGone_ && !resultsDeleted_;
+  if (getState() == ServerState::WaitingForDataFromQueue || deleteResults) {
+    queueMgr_->releaseReader(
+        partitionKey_.taskId, partitionKey_.destination, deleteResults);
+  }
+
   // Move all requests to the Communicator's deferred list so the GPU
   // buffers they reference (via their arg shared_ptr) stay alive until
   // UCX has fully processed any in-flight operations.
@@ -233,6 +268,9 @@ void UcxExchangeServer::close() {
     if (dataRequest_) {
       communicator_->deferRequestCleanup(std::move(dataRequest_));
     }
+    if (closeRequest_) {
+      communicator_->deferRequestCleanup(std::move(closeRequest_));
+    }
     for (auto& req : completedRequests_) {
       communicator_->deferRequestCleanup(std::move(req));
     }
@@ -240,6 +278,37 @@ void UcxExchangeServer::close() {
   }
 
   communicator_->unregister(getSelfPtr());
+}
+
+void UcxExchangeServer::onEndpointClosed(std::string_view reason) {
+  VLOG(1) << toString() << " endpoint closed: " << reason;
+  consumerGone_ = true;
+  close();
+}
+
+void UcxExchangeServer::receiveCloseMessage() {
+  auto message = std::make_shared<uint8_t>(0);
+  std::weak_ptr<UcxExchangeServer> weak = weak_from_this();
+  closeRequest_ =
+      endpointRef_->endpoint_
+          ->tagRecvBuilder(
+              message.get(),
+              sizeof(*message),
+              ucxx::Tag{getCloseTag(partitionKeyHash_)},
+              ucxx::TagMaskFull)
+          .callbackFunction(
+              [weak](ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+                // Cancelled when the server closes for another reason.
+                if (status != UCS_OK) {
+                  return;
+                }
+                if (auto self = weak.lock()) {
+                  self->sourceClosed_.store(true, std::memory_order_release);
+                  self->communicator_->addToWorkQueue(self);
+                }
+              })
+          .callbackData(message)
+          .build();
 }
 
 std::string UcxExchangeServer::toString() {
@@ -279,10 +348,23 @@ void UcxExchangeServer::sendData() {
 
       IntraNodeTransferKey key{
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
+      // Counted as read when the source takes it, rather than when this
+      // server notices, a Communicator turn later: a removal in between
+      // would otherwise fail a consumer that has all the producer's output.
+      auto onRetrieved = [queueMgr = queueMgr_,
+                          taskId = partitionKey_.taskId,
+                          destination = partitionKey_.destination]() {
+        queueMgr->intraNodePageRetrieved(taskId, destination);
+      };
       // dataPtr_ is already a shared_ptr, pass directly to share ownership.
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, dataPtr_, dataNumRows_, /*atEnd=*/false);
+              key,
+              dataPtr_,
+              dataNumRows_,
+              /*atEnd=*/false,
+              /*producerError=*/std::nullopt,
+              std::move(onRetrieved));
       dataPtr_.reset();
       dataNumRows_ = 0;
       intraNodeAtEndPublished_ = false;
@@ -301,10 +383,16 @@ void UcxExchangeServer::sendData() {
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, nullptr, /*numRows=*/0, /*atEnd=*/true);
+              key,
+              nullptr,
+              /*numRows=*/0,
+              /*atEnd=*/true,
+              producerError_,
+              /*onRetrieved=*/nullptr);
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      resultsDeleted_ = true;
 
       // Wait for source to acknowledge atEnd before finishing
       setState(ServerState::WaitingForIntraNodeRetrieve);
@@ -332,9 +420,14 @@ void UcxExchangeServer::sendData() {
       metadataMsg->numRows = 0;
       metadataMsg->remainingBytes = {};
       metadataMsg->atEnd = true;
+      metadataMsg->producerError = producerError_;
     }
 
-    auto [serializedMetadata, serMetaSize] = metadataMsg->serialize();
+    auto serialized = metadataMsg->serialize();
+    common::testutil::TestValue::adjust(
+        "facebook::velox::ucx_exchange::UcxExchangeServer::sendMetadata",
+        &serialized);
+    auto& [serializedMetadata, serMetaSize] = serialized;
 
     // send metadata.
     uint64_t metadataTag =
@@ -451,6 +544,7 @@ void UcxExchangeServer::sendData() {
               << " Finished transferring partition for task "
               << partitionKey_.toString();
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
+      resultsDeleted_ = true;
       setState(ServerState::Done);
       communicator_->addToWorkQueue(getSelfPtr());
     }

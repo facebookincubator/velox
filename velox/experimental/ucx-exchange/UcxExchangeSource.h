@@ -36,6 +36,10 @@
 #include <rmm/mr/cuda_memory_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 
+#include <optional>
+#include <string>
+#include <string_view>
+
 namespace facebook::velox::ucx_exchange {
 
 struct UcxExchangeMetrics {
@@ -98,6 +102,11 @@ class UcxExchangeSource
   /// of an error or an operator like Limit aborting the query
   /// once it received enough data.
   void close();
+
+  /// @brief Fails this source unless its producer already sent the end of its
+  /// stream: the rest of the producer's data can no longer arrive. A source
+  /// that saw the end closes cleanly.
+  void onEndpointClosed(std::string_view reason) override;
 
   /// @brief Marks this source as registered with the exchange queue.
   /// Must be called after addSourceLocked() increments numSources_ for this
@@ -208,6 +217,11 @@ class UcxExchangeSource
   /// @param arg The HandshakeResponse data
   void onHandshakeResponse(ucs_status_t status, std::shared_ptr<void> arg);
 
+  /// @brief Tells the server that this source closed before its stream ended,
+  /// so that the server closes and the producer drops the results that are
+  /// left for it. Called from cleanUp() on the Communicator thread.
+  void sendCloseMessage();
+
   /// @brief For intra-node transfer: initiates waiting for data from registry.
   void waitForIntraNodeData();
 
@@ -215,10 +229,12 @@ class UcxExchangeSource
   /// @param data The packed_columns from registry (nullptr if atEnd or error)
   /// @param numRows Logical rows in 'data'
   /// @param atEnd True if this is end-of-stream
+  /// @param producerError Why the producer ended early; set only with 'atEnd'
   void onIntraNodeData(
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
-      bool atEnd);
+      bool atEnd,
+      std::optional<std::string> producerError);
 
   /// @brief Sets the new state of this exchange source using
   /// sequential consistency. Logs transitions at VLOG(2).
@@ -239,6 +255,10 @@ class UcxExchangeSource
   /// Returns early without enqueuing if the source was never registered
   /// with the queue (i.e., registered_ is false).
   void deliverEndMarker();
+
+  // Ends this source with an error that fails every consumer of its queue,
+  // then lets cleanUp() run. Runs on the Communicator thread.
+  void failSource(std::string_view reason);
 
   /// @brief Sets the state to "desired" if and only if the current
   /// state is "expected".
@@ -264,7 +284,9 @@ class UcxExchangeSource
   // The shared queue of packed tables that all UcxExchangeSources write to
   const std::shared_ptr<UcxExchangeQueue> queue_{nullptr};
   std::atomic<bool> closed_{false};
-  bool atEnd_{false}; // set when "atEnd" is being received.
+  // Set when the producer's end of stream is received. Read and written only
+  // on the Communicator thread, which onEndpointClosed() relies on.
+  bool atEnd_{false};
 
   /// @brief Guards exactly-once delivery of the nullptr end-of-stream marker.
   /// Only one thread can win the CAS and call enqueue(nullptr).
@@ -283,6 +305,16 @@ class UcxExchangeSource
   /// HandshakeMsg) with its own Communicator's listener address.
   /// When true, intra-node transfer optimizations bypass UCXX transfers.
   bool isIntraNodeTransfer_{false};
+
+  /// Set from the acceptsClose flag in HandshakeResponse.
+  bool serverAcceptsClose_{false};
+
+  /// True once the server sent the end of the stream, cleanly or with the
+  /// producer's error; the server then closes by itself.
+  bool streamEnded_{false};
+
+  /// True once the endpoint to the server closed, which closes the server too.
+  bool endpointClosed_{false};
 
   // Backpressure: when queue exceeds kBackpressureHighWaterMark, the source
   // goes dormant. The consumer thread wakes it via resumeFromBackpressure()

@@ -19,8 +19,11 @@
 #include <velox/exec/OutputBufferManager.h>
 #include <velox/exec/Task.h>
 #include <functional>
+#include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
-#include <unordered_set>
+#include <unordered_map>
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -102,7 +105,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// receive earlier data and the end marker. Invokes 'notify' with nullptr
   /// when the final destination count excludes the reader, results have been
   /// deleted, or the task has terminated. Negative destinations also receive
-  /// nullptr.
+  /// nullptr. A task removed before sending all its output passes the reason
+  /// as producerError with that nullptr.
   /// @param taskId The unique taskId.
   /// @param destination The destination.
   /// @param notify The callback function.
@@ -110,6 +114,29 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       std::string_view taskId,
       int destination,
       UcxDataAvailableCallback notify);
+
+  /// @brief Same as getData(), for a server that hands pages to its consumer
+  /// through IntraNodeTransferRegistry, which drops them if the task is
+  /// removed. Each page the server receives counts as undelivered from the
+  /// moment it leaves the queue until the matching intraNodePageRetrieved().
+  void getIntraNodeData(
+      std::string_view taskId,
+      int destination,
+      UcxDataAvailableCallback notify);
+
+  /// @brief Forgets the reader of 'destination' of a server that closed, so
+  /// that the task's queue keeps no callback of a server that is gone. Drops a
+  /// placeholder queue once no reader waits on it. With 'consumerGone', which
+  /// a server passes when its consumer closed or its connection failed, also
+  /// deletes the destination's results of an initialized queue, as an HTTP
+  /// consumer that aborts its results does.
+  void
+  releaseReader(std::string_view taskId, int destination, bool consumerGone);
+
+  /// @brief Records that the consumer of 'destination' read a page it got
+  /// through getIntraNodeData(). Called from IntraNodeTransferRegistry::poll()
+  /// under the registry lock, so it must not throw or call into the registry.
+  void intraNodePageRetrieved(std::string_view taskId, int destination);
 
   /// Returns true if the given task can use intra-node transfer.
   /// Returns false if the task is not yet initialized (placeholder queue
@@ -119,7 +146,11 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   bool canUseIntraNode(std::string_view taskId);
 
   /// @brief Removes the queue for the given task from the queue manager.
-  /// Calls "terminate" on the queue to awake waiting producers.
+  /// Calls "terminate" on the queue to awake waiting producers and to end each
+  /// destination's stream. If the task had not sent all its output, every
+  /// consumer, including one that connects later, gets an end marker that
+  /// carries the reason. Intra-node consumers stop reading while that is
+  /// decided; see IntraNodeTransferRegistry::freezeTask().
   void removeTask(const std::string& taskId) override;
 
   /// @brief Returns the queue statistics of the queue associated with the given
@@ -144,14 +175,48 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   // Throws an exception if queue doesn't exist.
   std::shared_ptr<UcxOutputQueue> getQueue(std::string_view taskId);
 
+  // Shared by getData() and getIntraNodeData().
+  void getDataImpl(
+      std::string_view taskId,
+      int destination,
+      UcxDataAvailableCallback notify,
+      bool intraNode);
+
+  // The queues of the tasks, and what releaseReader() must know about them.
+  struct Queues {
+    std::unordered_map<std::string, std::shared_ptr<UcxOutputQueue>> byTaskId;
+    // How many getData() calls hold a placeholder whose reader they have not
+    // installed yet. They take the placeholder under the lock and install
+    // their reader after releasing it, so releaseReader() must keep a
+    // placeholder that has any.
+    std::unordered_map<const UcxOutputQueue*, int> numArrivingReaders;
+  };
+
+  folly::Synchronized<Queues, std::mutex> queues_;
+
+  // What a removal leaves behind for consumers that arrive after it.
+  struct RemovedTask {
+    // Expires when the host destroys the producer's Task, after which no
+    // consumer is expected. Empty if no Task with the ID was alive at the
+    // removal.
+    std::weak_ptr<exec::Task> task;
+    // What the end marker of a getData() after the removal carries.
+    std::optional<std::string> producerError;
+  };
+
+  // The Tasks whose initializeTask() threw before their queue was registered,
+  // so that their removal can still tie its record to the Task. removeTask()
+  // erases the entry; Task::terminate() removes such a Task once
+  // initializeTask() returned.
   folly::Synchronized<
-      std::unordered_map<std::string, std::shared_ptr<UcxOutputQueue>>,
+      std::unordered_map<std::string, std::weak_ptr<exec::Task>>,
       std::mutex>
-      queues_;
+      failedInitializations_;
 
   // Tracks removed tasks so late readers receive EOS instead of waiting on
-  // a recreated placeholder.
-  folly::Synchronized<std::unordered_set<std::string>, std::mutex>
+  // a recreated placeholder. removeTask() drops the records whose Task was
+  // destroyed, so the map holds at most the tasks the host still keeps.
+  folly::Synchronized<std::unordered_map<std::string, RemovedTask>, std::mutex>
       removedTasks_;
 };
 

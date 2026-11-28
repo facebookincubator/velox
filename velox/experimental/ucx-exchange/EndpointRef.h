@@ -55,7 +55,8 @@ class EndpointRef : public std::enable_shared_from_this<EndpointRef> {
   /// UcxExchangeServer.
   void removeCommElem(std::shared_ptr<CommElement> commElem);
 
-  /// @brief Closes all registered communicators and drains the set.
+  /// @brief Tells all registered communicators that the endpoint closed, with
+  /// the status onClose() received, and drains the set.
   /// Uses swap-and-drain pattern: swaps communicators_ into a local copy
   /// under the lock, then iterates the copy without the lock.
   /// Must be called from the Communicator main loop thread ONLY.
@@ -78,6 +79,10 @@ class EndpointRef : public std::enable_shared_from_this<EndpointRef> {
   /// Used for server-side intra-node detection instead of client-reported IPs.
   std::string peerIp_;
   void cleanup(); // cleans up expired communication elements.
+
+  // Status UCX closed the endpoint with. Set by onClose() and read by
+  // closeAndDrainCommunicators(), both on the Communicator thread.
+  ucs_status_t closeStatus_{UCS_OK};
 
   std::set<
       std::weak_ptr<CommElement>,

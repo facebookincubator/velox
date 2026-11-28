@@ -15,6 +15,10 @@
  */
 #pragma once
 
+#include <mutex>
+#include <optional>
+#include <string>
+
 #include "velox/exec/Driver.h"
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestData.h"
@@ -52,8 +56,16 @@ class SinkDriverMock {
   void run();
 
   /// @brief Waits until all threads executing the exchange operators have
-  /// terminated.
+  /// terminated. Adds a test failure if a driver caught an exception, unless
+  /// expectError() was called: a case that expects success must not pass
+  /// when its consumer failed.
   void joinThreads();
+
+  /// @brief Declares that this case expects a driver to fail, for instance
+  /// because its producer is removed early. Read the error with error().
+  void expectError() {
+    errorExpected_ = true;
+  }
 
   /// @brief Adds the set of splits to the task, from where they will be picked
   /// up by the exchange operator to initiate connections to the upstream task.
@@ -79,6 +91,10 @@ class SinkDriverMock {
     return dataValidFlag_;
   }
 
+  /// @brief Returns the message of the first exception a driver thread caught,
+  /// or nullopt if every driver finished without one.
+  std::optional<std::string> error() const;
+
  private:
   // Drives a single hybrid exchange operator until all data has been received.
   void receiveAllData(UcxExchange* hybridExchange);
@@ -89,6 +105,13 @@ class SinkDriverMock {
   void updateDataValidity(const cudf::table_view& tab);
 
   std::atomic<bool> dataValidFlag_{true};
+
+  // First exception message caught by a driver thread. A consumer error is
+  // thrown on a bare std::thread and would otherwise terminate the binary.
+  mutable std::mutex errorMutex_;
+  std::optional<std::string> error_;
+  // Set by expectError(); see joinThreads().
+  bool errorExpected_{false};
   std::shared_ptr<facebook::velox::exec::Task> task_;
   std::shared_ptr<UcxExchangeClient> exchangeClient_;
 
