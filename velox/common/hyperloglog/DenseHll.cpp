@@ -454,6 +454,9 @@ bool DenseHlls::canDeserialize(const char* input, int size) {
   auto numBuckets = 1 << indexBitLength;
   const int8_t* deltas = stream.read<int8_t>(numBuckets / 2);
   auto overflows = stream.read<int16_t>();
+  if (overflows < 0) {
+    return false;
+  }
 
   int sizeWithOverflow = minSizeNoOverflow + 2 * overflows + overflows;
   if (size < sizeWithOverflow) {
