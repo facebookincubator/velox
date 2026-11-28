@@ -2393,6 +2393,32 @@ RowVectorPtr CudfGroupby::doGetOutput() {
     return nullptr;
   }
 
+  if (noMoreInput_) {
+    finished_ = true;
+  }
+
+  // Aggregate a single batch on its own stream so its buffers can be freed
+  // in stream order after the aggregate has enqueued its reads.
+  if (inputs_.size() == 1) {
+    common::testutil::TestValue::adjust(
+        "CudfGroupby::doGetOutput::singleBatchFastPath", this);
+    auto input = std::move(inputs_.front());
+    inputs_.clear();
+    const auto inputStream = input->stream();
+    auto permutedInputView = input->getTableView().select(
+        aggregationInputChannels_.begin(), aggregationInputChannels_.end());
+    return doGroupByAggregation(
+        permutedInputView,
+        groupingKeyOutputChannels_,
+        aggregators_,
+        outputType_,
+        inputStream,
+        get_output_mr());
+  }
+
+  common::testutil::TestValue::adjust(
+      "CudfGroupby::doGetOutput::concatPath", this);
+
   auto stream = cudfGlobalStreamPool().get_stream();
 
   auto tbl = getConcatenatedTable(
@@ -2401,10 +2427,6 @@ RowVectorPtr CudfGroupby::doGetOutput() {
   // Release input data after synchronizing.
   stream.sync();
   inputs_.clear();
-
-  if (noMoreInput_) {
-    finished_ = true;
-  }
 
   VELOX_CHECK_NOT_NULL(tbl);
 

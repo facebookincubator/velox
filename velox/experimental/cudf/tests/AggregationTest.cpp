@@ -31,6 +31,7 @@
 #include "velox/type/Timestamp.h"
 
 #include <cmath>
+#include <utility>
 
 namespace facebook::velox::exec::test {
 
@@ -1059,6 +1060,66 @@ TEST_F(AggregationTest, companionAggs) {
           .planNode();
   assertQuery(
       op, "SELECT c0, count(c1), count(distinct c2) FROM tmp GROUP BY c0");
+}
+
+DEBUG_ONLY_TEST_F(AggregationTest, nonIncrementalGroupbyBatchPaths) {
+  constexpr int kNumBatches = 4;
+  constexpr int kRowsPerBatch = 2;
+  std::vector<RowVectorPtr> batches;
+  for (int64_t i = 0; i < kNumBatches; ++i) {
+    batches.push_back(makeRowVector({
+        makeFlatVector<int64_t>({1, 2}),
+        makeNullableFlatVector<int64_t>({i, std::nullopt}),
+    }));
+  }
+  createDuckDbTable(batches);
+
+  using Step = core::AggregationNode::Step;
+  auto runGroupby = [&](Step step, int batchSize) {
+    core::PlanNodeId firstAggId;
+    auto plan = PlanBuilder()
+                    .values(batches)
+                    .aggregation({"c0"}, {"count_partial(c1)"}, {}, step, false)
+                    .capturePlanNodeId(firstAggId)
+                    .localPartition({"c0"})
+                    .singleAggregation({"c0"}, {"count_merge(a0)"})
+                    .planNode();
+
+    int direct = 0;
+    int concat = 0;
+    SCOPED_TESTVALUE_SET(
+        "CudfGroupby::doGetOutput::singleBatchFastPath",
+        std::function<void(cudf_velox::CudfGroupby*)>([&](auto* op) {
+          if (op->planNodeId() == firstAggId) {
+            ++direct;
+          }
+        }));
+    SCOPED_TESTVALUE_SET(
+        "CudfGroupby::doGetOutput::concatPath",
+        std::function<void(cudf_velox::CudfGroupby*)>([&](auto* op) {
+          if (op->planNodeId() == firstAggId) {
+            ++concat;
+          }
+        }));
+
+    AssertQueryBuilder(duckDbQueryRunner_)
+        .maxDrivers(1)
+        .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, batchSize)
+        .plan(plan)
+        .assertResults("SELECT c0, count(c1) FROM tmp GROUP BY c0");
+    return std::make_pair(direct, concat);
+  };
+
+  // Single-step groupby buffers until the end. The converter either combines
+  // all four vectors into one GPU batch or emits each vector separately.
+  EXPECT_EQ(
+      runGroupby(Step::kSingle, kNumBatches * kRowsPerBatch),
+      std::make_pair(1, 0));
+  EXPECT_EQ(runGroupby(Step::kSingle, kRowsPerBatch), std::make_pair(0, 1));
+  // Partial groupby emits one result per input batch.
+  EXPECT_EQ(
+      runGroupby(Step::kPartial, kRowsPerBatch),
+      std::make_pair(kNumBatches, 0));
 }
 
 TEST_F(AggregationTest, partialAggregationMemoryLimit) {
