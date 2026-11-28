@@ -90,13 +90,14 @@ int main(int argc, char** argv) {
   FLAGS_batch_size = 40;
   FLAGS_num_batches = 4;
 
-  // Spark does not provide user-accessible aggregate functions with the
-  // following names.
+  // Skip functions that the reference fuzzer cannot invoke reliably.
   std::unordered_set<std::string> skipFunctions = {
       "bloom_filter_agg",
       // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
       // doesn't support. The fuzzer may pick this signature and fail.
       "collect_set",
+      // Requires constant numBins arguments, which the fuzzer does not support.
+      "histogram_numeric",
       "first_ignore_null",
       "last_ignore_null",
       "regr_replacement",
