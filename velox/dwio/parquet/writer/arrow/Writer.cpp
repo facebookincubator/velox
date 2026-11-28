@@ -346,7 +346,7 @@ class FileWriterImpl : public FileWriter {
     if (!closed_) {
       // Make idempotent.
       closed_ = true;
-      PARQUET_CATCH_NOT_OK(finishRowGroup());
+      RETURN_NOT_OK(finishRowGroup());
       PARQUET_CATCH_NOT_OK(writer_->close());
     }
     return Status::OK();
