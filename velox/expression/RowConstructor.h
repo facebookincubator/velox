@@ -28,5 +28,7 @@ class RowConstructorCallToSpecialForm : public FunctionCallToSpecialForm {
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
+
+  VectorFunctionMetadata metadata() const override;
 };
 } // namespace facebook::velox::exec

@@ -32,6 +32,10 @@ class FromJsonCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadata{};
+  }
+
   static constexpr const char* kFromJson = "from_json";
 };
 

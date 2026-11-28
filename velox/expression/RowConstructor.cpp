@@ -55,4 +55,15 @@ ExprPtr RowConstructorCallToSpecialForm::constructSpecialForm(
       expression::kRowConstructor,
       trackCpuUsage);
 }
+
+// Calls run the registered row_constructor vector function, so its metadata
+// describes them.
+VectorFunctionMetadata RowConstructorCallToSpecialForm::metadata() const {
+  const auto metadata = getVectorFunctionMetadata(expression::kRowConstructor);
+  VELOX_CHECK(
+      metadata.has_value(),
+      "Vector function is not registered: {}",
+      expression::kRowConstructor);
+  return metadata.value();
+}
 } // namespace facebook::velox::exec

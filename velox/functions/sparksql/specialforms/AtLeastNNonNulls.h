@@ -30,6 +30,12 @@ class AtLeastNNonNullsCallToSpecialForm
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadataBuilder()
+        .defaultNullBehavior(false)
+        .build();
+  }
+
   static constexpr const char* kAtLeastNNonNulls = "at_least_n_non_nulls";
 };
 } // namespace facebook::velox::functions::sparksql

@@ -65,6 +65,10 @@ class TryCallToSpecialForm : public FunctionCallToSpecialForm {
       std::vector<ExprPtr>&& compiledChildren,
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
+
+  VectorFunctionMetadata metadata() const override {
+    return VectorFunctionMetadata{};
+  }
 };
 
 } // namespace facebook::velox::exec

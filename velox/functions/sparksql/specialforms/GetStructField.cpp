@@ -109,7 +109,7 @@ exec::ExprPtr GetStructFieldCallToSpecialForm::constructSpecialForm(
       type,
       std::move(args),
       std::move(getStructFieldFunction),
-      exec::VectorFunctionMetadata{},
+      metadata(),
       kGetStructField,
       trackCpuUsage);
 }

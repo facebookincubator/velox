@@ -37,6 +37,10 @@ class GetStructFieldCallToSpecialForm : public exec::FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadata{};
+  }
+
   static constexpr const char* kGetStructField = "get_struct_field";
 };
 

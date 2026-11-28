@@ -2026,11 +2026,6 @@ exec::ExprPtr FromJsonCallToSpecialForm::constructSpecialForm(
   }
 
   return std::make_shared<exec::Expr>(
-      type,
-      std::move(args),
-      func,
-      exec::VectorFunctionMetadata{},
-      kFromJson,
-      trackCpuUsage);
+      type, std::move(args), func, metadata(), kFromJson, trackCpuUsage);
 }
 } // namespace facebook::velox::functions::sparksql

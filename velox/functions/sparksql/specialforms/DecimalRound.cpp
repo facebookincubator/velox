@@ -236,6 +236,10 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
     VELOX_USER_FAIL("{} requires an explicitly resolved result type.", name_);
   }
 
+  exec::VectorFunctionMetadata metadata() const override {
+    return exec::VectorFunctionMetadata{};
+  }
+
   exec::ExprPtr constructSpecialForm(
       const TypePtr& type,
       std::vector<exec::ExprPtr>&& args,
@@ -274,7 +278,7 @@ class DecimalRoundCallToSpecialForm : public exec::FunctionCallToSpecialForm {
         type,
         std::move(args),
         std::move(function),
-        exec::VectorFunctionMetadata{},
+        metadata(),
         name_,
         trackCpuUsage);
   }

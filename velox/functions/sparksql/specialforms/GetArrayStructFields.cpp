@@ -140,7 +140,7 @@ exec::ExprPtr GetArrayStructFieldsCallToSpecialForm::constructSpecialForm(
       type,
       std::move(args),
       std::move(getArrayStructFieldsFunction),
-      exec::VectorFunctionMetadata{},
+      metadata(),
       kGetArrayStructFields,
       trackCpuUsage);
 }

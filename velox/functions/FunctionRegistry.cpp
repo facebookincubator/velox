@@ -26,6 +26,7 @@
 #include "velox/expression/FunctionSignature.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
+#include "velox/expression/SpecialFormRegistry.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/type/Type.h"
 
@@ -90,7 +91,28 @@ void clearFunctionRegistry() {
       [](auto& functionMap) { functionMap.clear(); });
 }
 
+namespace {
+
+// Returns the metadata of the callable special form registered under
+// 'functionName'. Expression compilation runs that form in place of any
+// function of the same name.
+std::optional<exec::VectorFunctionMetadata> specialFormMetadata(
+    const std::string& functionName) {
+  const auto* specialForm =
+      exec::specialFormRegistry().getSpecialForm(functionName);
+  if (specialForm == nullptr) {
+    return std::nullopt;
+  }
+  return specialForm->metadata();
+}
+
+} // namespace
+
 std::optional<bool> isDeterministic(const std::string& functionName) {
+  if (const auto metadata = specialFormMetadata(functionName)) {
+    return metadata->deterministic;
+  }
+
   const auto simpleFunctions =
       exec::simpleFunctions().getFunctionSignaturesAndMetadata(functionName);
   const auto metadata = exec::getVectorFunctionMetadata(functionName);
@@ -110,6 +132,10 @@ std::optional<bool> isDeterministic(const std::string& functionName) {
 }
 
 std::optional<bool> isDefaultNullBehavior(const std::string& functionName) {
+  if (const auto metadata = specialFormMetadata(functionName)) {
+    return metadata->defaultNullBehavior;
+  }
+
   const auto simpleFunctions =
       exec::simpleFunctions().getFunctionSignaturesAndMetadata(functionName);
   const auto metadata = exec::getVectorFunctionMetadata(functionName);

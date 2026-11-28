@@ -126,6 +126,10 @@ class ConjunctCallToSpecialForm : public FunctionCallToSpecialForm {
       bool trackCpuUsage,
       const core::QueryConfig& config) override;
 
+  VectorFunctionMetadata metadata() const override {
+    return VectorFunctionMetadataBuilder().defaultNullBehavior(false).build();
+  }
+
  private:
   const bool isAnd_;
 };

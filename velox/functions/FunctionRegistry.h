@@ -44,14 +44,18 @@ FunctionSignatureMap getVectorFunctionSignatures();
 /// Returns if a function is deterministic by fetching all registry entries for
 /// the given function name and checking if all of them are deterministic.
 /// Returns std::nullopt if the function is not found. Returns false if any of
-/// the entries are not deterministic.
+/// the entries are not deterministic. If a callable special form is registered
+/// under the name, returns what its FunctionCallToSpecialForm::metadata
+/// declares instead.
 std::optional<bool> isDeterministic(const std::string& functionName);
 
 /// Returns if a function has default null behavior (null in any input produces
 /// null output) by fetching all registry entries for the given function name
 /// and checking if all of them have default null behavior.
 /// Returns std::nullopt if the function is not found. Returns false if any of
-/// the entries do not have default null behavior.
+/// the entries do not have default null behavior. If a callable special form is
+/// registered under the name, returns what its
+/// FunctionCallToSpecialForm::metadata declares instead.
 std::optional<bool> isDefaultNullBehavior(const std::string& functionName);
 
 /// Given a function name and argument types, returns
