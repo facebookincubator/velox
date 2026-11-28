@@ -19,8 +19,9 @@
 
 namespace facebook::velox::cudf_velox::sparksql {
 
-/// Spark hash_with_seed(seed, ...). Computes murmurhash3_x86_32 over the
-/// remaining arguments using the constant non-negative integer seed.
+/// Spark hash_with_seed(seed, ...). Computes cuDF's Spark-compatible
+/// murmurhash3_x86_32 over the remaining arguments using the constant
+/// non-negative integer seed.
 class HashFunction : public CudfFunction {
  public:
   static bool canEvaluate(const core::TypedExprPtr& expr);

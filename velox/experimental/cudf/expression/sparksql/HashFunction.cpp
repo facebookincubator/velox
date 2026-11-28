@@ -36,6 +36,25 @@ cudf::table_view convertToTableView(std::vector<ColumnOrView>& inputColumns) {
   return cudf::table_view(columns);
 }
 
+// Returns true if cuDF's Spark hash rejects the type: a TIMESTAMP whose cuDF
+// unit is not microseconds, or an ARRAY of ROW, at any nesting depth.
+bool containsUnsupportedType(const TypePtr& type) {
+  if (type->isTimestamp() &&
+      CudfConfig::getInstance().timestampUnit !=
+          cudf::type_id::TIMESTAMP_MICROSECONDS) {
+    return true;
+  }
+  if (type->isArray() && type->childAt(0)->isRow()) {
+    return true;
+  }
+  for (size_t i = 0; i < type->size(); ++i) {
+    if (containsUnsupportedType(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 bool HashFunction::canEvaluate(const core::TypedExprPtr& expr) {
@@ -43,13 +62,19 @@ bool HashFunction::canEvaluate(const core::TypedExprPtr& expr) {
     return false;
   }
 
-  // Multi-column hash_with_seed runs on GPU via cuDF murmurhash3_x86_32, which
-  // combines columns with a constant seed (hash_combine) instead of Spark's
-  // iterative seed-chaining (rapidsai/cudf#21720). When CPU fallback is
-  // allowed, reject this shape so it stays on CPU; when fallback is disabled,
-  // preserve the existing forced-GPU behavior.
-  const bool hasMultipleDataColumns = expr->inputs().size() > 2;
-  return !hasMultipleDataColumns || !CudfConfig::getInstance().allowCpuFallback;
+  for (size_t i = 1; i < expr->inputs().size(); ++i) {
+    const auto& input = expr->inputs()[i];
+    if (containsUnsupportedType(input->type())) {
+      return false;
+    }
+    // eval() receives no column for a constant input. Dropping a NULL constant
+    // is correct, because Spark skips nulls.
+    if (input->isConstantKind() &&
+        !input->asUnchecked<core::ConstantTypedExpr>()->isNull()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 HashFunction::HashFunction(
@@ -74,7 +99,7 @@ ColumnOrView HashFunction::eval(
     rmm::device_async_resource_ref mr) const {
   VELOX_CHECK(!inputColumns.empty());
   auto inputTableView = convertToTableView(inputColumns);
-  return cudf::hashing::murmurhash3_x86_32(
+  return cudf::hashing::spark_murmurhash3_x86_32(
       inputTableView, seedValue_, stream, mr);
 }
 
