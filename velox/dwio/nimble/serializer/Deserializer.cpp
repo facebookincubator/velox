@@ -506,6 +506,7 @@ void Deserializer::createDeserializersForType(
                                       type,
                                       /*isInMapStream=*/false,
                                       options_.bufferPoolCapacity,
+                                      options_.rebindEncodings,
                                       pool_))
                               .second;
     NIMBLE_CHECK(
@@ -527,6 +528,7 @@ void Deserializer::createDeserializersForType(
                                         nanosType,
                                         /*isInMapStream=*/false,
                                         options_.bufferPoolCapacity,
+                                        options_.rebindEncodings,
                                         pool_))
                                 .second;
       NIMBLE_CHECK(
@@ -546,6 +548,7 @@ void Deserializer::createDeserializersForType(
                                         type,
                                         /*isInMapStream=*/false,
                                         options_.bufferPoolCapacity,
+                                        options_.rebindEncodings,
                                         pool_))
                                 .second;
       NIMBLE_CHECK(
@@ -572,6 +575,7 @@ void Deserializer::createDeserializersForType(
                                         type,
                                         /*isInMapStream=*/true,
                                         options_.bufferPoolCapacity,
+                                        options_.rebindEncodings,
                                         pool_))
                                 .second;
       NIMBLE_CHECK(
@@ -613,6 +617,7 @@ void Deserializer::createDeserializersForType(
                       keyPresenceType,
                       /*isInMapStream=*/false,
                       options_.bufferPoolCapacity,
+                      options_.rebindEncodings,
                       pool_))
               .second;
       NIMBLE_CHECK(
@@ -627,6 +632,7 @@ void Deserializer::createDeserializersForType(
                                              inMapType,
                                              /*isInMapStream=*/false,
                                              options_.bufferPoolCapacity,
+                                             options_.rebindEncodings,
                                              pool_))
                                      .second;
       NIMBLE_CHECK(

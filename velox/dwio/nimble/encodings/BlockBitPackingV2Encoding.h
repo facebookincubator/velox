@@ -195,6 +195,11 @@ class BlockBitPackingEncodingImpl final
 
   std::string debugString(int offset) const final;
 
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
+
  private:
   friend class BlockBitPackingEncodingViewImpl<T, kLayout>;
 
@@ -213,6 +218,12 @@ class BlockBitPackingEncodingImpl final
       kHasFirstBlockRows,
       EncodingIdentifiers::BlockBitPacking,
       EncodingIdentifiers::BlockBitPackingV2>;
+
+  // Reads the block layout, the per-block metadata and the packed data of
+  // `data`.
+  void bindLayout(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory);
 
   struct BlockInfo {
     physicalType baseline;
@@ -650,6 +661,15 @@ BlockBitPackingEncodingImpl<T, kLayout>::BlockBitPackingEncodingImpl(
       blockOffsets_{this->template getVectorBuffer<uint32_t>()},
       packedData_{nullptr},
       buffer_{&pool} {
+  bindLayout(data, stringBufferFactory);
+}
+
+template <typename T, BlockBitPackingLayout kLayout>
+void BlockBitPackingEncodingImpl<T, kLayout>::bindLayout(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  auto& pool = *this->pool_;
+  const auto& options = this->options_;
   header_ = parseHeader(data, options);
 
   NIMBLE_CHECK_GT(header_.blockSize, 0);
@@ -672,6 +692,16 @@ BlockBitPackingEncodingImpl<T, kLayout>::BlockBitPackingEncodingImpl(
 
   packedData_ =
       packedDataSource(header_, uncompressedData_, &pool, options).data();
+}
+
+template <typename T, BlockBitPackingLayout kLayout>
+bool BlockBitPackingEncodingImpl<T, kLayout>::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  this->releaseBuffer(uncompressedData_);
+  row_ = 0;
+  bindLayout(data, stringBufferFactory);
+  return true;
 }
 
 template <typename T, BlockBitPackingLayout kLayout>

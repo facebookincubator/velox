@@ -118,6 +118,7 @@ BatchedStreamDecoder::BatchedStreamDecoder(
     const Type& type,
     bool isInMapStream,
     size_t bufferPoolCapacity,
+    bool rebindEncodings,
     velox::memory::MemoryPool* pool)
     : typeKind_{type.kind()},
       pool_{pool},
@@ -127,7 +128,8 @@ BatchedStreamDecoder::BatchedStreamDecoder(
       bufferPool_{
           bufferPoolCapacity > 0
               ? std::make_unique<velox::BufferPool>(bufferPoolCapacity)
-              : nullptr} {
+              : nullptr},
+      rebindEncodings_{rebindEncodings} {
   NIMBLE_CHECK(
       !isInMapStream_ || typeStorageWidth_ == sizeof(bool),
       "FlatMap in-map stream should be bool");
@@ -213,10 +215,10 @@ void BatchedStreamDecoder::reset() {
 void BatchedStreamDecoder::clear() {
   streamSegments_.clear();
   presentInMapSegments_.clear();
-  // Reset streamData_ (and hence its encoding_) BEFORE dropping
+  // Release streamData_ (and hence its encoding_) BEFORE dropping
   // encodingStringBuffers_ — the encoding may hold string_views into buffers
-  // stored there, and those views must not outlive the buffers.
-  streamData_.reset();
+  // stored there, and those views must not be read after the buffers go.
+  releaseStreamData();
   encodingStringBuffers_.clear();
   streamSegmentIndex_ = 0;
   presentSegmentIndex_ = 0;
@@ -244,12 +246,26 @@ uint32_t BatchedStreamDecoder::remainingRows() {
 }
 
 serde::StreamData& BatchedStreamDecoder::ensureStreamData() {
-  if (streamData_.has_value()) {
+  if (streamDataBound_) {
     return *streamData_;
   }
 
   NIMBLE_CHECK_LT(streamSegmentIndex_, streamSegments_.size());
   const auto& segment = streamSegments_[streamSegmentIndex_];
+  if (streamData_.has_value() && streamDataRebindable_ &&
+      !segment.legacyHeaderless) {
+    // A rebind that throws can leave the encodings bound to parts of two
+    // segments. Clearing the flag first makes the next call rebuild them.
+    streamDataRebindable_ = false;
+    streamData_->reset(
+        segment.data,
+        Encoding::Options{
+            .useVarintRowCount = segment.streamEncodingUsesVarintRowCount},
+        /*rebindEncoding=*/true);
+    streamDataRebindable_ = true;
+    streamDataBound_ = true;
+    return *streamData_;
+  }
   streamData_.emplace(
       segment.data,
       scalarKind_,
@@ -261,11 +277,20 @@ serde::StreamData& BatchedStreamDecoder::ensureStreamData() {
               segment.streamEncodingUsesVarintRowCount,
           .bufferPool = bufferPool_.get(),
           .decompressionBuffer = &decompressionBuffer_});
+  streamDataBound_ = true;
+  streamDataRebindable_ = !segment.legacyHeaderless;
   return *streamData_;
 }
 
+void BatchedStreamDecoder::releaseStreamData() {
+  streamDataBound_ = false;
+  if (!rebindEncodings_) {
+    streamData_.reset();
+  }
+}
+
 void BatchedStreamDecoder::advanceSegment() {
-  streamData_.reset();
+  releaseStreamData();
   // TODO: Release vector capacity if deep encodings bloat reserved memory.
   encodingStringBuffers_.clear();
   ++streamSegmentIndex_;
@@ -506,7 +531,7 @@ uint32_t BatchedStreamDecoder::denseRead(
       isInMapStream_,
       streamSegments_.size(),
       streamSegmentIndex_);
-  if (streamData_.has_value()) {
+  if (streamDataBound_) {
     attachEncodingBuffers(stringBuffers);
   }
   return nonNullCount;
@@ -569,7 +594,7 @@ uint32_t BatchedStreamDecoder::inMapRead(
       "Incomplete in-map read: segments={} streamSegmentIndex={}",
       streamSegments_.size(),
       streamSegmentIndex_);
-  if (streamData_.has_value()) {
+  if (streamDataBound_) {
     attachEncodingBuffers(stringBuffers);
   }
   return nonNullCount;
@@ -649,7 +674,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
       toString(typeKind_),
       streamSegments_.size(),
       streamSegmentIndex_);
-  if (streamData_.has_value()) {
+  if (streamDataBound_) {
     attachEncodingBuffers(stringBuffers);
   }
   return nonNullCount;

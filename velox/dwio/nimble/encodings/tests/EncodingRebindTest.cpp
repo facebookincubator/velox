@@ -25,6 +25,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
@@ -34,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
@@ -119,6 +121,25 @@ class EncodingRebindTest : public ::testing::Test {
       EXPECT_EQ(encoding->rowCount(), values.size());
       EXPECT_EQ(materialize<T>(*encoding), values);
     }
+  }
+
+  // Rebinds a BlockBitPacking encoding of 'kLayout' across constant, narrow
+  // and raw blocks, uncompressed and Zstd-compressed.
+  template <BlockBitPackingLayout kLayout>
+  void expectBlockBitPackingRebinds() {
+    std::vector<uint32_t> many;
+    many.reserve(3'000);
+    for (uint32_t i = 0; i < 3'000; ++i) {
+      many.push_back((i * 37) % 1'000 + (i % 300 == 0 ? 1'000'000 : 0));
+    }
+    for (const auto compression :
+         {CompressionType::Uncompressed, CompressionType::Zstd}) {
+      SCOPED_TRACE(toString(compression));
+      expectRebinds<BlockBitPackingEncodingImpl<uint32_t, kLayout>, uint32_t>(
+          {1, 2, 3, 4}, {many, {7, 7, 7}, {100, 70'000, 1}}, compression);
+    }
+    expectRebinds<BlockBitPackingEncodingImpl<int64_t, kLayout>, int64_t>(
+        {-10, -5, 0, 5}, {{-1'000'000, 1'000'000, 3}, {1, 2}});
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -501,6 +522,68 @@ TEST_F(EncodingRebindTest, partitionedEliasFano) {
   };
   expectRebinds<PartitionedEliasFanoEncoding<int64_t>, int64_t>(
       runs(2, 40, 1), {runs(5, 50, 3), runs(1, 64, 1'000), runs(30, 33, 2)});
+}
+
+TEST_F(EncodingRebindTest, blockBitPacking) {
+  {
+    SCOPED_TRACE("V1");
+    expectBlockBitPackingRebinds<BlockBitPackingLayout::kV1>();
+  }
+  {
+    SCOPED_TRACE("V2");
+    expectBlockBitPackingRebinds<BlockBitPackingLayout::kV2>();
+  }
+}
+
+TEST_F(EncodingRebindTest, slice) {
+  const auto encodeSlice = [&](const std::vector<int32_t>& values,
+                               uint32_t offset,
+                               uint32_t length,
+                               int64_t valueDelta) {
+    const auto inner = test::Encoder<FixedBitWidthEncoding<int32_t>>::encode(
+        *buffer_, makeVector<int32_t>(values));
+    return SliceEncoding<int32_t>::wrap(
+        inner, offset, length, *buffer_, valueDelta);
+  };
+  const auto expected = [](const std::vector<int32_t>& values,
+                           uint32_t offset,
+                           uint32_t length,
+                           int64_t valueDelta) {
+    std::vector<int32_t> out;
+    for (uint32_t i = offset; i < offset + length; ++i) {
+      out.push_back(static_cast<int32_t>(values[i] + valueDelta));
+    }
+    return out;
+  };
+  const std::vector<int32_t> a{10, 11, 12, 13, 14, 15};
+  const std::vector<int32_t> b{100, 200, 300, 400};
+  auto encoding = EncodingFactory().create(
+      *pool_,
+      encodeSlice(a, /*offset=*/2, /*length=*/3, /*valueDelta=*/0),
+      stringBufferFactory(),
+      {});
+  ASSERT_EQ(encoding->encodingType(), EncodingType::Slice);
+  EXPECT_EQ(
+      materialize<int32_t>(*encoding),
+      expected(a, /*offset=*/2, /*length=*/3, /*valueDelta=*/0));
+
+  ASSERT_TRUE(encoding->rebind(
+      encodeSlice(b, /*offset=*/1, /*length=*/3, /*valueDelta=*/5),
+      stringBufferFactory()));
+  EXPECT_EQ(
+      materialize<int32_t>(*encoding),
+      expected(b, /*offset=*/1, /*length=*/3, /*valueDelta=*/5));
+  encoding->reset();
+  EXPECT_EQ(
+      materialize<int32_t>(*encoding),
+      expected(b, /*offset=*/1, /*length=*/3, /*valueDelta=*/5));
+
+  ASSERT_TRUE(encoding->rebind(
+      encodeSlice(a, /*offset=*/1, /*length=*/5, /*valueDelta=*/-10),
+      stringBufferFactory()));
+  EXPECT_EQ(
+      materialize<int32_t>(*encoding),
+      expected(a, /*offset=*/1, /*length=*/5, /*valueDelta=*/-10));
 }
 
 TEST_F(EncodingRebindTest, otherEncodingTypeIsRejected) {

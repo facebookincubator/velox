@@ -43,10 +43,14 @@ class BatchedStreamDecoder : public Decoder {
  public:
   /// Copies the required metadata from `type`; the decoder does not retain a
   /// reference to it.
+  /// With `rebindEncodings`, the decoder keeps its stream encodings across
+  /// segments and clear() and rebinds them to the next segment
+  /// (Encoding::rebind) instead of rebuilding them.
   BatchedStreamDecoder(
       const Type& type,
       bool isInMapStream,
       size_t bufferPoolCapacity,
+      bool rebindEncodings,
       velox::memory::MemoryPool* pool);
 
   uint32_t next(
@@ -183,6 +187,10 @@ class BatchedStreamDecoder : public Decoder {
   // the new segment before decoding it.
   void advanceSegment();
 
+  // Unbinds streamData_ from the current segment. Drops it, or with
+  // rebindEncodings_ keeps it for ensureStreamData() to rebind.
+  void releaseStreamData();
+
   // Appends cached encoding buffer refs to the caller's vector to guarantee
   // lifetime.
   void attachEncodingBuffers(std::vector<velox::BufferPtr>& stringBuffers);
@@ -298,6 +306,8 @@ class BatchedStreamDecoder : public Decoder {
   // are reused instead of being allocated/freed through MemoryPool each time.
   // Null when buffer pooling is disabled via DeserializerOptions.
   const std::unique_ptr<velox::BufferPool> bufferPool_;
+  // Keeps streamData_ across segments and clear() to rebind it.
+  const bool rebindEncodings_;
   // Decompression buffer reused across StreamData lifetimes. Persists across
   // reset()/addBatch() cycles so the buffer capacity is reused instead of
   // freed and re-allocated on each segment transition.
@@ -314,6 +324,14 @@ class BatchedStreamDecoder : public Decoder {
   // Lazily-created StreamData wrapper reused across physical segments for this
   // stream decoder.
   std::optional<serde::StreamData> streamData_;
+  // Whether streamData_ is bound to the current segment and can be read. A
+  // kept but unbound streamData_ may hold string_views into dropped buffers,
+  // so it is only rebound, never read, until bound again.
+  bool streamDataBound_{false};
+  // Whether streamData_ can be rebound to the next segment. False when it was
+  // built from a legacy headerless segment, which cannot be rebound, or after
+  // a rebind threw.
+  bool streamDataRebindable_{false};
 
   // Row cursor in this decoder's row domain (matches
   // `StreamSegment::startRow` for in-map streams; encoded-row domain

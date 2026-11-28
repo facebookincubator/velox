@@ -3784,6 +3784,108 @@ TEST_P(NimbleIndexProjectorTest, slicesPartialStripesAroundFullStripe) {
   EXPECT_EQ(stats.numSlicedStripes, 2);
 }
 
+// One deserialize() over every slice of a lookup, as a Sequence Storage client
+// decodes a response: full-stripe slices keep chunk headers, partial ones are
+// sliced, and each stripe picks its own encodings. With rebindEncodings the
+// decoders rebind from slice to slice.
+TEST_P(NimbleIndexProjectorTest, decodesSlicesWithRebindEncodings) {
+  constexpr int kRowsPerBatch = 1'000;
+  constexpr int kNumBatches = 6;
+  auto rowType = ROW({
+      {"key", BIGINT()},
+      {"value", INTEGER()},
+      {"label", VARCHAR()},
+      {"ids", ARRAY(BIGINT())},
+  });
+  std::vector<RowVectorPtr> batches;
+  for (int b = 0; b < kNumBatches; ++b) {
+    std::vector<int64_t> keys(kRowsPerBatch);
+    std::vector<std::optional<int32_t>> values(kRowsPerBatch);
+    std::vector<std::optional<std::string>> labels(kRowsPerBatch);
+    std::vector<std::vector<int64_t>> ids(kRowsPerBatch);
+    for (int i = 0; i < kRowsPerBatch; ++i) {
+      keys[i] = b * kRowsPerBatch + i;
+      // Constant, long runs, all distinct and mostly null stripes.
+      const int64_t value = b % 4 == 0 ? 7
+          : b % 4 == 1                 ? i / 250
+                                       : keys[i] * 1'000'003 - 50'000;
+      if (b % 4 != 3 || i % 7 == 0) {
+        values[i] = static_cast<int32_t>(value);
+        labels[i] = fmt::format("label-{}", value);
+      }
+      ids[i].assign(b % 2 == 0 ? 2 : i % 4, value);
+    }
+    batches.emplace_back(vectorMaker_->rowVector(
+        {"key", "value", "label", "ids"},
+        {vectorMaker_->flatVector<int64_t>(keys),
+         vectorMaker_->flatVectorNullable<int32_t>(values),
+         vectorMaker_->flatVectorNullable<std::string>(labels),
+         vectorMaker_->arrayVector<int64_t>(ids)}));
+  }
+  // stripeSize=1 forces each batch into its own stripe.
+  writeData(batches, {"key"}, {}, /*stripeSize=*/1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  subfields.emplace_back("label");
+  subfields.emplace_back("ids");
+  auto projector = createProjector(subfields);
+  const auto request = index::IndexLookup::LookupRequest::rangeScan({
+      makeRangeLookup(rowType, {"key"}, 100, 2'900),
+      makeRangeLookup(rowType, {"key"}, 1'600, 1'700),
+      makeRangeLookup(rowType, {"key"}, 1'100, 1'400),
+      makeRangeLookup(rowType, {"key"}, 5'350, 5'900),
+      makeRangeLookup(rowType, {"key"}, 3'050, 4'990),
+      makeRangeLookup(rowType, {"key"}, 0, 1),
+      makeRangeLookup(rowType, {"key"}, 2'000, 4'000),
+  });
+  NimbleIndexProjector::Options options;
+  options.maxOverfetchRowsRatio = 0.0;
+  auto result = projector->projectStreams(*request, options);
+
+  std::vector<folly::IOBuf> chunks;
+  for (const auto& response : result.responses) {
+    for (const auto& slice : response.slices) {
+      chunks.push_back(coalesceChunkSlice(slice));
+    }
+  }
+  ASSERT_GT(chunks.size(), kNumBatches);
+  std::vector<std::string_view> views;
+  views.reserve(chunks.size());
+  for (const auto& chunk : chunks) {
+    views.emplace_back(
+        reinterpret_cast<const char*>(chunk.data()), chunk.length());
+  }
+
+  const auto decode = [&](Deserializer& deserializer) {
+    VectorPtr output;
+    std::vector<uint32_t> rowCounts;
+    deserializer.deserialize(views, output, rowCounts);
+    return std::make_pair(output, rowCounts);
+  };
+  Deserializer reference(
+      projector->projectedNimbleType(), leafPool_.get(), DeserializerOptions{});
+  const auto [expected, expectedRowCounts] = decode(reference);
+  ASSERT_GT(expected->size(), 0);
+
+  Deserializer rebinding(
+      projector->projectedNimbleType(),
+      leafPool_.get(),
+      DeserializerOptions{.rebindEncodings = true});
+  // The second call rebinds the encodings the first call left.
+  for (int call = 0; call < 2; ++call) {
+    SCOPED_TRACE(fmt::format("call {}", call));
+    const auto [actual, actualRowCounts] = decode(rebinding);
+    EXPECT_EQ(actualRowCounts, expectedRowCounts);
+    ASSERT_EQ(actual->size(), expected->size());
+    for (vector_size_t row = 0; row < expected->size(); ++row) {
+      ASSERT_TRUE(actual->equalValueAt(expected.get(), row, row))
+          << "row " << row << ": " << actual->toString(row) << " vs "
+          << expected->toString(row);
+    }
+  }
+}
+
 TEST_P(NimbleIndexProjectorTest, slicedRequestsShareShiftedBody) {
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
 

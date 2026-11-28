@@ -127,6 +127,7 @@ struct FormatParam {
   // Codec of the whole body of a kBlob input. Other input versions ignore it.
   CompressionOptions blobCompressionOptions{
       .compressionType = CompressionType::Lz4};
+  bool rebindEncodings{false};
 
   std::string name() const {
     auto base =
@@ -142,6 +143,9 @@ struct FormatParam {
       base += "_NoBufferPool";
     } else if (bufferPoolCapacity != velox::BufferPool::kDefaultCapacity) {
       base += "_BufferPool" + std::to_string(bufferPoolCapacity);
+    }
+    if (rebindEncodings) {
+      base += "_Rebind";
     }
     return base;
   }
@@ -191,6 +195,10 @@ std::vector<FormatParam> allFormatCombinations() {
        EncodingType::Trivial,
        velox::BufferPool::kDefaultCapacity,
        {.compressionType = CompressionType::Uncompressed}},
+      // Projected output decoded with encodings rebound across segments.
+      {.inputVersion = SerializationVersion::kSerialization,
+       .projectVersion = SerializationVersion::kProjection,
+       .rebindEncodings = true},
   };
 }
 
@@ -412,6 +420,7 @@ class ProjectorFormatTest : public ProjectorTestBase,
   DeserializerOptions outputDeserializerOptions() const {
     return {
         .bufferPoolCapacity = GetParam().bufferPoolCapacity,
+        .rebindEncodings = GetParam().rebindEncodings,
     };
   }
 };
