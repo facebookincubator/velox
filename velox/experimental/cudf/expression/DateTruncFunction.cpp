@@ -69,9 +69,10 @@ bool DateTruncFunction::isTimezoneSensitive(const core::TypedExprPtr& expr) {
 
   const auto unitString = constantVarcharValue(expr->inputs()[0]);
   const auto unit = functions::fromDateTimeUnitString(*unitString, false);
-  return *unit == DateTimeUnit::kHour || *unit == DateTimeUnit::kDay ||
-      *unit == DateTimeUnit::kWeek || *unit == DateTimeUnit::kMonth ||
-      *unit == DateTimeUnit::kQuarter || *unit == DateTimeUnit::kYear;
+  return *unit == DateTimeUnit::kMinute || *unit == DateTimeUnit::kHour ||
+      *unit == DateTimeUnit::kDay || *unit == DateTimeUnit::kWeek ||
+      *unit == DateTimeUnit::kMonth || *unit == DateTimeUnit::kQuarter ||
+      *unit == DateTimeUnit::kYear;
 }
 
 DateTruncFunction::DateTruncFunction(

@@ -1626,6 +1626,51 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
       Timestamp(978336000, 0),
       dateTrunc("year", Timestamp(998'474'645, 321'001'234)));
 
+  {
+    SCOPED_TRACE(
+        "Historical non-whole-minute timezone offsets and transitions");
+    setQueryTimeZone("Asia/Shanghai");
+    // 1900-01-01 00:00:00 UTC is 1900-01-01 08:05:43 in Asia/Shanghai.
+    // Truncating to minute in local time floors to 08:05:00, which is
+    // 1899-12-31 23:59:17 UTC (-43 seconds).
+    EXPECT_EQ(
+        Timestamp(-2'208'988'843, 0),
+        dateTrunc("minute", Timestamp(-2'208'988'800, 123'456'789)));
+
+    // Asia/Shanghai, Timestamp(-2'177'481'930, 0), which is local
+    // 1900-12-31 23:54:30 at +08:00, 13 s after the 1901 LMT transition.
+    // Spark returns -2177482303 (local 23:54:00 at +08:05:43).
+    EXPECT_EQ(
+        Timestamp(-2'177'482'303, 0),
+        dateTrunc("minute", Timestamp(-2'177'481'930, 0)));
+
+    // Timestamp(-9'223'372'036'843, 0) in Asia/Shanghai (+08:05:43) is
+    // -9'223'372'007'700 local seconds, an exact multiple of 60, so minute
+    // truncation returns the valid timestamp without overflow.
+    const Timestamp minValidMinute(-9'223'372'036'843, 0);
+    EXPECT_EQ(minValidMinute, dateTrunc("minute", minValidMinute));
+
+    // Negative sub-minute historical LMT offset (SPARK-33404):
+    // 1880-01-01 00:00:00 UTC in America/Los_Angeles (-07:52:58) is
+    // 1879-12-31 16:07:02 local; flooring to minute yields 16:07:00
+    // (-2 seconds).
+    setQueryTimeZone("America/Los_Angeles");
+    EXPECT_EQ(
+        Timestamp(-2'840'140'802, 0),
+        dateTrunc("minute", Timestamp(-2'840'140'800, 123'456'789)));
+
+    setQueryTimeZone("Asia/Kolkata");
+    // At 1906-01-01 00:00:00, Asia/Kolkata transitioned from LMT (+05:21:10) to
+    // IST (+05:30:00). Local times in [00:00:00, 00:08:50) are nonexistent.
+    // Timestamp(-2'019'705'670, 0) is local 1906-01-01 00:08:50 at +05:30.
+    // Floored local minute 00:08:00 falls in the gap, so the fallback path
+    // adjusts it via correct_nonexistent_time to 00:16:50 (+05:30), returning
+    // Timestamp(-2'019'705'190, 0).
+    EXPECT_EQ(
+        Timestamp(-2'019'705'190, 0),
+        dateTrunc("minute", Timestamp(-2'019'705'670, 0)));
+  }
+
   // Spark timestamps are int64 microseconds since the epoch, from
   // -290308-12-21 19:59:05.224192 to 294247-01-10 04:00:54.775807 UTC. Results
   // outside that range throw.
