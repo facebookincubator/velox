@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_executable(velox_type_tz_test TimeZoneMapTest.cpp)
+add_executable(velox_type_tz_test TimeZoneMapTest.cpp TzdbConversionTest.cpp)
 add_test(velox_type_tz_test velox_type_tz_test)
 
 target_link_libraries(
