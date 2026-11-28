@@ -62,7 +62,7 @@ void castFromTimestamp(
     const SelectivityVector& rows,
     int64_t* rawResults) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto* sessionTimeZone = functions::getSessionTimeZone(config);
+  const auto* sessionTimeZone = config.timeZone(tz::locateZone(0));
 
   const auto adjustTimestampToTimezone = config.adjustTimestampToTimezone();
 
@@ -84,7 +84,7 @@ void castFromDate(
     const SelectivityVector& rows,
     int64_t* rawResults) {
   const auto& config = context.execCtx()->queryCtx()->queryConfig();
-  const auto* sessionTimeZone = functions::getSessionTimeZone(config);
+  const auto* sessionTimeZone = config.timeZone(tz::locateZone(0));
 
   static const int64_t kSecondsInDay = 86400;
 
@@ -124,7 +124,7 @@ void castFromString(
           return;
         }
         const auto& config = context.execCtx()->queryCtx()->queryConfig();
-        timeZone = functions::getSessionTimeZone(config);
+        timeZone = config.timeZone(tz::locateZone(0));
       }
       ts.toGMT(*timeZone);
       rawResults[row] = pack(ts.toMillis(), timeZone->id());
@@ -260,7 +260,7 @@ class TimestampWithTimeZoneCastOperator final : public exec::CastOperator {
     if (input.typeKind() == TypeKind::BIGINT &&
         input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
-      const auto* sessionTimeZone = functions::getSessionTimeZone(config);
+      const auto* sessionTimeZone = config.timeZone(tz::locateZone(0));
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
 
       // Calculate midnight in UTC once (shared by both constant and

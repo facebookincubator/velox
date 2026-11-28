@@ -165,7 +165,7 @@ class TimeWithTimeZoneCastOperator final : public exec::CastOperator {
 
     if (input.type()->equivalent(*TIME())) {
       const auto& config = context.execCtx()->queryCtx()->queryConfig();
-      const auto* sessionTimeZone = functions::getSessionTimeZone(config);
+      const auto* sessionTimeZone = config.timeZone(tz::locateZone(0));
       const auto sessionStartTimeMs = config.sessionStartTimeMs();
       int16_t offsetMinutes =
           getTimezoneOffsetMinutes(sessionTimeZone, sessionStartTimeMs);
