@@ -361,6 +361,16 @@ class Operator : public BaseRuntimeStatWriter {
     return identityProjections_;
   }
 
+  /// Returns false if a dynamic filter must not be pushed through this
+  /// operator to an operator upstream of it, even along an identity
+  /// projection. FilterProject and ParallelProject return false when they
+  /// evaluate a non-deterministic expression and
+  /// dynamic_filter_pushdown_through_non_deterministic_enabled is false.
+  /// Valid only after initialize().
+  virtual bool canPushDynamicFilterThrough() const {
+    return true;
+  }
+
   /// Frees all resources associated with 'this'. No other methods
   /// should be called after this.
   virtual void close();

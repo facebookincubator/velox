@@ -1188,36 +1188,39 @@ std::unordered_set<column_index_t> Driver::canPushdownFilters(
   const int filterSourceIndex = operatorIndex(filterSource);
 
   std::unordered_set<column_index_t> supportedChannels;
-  for (auto i = 0; i < channels.size(); ++i) {
-    auto channel = channels[i];
-    for (auto j = filterSourceIndex - 1; j >= 0; --j) {
-      auto* prevOp = operators_[j].get();
-
-      if (j == 0) {
-        // Source operator.
-        if (prevOp->canAddDynamicFilter()) {
-          supportedChannels.emplace(channels[i]);
-        }
-        break;
-      }
-
-      const auto& identityProjections = prevOp->identityProjections();
-      const auto inputChannel =
-          getIdentityProjection(identityProjections, channel);
-      if (!inputChannel.has_value()) {
-        // Filter channel is not an identity projection.
-        if (prevOp->canAddDynamicFilter()) {
-          supportedChannels.emplace(channels[i]);
-        }
-        break;
-      }
-
-      // Continue walking upstream.
-      channel = inputChannel.value();
+  for (auto channel : channels) {
+    if (findDynamicFilterTarget(filterSourceIndex, channel).has_value()) {
+      supportedChannels.emplace(channel);
     }
   }
 
   return supportedChannels;
+}
+
+std::optional<std::pair<int, column_index_t>> Driver::findDynamicFilterTarget(
+    int filterSourceIndex,
+    column_index_t channel) const {
+  for (auto j = filterSourceIndex - 1; j >= 0; --j) {
+    auto* prevOp = operators_[j].get();
+    if (j > 0) {
+      if (!prevOp->canPushDynamicFilterThrough()) {
+        return std::nullopt;
+      }
+      const auto inputChannel =
+          getIdentityProjection(prevOp->identityProjections(), channel);
+      if (inputChannel.has_value()) {
+        // Continue walking upstream.
+        channel = inputChannel.value();
+        continue;
+      }
+      // Filter channel is not an identity projection.
+    }
+    if (prevOp->canAddDynamicFilter()) {
+      return std::make_pair(j, channel);
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
 }
 
 int Driver::pushdownFilters(
@@ -1228,45 +1231,29 @@ int Driver::pushdownFilters(
   int numFiltersProduced = 0;
   std::vector<int> numFiltersAccepted(filterSourceIndex);
   for (auto i = 0; i < channels.size(); ++i) {
-    auto channel = channels[i];
-    int j = -1;
-    for (j = filterSourceIndex - 1; j >= 0; --j) {
-      auto* prevOp = operators_[j].get();
-      if (j == 0) {
-        // Source operator.
-        break;
-      }
-      const auto& identityProjections = prevOp->identityProjections();
-      const auto inputChannel =
-          getIdentityProjection(identityProjections, channel);
-      if (!inputChannel.has_value()) {
-        // Filter channel is not an identity projection.
-        break;
-      }
-      // Continue walking upstream.
-      channel = inputChannel.value();
-    }
-    if (!(j >= 0 && operators_[j]->canAddDynamicFilter())) {
+    const auto target = findDynamicFilterTarget(filterSourceIndex, channels[i]);
+    if (!target.has_value()) {
       continue;
     }
+    const auto [targetIndex, targetChannel] = target.value();
     auto lkSource = pushdownFilters_->at(filterSourceIndex).wlock();
     if (lkSource->producedFilters.contains(i)) {
       // Another driver of the node produced the filter.
-      auto lkTarget = pushdownFilters_->at(j).rlock();
-      VELOX_CHECK_NOT_NULL(lkTarget->filters.at(channel));
-      VELOX_CHECK(lkTarget->dynamicFilteredColumns.contains(channel));
+      auto lkTarget = pushdownFilters_->at(targetIndex).rlock();
+      VELOX_CHECK_NOT_NULL(lkTarget->filters.at(targetChannel));
+      VELOX_CHECK(lkTarget->dynamicFilteredColumns.contains(targetChannel));
     } else {
       auto filter = makeFilter(i);
       if (filter == nullptr) {
         continue;
       }
-      auto lkTarget = pushdownFilters_->at(j).wlock();
-      common::Filter::merge(filter, lkTarget->filters[channel]);
-      lkTarget->dynamicFilteredColumns.insert(channel);
+      auto lkTarget = pushdownFilters_->at(targetIndex).wlock();
+      common::Filter::merge(filter, lkTarget->filters[targetChannel]);
+      lkTarget->dynamicFilteredColumns.insert(targetChannel);
       lkSource->producedFilters.insert(i);
     }
     ++numFiltersProduced;
-    ++numFiltersAccepted[j];
+    ++numFiltersAccepted[targetIndex];
   }
   for (int j = 0; j < filterSourceIndex; ++j) {
     if (numFiltersAccepted[j] == 0) {
