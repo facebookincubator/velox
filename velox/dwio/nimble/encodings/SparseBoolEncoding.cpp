@@ -103,6 +103,21 @@ SparseBoolEncoding::SparseBoolEncoding(
   reset();
 }
 
+bool SparseBoolEncoding::rebindImpl(
+    std::string_view data,
+    const std::function<void*(uint32_t)>& stringBufferFactory) {
+  const auto indicesOffset = this->dataOffset() + kPrefixSize;
+  NIMBLE_CHECK_FILE_GE(
+      data.size(), indicesOffset, "Truncated sparse bool encoding");
+  sparseValue_ = static_cast<bool>(data[this->dataOffset()]);
+  indices_ = detail::BufferedEncoding<uint32_t, 32>{rebindChild(
+      data.substr(indicesOffset),
+      stringBufferFactory,
+      indices_.releaseEncoding())};
+  reset();
+  return true;
+}
+
 void SparseBoolEncoding::reset() {
   row_ = 0;
   indices_.reset();
