@@ -753,7 +753,13 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
         excluded, excluded, false);
   }
 
-  VELOX_NYI_CHECK_NE(typeKind, TypeKind::HUGEINT);
+  // Not-equal over HUGEINT is not expressible as a subfield filter yet.
+  // Return no filter so the caller keeps the predicate as a remaining
+  // filter, like every other unsupported case in this function, instead
+  // of failing the query.
+  if (typeKind == TypeKind::HUGEINT) {
+    return nullptr;
+  }
   if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
       lessThanFilter->kind() == common::FilterKind::kIsNull) {
     return greaterThanFilter;
