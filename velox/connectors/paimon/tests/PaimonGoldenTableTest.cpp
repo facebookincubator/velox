@@ -237,6 +237,14 @@ TEST_F(PaimonGoldenTableTest, javaTables) {
       "sequence_field",
       // A raw split whose compacted file has a deletion vector.
       "deletion_vectors",
+      // A merge split of an aggregation table with retracts and a key that
+      // has only an UPDATE_BEFORE row.
+      "aggregation",
+      // A merge split of an aggregation table whose DELETE rows replace the
+      // merged row.
+      "aggregation_remove_record_on_delete",
+      // A merge split of an aggregation table whose compaction looks up keys.
+      "aggregation_lookup",
   };
   for (const auto& name : cases) {
     SCOPED_TRACE(name);

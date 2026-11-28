@@ -606,6 +606,111 @@ TEST_F(PaimonTableHandleTest, needLookup) {
       "Paimon table option must be true or false: deletion-vectors.enabled");
 }
 
+TEST_F(PaimonTableHandleTest, fieldAggregations) {
+  const auto make = [](std::unordered_map<std::string, std::string> options) {
+    return PaimonTableHandle(
+        "test-paimon",
+        "orders",
+        0,
+        rowType(),
+        {7, 8, 20},
+        PaimonTableType::kPrimaryKey,
+        {"p"},
+        std::move(options),
+        /*subfieldFilters=*/{},
+        /*remainingFilter=*/nullptr,
+        /*filterColumnHandles=*/{},
+        /*sampleRate=*/1.0,
+        /*dbName=*/"",
+        /*primaryKeys=*/{"id", "p"});
+  };
+  struct TestParam {
+    std::unordered_map<std::string, std::string> options;
+    std::string valueFunction;
+    bool valueIgnoreRetract;
+    bool removeRecordOnDelete;
+
+    std::string debugString() const {
+      std::vector<std::string> entries;
+      entries.reserve(options.size());
+      for (const auto& [key, value] : options) {
+        entries.push_back(fmt::format("{}={}", key, value));
+      }
+      std::sort(entries.begin(), entries.end());
+      return fmt::format(
+          "options [{}], valueFunction {}, valueIgnoreRetract {}, "
+          "removeRecordOnDelete {}",
+          fmt::join(entries, ", "),
+          valueFunction,
+          valueIgnoreRetract,
+          removeRecordOnDelete);
+    }
+  };
+  // Primary keys always take 'primary-key', and sequence fields 'last_value'.
+  const std::vector<TestParam> testSettings{
+      {{}, "last_non_null_value", false, false},
+      {{{"fields.default-aggregate-function", "sum"}}, "sum", false, false},
+      {{{"fields.default-aggregate-function", "sum"},
+        {"fields.value.aggregate-function", "max"}},
+       "max",
+       false,
+       false},
+      {{{"fields.value.aggregate-function", "sum"},
+        {"sequence.field", "value"}},
+       "last_value",
+       false,
+       false},
+      {{{"fields.id.aggregate-function", "sum"},
+        {"fields.p.aggregate-function", "sum"}},
+       "last_non_null_value",
+       false,
+       false},
+      {{{"fields.value.aggregate-function", "sum"},
+        {"fields.value.ignore-retract", "TRUE"}},
+       "sum",
+       true,
+       false},
+      {{{"aggregation.remove-record-on-delete", "true"}},
+       "last_non_null_value",
+       false,
+       true},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    auto options = testData.options;
+    options.emplace("merge-engine", "aggregation");
+    const auto handle = make(std::move(options));
+    const auto& mergeOptions = handle.mergeOptions();
+    const auto& aggregations = mergeOptions.fieldAggregations;
+    ASSERT_EQ(aggregations.size(), 3);
+    EXPECT_EQ(aggregations.at("id").function, "primary-key");
+    EXPECT_FALSE(aggregations.at("id").ignoreRetract);
+    EXPECT_EQ(aggregations.at("p").function, "primary-key");
+    EXPECT_EQ(aggregations.at("value").function, testData.valueFunction);
+    EXPECT_EQ(
+        aggregations.at("value").ignoreRetract, testData.valueIgnoreRetract);
+    EXPECT_EQ(
+        mergeOptions.aggregationRemoveRecordOnDelete,
+        testData.removeRecordOnDelete);
+  }
+
+  // Other merge engines aggregate no column.
+  EXPECT_TRUE(make({{"fields.value.aggregate-function", "sum"}})
+                  .mergeOptions()
+                  .fieldAggregations.empty());
+  VELOX_ASSERT_USER_THROW(
+      make(
+          {{"merge-engine", "aggregation"},
+           {"fields.value.ignore-retract", "yes"}}),
+      "Paimon table option must be true or false: fields.value.ignore-retract");
+  VELOX_ASSERT_USER_THROW(
+      make(
+          {{"merge-engine", "aggregation"},
+           {"aggregation.remove-record-on-delete", "1"}}),
+      "Paimon table option must be true or false: "
+      "aggregation.remove-record-on-delete");
+}
+
 TEST_F(PaimonTableHandleTest, malformedWire) {
   const auto good = table()->serialize();
   auto obj = good;

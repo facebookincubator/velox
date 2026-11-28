@@ -1,0 +1,1 @@
+[ [ 1, 111, 12, -1.0, 9.5, "a3", "a", true, "z" ], [ 2, 22, 2, 2.0, 2.5, null, "b", false, null ], [ 3, 30, 4, 3.5, 3.5, null, null, null, null ], [ 4, 0, 1, 4.0, 4.0, null, "d", true, null ], [ 5, 0, 1, 5.5, 5.5, null, "e", false, null ] ]

@@ -49,10 +49,28 @@ velox_link_libraries(
 )
 
 velox_add_library(
+  velox_paimon_merge_function
+  PaimonFieldAggregator.cpp
+  PaimonMergeFunction.cpp
+  HEADERS
+  PaimonFieldAggregator.h
+  PaimonMergeFunction.h
+)
+
+velox_link_libraries(
+  velox_paimon_merge_function
+  velox_paimon_split
+  velox_paimon_table_handle
+  velox_vector
+  Boost::headers
+)
+
+velox_add_library(
   velox_paimon_connector
   PaimonConnector.cpp
   PaimonDataSource.cpp
   PaimonDeletionVectorReader.cpp
+  PaimonFieldMergeSplitReader.cpp
   PaimonMergeSplitReader.cpp
   PaimonMergeStream.cpp
   PaimonSplitReader.cpp
@@ -61,6 +79,7 @@ velox_add_library(
   PaimonConnector.h
   PaimonDataSource.h
   PaimonDeletionVectorReader.h
+  PaimonFieldMergeSplitReader.h
   PaimonMergeSplitReader.h
   PaimonMergeStream.h
   PaimonSplitReader.h
@@ -68,6 +87,7 @@ velox_add_library(
 
 velox_link_libraries(
   velox_paimon_connector
+  velox_paimon_merge_function
   velox_paimon_split
   velox_paimon_table_handle
   velox_paimon_column_handle

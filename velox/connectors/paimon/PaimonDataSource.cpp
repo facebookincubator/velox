@@ -17,6 +17,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/connectors/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonFieldMergeSplitReader.h"
 #include "velox/connectors/paimon/PaimonMergeSplitReader.h"
 #include "velox/connectors/paimon/PaimonSplitReader.h"
 #include "velox/connectors/paimon/PaimonTableHandle.h"
@@ -103,8 +104,7 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         "Paimon table handle must have primary keys for merge-on-read: {}",
         paimonTableHandle_->tableName());
     const auto mergeEngine = paimonTableHandle_->mergeOptions().mergeEngine;
-    if (mergeEngine == PaimonMergeEngine::kPartialUpdate ||
-        mergeEngine == PaimonMergeEngine::kAggregation) {
+    if (mergeEngine == PaimonMergeEngine::kPartialUpdate) {
       VELOX_NYI(
           "Paimon merge-on-read does not support the merge engine: {}",
           mergeEngine);
@@ -127,6 +127,23 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 std::unique_ptr<connector::FileSplitReader>
 PaimonDataSource::createSplitReader() {
   if (needsMerge(*paimonSplit_)) {
+    if (paimonTableHandle_->mergeOptions().mergeEngine ==
+        PaimonMergeEngine::kAggregation) {
+      return std::make_unique<PaimonFieldMergeSplitReader>(
+          split_,
+          paimonSplit_,
+          paimonTableHandle_,
+          &partitionKeys_,
+          connectorQueryCtx_,
+          fileConfig_,
+          readerOutputType_,
+          dataIoStats_,
+          metadataIoStats_,
+          ioStats_,
+          fileHandleFactory_,
+          ioExecutor_,
+          fileScanState_->scanSpec);
+    }
     return std::make_unique<PaimonMergeSplitReader>(
         split_,
         paimonSplit_,
