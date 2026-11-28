@@ -205,12 +205,17 @@ TEST_F(CursorTest, setErrorConcurrentWithMoveNext) {
 
 // After the task is cancelled, the parallel cursor surfaces cooperative
 // cancellation (folly::OperationCancelled) from moveNext() rather than
-// returning data. requestCancel().wait() makes the terminal state deterministic
-// before we pull.
+// returning data.
 TEST_F(CursorTest, cancelSurfacesErrorParallel) {
-  auto cursor = TaskCursor::create(makeParams(/*serialExecution=*/false));
+  auto params = makeParams(/*serialExecution=*/false);
+  // Blocks the producer on its first batch, so the task is still running when
+  // requestCancel() arrives. A task that finished first ignores the cancel, and
+  // moveNext() returns its output.
+  params.bufferedBytes = 1;
+  auto cursor = TaskCursor::create(params);
   cursor->start();
   cursor->task()->requestCancel().wait();
+  ASSERT_EQ(cursor->task()->state(), TaskState::kCanceled);
 
   ContinueFuture future = ContinueFuture::makeEmpty();
   EXPECT_THROW(cursor->moveNext(&future), folly::OperationCancelled);
