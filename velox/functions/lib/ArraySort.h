@@ -36,6 +36,31 @@ std::shared_ptr<exec::VectorFunction> makeArraySort(
     bool nullsFirst,
     bool throwOnNestedNull);
 
+/// Options for array_sort without a lambda.
+struct ArraySortOptions {
+  /// If true, sort in ascending order; otherwise, sort in descending order.
+  bool ascending{true};
+  /// If true, top-level nulls are placed first; otherwise, they are placed
+  /// last.
+  bool nullsFirst{false};
+  /// If true, nulls nested inside complex values are ordered first;
+  /// otherwise, they are ordered last.
+  bool nestedNullsFirst{false};
+  /// If true, throw an exception if a nested null is encountered.
+  bool throwOnNestedNull{true};
+  /// If true, preserve the original order of elements that compare equal but
+  /// are distinguishable, such as -0.0 and 0.0. Ignored for element types
+  /// whose equal values are indistinguishable.
+  bool stable{false};
+};
+
+/// Creates array_sort function.
+std::shared_ptr<exec::VectorFunction> makeArraySort(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config,
+    const ArraySortOptions& options);
+
 /// Creates array_sort with a lambda function.
 ///
 /// @param ascending If true, sort in ascending order; otherwise, sort in
@@ -48,6 +73,27 @@ std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
     const core::QueryConfig& config,
     bool ascending,
     bool throwOnNestedNull);
+
+/// Options for array_sort with a sort-key lambda.
+struct ArraySortLambdaOptions {
+  /// If true, sort in ascending order; otherwise, sort in descending order.
+  bool ascending{true};
+  /// If true, throw an exception if a nested null is encountered.
+  bool throwOnNestedNull{true};
+  /// If true, throw a user error when the lambda produces a null sort key for
+  /// an array with at least two elements.
+  bool rejectNullSortKeys{false};
+  /// If true, don't evaluate the lambda for arrays with fewer than two
+  /// elements.
+  bool skipLambdaForTrivialArrays{false};
+};
+
+/// Creates array_sort with a lambda function.
+std::shared_ptr<exec::VectorFunction> makeArraySortLambdaFunction(
+    const std::string& name,
+    const std::vector<exec::VectorFunctionArg>& inputArgs,
+    const core::QueryConfig& config,
+    const ArraySortLambdaOptions& options);
 
 /// Returns signatures for array_sort function.
 ///
@@ -71,5 +117,23 @@ core::TypedExprPtr rewriteArraySortCall(
     const std::string& prefix,
     const core::TypedExprPtr& expr,
     const std::shared_ptr<SimpleComparisonChecker> checker);
+
+/// Options for rewriting array_sort comparator lambdas.
+struct ArraySortRewriteOptions {
+  /// If true, comparators may return any negative value, zero, and any
+  /// positive value. Otherwise, only -1, 0, and 1 are accepted.
+  bool supportsArbitraryComparatorResults{false};
+  /// If true, rewrite into '$internal$array_sort_comparator[_desc]', which
+  /// rejects null sort keys at runtime. Otherwise, rewrite into
+  /// 'array_sort[_desc]'.
+  bool rejectNullSortKeys{false};
+};
+
+/// Same as above, but with configurable rewrite options.
+core::TypedExprPtr rewriteArraySortCall(
+    const std::string& prefix,
+    const core::TypedExprPtr& expr,
+    const std::shared_ptr<SimpleComparisonChecker> checker,
+    const ArraySortRewriteOptions& options);
 
 } // namespace facebook::velox::functions
