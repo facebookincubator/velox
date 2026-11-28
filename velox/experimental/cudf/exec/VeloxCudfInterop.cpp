@@ -35,6 +35,7 @@
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
@@ -42,9 +43,6 @@
 namespace facebook::velox::cudf_velox {
 
 std::optional<cudf::data_type> tryVeloxToCudfDataType(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return std::nullopt;
-  }
   switch (type->kind()) {
     case TypeKind::BOOLEAN:
       return cudf::data_type{cudf::type_id::BOOL8};
@@ -132,6 +130,35 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
 
 bool isTypeSupportedByCudf(const TypePtr& type) {
   return tryVeloxToCudfDataType(type).has_value();
+}
+
+bool containsCustomComparison(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return true;
+  }
+  for (uint32_t i = 0; i < type->size(); ++i) {
+    if (containsCustomComparison(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsCustomComparison(const core::TypedExprPtr& expression) {
+  if (containsCustomComparison(expression->type())) {
+    return true;
+  }
+  const auto& inputs = expression->inputs();
+  return std::any_of(inputs.begin(), inputs.end(), [](const auto& input) {
+    return containsCustomComparison(input);
+  });
+}
+
+bool containsCustomComparison(
+    const std::vector<core::FieldAccessTypedExprPtr>& keys) {
+  return std::any_of(keys.begin(), keys.end(), [](const auto& key) {
+    return containsCustomComparison(key->type());
+  });
 }
 
 namespace with_arrow {
