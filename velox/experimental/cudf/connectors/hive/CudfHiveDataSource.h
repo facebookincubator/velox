@@ -18,6 +18,7 @@
 
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
+#include "velox/experimental/cudf/connectors/hive/CudfRowGroupPruning.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
@@ -45,6 +46,11 @@ using namespace facebook::velox::connector;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
+  /// Runtime stat: the number of row groups cuDF's statistics pass tested,
+  /// which the host row-group test spares when it decides every filter.
+  static constexpr std::string_view kCudfStatsTestedStrides{
+      "cudfStatsTestedStrides"};
+
   /// DWIO bytes read, preserved separately from ReadFile bytes.
   static constexpr std::string_view kDwioStorageReadBytes{
       "dwio.storageReadBytes"};
@@ -226,6 +232,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   size_t completedBytes_{0};
 
   dwio::common::RuntimeStats runtimeStats_;
+  int64_t cudfStatsTestedStrides_{0};
+
+  // The subfield filters prepared for the host row-group test of the splits
+  // this data source opens; unset until the first of them.
+  std::optional<HostRowGroupPruningFilters> hostRowGroupPruningFilters_;
 
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
