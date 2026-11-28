@@ -21,11 +21,14 @@
 ///   --fuzzer_max_rows=N       Maximum rows per iteration (default: 5000)
 ///   --fuzzer_seed=N           Fixed seed, 0=random (default: 42)
 ///   --fuzzer_compression      Enable compression testing (default: true)
+///   --rebind_fuzzer_seed=N    Rebind fuzzer seed, 0=random (default: 0)
 
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -64,13 +67,22 @@
 #endif
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
+#include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/fuzzer/encoding/EncodingFuzzer.h"
 
 DEFINE_uint32(fuzzer_iterations, 50, "Number of fuzzer iterations per test");
 DEFINE_uint32(fuzzer_max_rows, 5000, "Maximum rows per fuzzer iteration");
 DEFINE_uint32(fuzzer_seed, 42, "Fuzzer seed (0 = random each run)");
 DEFINE_bool(fuzzer_compression, true, "Test with compression enabled");
+DEFINE_uint32(
+    rebind_fuzzer_seed,
+    0,
+    "Rebind fuzzer seed (0 = random each process)");
 
 using namespace facebook;
 using namespace facebook::nimble;
@@ -473,6 +485,442 @@ TYPED_TEST(HuffmanFuzzerTest, correctness) {
       /*minDistinctValues=*/2,
       /*maxDistinctValues=*/HuffmanEncoding<int8_t>::kMaxSymbols);
   fuzzer.run();
+}
+
+namespace {
+
+// Encodings the rebind fuzzer forces on the first payload of a stream, and
+// draws nested encodings from: every encoding the size estimator covers.
+constexpr std::array kRebindFuzzerEncodingTypes{
+    EncodingType::Trivial,
+    EncodingType::RLE,
+    EncodingType::Dictionary,
+    EncodingType::FixedBitWidth,
+    EncodingType::SparseBool,
+    EncodingType::Varint,
+    EncodingType::Constant,
+    EncodingType::MainlyConstant,
+    EncodingType::ALP,
+    EncodingType::ALPRD,
+    EncodingType::BlockBitPacking,
+    EncodingType::BlockBitPackingV2,
+    EncodingType::Fsst,
+    EncodingType::Huffman,
+    EncodingType::DeltaBlock,
+    EncodingType::EliasFano,
+    EncodingType::PartitionedEliasFano,
+    EncodingType::PFOR,
+    EncodingType::SimdForBitpack,
+    EncodingType::Reversed,
+    EncodingType::Sequence,
+};
+
+// Encodings whose rebind() must succeed for a payload of the same encoding and
+// data type.
+constexpr std::array kRebindableEncodingTypes{
+    EncodingType::Trivial,
+    EncodingType::RLE,
+    EncodingType::Dictionary,
+    EncodingType::FixedBitWidth,
+    EncodingType::SparseBool,
+    EncodingType::Varint,
+    EncodingType::Constant,
+    EncodingType::MainlyConstant,
+    EncodingType::DeltaBlock,
+    EncodingType::EliasFano,
+    EncodingType::PartitionedEliasFano,
+};
+
+bool isRebindable(EncodingType encodingType) {
+  return std::find(
+             kRebindableEncodingTypes.begin(),
+             kRebindableEncodingTypes.end(),
+             encodingType) != kRebindableEncodingTypes.end();
+}
+
+std::vector<EncodingType> rebindFuzzerCandidates() {
+  return {kRebindFuzzerEncodingTypes.begin(), kRebindFuzzerEncodingTypes.end()};
+}
+
+// Selects `encodingType` for the top-level stream, failing with
+// IncompatibleEncoding when the values do not fit it, and random encodings for
+// the nested streams.
+template <typename T>
+class TopLevelEncodingSelectionPolicy
+    : public nimble::testing::RandomEncodingSelectionPolicy<T> {
+  using physicalType = typename TypeTraits<T>::physicalType;
+  using Base = nimble::testing::RandomEncodingSelectionPolicy<T>;
+
+ public:
+  TopLevelEncodingSelectionPolicy(
+      EncodingType encodingType,
+      uint64_t seed,
+      std::optional<CompressionOptions> compressionOptions)
+      : Base{seed, rebindFuzzerCandidates(), compressionOptions},
+        encodingType_{encodingType},
+        compressionOptions_{std::move(compressionOptions)} {}
+
+  using Base::select;
+
+  EncodingSelectionResult select(
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options) override {
+    const auto estimatedSize =
+        nimble::detail::EncodingSizeEstimation<T>::estimateSize(
+            *this, encodingType_, values, statistics, options);
+    if (!estimatedSize.has_value()) {
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Values do not fit encoding {}.", toString(encodingType_));
+    }
+    EncodingSelectionResult result{
+        .encodingType = encodingType_,
+        .estimatedSize = estimatedSize,
+    };
+    if (compressionOptions_.has_value()) {
+      result.compressionPolicyFactory = [compressionOptions =
+                                             compressionOptions_.value(),
+                                         encodingType = encodingType_]() {
+        return std::make_unique<ConfiguredCompressionPolicy>(
+            compressionOptions, encodingType);
+      };
+    }
+    return result;
+  }
+
+ private:
+  const EncodingType encodingType_;
+  const std::optional<CompressionOptions> compressionOptions_;
+};
+
+// One dataset per shared data pattern that fits T, as candidates for the
+// payloads of one stream.
+template <typename T>
+std::vector<Vector<T>> makeRebindDatasets(
+    velox::memory::MemoryPool& pool,
+    std::mt19937& rng,
+    uint32_t rowCount,
+    Buffer* buffer) {
+  std::vector<Vector<T>> datasets;
+  {
+    Vector<T> random(&pool);
+    random.reserve(rowCount);
+    nimble::testing::addRandomData<T>(rng, rowCount, &random, buffer);
+    datasets.push_back(std::move(random));
+  }
+  datasets.push_back(makeSingleValueData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeMainlyConstantData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeLowCardinalityData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeDominantValueData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeMixedRegimeData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeBoundaryMixedData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeMonotonicData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeSortedData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeDeltaBlockSortedData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeBitStructuredData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(makeSnowflakeData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(
+      makeFloatingPointDecimalData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(
+      makeFloatingPointSpecialData<T>(pool, rng, rowCount, buffer));
+  datasets.push_back(
+      makeFloatingPointMixedExceptionData<T>(pool, rng, rowCount, buffer));
+  if constexpr (std::is_same_v<T, std::string_view>) {
+    datasets.push_back(
+        makeFsstData(pool, rng, rowCount, buffer, /*repeated=*/true));
+    datasets.push_back(
+        makeFsstData(pool, rng, rowCount, buffer, /*repeated=*/false));
+  }
+  std::erase_if(
+      datasets, [](const Vector<T>& values) { return values.empty(); });
+  return datasets;
+}
+
+// Encodes 2 or 3 payloads of one stream and rebinds one encoding across them
+// and back to the first. A successful rebind must read like an encoding freshly
+// built from the new payload. A failed one must leave the encoding reading its
+// current payload from where it stopped.
+template <typename T>
+class EncodingRebindFuzzer {
+ public:
+  EncodingRebindFuzzer(velox::memory::MemoryPool& pool, std::mt19937& rng)
+      : pool_{pool},
+        rng_{rng},
+        options_{makeOptions(rng)},
+        compressionOptions_{
+            folly::Random::oneIn(2, rng)
+                ? std::optional<CompressionOptions>{CompressionOptions{}}
+                : std::nullopt},
+        buffer_{pool} {}
+
+  // Encodes the first payload with `encodingType` at the top level and returns
+  // the number of successful rebinds. Skips the stream when no dataset fits
+  // that encoding.
+  uint32_t run(EncodingType encodingType) {
+    const uint32_t rowCount =
+        1 + folly::Random::rand32(FLAGS_fuzzer_max_rows, rng_);
+    auto datasets = makeRebindDatasets<T>(pool_, rng_, rowCount, &buffer_);
+    std::shuffle(datasets.begin(), datasets.end(), rng_);
+    for (const auto& values : datasets) {
+      const auto first = tryEncode([&]() {
+        return EncodingFactory::encode<T>(
+            makeTopLevelPolicy(encodingType),
+            std::span<const T>{values.data(), values.size()},
+            buffer_,
+            options_);
+      });
+      if (!first.has_value()) {
+        continue;
+      }
+      std::vector<std::string_view> payloads{*first};
+      payloads.push_back(encodeSameTopLevelPayload(*first, values, datasets));
+      if (folly::Random::oneIn(2, rng_)) {
+        payloads.push_back(encodeOtherPayload(datasets));
+      }
+      return rebindAcross(payloads);
+    }
+    return 0;
+  }
+
+ private:
+  static Encoding::Options makeOptions(std::mt19937& rng) {
+    Encoding::Options options;
+    options.useVarintRowCount = folly::Random::oneIn(2, rng);
+    // Keeps FSST output while leaving size estimates representable.
+    options.fsstCompressionTargetRatio = std::numeric_limits<uint32_t>::max();
+    return options;
+  }
+
+  std::unique_ptr<EncodingSelectionPolicy<T>> makeTopLevelPolicy(
+      EncodingType encodingType) {
+    return std::make_unique<TopLevelEncodingSelectionPolicy<T>>(
+        encodingType, rng_(), compressionOptions_);
+  }
+
+  // Replays the layout of `encoded`, with random encodings for nested streams
+  // the layout lacks, e.g. a Dictionary alphabet that was Constant and no
+  // longer is.
+  std::unique_ptr<EncodingSelectionPolicy<T>> makeSameLayoutPolicy(
+      std::string_view encoded) {
+    return std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
+        EncodingLayoutCapture::capture(encoded, options_),
+        compressionOptions_,
+        [factory =
+             nimble::testing::RandomEncodingSelectionPolicyFactory{
+                 rng_(), rebindFuzzerCandidates(), compressionOptions_}](
+            DataType dataType) { return factory.createPolicy(dataType); });
+  }
+
+  // Returns std::nullopt when the selected encoding does not fit the values.
+  static std::optional<std::string_view> tryEncode(
+      const std::function<std::string_view()>& encode) {
+    try {
+      return encode();
+    } catch (const NimbleUserError& e) {
+      if (e.errorCode() == error_code::IncompatibleEncoding) {
+        return std::nullopt;
+      }
+      throw;
+    }
+  }
+
+  // Encodes a random row range of `values` with the top-level encoding of
+  // `first`: half of the time with its whole captured layout, otherwise with
+  // new random nested encodings. Falls back to encodeOtherPayload() when the
+  // range does not fit.
+  std::string_view encodeSameTopLevelPayload(
+      std::string_view first,
+      const Vector<T>& values,
+      const std::vector<Vector<T>>& datasets) {
+    const auto offset =
+        folly::Random::rand32(static_cast<uint32_t>(values.size()), rng_);
+    const auto length =
+        1 +
+        folly::Random::rand32(
+            static_cast<uint32_t>(values.size()) - offset, rng_);
+    const std::span<const T> range{values.data() + offset, length};
+    if (folly::Random::oneIn(2, rng_)) {
+      const auto sameLayout = tryEncode([&]() {
+        return EncodingFactory::encode<T>(
+            makeSameLayoutPolicy(first), range, buffer_, options_);
+      });
+      if (sameLayout.has_value()) {
+        return *sameLayout;
+      }
+    }
+    const auto sameTopLevel = tryEncode([&]() {
+      return EncodingFactory::encode<T>(
+          makeTopLevelPolicy(EncodingPrefix::encodingType(first)),
+          range,
+          buffer_,
+          options_);
+    });
+    if (sameTopLevel.has_value()) {
+      return *sameTopLevel;
+    }
+    return encodeOtherPayload(datasets);
+  }
+
+  // Encodes a random dataset with random encodings at every level.
+  std::string_view encodeOtherPayload(const std::vector<Vector<T>>& datasets) {
+    const auto& values = datasets[folly::Random::rand32(
+        static_cast<uint32_t>(datasets.size()), rng_)];
+    return EncodingFactory::encode<T>(
+        std::make_unique<nimble::testing::RandomEncodingSelectionPolicy<T>>(
+            rng_(), rebindFuzzerCandidates(), compressionOptions_),
+        std::span<const T>{values.data(), values.size()},
+        buffer_,
+        options_);
+  }
+
+  // Returns the number of successful rebinds.
+  uint32_t rebindAcross(const std::vector<std::string_view>& payloads) {
+    auto encoding = create(payloads[0]);
+    const auto encodingType = EncodingPrefix::encodingType(payloads[0]);
+    std::vector<size_t> targets;
+    for (size_t target = 1; target < payloads.size(); ++target) {
+      targets.push_back(target);
+    }
+    targets.push_back(0);
+
+    size_t bound = 0;
+    uint32_t numRebinds = 0;
+    for (const auto target : targets) {
+      const auto targetType = EncodingPrefix::encodingType(payloads[target]);
+      SCOPED_TRACE(
+          ::testing::Message()
+          << "rebind " << toString(encodingType) << " from payload " << bound
+          << " to payload " << target << " (" << toString(targetType) << ", "
+          << payloads.size() << " payloads)");
+      auto boundFresh = create(payloads[bound]);
+      encoding->reset();
+      const auto readRows = readSameRandomRows(
+          *encoding,
+          *boundFresh,
+          folly::Random::rand32(boundFresh->rowCount() + 1, rng_));
+      const bool rebound =
+          encoding->rebind(payloads[target], stringBufferFactory());
+      EXPECT_EQ(
+          rebound, targetType == encodingType && isRebindable(encodingType));
+      if (!rebound) {
+        expectSameRows(
+            *encoding, *boundFresh, boundFresh->rowCount() - readRows);
+        expectSameReads(*encoding, *boundFresh);
+        continue;
+      }
+      bound = target;
+      ++numRebinds;
+      auto fresh = create(payloads[target]);
+      EXPECT_EQ(encoding->rowCount(), fresh->rowCount());
+      expectSameReads(*encoding, *fresh);
+    }
+    return numRebinds;
+  }
+
+  std::unique_ptr<Encoding> create(std::string_view encoded) {
+    return EncodingFactory{}.create(
+        pool_, encoded, stringBufferFactory(), options_);
+  }
+
+  std::function<void*(uint32_t)> stringBufferFactory() {
+    return [this](uint32_t totalLength) {
+      auto& buffer = stringBuffers_.emplace_back(
+          velox::AlignedBuffer::allocate<char>(totalLength, &pool_));
+      return buffer->template asMutable<void>();
+    };
+  }
+
+  // Reads both encodings, bound to the same payload, from the start: all rows
+  // at once, then in random runs that are either skipped or read.
+  void expectSameReads(Encoding& rebound, Encoding& fresh) {
+    rebound.reset();
+    fresh.reset();
+    expectSameRows(rebound, fresh, fresh.rowCount());
+    rebound.reset();
+    fresh.reset();
+    readSameRandomRows(rebound, fresh, fresh.rowCount());
+  }
+
+  // Advances both encodings by `numRows` in random runs that are either skipped
+  // or read and compared. Returns `numRows`.
+  uint32_t
+  readSameRandomRows(Encoding& rebound, Encoding& fresh, uint32_t numRows) {
+    uint32_t row = 0;
+    while (row < numRows) {
+      const auto runRows = 1 + folly::Random::rand32(numRows - row, rng_);
+      if (folly::Random::oneIn(2, rng_)) {
+        rebound.skip(runRows);
+        fresh.skip(runRows);
+      } else {
+        expectSameRows(rebound, fresh, runRows);
+      }
+      row += runRows;
+    }
+    return numRows;
+  }
+
+  // Reads the next `numRows` of both encodings and expects the same values, bit
+  // for bit.
+  void expectSameRows(Encoding& rebound, Encoding& fresh, uint32_t numRows) {
+    if (numRows == 0) {
+      return;
+    }
+    Vector<T> actual(&pool_, numRows);
+    Vector<T> expected(&pool_, numRows);
+    rebound.materialize(numRows, actual.data());
+    fresh.materialize(numRows, expected.data());
+    for (uint32_t i = 0; i < numRows; ++i) {
+      ASSERT_EQ(
+          EncodingPhysicalType<T>::asEncodingPhysicalType(actual[i]),
+          EncodingPhysicalType<T>::asEncodingPhysicalType(expected[i]))
+          << "row " << i << " of " << numRows;
+    }
+  }
+
+  velox::memory::MemoryPool& pool_;
+  std::mt19937& rng_;
+  const Encoding::Options options_;
+  const std::optional<CompressionOptions> compressionOptions_;
+  Buffer buffer_;
+  std::vector<velox::BufferPtr> stringBuffers_;
+};
+
+} // namespace
+
+using RebindFuzzerTypes = ::testing::Types<
+    bool,
+    int8_t,
+    uint8_t,
+    int16_t,
+    uint16_t,
+    int32_t,
+    uint32_t,
+    int64_t,
+    uint64_t,
+    float,
+    double,
+    std::string_view>;
+
+template <typename T>
+class RebindFuzzerTest : public ::testing::Test {};
+TYPED_TEST_SUITE(RebindFuzzerTest, RebindFuzzerTypes);
+
+// Draws one seed per process; repeat with --stress-runs.
+TYPED_TEST(RebindFuzzerTest, rebindAcrossPayloads) {
+  const uint32_t seed = FLAGS_rebind_fuzzer_seed != 0 ? FLAGS_rebind_fuzzer_seed
+                                                      : folly::Random::rand32();
+  LOG(INFO) << "RebindFuzzerTest seed: " << seed
+            << " dtype: " << toString(TypeTraits<TypeParam>::dataType);
+  SCOPED_TRACE(::testing::Message() << "seed " << seed);
+  std::mt19937 rng(seed);
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  for (const auto encodingType : kRebindFuzzerEncodingTypes) {
+    SCOPED_TRACE(toString(encodingType));
+    const auto numRebinds =
+        EncodingRebindFuzzer<TypeParam>(*pool, rng).run(encodingType);
+    LOG(INFO) << toString(encodingType) << ": " << numRebinds
+              << " successful rebinds";
+  }
 }
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS

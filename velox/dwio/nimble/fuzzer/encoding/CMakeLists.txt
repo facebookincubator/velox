@@ -79,6 +79,7 @@ target_compile_definitions(
 target_link_libraries(
   nimble_encoding_fuzzer_tests
   nimble_encodings_tests_utils
+  nimble_random_encoding_selection_policy
   nimble_encodings
   nimble_common
   gtest
