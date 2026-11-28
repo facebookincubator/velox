@@ -1163,6 +1163,11 @@ PageReader::readNulls(int32_t numValues, BufferPtr& buffer) {
       0,
       numValues);
   numLeafNullsConsumed_ += numValues;
+  // As for the top level case, no nulls lets the decoders skip mapping rows to
+  // non-null values, which is costly when the rows are not dense.
+  if (bits::isAllSet(buffer->as<uint64_t>(), 0, numValues)) {
+    return nullptr;
+  }
   return buffer->as<uint64_t>();
 }
 

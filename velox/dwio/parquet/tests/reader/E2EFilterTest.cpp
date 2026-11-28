@@ -718,6 +718,58 @@ TEST_F(E2EFilterTest, mutationCornerCases) {
   testMutationCornerCases();
 }
 
+TEST_F(E2EFilterTest, nestedLeafWithoutNulls) {
+  // Nested leaves report no nulls for pages without nulls, like top level
+  // columns. Small pages make one read span pages with and without nulls, and
+  // the random deletes and filters make the row sets sparse.
+  options_.dataPageSize = 4 * 1024;
+  constexpr vector_size_t kBatchSize = 10'000;
+  constexpr int64_t kFirstNullRow = 15'000;
+  rowType_ =
+      ROW({"long_val", "s", "m"},
+          {BIGINT(),
+           ROW({"a", "b", "l"}, {BIGINT(), VARCHAR(), ARRAY(INTEGER())}),
+           MAP(INTEGER(), BIGINT())});
+  filterGenerator_ = std::make_unique<FilterGenerator>(rowType_, seed_);
+  test::VectorMaker vectorMaker(leafPool_.get());
+  std::vector<RowVectorPtr> batches;
+  for (int64_t first = 0; first < 2 * kBatchSize; first += kBatchSize) {
+    auto hasNull = [&](int64_t row) {
+      return row >= kFirstNullRow && row % 7 == 0;
+    };
+    std::vector<std::string> strings;
+    for (auto i = 0; i < kBatchSize; ++i) {
+      strings.push_back(fmt::format("string-{}", (first + i) % 100));
+    }
+    auto a = vectorMaker.flatVector<int64_t>(
+        kBatchSize,
+        [&](auto i) { return first + i; },
+        [&](auto i) { return hasNull(first + i); });
+    // Array element 'idx' belongs to row 'first + idx / 2'.
+    auto l = vectorMaker.arrayVector<int32_t>(
+        kBatchSize,
+        [](auto) { return 2; },
+        [](auto idx) { return idx; },
+        nullptr,
+        [&](auto idx) { return hasNull(first + idx / 2); });
+    auto s = vectorMaker.rowVector(
+        {"a", "b", "l"}, {a, vectorMaker.flatVector(strings), l});
+    auto m = vectorMaker.mapVector<int32_t, int64_t>(
+        kBatchSize,
+        [](auto) { return 2; },
+        [](auto idx) { return idx % 2; },
+        [](auto idx) { return idx; });
+    batches.push_back(vectorMaker.rowVector(
+        {"long_val", "s", "m"},
+        {vectorMaker.flatVector<int64_t>(
+             kBatchSize, [&](auto i) { return first + i; }),
+         s,
+         m}));
+  }
+  writeToMemory(rowType_, batches, false);
+  testNoRowGroupSkip(batches, {"long_val", "s.a", "s.b"}, 20);
+}
+
 TEST_F(E2EFilterTest, map) {
   // Break up the leaf data in small pages to cover coalescing repdefs.
   options_.dataPageSize = 4 * 1024;
