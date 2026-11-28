@@ -70,9 +70,10 @@ class BulkStringDecoder;
 /// that what it keeps does not depend on earlier reads. A read of indices
 /// decides for each run of indices in one chunk, as readPhysicalAt() does. A
 /// read caches none of the rows it decodes into its region, so a read of the
-/// same rows decodes them again. Without
-/// Encoding::Options::decodedStringBuffers, a decode sizes its buffer to
-/// exactly the bytes that its strings decode to.
+/// same rows decodes them again, and a read of more indices than the view has
+/// rows, such as the reads of the alphabet of a Dictionary, decodes each row
+/// that they ask for once. Without Encoding::Options::decodedStringBuffers, a
+/// decode sizes its buffer to exactly the bytes that its strings decode to.
 ///
 /// A read holds a lock of the view while it decodes rows alone, so concurrent
 /// reads of one view decode such rows one read at a time. Views that share
@@ -90,7 +91,8 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   /// Reads selected rows. Given an `addStringBuffer`, takes the rows of the
   /// chunks that a cached view decodes for them from those chunks, as
   /// readPhysicalAt() decides, and decodes the other rows into a region of the
-  /// read with decodeRows().
+  /// read with decodeRows(). Reads more indices than the view has rows with
+  /// decodeDistinctRows().
   uint32_t read(
       std::span<const uint32_t> indices,
       const std::function<void(uint32_t)>& setNull,
@@ -313,6 +315,16 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   void decodeRows(
       std::span<const uint64_t> offsets,
       std::span<const uint32_t> sizes,
+      const std::function<void(velox::BufferPtr)>& addStringBuffer,
+      std::string_view* output) const;
+
+  // Reads 'indices', more of them than the view has rows, for a read given an
+  // addStringBuffer: reads each row that they ask for once, then gathers, so
+  // that a row that they repeat, such as an entry of the alphabet of a
+  // Dictionary, decodes once rather than once for each index. 'indices' must
+  // be checked. Takes no setNull, since an FSST view holds no nulls.
+  void decodeDistinctRows(
+      std::span<const uint32_t> indices,
       const std::function<void(velox::BufferPtr)>& addStringBuffer,
       std::string_view* output) const;
 

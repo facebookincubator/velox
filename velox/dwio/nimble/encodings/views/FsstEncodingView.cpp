@@ -273,6 +273,10 @@ uint32_t FsstEncodingView::read(
   NIMBLE_CHECK_LE(indices.size(), std::numeric_limits<uint32_t>::max());
   this->checkReadIndices(indices);
   auto* values = static_cast<std::string_view*>(output);
+  if (indices.size() > this->rowCount_) {
+    decodeDistinctRows(indices, addStringBuffer, values);
+    return static_cast<uint32_t>(indices.size());
+  }
   if (cachesDecodedChunks()) {
     decodeRows(indices, addStringBuffer, values);
     return static_cast<uint32_t>(indices.size());
@@ -1033,6 +1037,49 @@ void FsstEncodingView::decodeRows(
     output[i] = stringDecoder.decode({blob_.data() + offsets[i], sizes[i]});
   }
   stringDecoder.finish();
+}
+
+void FsstEncodingView::decodeDistinctRows(
+    std::span<const uint32_t> indices,
+    const std::function<void(velox::BufferPtr)>& addStringBuffer,
+    std::string_view* output) const {
+  constexpr auto kUnread = std::numeric_limits<uint32_t>::max();
+
+  // Marks the rows that 'indices' ask for, then gives each its position among
+  // them, in row order.
+  ScopedVector<uint32_t> positions{
+      this->rowCount_, this->pool_, this->options_.bufferPool};
+  std::fill(positions.begin(), positions.end(), kUnread);
+  for (const auto index : indices) {
+    positions[index] = 0;
+  }
+  ScopedVector<uint32_t> rows{
+      this->rowCount_, this->pool_, this->options_.bufferPool};
+
+  // Starts empty, and keeps the capacity, which the rows never exceed.
+  rows.resize(0);
+  for (uint32_t row{0}; row < this->rowCount_; ++row) {
+    if (positions[row] != kUnread) {
+      positions[row] = static_cast<uint32_t>(rows.size());
+      rows.push_back(row);
+    }
+  }
+  ScopedVector<std::string_view> values{
+      rows.size(), this->pool_, this->options_.bufferPool};
+
+  // A row that the read set null would be a position among 'rows', not among
+  // 'indices', so the caller's setNull must not take it.
+  const std::function<void(uint32_t)> setNull = [](uint32_t row) {
+    NIMBLE_UNREACHABLE("An FSST view must not set a null: {}", row);
+  };
+  read(
+      std::span<const uint32_t>{rows.data(), rows.size()},
+      setNull,
+      addStringBuffer,
+      values.data());
+  for (size_t i{0}; i < indices.size(); ++i) {
+    output[i] = values[positions[indices[i]]];
+  }
 }
 
 void FsstEncodingView::reserveDecodeBuffer(
