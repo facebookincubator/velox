@@ -282,28 +282,69 @@ RowContainer::~RowContainer() {
   clear();
 }
 
+// Forced inline: a call from newRow() costs about 3% of its cycles.
+FOLLY_ALWAYS_INLINE void RowContainer::allocateRows(std::span<char*> rows) {
+  const auto stride = allocatedRowSize();
+  const int32_t numRows = rows.size();
+  char* firstRow = rows_.allocateFixed(stride * numRows, layout_.alignment) +
+      normalizedKeySize_;
+  numRows_ += numRows;
+  if (normalizedKeySize_) {
+    numRowsWithNormalizedKey_ += numRows;
+  }
+  for (int32_t i = 0; i < numRows; ++i) {
+    rows[i] = firstRow + stride * i;
+  }
+  if (useListRowIndex_) {
+    rowPointers_.insert(rowPointers_.end(), rows.begin(), rows.end());
+  }
+}
+
 char* RowContainer::newRow() {
   VELOX_DCHECK(mutable_, "Can't add row into an immutable row container");
-  ++numRows_;
-  char* row;
   if (firstFreeRow_) {
-    row = firstFreeRow_;
+    ++numRows_;
+    char* row = firstFreeRow_;
     VELOX_CHECK(bits::isBitSet(row, layout_.freeFlagOffset));
     firstFreeRow_ = nextFree(row);
     --numFreeRows_;
-  } else {
-    row = rows_.allocateFixed(
-              layout_.fixedRowSize + normalizedKeySize_, layout_.alignment) +
-        normalizedKeySize_;
-    if (normalizedKeySize_) {
-      ++numRowsWithNormalizedKey_;
-    }
-
-    if (useListRowIndex_) {
-      rowPointers_.push_back(row);
-    }
+    return initializeRow(row, false /* reuse */);
   }
+  char* row;
+  allocateRows(std::span(&row, 1));
   return initializeRow(row, false /* reuse */);
+}
+
+void RowContainer::newRows(std::span<char*> rows) {
+  if (rows.empty()) {
+    return;
+  }
+  // Rows of a wider alignment cannot be packed back to back.
+  if (firstFreeRow_ != nullptr || layout_.alignment != 1) {
+    for (auto& row : rows) {
+      row = newRow();
+    }
+    return;
+  }
+  VELOX_DCHECK(mutable_, "Can't add row into an immutable row container");
+  if (initializedRow_.empty()) {
+    initializedRow_.assign(layout_.fixedRowSize, 0);
+    initializeRow(initializedRow_.data(), false);
+  }
+  const auto stride = allocatedRowSize();
+  while (!rows.empty()) {
+    // Allocate only the rows that fit in the current run, or one row if none
+    // does. listRows() walks each run up to its end, so a closed run must not
+    // end with unused space of one row or more.
+    const auto numFitInRun = rows_.freeAddressableBytes() / stride;
+    const auto batchSize = std::clamp<uint64_t>(numFitInRun, 1, rows.size());
+    const auto batch = rows.first(batchSize);
+    allocateRows(batch);
+    for (char* row : batch) {
+      ::memcpy(row, initializedRow_.data(), layout_.fixedRowSize);
+    }
+    rows = rows.subspan(batchSize);
+  }
 }
 
 void RowContainer::setAllNull(char* row) {
@@ -1070,7 +1111,7 @@ int64_t RowContainer::maxGrowthBytes(
   // minimum increment is a huge page.
   constexpr int32_t kAllocUnit = memory::AllocationTraits::kHugePageSize;
   // A row taken from the allocation runs also takes its normalized key.
-  const int64_t newRowSize = layout_.fixedRowSize + normalizedKeySize_;
+  const int64_t newRowSize = allocatedRowSize();
   const int64_t numFreeRows = numFreeRows_ + rows_.freeBytes() / newRowSize;
   const int64_t needRows = std::max<int64_t>(0, numRows - numFreeRows);
   int64_t needBytes =

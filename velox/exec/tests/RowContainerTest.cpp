@@ -298,6 +298,72 @@ class RowContainerTest : public RowContainerTestBase,
     }
   }
 
+  // Adds 'numRows' rows to 'expected' with newRow() and to 'actual' with
+  // newRows(), in batches that cycle through 'batchSizes'. Checks that the rows
+  // of 'actual' match those of 'expected' and returns them. If
+  // 'compareWholeRows', compares the rows byte by byte; otherwise only the
+  // fields that initializeRow() always defines.
+  std::vector<char*> assertNewRowsMatchNewRow(
+      const RowContainer::Options& options,
+      RowContainer& expected,
+      RowContainer& actual,
+      int32_t numRows,
+      const std::vector<int32_t>& batchSizes,
+      bool compareWholeRows) {
+    std::vector<char*> expectedRows;
+    for (auto i = 0; i < numRows; ++i) {
+      expectedRows.push_back(expected.newRow());
+    }
+
+    std::vector<char*> actualRows(numRows);
+    const size_t total = numRows;
+    for (size_t i = 0, numAdded = 0; numAdded < total; ++i) {
+      const auto batchSize =
+          std::min<size_t>(batchSizes[i % batchSizes.size()], total - numAdded);
+      actual.newRows(std::span(actualRows).subspan(numAdded, batchSize));
+      numAdded += batchSize;
+    }
+
+    EXPECT_EQ(expected.numRows(), actual.numRows());
+    for (auto i = 0; i < numRows; ++i) {
+      if (compareWholeRows) {
+        EXPECT_EQ(
+            0,
+            ::memcmp(expectedRows[i], actualRows[i], expected.fixedRowSize()))
+            << i;
+      }
+      if (options.hasNext) {
+        EXPECT_EQ(
+            nullptr,
+            *reinterpret_cast<char**>(actualRows[i] + actual.nextOffset()))
+            << i;
+      }
+      if (options.hasCountFlag) {
+        EXPECT_EQ(1, actual.count(actualRows[i])) << i;
+      }
+      if (options.hasProbedFlag) {
+        // The probed flag of a new row is clear, so setting it flips it.
+        EXPECT_TRUE(actual.testAndSetProbedFlag(actualRows[i])) << i;
+      }
+    }
+    return actualRows;
+  }
+
+  // Checks that listRows() returns exactly 'expectedRows', in order. In
+  // particular it must not return unused space at the end of a closed run.
+  void assertListRows(
+      RowContainer& container,
+      const std::vector<char*>& expectedRows) {
+    std::vector<char*> batch(1'024);
+    std::vector<char*> listedRows;
+    RowContainerIterator iterator;
+    while (auto numListed = container.listRows(&iterator, std::span(batch))) {
+      listedRows.insert(
+          listedRows.end(), batch.begin(), batch.begin() + numListed);
+    }
+    ASSERT_EQ(expectedRows, listedRows);
+  }
+
   void checkSizes(std::vector<char*>& rows, RowContainer& rowContainer) {
     int64_t sum = 0;
     for (auto row : rows) {
@@ -1301,6 +1367,137 @@ TEST_P(RowContainerTest, initialNulls) {
     EXPECT_FALSE(isNullAt(rowContainer, row, 0));
     EXPECT_FALSE(isNullAt(rowContainer, row, 1));
   }
+}
+
+TEST_P(RowContainerTest, newRows) {
+  const std::vector<RowContainer::Options> optionsList = {
+      {.useListRowIndex = useListRowIndex()},
+      {.hasNext = true, .useListRowIndex = useListRowIndex()},
+      {.hasProbedFlag = true, .useListRowIndex = useListRowIndex()},
+      {.hasCountFlag = true, .useListRowIndex = useListRowIndex()},
+      {.hasNormalizedKey = true, .useListRowIndex = useListRowIndex()},
+      {.hasNext = true,
+       .hasProbedFlag = true,
+       .hasCountFlag = true,
+       .hasNormalizedKey = true,
+       .useListRowIndex = useListRowIndex()},
+  };
+  // Batches of no rows, one row and rows that straddle the end of a run.
+  const std::vector<int32_t> batchSizes = {0, 1, 2, 3, 255, 256, 257, 1'000};
+
+  for (const auto& options : optionsList) {
+    for (const bool wide : {false, true}) {
+      for (const bool variableWidth : {false, true}) {
+        // A VARCHAR dependent column makes initializeRow() define the whole
+        // fixed row, so only then can rows be compared byte by byte.
+        std::vector<TypePtr> dependentTypes;
+        if (variableWidth) {
+          dependentTypes.push_back(VARCHAR());
+        }
+        dependentTypes.insert(dependentTypes.end(), wide ? 200 : 1, BIGINT());
+        auto makeContainer = [&]() {
+          return std::make_unique<RowContainer>(
+              std::vector<TypePtr>{BIGINT()},
+              std::vector<Accumulator>{},
+              dependentTypes,
+              pool(),
+              options);
+        };
+        auto expected = makeContainer();
+        auto actual = makeContainer();
+        const int32_t numRows = wide ? 3'000 : 20'000;
+
+        auto actualRows = assertNewRowsMatchNewRow(
+            options, *expected, *actual, numRows, batchSizes, variableWidth);
+        assertListRows(*actual, actualRows);
+
+        // Rows after the normalized keys are disabled have no room for them.
+        if (options.hasNormalizedKey) {
+          expected->disableNormalizedKeys();
+          actual->disableNormalizedKeys();
+          auto moreRows = assertNewRowsMatchNewRow(
+              options, *expected, *actual, 1'000, batchSizes, variableWidth);
+          actualRows.insert(actualRows.end(), moreRows.begin(), moreRows.end());
+          assertListRows(*actual, actualRows);
+        }
+
+        // A cleared container can be filled again.
+        expected->clear();
+        actual->clear();
+        actualRows = assertNewRowsMatchNewRow(
+            options, *expected, *actual, 500, batchSizes, variableWidth);
+        assertListRows(*actual, actualRows);
+      }
+    }
+  }
+}
+
+// Rows of a wider alignment cannot be packed back to back, so newRows() falls
+// back to newRow().
+TEST_P(RowContainerTest, newRowsWithAlignment) {
+  const RowContainer::Options options{
+      .hasProbedFlag = true,
+      .hasNormalizedKey = true,
+      .useListRowIndex = useListRowIndex()};
+  auto makeContainer = [&]() {
+    std::vector<Accumulator> accumulators{Accumulator(
+        true, // isFixedSize
+        42, // fixedSize
+        false, // usesExternalMemory
+        64, // alignment
+        nullptr, // spillType
+        [](auto, auto) { VELOX_UNREACHABLE(); },
+        [](auto) {})};
+    return std::make_unique<RowContainer>(
+        std::vector<TypePtr>{SMALLINT()},
+        accumulators,
+        std::vector<TypePtr>{},
+        pool(),
+        options);
+  };
+  auto expected = makeContainer();
+  auto actual = makeContainer();
+
+  const auto actualRows = assertNewRowsMatchNewRow(
+      options,
+      *expected,
+      *actual,
+      1'000,
+      {1, 7, 100, 300},
+      /*compareWholeRows=*/false);
+  for (auto* row : actualRows) {
+    ASSERT_EQ(reinterpret_cast<uintptr_t>(row) % 64, 0);
+  }
+  assertListRows(*actual, actualRows);
+}
+
+TEST_P(RowContainerTest, newRowsReusesFreeRows) {
+  RowContainer container(
+      {BIGINT()},
+      {},
+      {VARCHAR()},
+      pool(),
+      {.useListRowIndex = useListRowIndex()});
+  std::vector<char*> rows(3'000);
+  container.newRows(rows);
+
+  const std::vector<char*> erasedRows(rows.begin(), rows.begin() + 1'000);
+  container.eraseRows(folly::Range<char**>(rows.data(), erasedRows.size()));
+  ASSERT_EQ(2'000, container.numRows());
+
+  // The erased rows come first, in any order, and then new rows.
+  std::vector<char*> newRows(1'500);
+  container.newRows(newRows);
+  ASSERT_EQ(3'500, container.numRows());
+  EXPECT_THAT(
+      std::vector<char*>(newRows.begin(), newRows.begin() + 1'000),
+      testing::UnorderedElementsAreArray(erasedRows));
+
+  // The reused rows are back in their old places.
+  auto expectedRows = rows;
+  expectedRows.insert(
+      expectedRows.end(), newRows.begin() + 1'000, newRows.end());
+  assertListRows(container, expectedRows);
 }
 
 TEST_F(RowContainerTest, rowSize) {

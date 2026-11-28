@@ -616,8 +616,11 @@ void HashBuild::addInput(RowVectorPtr input) {
         input->childAt(spillProbedFlagChannel_)->asFlatVector<bool>();
   }
 
+  newRows_.resize(activeRows_.countSelected());
+  rows->newRows(newRows_);
+  int32_t newRowIndex{0};
   activeRows_.applyToSelected([&](auto rowIndex) {
-    char* newRow = rows->newRow();
+    char* newRow = newRows_[newRowIndex++];
     // Store the columns for each row in sequence. At probe time
     // strings of the row will probably be in consecutive places, so
     // reading one will prime the cache for the next.
