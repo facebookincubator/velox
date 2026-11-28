@@ -93,11 +93,9 @@ class CudfHashJoinBridge : public exec::JoinBridge {
  * @brief Build operator that constructs CUDF hash tables from build-side input
  * data.
  *
- * This operator accumulates all build-side input batches and constructs hash
- * tables when all input is received. It handles batching when data exceeds
- * cudf::size_type limits and coordinates with other driver threads to ensure
- * only one driver performs the final hash table construction. The constructed
- * hash tables are transferred to probe operators via CudfHashJoinBridge.
+ * Builds the hash tables from the inputs of all build drivers, split into
+ * batches when the data exceeds cudf::size_type limits. The constructed hash
+ * tables are transferred to probe operators via CudfHashJoinBridge.
  */
 class CudfHashJoinBuild : public CudfJoinBuild {
  public:

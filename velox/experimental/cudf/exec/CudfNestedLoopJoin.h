@@ -93,17 +93,8 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
   std::optional<cuda::stream_ref> buildStream_;
 };
 
-/// Accumulates build-side input for nested loop join.
-///
-/// Lifecycle:
-/// 1. addInput() - Collects all input batches in memory (as CudfVectors)
-/// 2. noMoreInput() - Called when upstream finishes
-///    - One build operator (chosen via allPeersArrived) transfers all
-///      accumulated data to the bridge
-///    - Other operators just mark themselves as finished
-/// 3. getOutput() - Always returns nullptr (build operators don't produce
-/// output)
-/// 4. isFinished() - True after noMoreInput() and bridge transfer completes
+/// Concatenates the build-side input of all build drivers into a single cuDF
+/// table and transfers it to probe operators via CudfNestedLoopJoinBridge.
 ///
 /// Memory: All build-side data is kept in GPU memory until the join completes.
 /// For very large build sides, this could be memory-intensive.
