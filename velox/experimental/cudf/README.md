@@ -8,6 +8,8 @@ Velox-cuDF implements the Velox [DriverAdapter](https://github.com/facebookincub
 
 For more information please refer to our blog: "[Extending Velox - GPU Acceleration with cuDF](https://velox-lib.io/blog/extending-velox-with-cudf)."
 
+Velox-cuDF can also run plans of explicit cuDF plan nodes, which select GPU execution before Velox builds drivers. See [Explicit cuDF physical plans](docs/physical_plans.md).
+
 ## Getting started with Velox-cuDF
 
 cuDF supports Linux and WSL2 but not Windows or MacOS. cuDF also has minimum CUDA version, NVIDIA driver and GPU architecture requirements which can be found in the [RAPIDS Installation Guide](https://docs.rapids.ai/install/). Please refer to cuDF's [readme](https://github.com/rapidsai/cudf) and [developer guide](https://github.com/rapidsai/cudf/blob/main/cpp/doxygen/developer_guide/DEVELOPER_GUIDE.md) for more information.

@@ -1677,6 +1677,18 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, enable cuDF. By default, it is enabled if compiled with cuDF.
+   * - cudf.driver_adapter_enabled
+     - bool
+     - true
+     - If true, register the cuDF driver adapter, which replaces CPU operators with cuDF operators after drivers are created.
+       Set to false to run plans of cuDF plan nodes instead, which an engine builds itself or gets from ``CudfPlanRewriter``.
+       See `Explicit cuDF physical plans <https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/docs/physical_plans.md>`_.
+   * - cudf.max_drivers
+     - integer
+     -
+     - The maximum number of drivers of a pipeline that contains a cuDF plan node. Must be positive. Pipelines without a cuDF plan node
+       keep the driver count of the task. If not set, there is no separate limit. Applies only to plans of cuDF plan nodes,
+       because the cuDF driver adapter runs after the driver counts are fixed.
    * - cudf.memory_resource
      - string
      - async
@@ -1703,6 +1715,7 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, allow falling back to Velox CPU execution when an operation is not supported in cuDF execution. If false, an error will be thrown if an operation is not supported in cuDF execution.
+       Only the cuDF driver adapter reads this property. A caller of ``CudfPlanRewriter`` sets ``Config::allowCpuFallback`` instead.
    * - cudf.debug_enabled
      - bool
      - false

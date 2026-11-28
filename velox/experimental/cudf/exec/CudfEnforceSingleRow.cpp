@@ -26,7 +26,7 @@ namespace facebook::velox::cudf_velox {
 CudfEnforceSingleRow::CudfEnforceSingleRow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::EnforceSingleRowNode>& planNode)
+    const std::shared_ptr<const CudfEnforceSingleRowNode>& planNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

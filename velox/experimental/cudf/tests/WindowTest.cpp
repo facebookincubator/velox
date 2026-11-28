@@ -90,14 +90,25 @@ class CudfWindowTest : public testing::Test,
     EXPECT_TRUE(hasCudfWindow);
   }
 
+  // Returns why cuDF cannot run 'node', by the rules of CudfWindowNode.
+  static std::optional<std::string> unsupportedReason(
+      const core::WindowNode& node) {
+    return cudf_velox::CudfWindowNode::unsupportedReason(
+        asRowType(node.inputType()),
+        node.partitionKeys(),
+        node.sortingKeys(),
+        node.sortingOrders(),
+        node.windowFunctions());
+  }
+
   void assertWindowRejected(
       const core::PlanNodePtr& plan,
       const std::string& expectedReason) {
     auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
     ASSERT_NE(windowNode, nullptr);
-    std::string reason;
-    EXPECT_FALSE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason));
-    EXPECT_NE(reason.find(expectedReason), std::string::npos) << reason;
+    const auto reason = unsupportedReason(*windowNode);
+    ASSERT_TRUE(reason.has_value());
+    EXPECT_NE(reason->find(expectedReason), std::string::npos) << *reason;
     VELOX_ASSERT_THROW(
         AssertQueryBuilder(plan).copyResults(pool()),
         "Replacement with cuDF operator failed");
@@ -663,9 +674,8 @@ TEST_F(CudfWindowTest, rankWithNestedKeysGating) {
                     .planNode();
     auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
     ASSERT_NE(windowNode, nullptr);
-    std::string reason;
-    EXPECT_TRUE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason))
-        << reason;
+    const auto reason = unsupportedReason(*windowNode);
+    EXPECT_FALSE(reason.has_value()) << reason.value_or("");
     assertCpuAndGpuResults(plan);
   }
 }
@@ -714,10 +724,7 @@ TEST_F(CudfWindowTest, mapSortKeysFallback) {
           auto windowNode =
               std::dynamic_pointer_cast<const core::WindowNode>(plan);
           ASSERT_NE(windowNode, nullptr);
-          std::string reason;
-          EXPECT_FALSE(
-              cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason));
-          EXPECT_EQ(reason, expectedReason);
+          EXPECT_EQ(unsupportedReason(*windowNode), expectedReason);
         }
 
         auto plan = PlanBuilder()
@@ -2466,9 +2473,8 @@ TEST_F(CudfWindowTest, orderedGlobalFullPartitionAverageNumericInputs) {
         PlanBuilder().values(split(data, 3)).window(expressions).planNode();
     auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
     ASSERT_NE(windowNode, nullptr);
-    std::string reason;
-    EXPECT_TRUE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode, &reason))
-        << reason;
+    const auto reason = unsupportedReason(*windowNode);
+    EXPECT_FALSE(reason.has_value()) << reason.value_or("");
     assertCpuAndGpuResults(plan);
   }
 }

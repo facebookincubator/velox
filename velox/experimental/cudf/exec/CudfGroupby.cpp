@@ -1587,7 +1587,7 @@ cudf::column_view GroupbyAggregator::materializeMaskedInput(
 }
 
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
@@ -1606,7 +1606,7 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
 
 std::optional<std::vector<std::unique_ptr<StreamingGroupbyAggregator>>>
 toStreamingGroupbyAggregators(
-    const core::AggregationNode& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     const RowTypePtr& inputType,
     const std::vector<column_index_t>& aggregationInputChannels,
     const TypePtr& outputType,
@@ -1647,18 +1647,14 @@ bool canGroupbyAggregationBeEvaluatedByCudf(
 }
 
 bool canGroupbyBeEvaluatedByCudf(
-    const core::AggregationNode& aggregationNode,
+    core::AggregationNode::Step step,
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
-  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
-      ? nullptr
-      : aggregationNode.sources()[0].get();
-
-  // Get the aggregation step from the node
-  auto step = aggregationNode.step();
-
   // Check supported aggregation functions using step-aware aggregation registry
-  for (const auto& aggregate : aggregationNode.aggregates()) {
+  for (const auto& aggregate : aggregates) {
     // Use step-aware validation that handles partial/final/intermediate steps
     if (!canGroupbyAggregationBeEvaluatedByCudf(
             *aggregate.call, step, aggregate.rawInputTypes, queryCtx)) {
@@ -1695,7 +1691,7 @@ bool canGroupbyBeEvaluatedByCudf(
 
   // Check grouping key expressions
   if (!canGroupingKeysBeEvaluatedByCudf(
-          aggregationNode.groupingKeys(), sourceNode, queryCtx, pool)) {
+          groupingKeys, sourceNode, queryCtx, pool)) {
     return false;
   }
 
@@ -1705,7 +1701,7 @@ bool canGroupbyBeEvaluatedByCudf(
 CudfGroupby::CudfGroupby(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<core::AggregationNode const> const& aggregationNode)
+    std::shared_ptr<const CudfAggregationNode> aggregationNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

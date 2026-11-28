@@ -272,6 +272,139 @@ TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+// With nullAsValue, NULL join keys match each other, as EXCEPT and INTERSECT
+// need. The cuDF join treats NULL keys as unequal, so such a join stays on the
+// CPU.
+TEST_F(HashJoinTest, nullAsValueJoinStaysOnCpu) {
+  // (1, null) is on both sides. (2, 3) has no match, because the build side
+  // has (2, 4).
+  auto probe = makeRowVector(
+      {"c0", "c1"},
+      {makeNullableFlatVector<int32_t>({1, 2}),
+       makeNullableFlatVector<int32_t>({std::nullopt, 3})});
+  auto build = makeRowVector(
+      {"u0", "u1"},
+      {makeNullableFlatVector<int32_t>({1, 2}),
+       makeNullableFlatVector<int32_t>({std::nullopt, 4})});
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.allowCpuFallback = true;
+  SCOPE_EXIT {
+    config.allowCpuFallback = false;
+  };
+
+  for (const auto& [joinType, expected] :
+       std::vector<std::pair<core::JoinType, RowVectorPtr>>{
+           {core::JoinType::kAnti,
+            makeRowVector(
+                {"c0", "c1"},
+                {makeNullableFlatVector<int32_t>({2}),
+                 makeNullableFlatVector<int32_t>({3})})},
+           {core::JoinType::kLeftSemiFilter,
+            makeRowVector(
+                {"c0", "c1"},
+                {makeNullableFlatVector<int32_t>({1}),
+                 makeNullableFlatVector<int32_t>({std::nullopt})})}}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    core::PlanNodeId joinId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .hashJoin(
+                {"c0", "c1"},
+                {"u0", "u1"},
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                "",
+                {"c0", "c1"},
+                joinType,
+                /*nullAware=*/false,
+                /*nullAsValue=*/true)
+            .capturePlanNodeId(joinId)
+            .planNode();
+    auto task = AssertQueryBuilder(plan).assertResults(expected);
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.planNodeId == joinId) {
+          EXPECT_EQ(op.operatorType.find("Cudf"), std::string::npos)
+              << op.operatorType;
+        }
+      }
+    }
+  }
+}
+
+// A full, semi or anti join applies its filter only as a cuDF AST. A filter
+// that cannot run as one keeps the join on the CPU.
+TEST_F(HashJoinTest, joinThatNeedsAstFilterStaysOnCpu) {
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3}),
+       makeFlatVector<std::string>({"apple", "banana", "cherry", "date"})});
+  auto build = makeRowVector(
+      {"u_k", "u_pattern"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<std::string>({"ban%", "app%", "%err%", "%xyz%"})});
+
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.allowCpuFallback = true;
+  SCOPE_EXIT {
+    config.allowCpuFallback = false;
+  };
+
+  struct TestCase {
+    core::JoinType joinType;
+    // Output columns of the join.
+    std::vector<std::string> output;
+    // Filter over the join output, or empty.
+    std::string outputFilter;
+    int64_t numRows;
+  };
+  // Only (2, banana) matches a build row and passes the filter, against
+  // (2, ban%). A full join adds the other three rows of each side. A left
+  // semi project join marks that one probe row.
+  for (const auto& [joinType, output, outputFilter, numRows] :
+       std::vector<TestCase>{
+           {core::JoinType::kLeftSemiFilter, {"k"}, "", 1},
+           {core::JoinType::kRightSemiFilter, {"u_k"}, "", 1},
+           {core::JoinType::kLeftSemiProject, {"k", "match"}, "match", 1},
+           {core::JoinType::kAnti, {"k"}, "", 3},
+           {core::JoinType::kFull, {"k"}, "", 7}}) {
+    SCOPED_TRACE(core::JoinTypeName::toName(joinType));
+    core::PlanNodeId joinId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto builder =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .hashJoin(
+                {"k"},
+                {"u_k"},
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                "t_val LIKE u_pattern",
+                output,
+                joinType)
+            .capturePlanNodeId(joinId);
+    if (!outputFilter.empty()) {
+      builder.filter(outputFilter);
+    }
+    auto plan = builder.partialAggregation({}, {"count(*)"})
+                    .finalAggregation()
+                    .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+    facebook::velox::test::assertEqualVectors(
+        makeRowVector({makeFlatVector<int64_t>({numRows})}), result);
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.planNodeId == joinId) {
+          EXPECT_EQ(op.operatorType.find("Cudf"), std::string::npos)
+              << op.operatorType;
+        }
+      }
+    }
+  }
+}
+
 TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
   auto probe = makeNamedRowVector("k", makeFlatVector<int32_t>({1, 2, 2, 3}));
   auto build = makeNamedRowVector("u_k", makeFlatVector<int32_t>({2, 2, 3, 4}));

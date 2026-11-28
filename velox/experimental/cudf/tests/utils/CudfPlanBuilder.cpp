@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/tests/utils/CudfPlanBuilder.h"
 
 #include "velox/dwio/common/Options.h"
@@ -99,3 +102,25 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test
+
+namespace facebook::velox::cudf_velox::test {
+
+core::PlanNodePtr rewriteToCudfPlan(
+    const core::PlanNodePtr& plan,
+    std::shared_ptr<core::QueryCtx> queryCtx) {
+  VELOX_CHECK(
+      cudfIsRegistered(),
+      "cuDF must be registered before rewriting a plan for cuDF execution");
+  VELOX_CHECK_NOT_NULL(queryCtx);
+  CudfPlanRewriter::Config config;
+  config.queryCtx = std::move(queryCtx);
+  // The rewriter takes the fallback choice from its caller. Tests keep
+  // setting it the way they do for the driver adapter, so copy it over as an
+  // engine would.
+  config.allowCpuFallback = config.queryCtx->queryConfig().get<bool>(
+      CudfConfig::kCudfAllowCpuFallback,
+      CudfConfig::getInstance().allowCpuFallback);
+  return CudfPlanRewriter::rewrite(plan, config);
+}
+
+} // namespace facebook::velox::cudf_velox::test

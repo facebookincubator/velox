@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/PlanNode.h"
@@ -34,8 +35,7 @@ class CudfFilterProject : public CudfOperatorBase {
   CudfFilterProject(
       int32_t operatorId,
       velox::exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::FilterNode>& filter,
-      const std::shared_ptr<const core::ProjectNode>& project);
+      std::shared_ptr<const CudfFilterProjectNode> planNode);
 
   void initialize() override;
 
@@ -78,10 +78,8 @@ class CudfFilterProject : public CudfOperatorBase {
   // If true exprs_[0] is a filter and the other expressions are projections
   const bool hasFilter_{false};
 
-  // Cached filter and project node for lazy initialization. After
-  // initialization, they will be reset, and initialized_ will be set to true.
-  std::shared_ptr<const core::ProjectNode> project_;
-  std::shared_ptr<const core::FilterNode> filter_;
+  // Plan metadata for lazy initialization. Reset at the end of initialize().
+  std::shared_ptr<const CudfFilterProjectNode> planNode_;
 
   std::vector<CudfExpressionPtr> projectEvaluators_;
   // Constant projections of a zero-column input, as (output channel, scalar)
@@ -96,7 +94,7 @@ class CudfFilterProject : public CudfOperatorBase {
 };
 
 /// True when 'projection' is a plan constant over a zero-column 'inputType'.
-/// Shared by FilterProjectAdapter::canRunOnGPU and
+/// Shared by CudfFilterProjectNode::unsupportedReason() and
 /// CudfFilterProject::initialize() so the two checks cannot drift.
 bool isConstantProjectionOverZeroColumns(
     const RowTypePtr& inputType,

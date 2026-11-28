@@ -77,8 +77,9 @@ std::optional<column_index_t> resolveInputChannel(
     return std::nullopt;
   }
   // Match the CPU Window operator: the argument must be a field access or
-  // constant. canRunOnGPU rejects cast arguments (windowArgIsCast) before we
-  // reach here, so we never strip a cast and reinterpret its semantics.
+  // constant. CudfWindowNode::unsupportedReason() rejects cast arguments
+  // (windowArgIsCast) before we reach here, so we never strip a cast and
+  // reinterpret its semantics.
   return exec::exprToChannel(inputs[0].get(), inputType);
 }
 
@@ -483,60 +484,53 @@ bool CudfWindow::isSupportedWindowFunction(
   return true;
 }
 
-bool CudfWindow::canRunOnGPU(const core::WindowNode& windowNode) {
-  return canRunOnGPU(windowNode, nullptr);
-}
-
-bool CudfWindow::canRunOnGPU(
-    const core::WindowNode& windowNode,
-    std::string* reason) {
-  for (const auto& key : windowNode.partitionKeys()) {
+// static
+std::optional<std::string> CudfWindowNode::unsupportedReason(
+    const RowTypePtr& inputType,
+    const std::vector<core::FieldAccessTypedExprPtr>& partitionKeys,
+    const std::vector<core::FieldAccessTypedExprPtr>& sortingKeys,
+    const std::vector<core::SortOrder>& sortingOrders,
+    const std::vector<core::WindowNode::Function>& windowFunctions) {
+  if (sortingKeys.size() != sortingOrders.size()) {
+    return fmt::format(
+        "Window must have one sorting order per sorting key: {} keys, {} orders",
+        sortingKeys.size(),
+        sortingOrders.size());
+  }
+  for (const auto& key : partitionKeys) {
     if (containsCustomComparison(key->type())) {
-      if (reason) {
-        *reason = fmt::format(
-            "PARTITION BY key {} uses custom comparison type {}",
-            key->name(),
-            key->type()->toString());
-      }
-      return false;
+      return fmt::format(
+          "PARTITION BY key {} uses custom comparison type {}",
+          key->name(),
+          key->type()->toString());
     }
   }
 
-  for (const auto& key : windowNode.sortingKeys()) {
+  for (const auto& key : sortingKeys) {
     if (containsCustomComparison(key->type())) {
-      if (reason) {
-        *reason = fmt::format(
-            "ORDER BY key {} uses custom comparison type {}",
-            key->name(),
-            key->type()->toString());
-      }
-      return false;
+      return fmt::format(
+          "ORDER BY key {} uses custom comparison type {}",
+          key->name(),
+          key->type()->toString());
     }
     // Velox compares maps independently of entry order, while cuDF compares
     // their list representation in entry order.
     if (containsMap(key->type())) {
-      if (reason) {
-        *reason = fmt::format(
-            "ORDER BY key {} contains MAP type {}",
-            key->name(),
-            key->type()->toString());
-      }
-      return false;
+      return fmt::format(
+          "ORDER BY key {} contains MAP type {}",
+          key->name(),
+          key->type()->toString());
     }
   }
 
   const auto& prefix = CudfConfig::getInstance().functionNamePrefix;
-  const auto inputType = asRowType(windowNode.inputType());
-  for (const auto& func : windowNode.windowFunctions()) {
+  for (const auto& func : windowFunctions) {
     const auto baseName =
         stripFunctionPrefix(func.functionCall->name(), prefix);
-    if (!isSupportedWindowFunction(
+    if (!CudfWindow::isSupportedWindowFunction(
             baseName, func.functionCall->inputs().size())) {
-      if (reason) {
-        *reason = fmt::format(
-            "Unsupported window function: {}", func.functionCall->name());
-      }
-      return false;
+      return fmt::format(
+          "Unsupported window function: {}", func.functionCall->name());
     }
 
     // MAPs are already rejected above. Ranking with ARRAY sort keys is limited
@@ -546,14 +540,11 @@ bool CudfWindow::canRunOnGPU(
     const bool isRankFunction = baseName == "row_number" ||
         baseName == "rank" || baseName == "dense_rank";
     if (isRankFunction &&
-        (windowNode.sortingKeys().size() > 1 || baseName == "rank" ||
-         !windowNode.partitionKeys().empty())) {
-      for (const auto& key : windowNode.sortingKeys()) {
+        (sortingKeys.size() > 1 || baseName == "rank" ||
+         !partitionKeys.empty())) {
+      for (const auto& key : sortingKeys) {
         if (containsListOrMap(key->type())) {
-          if (reason) {
-            *reason = "Ranking with ARRAY sort keys is not supported";
-          }
-          return false;
+          return "Ranking with ARRAY sort keys is not supported";
         }
       }
     }
@@ -561,23 +552,15 @@ bool CudfWindow::canRunOnGPU(
     // Without ORDER BY, grouped row_number() uses the first partition key as
     // its values column. cuDF still validates that column's type even though
     // this rank method does not inspect values for ties.
-    if (baseName == "row_number" && windowNode.sortingKeys().empty() &&
-        !windowNode.partitionKeys().empty() &&
-        containsListOrMap(windowNode.partitionKeys()[0]->type())) {
-      if (reason) {
-        *reason =
-            "ROW_NUMBER without ORDER BY with an ARRAY or MAP partition key "
-            "is not supported";
-      }
-      return false;
+    if (baseName == "row_number" && sortingKeys.empty() &&
+        !partitionKeys.empty() && containsListOrMap(partitionKeys[0]->type())) {
+      return "ROW_NUMBER without ORDER BY with an ARRAY or MAP partition key "
+             "is not supported";
     }
 
     if (windowArgIsCast(func)) {
-      if (reason) {
-        *reason = fmt::format(
-            "Cast expression in {} argument is not supported", baseName);
-      }
-      return false;
+      return fmt::format(
+          "Cast expression in {} argument is not supported", baseName);
     }
 
     // Reject NULL constant frame offsets so we fall back to the CPU operator
@@ -594,27 +577,18 @@ bool CudfWindow::canRunOnGPU(
     };
     if (isNullConstantBound(func.frame.startType, func.frame.startValue) ||
         isNullConstantBound(func.frame.endType, func.frame.endValue)) {
-      if (reason) {
-        *reason = "NULL frame offset is not supported";
-      }
-      return false;
+      return "NULL frame offset is not supported";
     }
 
     if (baseName == "lag" || baseName == "lead") {
       if (func.ignoreNulls) {
-        if (reason) {
-          *reason = fmt::format("{} IGNORE NULLS is not supported", baseName);
-        }
-        return false;
+        return fmt::format("{} IGNORE NULLS is not supported", baseName);
       }
 
       const auto inputChannel = resolveInputChannel(func, inputType);
       if (!inputChannel.has_value() || *inputChannel == kConstantChannel) {
-        if (reason) {
-          *reason = fmt::format(
-              "Constant value argument for {} is not supported", baseName);
-        }
-        return false;
+        return fmt::format(
+            "Constant value argument for {} is not supported", baseName);
       }
 
       if (func.functionCall->inputs().size() >= 2) {
@@ -622,33 +596,23 @@ bool CudfWindow::canRunOnGPU(
             std::dynamic_pointer_cast<const core::ConstantTypedExpr>(
                 func.functionCall->inputs()[1]);
         if (!offsetExpr) {
-          if (reason) {
-            *reason = fmt::format(
-                "Non-constant offset for {} is not supported", baseName);
-          }
-          return false;
+          return fmt::format(
+              "Non-constant offset for {} is not supported", baseName);
         }
 
         if (offsetExpr->isNull()) {
-          if (reason) {
-            *reason =
-                fmt::format("Null offset for {} is not supported", baseName);
-          }
-          return false;
+          return fmt::format("Null offset for {} is not supported", baseName);
         }
 
         const int64_t offset = constantIntegerOrBigintValue(*offsetExpr);
         constexpr int64_t kMaxCudfLeadLagOffset =
             std::numeric_limits<cudf::size_type>::max() - 1LL;
         if (offset < 0 || offset > kMaxCudfLeadLagOffset) {
-          if (reason) {
-            *reason = fmt::format(
-                "{} offset {} is outside cuDF's supported range [0, {}]",
-                baseName,
-                offset,
-                kMaxCudfLeadLagOffset);
-          }
-          return false;
+          return fmt::format(
+              "{} offset {} is outside cuDF's supported range [0, {}]",
+              baseName,
+              offset,
+              kMaxCudfLeadLagOffset);
         }
       }
     }
@@ -668,27 +632,20 @@ bool CudfWindow::canRunOnGPU(
            argumentType->isRow());
 
       if (unsupportedRealSum || unsupportedAverage || unsupportedNestedMinMax) {
-        if (reason) {
-          *reason = fmt::format(
-              "{} does not support input type {} on cuDF",
-              baseName,
-              argumentType->toString());
-        }
-        return false;
+        return fmt::format(
+            "{} does not support input type {} on cuDF",
+            baseName,
+            argumentType->toString());
       }
     }
 
     const bool isFullPartition =
-        isFullPartitionFrame(func, !windowNode.sortingKeys().empty());
+        isFullPartitionFrame(func, !sortingKeys.empty());
     // Full-partition AVG without partition keys uses the global reduction
     // path, which also supports integer and REAL inputs, even with ORDER BY.
-    if (baseName == "avg" && isFullPartition &&
-        !windowNode.partitionKeys().empty() &&
+    if (baseName == "avg" && isFullPartition && !partitionKeys.empty() &&
         !func.functionCall->inputs()[0]->type()->isDouble()) {
-      if (reason) {
-        *reason = "Partitioned full-partition AVG requires DOUBLE input";
-      }
-      return false;
+      return "Partitioned full-partition AVG requires DOUBLE input";
     }
 
     const bool usesFrame = baseName == "first_value" ||
@@ -698,10 +655,7 @@ bool CudfWindow::canRunOnGPU(
     if (usesFrame) {
       if (auto channel = resolveInputChannel(func, inputType)) {
         if (*channel == kConstantChannel) {
-          if (reason) {
-            *reason = "Constant window aggregate input not supported";
-          }
-          return false;
+          return "Constant window aggregate input not supported";
         }
       }
 
@@ -712,11 +666,7 @@ bool CudfWindow::canRunOnGPU(
                 core::WindowNode::BoundType::kUnboundedFollowing ||
             func.frame.endType == core::WindowNode::BoundType::kCurrentRow;
         if (!startOk || !endOk) {
-          if (reason) {
-            *reason =
-                "RANGE frame with non-unbounded/current bounds not supported";
-          }
-          return false;
+          return "RANGE frame with non-unbounded/current bounds not supported";
         }
       }
 
@@ -735,10 +685,7 @@ bool CudfWindow::canRunOnGPU(
       };
       if (!isConstantBound(func.frame.startType, func.frame.startValue) ||
           !isConstantBound(func.frame.endType, func.frame.endValue)) {
-        if (reason) {
-          *reason = "Non-constant frame bound not supported";
-        }
-        return false;
+        return "Non-constant frame bound not supported";
       }
     }
 
@@ -769,20 +716,18 @@ bool CudfWindow::canRunOnGPU(
       }
       return constExpr->value().value<int64_t>();
     };
-    const auto validateRowsBound = [&](core::WindowNode::BoundType type,
-                                       const core::TypedExprPtr& value,
-                                       bool isStartBound) {
+    const auto rowsBoundUnsupportedReason =
+        [&](core::WindowNode::BoundType type,
+            const core::TypedExprPtr& value,
+            bool isStartBound) -> std::optional<std::string> {
       const auto constant = isNonNegativeConstantBound(type, value);
       if (!constant.has_value()) {
-        return true;
+        return std::nullopt;
       }
 
       if (*constant < 0) {
-        if (reason) {
-          *reason = fmt::format(
-              "Window frame {} offset must not be negative", *constant);
-        }
-        return false;
+        return fmt::format(
+            "Window frame {} offset must not be negative", *constant);
       }
 
       const int64_t maxOffset =
@@ -791,32 +736,33 @@ bool CudfWindow::canRunOnGPU(
                                                                            : 0);
 
       if (*constant > maxOffset) {
-        if (reason) {
-          *reason = fmt::format(
-              "Window frame offset {} exceeds cuDF limit {}",
-              *constant,
-              maxOffset);
-        }
-        return false;
+        return fmt::format(
+            "Window frame offset {} exceeds cuDF limit {}",
+            *constant,
+            maxOffset);
       }
 
-      return true;
+      return std::nullopt;
     };
 
-    if (func.frame.type == core::WindowNode::WindowType::kRows &&
-        (!validateRowsBound(
-             func.frame.startType, func.frame.startValue, true) ||
-         !validateRowsBound(func.frame.endType, func.frame.endValue, false))) {
-      return false;
+    if (func.frame.type == core::WindowNode::WindowType::kRows) {
+      if (auto unsupported = rowsBoundUnsupportedReason(
+              func.frame.startType, func.frame.startValue, true)) {
+        return unsupported;
+      }
+      if (auto unsupported = rowsBoundUnsupportedReason(
+              func.frame.endType, func.frame.endValue, false)) {
+        return unsupported;
+      }
     }
   }
-  return true;
+  return std::nullopt;
 }
 
 CudfWindow::CudfWindow(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::WindowNode>& windowNode)
+    const std::shared_ptr<const CudfWindowNode>& windowNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
@@ -1036,8 +982,9 @@ std::unique_ptr<cudf::column> CudfWindow::invokeGroupedRollingWindow(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
   // RANGE frames are handled by the batched grouped_range_rolling_window path
-  // in doGetOutput (see toBatchRangeWindowTypes). canRunOnGPU only accepts
-  // RANGE frames that path can express, so RANGE never reaches here.
+  // in doGetOutput (see toBatchRangeWindowTypes).
+  // CudfWindowNode::unsupportedReason() only accepts RANGE frames that path
+  // can express, so RANGE never reaches here.
   VELOX_CHECK(
       func.frame.type != core::WindowNode::WindowType::kRange,
       "RANGE window frames must be handled by the batched range rolling path");

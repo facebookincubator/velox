@@ -56,9 +56,6 @@ class CudfLocalPartition : public CudfOperatorBase {
 
   bool isFinished() override;
 
-  static bool shouldReplace(
-      const std::shared_ptr<const core::LocalPartitionNode>& planNode);
-
  protected:
   void doAddInput(RowVectorPtr input) override;
 

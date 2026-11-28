@@ -847,7 +847,7 @@ std::unique_ptr<ReduceAggregator> createReduceAggregator(
 namespace facebook::velox::cudf_velox {
 
 std::vector<std::unique_ptr<ReduceAggregator>> toReduceAggregators(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
@@ -873,18 +873,13 @@ bool canReduceAggregationBeEvaluatedByCudf(
 }
 
 bool canReduceBeEvaluatedByCudf(
-    const core::AggregationNode& aggregationNode,
+    core::AggregationNode::Step step,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
-  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
-      ? nullptr
-      : aggregationNode.sources()[0].get();
-
-  // Get the aggregation step from the node
-  auto step = aggregationNode.step();
-
   // Check supported aggregation functions using reduce registry
-  for (const auto& aggregate : aggregationNode.aggregates()) {
+  for (const auto& aggregate : aggregates) {
     // Use step-aware validation that handles partial/final/intermediate steps
     if (!canReduceAggregationBeEvaluatedByCudf(
             *aggregate.call, step, aggregate.rawInputTypes, queryCtx)) {
@@ -924,7 +919,7 @@ bool canReduceBeEvaluatedByCudf(
 CudfReduce::CudfReduce(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<core::AggregationNode const> const& aggregationNode)
+    std::shared_ptr<const CudfAggregationNode> aggregationNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

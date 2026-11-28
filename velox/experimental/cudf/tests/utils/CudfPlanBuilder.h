@@ -97,3 +97,15 @@ std::function<PlanNodePtr(std::string, PlanNodePtr)> cudfTableWrite(
     const RowTypePtr& schema = nullptr);
 
 } // namespace facebook::velox::cudf_velox::exec::test
+
+namespace facebook::velox::cudf_velox::test {
+
+/// Returns 'plan' rewritten into a plan of cuDF plan nodes by
+/// CudfPlanRewriter, for the session settings of 'queryCtx'. A test that runs
+/// the result passes the same QueryCtx to its query builder, so the plan runs
+/// under the settings it was rewritten for.
+core::PlanNodePtr rewriteToCudfPlan(
+    const core::PlanNodePtr& plan,
+    std::shared_ptr<core::QueryCtx> queryCtx);
+
+} // namespace facebook::velox::cudf_velox::test

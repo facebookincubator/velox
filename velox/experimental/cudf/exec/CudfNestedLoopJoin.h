@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/CudfJoinBuild.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrecomputeInstruction.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -112,13 +113,13 @@ class CudfNestedLoopJoinBuild : public CudfJoinBuild {
   CudfNestedLoopJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
+      std::shared_ptr<const CudfNestedLoopJoinNode> joinNode);
 
  protected:
   void buildAndPublish(std::vector<CudfVectorPtr> inputs) override;
 
  private:
-  std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
+  std::shared_ptr<const CudfNestedLoopJoinNode> joinNode_;
 };
 
 /// Performs nested loop join using cuDF APIs.
@@ -167,7 +168,7 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   CudfNestedLoopJoinProbe(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::NestedLoopJoinNode> joinNode);
+      std::shared_ptr<const CudfNestedLoopJoinNode> joinNode);
 
   void initialize() override;
 
@@ -176,14 +177,6 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 
   bool isFinished() override;
-
-  static bool isSupportedJoinType(core::JoinType joinType) {
-    return joinType == core::JoinType::kInner ||
-        joinType == core::JoinType::kLeft ||
-        joinType == core::JoinType::kRight ||
-        joinType == core::JoinType::kFull ||
-        joinType == core::JoinType::kLeftSemiProject;
-  }
 
   /// Returns true if we should skip probe input when build side is empty.
   bool skipProbeOnEmptyBuild() const {
@@ -263,7 +256,7 @@ class CudfNestedLoopJoinProbe : public CudfOperatorBase {
         joinType_ == core::JoinType::kFull;
   }
 
-  std::shared_ptr<const core::NestedLoopJoinNode> joinNode_;
+  std::shared_ptr<const CudfNestedLoopJoinNode> joinNode_;
   core::JoinType joinType_;
   std::optional<build_data_type> buildData_;
 

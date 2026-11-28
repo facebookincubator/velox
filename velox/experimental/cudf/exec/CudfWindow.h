@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -67,16 +68,7 @@ class CudfWindow : public CudfOperatorBase {
   CudfWindow(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::WindowNode>& windowNode);
-
-  /// Returns true if every window function and frame in the plan node is
-  /// supported by CudfWindow. On failure, @p reason is populated with a
-  /// human-readable explanation when a non-null pointer is provided.
-  static bool canRunOnGPU(const core::WindowNode& windowNode);
-
-  static bool canRunOnGPU(
-      const core::WindowNode& windowNode,
-      std::string* reason);
+      const std::shared_ptr<const CudfWindowNode>& windowNode);
 
   /// Returns true if the window function is supported by CudfWindow.
   static bool isSupportedWindowFunction(
@@ -152,7 +144,7 @@ class CudfWindow : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const;
 
-  std::shared_ptr<const core::WindowNode> windowNode_;
+  std::shared_ptr<const CudfWindowNode> windowNode_;
   const RowTypePtr inputRowType_;
 
   std::vector<cudf::size_type> partitionKeyIndices_;

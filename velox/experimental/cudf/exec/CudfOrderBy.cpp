@@ -29,7 +29,7 @@ namespace facebook::velox::cudf_velox {
 CudfOrderBy::CudfOrderBy(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::OrderByNode>& orderByNode)
+    std::shared_ptr<const CudfOrderByNode> orderByNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

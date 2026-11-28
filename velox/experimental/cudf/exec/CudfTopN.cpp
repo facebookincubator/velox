@@ -31,7 +31,7 @@ namespace facebook::velox::cudf_velox {
 CudfTopN::CudfTopN(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::TopNNode>& topNNode)
+    std::shared_ptr<const CudfTopNNode> topNNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

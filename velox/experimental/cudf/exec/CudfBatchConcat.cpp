@@ -25,21 +25,6 @@
 namespace facebook::velox::cudf_velox {
 namespace {
 
-RowTypePtr getConcatOutputType(
-    const std::shared_ptr<const core::PlanNode>& planNode) {
-  const auto numSources = planNode->sources().size();
-  if (planNode->is<core::AbstractJoinNode>()) {
-    VELOX_CHECK_EQ(
-        numSources,
-        2,
-        "CudfBatchConcat expects a join plan node to have exactly 2 sources");
-  } else {
-    VELOX_CHECK_EQ(
-        numSources, 1, "CudfBatchConcat expects a single-source plan node");
-  }
-  return planNode->sources()[0]->outputType();
-}
-
 // Returns the byte target, or nullopt when unset or the output has no columns.
 // Zero-column vectors own no GPU buffers to measure.
 std::optional<uint64_t> getTargetBytes(const RowTypePtr& outputType) {
@@ -68,11 +53,11 @@ size_t getTargetRows() {
 CudfBatchConcat::CudfBatchConcat(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::PlanNode> planNode)
+    std::shared_ptr<const CudfBatchConcatNode> planNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
-          getConcatOutputType(planNode),
+          planNode->outputType(),
           planNode->id(),
           "CudfBatchConcat",
           nvtx3::rgb{211, 211, 211}, /* LightGrey */

@@ -46,6 +46,19 @@ class TopNRowNumberTest : public OperatorTestBase {
   }
 
  protected:
+  // Returns whether cuDF supports the ranking function and key types of
+  // 'plan', a core::TopNRowNumberNode, by the rules of CudfTopNRowNumberNode.
+  static bool rankingSupported(const core::PlanNodePtr& plan) {
+    const auto node =
+        std::dynamic_pointer_cast<const core::TopNRowNumberNode>(plan);
+    VELOX_CHECK_NOT_NULL(node);
+    return !cudf_velox::CudfTopNRowNumberNode::unsupportedReason(
+                node->rankFunction(),
+                node->partitionKeys(),
+                node->sortingKeys())
+                .has_value();
+  }
+
   static bool wasCudfTopNRowNumberUsed(
       const std::shared_ptr<exec::Task>& task) {
     auto stats = task->taskStats();
@@ -801,10 +814,7 @@ TEST_F(TopNRowNumberTest, unsupportedRankKeys) {
                             1,
                             true)
                         .planNode();
-        ASSERT_FALSE(
-            cudf_velox::CudfTopNRowNumber::canRunOnGPU(
-                *std::dynamic_pointer_cast<const core::TopNRowNumberNode>(
-                    plan)));
+        ASSERT_FALSE(rankingSupported(plan));
       }
     }
 
@@ -817,9 +827,7 @@ TEST_F(TopNRowNumberTest, unsupportedRankKeys) {
                       .values({data})
                       .topNRank(function, {"c0"}, {"c1"}, 1, true)
                       .planNode();
-      ASSERT_FALSE(
-          cudf_velox::CudfTopNRowNumber::canRunOnGPU(
-              *std::dynamic_pointer_cast<const core::TopNRowNumberNode>(plan)));
+      ASSERT_FALSE(rankingSupported(plan));
     }
   }
 

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 namespace facebook::velox::cudf_velox {
@@ -41,10 +42,7 @@ class CudfTopNRowNumber : public CudfOperatorBase {
   CudfTopNRowNumber(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::TopNRowNumberNode>& node);
-
-  /// Checks whether the ranking function and key types are supported on GPU.
-  static bool canRunOnGPU(const core::TopNRowNumberNode& node);
+      const std::shared_ptr<const CudfTopNRowNumberNode>& node);
 
   bool needsInput() const override {
     return !noMoreInput_;
@@ -84,7 +82,7 @@ class CudfTopNRowNumber : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
-  const std::shared_ptr<const core::TopNRowNumberNode> node_;
+  const core::TopNRowNumberNode::RankFunction rankFunction_;
   const int32_t limit_;
   const bool generateRowNumber_;
   const TypePtr inputType_;

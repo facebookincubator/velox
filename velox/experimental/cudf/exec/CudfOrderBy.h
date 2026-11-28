@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/exec/Operator.h"
@@ -31,7 +32,7 @@ class CudfOrderBy : public CudfOperatorBase {
   CudfOrderBy(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::OrderByNode>& orderByNode);
+      std::shared_ptr<const CudfOrderByNode> orderByNode);
 
   /// Builds the GPU sort appended after a kept UcxExchange operator. Together,
   /// the two operators implement MergeExchange on the GPU.

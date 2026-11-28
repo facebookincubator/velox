@@ -30,7 +30,7 @@ namespace facebook::velox::cudf_velox {
 CudfGroupId::CudfGroupId(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::GroupIdNode>& groupIdNode)
+    const std::shared_ptr<const CudfGroupIdNode>& groupIdNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

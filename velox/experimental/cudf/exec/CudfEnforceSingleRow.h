@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/core/PlanNode.h"
@@ -39,7 +40,7 @@ class CudfEnforceSingleRow : public CudfOperatorBase {
   CudfEnforceSingleRow(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::EnforceSingleRowNode>& planNode);
+      const std::shared_ptr<const CudfEnforceSingleRowNode>& planNode);
 
   bool isFilter() const override {
     return true;

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 
 #include "velox/exec/Operator.h"
 
@@ -32,7 +33,7 @@ class CudfGroupId : public CudfOperatorBase {
   CudfGroupId(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::GroupIdNode>& groupIdNode);
+      const std::shared_ptr<const CudfGroupIdNode>& groupIdNode);
 
   bool needsInput() const override;
 

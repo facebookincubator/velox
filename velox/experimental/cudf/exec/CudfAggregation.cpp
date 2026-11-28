@@ -151,15 +151,13 @@ bool isCompanionAggregateName(std::string const& kind) {
 }
 
 bool isSupportedZeroColumnAggregation(
-    const core::AggregationNode& aggregationNode) {
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates) {
   // Zero-column input: only global prefixed `count` aggregates (same as
   // createAggregator). No GROUP BY keys.
-  return aggregationNode.groupingKeys().empty() &&
-      !aggregationNode.aggregates().empty() &&
+  return groupingKeys.empty() && !aggregates.empty() &&
       std::all_of(
-             aggregationNode.aggregates().begin(),
-             aggregationNode.aggregates().end(),
-             [](const auto& aggregate) {
+             aggregates.begin(), aggregates.end(), [](const auto& aggregate) {
                return isCountFunctionName(aggregate.call->name());
              });
 }
@@ -219,7 +217,7 @@ std::unique_ptr<cudf::column> maskToValidityColumn(
 }
 
 std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
@@ -231,9 +229,8 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
   for (size_t i = 0; i < aggregationNode.aggregates().size(); ++i) {
     auto const& aggregate = aggregationNode.aggregates()[i];
     auto const companionStep = getCompanionStep(aggregate.call->name(), step);
-    const auto originalName = getOriginalName(aggregate.call->name());
     const auto resultType = exec::isPartialOutput(companionStep)
-        ? exec::resolveIntermediateType(originalName, aggregate.rawInputTypes)
+        ? aggregationNode.intermediateTypes().at(i)
         : outputType->childAt(numKeys + i);
     const auto isDecimalAggregate = aggregate.rawInputTypes.size() == 1 &&
         aggregate.rawInputTypes[0]->isDecimal();
@@ -261,7 +258,7 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
 }
 
 AggregationInputChannels buildAggregationInputChannels(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     exec::OperatorCtx const& operatorCtx,
     RowTypePtr const& inputRowSchema,
     std::vector<column_index_t> const& groupingKeyInputChannels) {
@@ -327,7 +324,7 @@ AggregationInputChannels buildAggregationInputChannels(
   return result;
 }
 
-RowTypePtr getBufferedResultType(core::AggregationNode const& aggregationNode) {
+RowTypePtr getBufferedResultType(const CudfAggregationNode& aggregationNode) {
   const auto outputRowType = asRowType(aggregationNode.outputType());
   const auto numKeys = aggregationNode.groupingKeys().size();
 
@@ -338,10 +335,7 @@ RowTypePtr getBufferedResultType(core::AggregationNode const& aggregationNode) {
   VELOX_CHECK_GE(types.size(), numKeys + aggregationNode.aggregates().size());
 
   for (auto i = 0; i < aggregationNode.aggregates().size(); ++i) {
-    auto const& aggregate = aggregationNode.aggregates()[i];
-    const auto originalName = getOriginalName(aggregate.call->name());
-    types[numKeys + i] =
-        exec::resolveIntermediateType(originalName, aggregate.rawInputTypes);
+    types[numKeys + i] = aggregationNode.intermediateTypes().at(i);
   }
 
   return ROW(std::move(names), std::move(types));
@@ -355,7 +349,7 @@ bool hasFinalAggs(
 }
 
 void setupGroupingKeyChannelProjections(
-    const core::AggregationNode& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     std::vector<column_index_t>& groupingKeyInputChannels,
     std::vector<column_index_t>& groupingKeyOutputChannels) {
   VELOX_CHECK(groupingKeyInputChannels.empty());
@@ -446,25 +440,40 @@ bool canBeEvaluatedByCudf(
     const core::AggregationNode& aggregationNode,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
-  const core::PlanNode* sourceNode = aggregationNode.sources().empty()
-      ? nullptr
-      : aggregationNode.sources()[0].get();
+  return canBeEvaluatedByCudf(
+      aggregationNode.step(),
+      aggregationNode.groupingKeys(),
+      aggregationNode.aggregates(),
+      aggregationNode.sources().empty() ? nullptr
+                                        : aggregationNode.sources()[0].get(),
+      queryCtx,
+      pool);
+}
 
+bool canBeEvaluatedByCudf(
+    core::AggregationNode::Step step,
+    const std::vector<core::FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<core::AggregationNode::Aggregate>& aggregates,
+    const core::PlanNode* sourceNode,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
   if (sourceNode && sourceNode->outputType()->size() == 0 &&
-      !isSupportedZeroColumnAggregation(aggregationNode)) {
+      !isSupportedZeroColumnAggregation(groupingKeys, aggregates)) {
     return false;
   }
 
-  bool isGlobal = aggregationNode.groupingKeys().empty();
-  bool isDistinct = !isGlobal && aggregationNode.aggregates().empty();
+  bool isGlobal = groupingKeys.empty();
+  bool isDistinct = !isGlobal && aggregates.empty();
 
   if (isDistinct) {
     return canGroupingKeysBeEvaluatedByCudf(
-        aggregationNode.groupingKeys(), sourceNode, queryCtx, pool);
+        groupingKeys, sourceNode, queryCtx, pool);
   } else if (isGlobal) {
-    return canReduceBeEvaluatedByCudf(aggregationNode, queryCtx, pool);
+    return canReduceBeEvaluatedByCudf(
+        step, aggregates, sourceNode, queryCtx, pool);
   } else {
-    return canGroupbyBeEvaluatedByCudf(aggregationNode, queryCtx, pool);
+    return canGroupbyBeEvaluatedByCudf(
+        step, groupingKeys, aggregates, sourceNode, queryCtx, pool);
   }
 }
 

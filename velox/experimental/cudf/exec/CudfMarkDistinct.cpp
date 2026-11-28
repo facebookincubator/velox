@@ -34,7 +34,7 @@ namespace facebook::velox::cudf_velox {
 CudfMarkDistinct::CudfMarkDistinct(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::MarkDistinctNode>& planNode)
+    const std::shared_ptr<const CudfMarkDistinctNode>& planNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

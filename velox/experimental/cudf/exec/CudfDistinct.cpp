@@ -31,7 +31,7 @@ namespace facebook::velox::cudf_velox {
 CudfDistinct::CudfDistinct(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<core::AggregationNode const> const& aggregationNode)
+    std::shared_ptr<const CudfAggregationNode> aggregationNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

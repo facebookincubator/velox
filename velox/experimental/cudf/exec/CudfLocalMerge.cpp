@@ -27,7 +27,7 @@ namespace facebook::velox::cudf_velox {
 CudfLocalMerge::CudfLocalMerge(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::LocalMergeNode>& localMergeNode)
+    const std::shared_ptr<const CudfLocalMergeNode>& localMergeNode)
     : CudfSourceOperatorBase(
           operatorId,
           driverCtx,

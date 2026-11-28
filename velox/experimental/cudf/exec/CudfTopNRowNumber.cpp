@@ -127,48 +127,12 @@ std::unique_ptr<cudf::column> makeLimitMask(
       withTempMr(mr));
 }
 
-bool supportsRankKey(const TypePtr& type, bool sortingKey) {
-  if (type->providesCustomComparison() ||
-      (sortingKey && (type->isArray() || type->isMap()))) {
-    return false;
-  }
-  for (uint32_t i = 0; i < type->size(); ++i) {
-    if (!supportsRankKey(type->childAt(i), sortingKey)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 } // namespace
-
-bool CudfTopNRowNumber::canRunOnGPU(const core::TopNRowNumberNode& node) {
-  switch (node.rankFunction()) {
-    case core::TopNRowNumberNode::RankFunction::kRowNumber:
-      return true;
-    case core::TopNRowNumberNode::RankFunction::kRank:
-    case core::TopNRowNumberNode::RankFunction::kDenseRank:
-      break;
-    default:
-      return false;
-  }
-  for (const auto& key : node.partitionKeys()) {
-    if (!supportsRankKey(key->type(), /*sortingKey=*/false)) {
-      return false;
-    }
-  }
-  for (const auto& key : node.sortingKeys()) {
-    if (!supportsRankKey(key->type(), /*sortingKey=*/true)) {
-      return false;
-    }
-  }
-  return true;
-}
 
 CudfTopNRowNumber::CudfTopNRowNumber(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::TopNRowNumberNode>& node)
+    const std::shared_ptr<const CudfTopNRowNumberNode>& node)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
@@ -179,15 +143,11 @@ CudfTopNRowNumber::CudfTopNRowNumber(
           NvtxMethodFlag::kAll,
           std::nullopt,
           node),
-      node_(node),
+      rankFunction_(node->rankFunction()),
       limit_(node->limit()),
       generateRowNumber_(node->generateRowNumber()),
       inputType_(node->sources()[0]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
-  VELOX_CHECK(
-      canRunOnGPU(*node),
-      "Unsupported ranking function or partitioning/sorting key types for CudfTopNRowNumber");
-
   partitionKeyIndices_.reserve(node->partitionKeys().size());
   for (const auto& key : node->partitionKeys()) {
     partitionKeyIndices_.push_back(exec::exprToChannel(key.get(), inputType_));
@@ -247,7 +207,7 @@ CudfVectorPtr CudfTopNRowNumber::reduceBatchToLocalCandidates(
       sortedKeyTable->view(),
       localPartitionKeyIndices_,
       localSortKeyIndices_,
-      node_->rankFunction(),
+      rankFunction_,
       stream,
       mr);
   auto mask = makeLimitMask(*ranks, limit_, stream, mr);
@@ -304,7 +264,7 @@ CudfVectorPtr CudfTopNRowNumber::mergeAndPruneCandidates(
       merged->view(),
       partitionKeyIndices_,
       sortKeyIndices_,
-      node_->rankFunction(),
+      rankFunction_,
       stream,
       mr);
   auto mask = makeLimitMask(*ranks, limit_, stream, mr);
@@ -370,7 +330,7 @@ RowVectorPtr CudfTopNRowNumber::doGetOutput() {
       candidates_->getTableView(),
       partitionKeyIndices_,
       sortKeyIndices_,
-      node_->rankFunction(),
+      rankFunction_,
       stream,
       mr);
   // cuDF ranks are int32; Velox expects bigint.

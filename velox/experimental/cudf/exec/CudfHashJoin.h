@@ -19,6 +19,7 @@
 #include "velox/experimental/cudf/exec/CudfJoin.h"
 #include "velox/experimental/cudf/exec/CudfJoinBuild.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/AstExpressionUtils.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -104,14 +105,14 @@ class CudfHashJoinBuild : public CudfJoinBuild {
   CudfHashJoinBuild(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::HashJoinNode> joinNode);
+      std::shared_ptr<const CudfHashJoinNode> joinNode);
 
  protected:
   void recordInputStats(const CudfVector& input) override;
   void buildAndPublish(std::vector<CudfVectorPtr> inputs) override;
 
  private:
-  std::shared_ptr<const core::HashJoinNode> joinNode_;
+  std::shared_ptr<const CudfHashJoinNode> joinNode_;
 };
 
 /**
@@ -132,7 +133,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   CudfHashJoinProbe(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      std::shared_ptr<const core::HashJoinNode> joinNode);
+      std::shared_ptr<const CudfHashJoinNode> joinNode);
 
   void initialize() override;
 
@@ -141,25 +142,6 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   bool skipProbeOnEmptyBuild() const;
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
-
-  /// Returns true if the join type is supported by cudf hash join.
-  /// Supported types:
-  /// - Inner, Left, Right, Full joins
-  /// - Left/Right Semi Filter joins
-  /// - Left Semi Project join (excluding null-aware join with filter)
-  /// - Anti join (non-null-aware, or null-aware without filter)
-  /// Note: Right Semi Project, and null-aware left semi-project join with
-  /// filter not yet supported.
-  static bool isSupportedJoinType(core::JoinType joinType) {
-    return joinType == core::JoinType::kInner ||
-        joinType == core::JoinType::kLeft ||
-        joinType == core::JoinType::kAnti ||
-        joinType == core::JoinType::kLeftSemiFilter ||
-        joinType == core::JoinType::kLeftSemiProject ||
-        joinType == core::JoinType::kRight ||
-        joinType == core::JoinType::kRightSemiFilter ||
-        joinType == core::JoinType::kFull;
-  }
 
   bool isFinished() override;
 
@@ -190,7 +172,7 @@ class CudfHashJoinProbe : public CudfOperatorBase {
   struct ReadStream;
   ReadStream* findReadStream(cuda::stream_ref stream);
 
-  std::shared_ptr<const core::HashJoinNode> joinNode_;
+  std::shared_ptr<const CudfHashJoinNode> joinNode_;
   /** @brief Hash tables and join objects received from build operator */
   std::optional<hash_type> hashObject_;
 

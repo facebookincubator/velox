@@ -26,7 +26,7 @@ namespace facebook::velox::cudf_velox {
 CudfLimit::CudfLimit(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    const std::shared_ptr<const core::LimitNode>& limitNode)
+    std::shared_ptr<const CudfLimitNode> limitNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,

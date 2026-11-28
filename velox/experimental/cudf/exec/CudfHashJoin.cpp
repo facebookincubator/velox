@@ -17,7 +17,10 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeDefinitions.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
+#include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
@@ -25,6 +28,7 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/PlanNode.h"
+#include "velox/exec/HashJoinBridge.h"
 #include "velox/exec/Task.h" // NOLINT(misc-unused-headers)
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/type/TypeUtil.h"
@@ -288,7 +292,7 @@ std::shared_ptr<CudaEvent> CudfHashJoinBridge::getBuildReadyEvent() {
 CudfHashJoinBuild::CudfHashJoinBuild(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::HashJoinNode> joinNode)
+    std::shared_ptr<const CudfHashJoinNode> joinNode)
     // TODO check outputType should be set or not?
     : CudfJoinBuild(
           operatorId,
@@ -296,7 +300,7 @@ CudfHashJoinBuild::CudfHashJoinBuild(
           joinNode,
           "CudfHashJoinBuild",
           NvtxMethodFlag::kAll),
-      joinNode_(joinNode) {}
+      joinNode_(std::move(joinNode)) {}
 
 void CudfHashJoinBuild::recordInputStats(const CudfVector& input) {
   auto [_, nullCount] =
@@ -402,7 +406,7 @@ void CudfHashJoinBuild::buildAndPublish(std::vector<CudfVectorPtr> inputs) {
 CudfHashJoinProbe::CudfHashJoinProbe(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
-    std::shared_ptr<const core::HashJoinNode> joinNode)
+    std::shared_ptr<const CudfHashJoinNode> joinNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
@@ -413,7 +417,7 @@ CudfHashJoinProbe::CudfHashJoinProbe(
           NvtxMethodFlag::kAll,
           std::nullopt, // spillConfig
           joinNode),
-      joinNode_(joinNode),
+      joinNode_(std::move(joinNode)),
       probeType_(joinNode_->sources()[0]->outputType()),
       buildType_(joinNode_->sources()[1]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
@@ -508,14 +512,6 @@ void CudfHashJoinProbe::initialize() {
     useAstFilter_ = false;
   }
 
-  // Validate AST filtering for this join type now to avoid run-time error.
-  if (joinNode_->isRightSemiFilterJoin() || joinNode_->isLeftSemiFilterJoin() ||
-      joinNode_->isAntiJoin()) {
-    VELOX_CHECK(
-        useAstFilter_,
-        "AST expression evaluation must be enabled for semi-filter and anti joins.");
-  }
-
   // Create a reusable evaluator for the filter column. This is expensive to
   // build, and the expression + input schema are stable for the lifetime of
   // the operator instance.
@@ -529,11 +525,23 @@ void CudfHashJoinProbe::initialize() {
   // Check if the filter expression spans both join sides (e.g., switch
   // expressions referencing columns from both probe and build). If so, we
   // cannot use AST-based filtering and must fall back to filterEvaluator_.
-  if (hasNonAstSubexprSpanningBothSides(
-          optimizedFilter, probeType_, buildType_)) {
+  const bool spansBothSides = hasNonAstSubexprSpanningBothSides(
+      optimizedFilter, probeType_, buildType_);
+  if (spansBothSides) {
     VLOG(1) << "Filter expression spans both join sides, using "
                "filterEvaluator_ instead of AST";
     useAstFilter_ = false;
+  }
+
+  // CudfHashJoinNode::unsupportedReasonForSession() keeps such a join off
+  // cuDF, so this holds for a plan that was checked with the session it runs
+  // in.
+  VELOX_CHECK(
+      useAstFilter_ || !joinNode_->filterRequiresAst(),
+      "The filter of this join type must run as a cuDF AST: {}",
+      core::JoinTypeName::toName(joinNode_->joinType()));
+
+  if (spansBothSides) {
     return;
   }
 
@@ -2400,6 +2408,44 @@ bool CudfHashJoinProbe::isFinished() {
   return isFinished;
 }
 
+namespace {
+
+// Returns 'node' as a CudfHashJoinNode: the node itself, or the cuDF plan node
+// that runs a core::HashJoinNode. Returns nullptr for any other node.
+std::shared_ptr<const CudfHashJoinNode> asCudfHashJoinNode(
+    const core::PlanNodePtr& node) {
+  if (auto cudfJoin = std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+    return cudfJoin;
+  }
+  if (std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
+    return cudf_velox::detail::lowerInPlace<CudfHashJoinNode>(node);
+  }
+  return nullptr;
+}
+
+// Returns whether exactly one side of 'joinNode' runs under grouped execution.
+// Same rule as Task::hasMixedExecutionGroupJoin(), which takes only a
+// core::HashJoinNode.
+bool hasMixedExecutionGroupJoin(
+    const exec::Task& task,
+    const CudfHashJoinNode& joinNode) {
+  if (!task.isGroupedExecution()) {
+    return false;
+  }
+  const auto& planFragment = task.planFragment();
+  const auto hasGroupedLeaf = [&](const core::PlanNodePtr& side) {
+    return core::PlanNode::findFirstNode(
+               side.get(), [&](const core::PlanNode* node) {
+                 return node->sources().empty() &&
+                     planFragment.leafNodeRunsGroupedExecution(node->id());
+               }) != nullptr;
+  };
+  return hasGroupedLeaf(joinNode.sources()[0]) !=
+      hasGroupedLeaf(joinNode.sources()[1]);
+}
+
+} // namespace
+
 std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
     exec::DriverCtx* ctx,
     int32_t id,
@@ -2407,9 +2453,8 @@ std::unique_ptr<exec::Operator> CudfHashJoinBridgeTranslator::toOperator(
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toOperator";
   }
-  if (auto joinNode =
-          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-    return std::make_unique<CudfHashJoinProbe>(id, ctx, joinNode);
+  if (auto cudfJoin = asCudfHashJoinNode(node)) {
+    return std::make_unique<CudfHashJoinProbe>(id, ctx, cudfJoin);
   }
   return nullptr;
 }
@@ -2419,10 +2464,9 @@ std::unique_ptr<exec::JoinBridge> CudfHashJoinBridgeTranslator::toJoinBridge(
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toJoinBridge";
   }
-  if (auto joinNode =
-          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-    auto joinBridge = std::make_unique<CudfHashJoinBridge>();
-    return joinBridge;
+  if (std::dynamic_pointer_cast<const core::HashJoinNode>(node) ||
+      std::dynamic_pointer_cast<const CudfHashJoinNode>(node)) {
+    return std::make_unique<CudfHashJoinBridge>();
   }
   return nullptr;
 }
@@ -2432,10 +2476,17 @@ exec::OperatorSupplier CudfHashJoinBridgeTranslator::toOperatorSupplier(
   if (CudfConfig::getInstance().debugEnabled) {
     VLOG(2) << "Calling CudfHashJoinBridgeTranslator::toOperatorSupplier";
   }
-  if (auto joinNode =
-          std::dynamic_pointer_cast<const core::HashJoinNode>(node)) {
-    return [joinNode](int32_t operatorId, exec::DriverCtx* ctx) {
-      return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, joinNode);
+  if (auto cudfJoin = asCudfHashJoinNode(node)) {
+    return [cudfJoin](int32_t operatorId, exec::DriverCtx* ctx) {
+      // LocalPlanner makes this check for a core::HashJoinNode. Such a join
+      // would emit the unmatched build rows once per split group.
+      if (exec::needRightSideJoin(cudfJoin->joinType()) &&
+          hasMixedExecutionGroupJoin(*ctx->task, *cudfJoin)) {
+        VELOX_UNSUPPORTED(
+            "Hash join currently does not support mixed grouped execution for join type {}",
+            core::JoinTypeName::toName(cudfJoin->joinType()));
+      }
+      return std::make_unique<CudfHashJoinBuild>(operatorId, ctx, cudfJoin);
     };
   }
   return nullptr;

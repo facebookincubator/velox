@@ -17,6 +17,7 @@
 #pragma once
 
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -38,7 +39,7 @@ class CudfLocalMerge : public CudfSourceOperatorBase {
   CudfLocalMerge(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
-      const std::shared_ptr<const core::LocalMergeNode>& localMergeNode);
+      const std::shared_ptr<const CudfLocalMergeNode>& localMergeNode);
 
   exec::BlockingReason isBlocked(ContinueFuture* future) override;
 

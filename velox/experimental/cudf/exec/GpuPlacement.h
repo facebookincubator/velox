@@ -1,0 +1,64 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+#include "velox/connectors/Connector.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
+#include "velox/core/QueryCtx.h"
+
+#include <string>
+
+namespace facebook::velox::cudf_velox {
+
+/// Decides whether a table scan runs on the GPU. A scan has no cuDF plan node:
+/// it stays a core::TableScanNode, and the cuDF Hive or Iceberg connector
+/// gives it a cuDF data source. The rules of every other node are with its
+/// definition in CudfPlanNodeDefinitions.cpp and its cuDF plan node class.
+
+/// Returns whether the scan of 'node' produces CudfVectors: its connector is a
+/// cuDF Hive or Iceberg connector, cuDF supports its output type and the cuDF
+/// data source accepts its table handle. Sets 'reason' when the scan stays on
+/// the CPU. The plan rewriter and the cuDF driver adapter both ask here.
+///
+/// 'connectorQueryCtx' is the context the scan gives the connector, so that
+/// the answer matches the data source the connector picks.
+///
+/// Throws if the scan runs on the GPU, 'queryConfig' sets legacy_cast and the
+/// remaining filter has a cast that legacy_cast may change. The cuDF data
+/// source folds the remaining filter without legacy_cast, and the connector
+/// cannot see the setting to fall back.
+bool isGpuTableScan(
+    const core::TableScanNode& node,
+    const velox::connector::ConnectorQueryCtx& connectorQueryCtx,
+    const core::QueryConfig& queryConfig,
+    std::string* reason);
+
+/// Variant for a plan that has no task yet. Asks with a ConnectorQueryCtx that
+/// carries what the check reads from one: the session timezone settings of
+/// 'queryCtx' and an expression evaluator with its QueryConfig.
+bool isGpuTableScan(
+    const core::TableScanNode& node,
+    const core::QueryCtx& queryCtx,
+    std::string* reason);
+
+/// Returns whether source 'sourceIndex' of 'node' is the lookup side of an
+/// IndexLookupJoinNode. That scan is not a pipeline: the join reads its table
+/// handle and gets no vectors from it. It stays a core::TableScanNode with no
+/// conversion above it, whatever its connector is.
+bool isIndexLookupSource(const core::PlanNode& node, size_t sourceIndex);
+
+} // namespace facebook::velox::cudf_velox
