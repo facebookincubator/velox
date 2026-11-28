@@ -28,6 +28,8 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 
+#include <optional>
+
 namespace facebook::velox::parquet::test {
 
 using TempDirectoryPath = common::testutil::TempDirectoryPath;
@@ -100,13 +102,18 @@ class ParquetReaderBenchmark {
       std::shared_ptr<facebook::velox::dwio::common::ScanSpec> scanSpec,
       uint32_t nextSize);
 
+  /// Writes a single column with 'nullsRateX100' percent nulls and reads it
+  /// back with a filter on that column. 'filterKind' std::nullopt picks a
+  /// range filter by type that selects 'selectPct' percent of the non-null
+  /// rows.
   void readSingleColumn(
       const std::string& columnName,
       const facebook::velox::TypePtr& type,
       float startPct,
       float selectPct,
       uint8_t nullsRateX100,
-      uint32_t nextSize);
+      uint32_t nextSize,
+      std::optional<facebook::velox::common::FilterKind> filterKind);
 
  private:
   const std::string fileName_ = "test.parquet";
@@ -130,6 +137,18 @@ void run(
     const std::string& columnName,
     const facebook::velox::TypePtr& type,
     float filterRateX100,
+    uint8_t nullsRateX100,
+    uint32_t nextSize,
+    bool disableDictionary);
+
+/// Reads a single projected column with an IsNotNull filter, the filter a scan
+/// pushes down for 'x IS NOT NULL' and for inner join keys. Only a projected
+/// column decodes values under IsNotNull; otherwise the reader reads nulls
+/// only.
+void runIsNotNull(
+    uint32_t,
+    const std::string& columnName,
+    const facebook::velox::TypePtr& type,
     uint8_t nullsRateX100,
     uint32_t nextSize,
     bool disableDictionary);
