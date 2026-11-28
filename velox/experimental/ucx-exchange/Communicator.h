@@ -18,6 +18,9 @@
 #include <ucxx/api.h>
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <functional>
+#include <mutex>
 #include <random>
 #include <string>
 #include <string_view>
@@ -27,6 +30,8 @@
 #include "velox/experimental/ucx-exchange/WorkQueue.h"
 
 namespace facebook::velox::ucx_exchange {
+
+struct CloseMsg;
 
 struct HostPort {
   std::string hostname;
@@ -103,6 +108,8 @@ class Communicator {
 
   /// @brief Removes an endpoint from the communicator. This is required when
   /// the endpoint has become stale since the other side has disappeared.
+  /// Must be called on the Communicator thread, which owns the Acceptor's
+  /// handle map.
   /// NOTE: This should NOT be called from within a UCX callback. Use
   /// deferEndpointCleanup() instead.
   void removeEndpointRef(std::shared_ptr<EndpointRef> ep);
@@ -119,6 +126,13 @@ class Communicator {
   /// held alive until UCX has fully processed the cancellation.
   /// Must only be called from the Communicator thread.
   void deferRequestCleanup(std::shared_ptr<ucxx::Request> request);
+
+  /// Runs 'action' on the Communicator thread, at the top of a later
+  /// iteration of run(), outside every UCX callback. Safe to call from any
+  /// thread, including from a UCX callback. Use it for work that must not run
+  /// inside UCX progress, such as Task::setError(), which terminates the task
+  /// synchronously.
+  void postToLoop(std::function<void()> action);
 
   /// Returns the URL of the coordinator.
   [[nodiscard]] const std::string& getCoordinatorUrl();
@@ -141,6 +155,11 @@ class Communicator {
   uint64_t getWorkerId() const {
     return workerId_;
   }
+
+  /// Returns true if the receive of close messages is posted and has not
+  /// completed. For the test environment, which calls it after run() returned
+  /// to check that the receive was cancelled before the worker is destroyed.
+  bool hasPendingCloseReceive() const;
 
   /// Looks up the EndpointRef associated with a raw UCP endpoint handle.
   /// Used by the Acceptor's active-message callback to resolve the endpoint
@@ -226,6 +245,39 @@ class Communicator {
   // ensuring the GPU buffers (owned via the request's arg shared_ptr)
   // are not freed prematurely.
   std::vector<std::shared_ptr<ucxx::Request>> deferredRequests_;
+
+  // Runs the actions that postToLoop() added. Called by run() only.
+  void runPostedActions();
+
+  // Posts 'closeReceive_', which matches the close message of every channel
+  // on this worker. Called by run() only.
+  void postCloseReceive();
+
+  // Hands each close message that 'closeReceive_' received to the output queue
+  // of its task, and posts the receive again unless the Communicator is
+  // stopping. Called by run() only, outside every UCX callback.
+  void handleCloseReceives();
+
+  // Cancels 'closeReceive_' and progresses the worker until the receive
+  // completes, for at most 3 seconds, so that UCX does not write into
+  // 'closeBuffer_' after the worker is gone. Called by run() on every exit,
+  // so it does not throw.
+  void cancelCloseReceive() noexcept;
+
+  // Protects postedActions_.
+  std::mutex postedActionsMutex_;
+
+  // Actions that postToLoop() added and run() has not run yet.
+  std::deque<std::function<void()>> postedActions_;
+
+  // The buffer 'closeReceive_' receives into. The request owns it too, as its
+  // callback data. Declared before 'closeReceive_', so that it is destroyed
+  // after it.
+  std::shared_ptr<CloseMsg> closeBuffer_;
+
+  // The one receive of every close message on this worker. Used only on the
+  // Communicator thread.
+  std::shared_ptr<ucxx::Request> closeReceive_;
 
   // Heartbeat state for diagnostic logging.
   std::chrono::steady_clock::time_point lastHeartbeat_{

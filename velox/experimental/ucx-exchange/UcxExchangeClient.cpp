@@ -44,15 +44,20 @@ void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
       return;
     }
 
-    std::shared_ptr<UcxExchangeSource> source;
-    source = UcxExchangeSource::create(taskId_, *remoteTaskIdIt, queue_);
+    // Add the entry first: create() registers the source with the
+    // Communicator, which may run it at once. A source added after close()
+    // gets a Released entry and is closed at once. It still connects, to send
+    // the close message, so that its producer can finish.
+    const bool closed = queue_->isClosedLocked();
+    const auto sourceId =
+        closed ? queue_->addReleasedSourceLocked() : queue_->addSourceLocked();
+    auto source =
+        UcxExchangeSource::create(taskId_, *remoteTaskIdIt, queue_, sourceId);
 
-    if (closed_) {
+    if (closed) {
       toClose = std::move(source);
     } else {
-      sources_.push_back(source);
-      queue_->addSourceLocked();
-      source->setRegistered();
+      sources_.emplace(sourceId, std::move(source));
       VLOG(3) << "@" << taskId_
               << " Added remote split for task: " << remoteTaskId;
     }
@@ -70,21 +75,25 @@ void UcxExchangeClient::noMoreRemoteTasks() {
 }
 
 void UcxExchangeClient::close() {
-  std::vector<std::shared_ptr<UcxExchangeSource>> sources;
+  // Only the first close() gets ids. It removes just the sources it closes, so
+  // a concurrent close() cannot take them away before it looks them up.
+  const auto toTell = queue_->close();
+  std::vector<std::shared_ptr<UcxExchangeSource>> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
-    if (closed_) {
-      return;
+    toClose.reserve(toTell.size());
+    for (const auto sourceId : toTell) {
+      if (auto it = sources_.find(sourceId); it != sources_.end()) {
+        toClose.push_back(std::move(it->second));
+        sources_.erase(it);
+      }
     }
-    closed_ = true;
-    sources = std::move(sources_);
   }
 
   // Outside of mutex.
-  for (auto& source : sources) {
+  for (auto& source : toClose) {
     source->close();
   }
-  queue_->close();
 }
 
 folly::F14FastMap<std::string, RuntimeMetric> UcxExchangeClient::stats() const {
@@ -102,16 +111,9 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
   std::vector<std::shared_ptr<UcxExchangeSource>> sourcesToResume;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
-    if (closed_) {
-      *atEnd = true;
-      return data;
-    }
-
-    // not closed, get packed table from the queue.
     *atEnd = false;
     data = queue_->dequeueLocked(consumerId, atEnd, future, &stalePromise);
     if (*atEnd) {
-      // queue is closed!
       return data;
     }
 
@@ -157,7 +159,10 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
     // queue_->mutex_ → WorkQueue::mutex_ ordering.
     if (data != nullptr &&
         queue_->size() <= UcxExchangeSource::kBackpressureLowWaterMark) {
-      sourcesToResume.assign(sources_.begin(), sources_.end());
+      sourcesToResume.reserve(sources_.size());
+      for (const auto& [sourceId, source] : sources_) {
+        sourcesToResume.push_back(source);
+      }
     }
   }
 
@@ -179,7 +184,7 @@ std::string UcxExchangeClient::toString() const {
   std::stringstream out;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
-    for (auto& source : sources_) {
+    for (const auto& [sourceId, source] : sources_) {
       out << source->toString() << std::endl;
     }
   }
@@ -193,8 +198,8 @@ folly::dynamic UcxExchangeClient::toJson() const {
   int index = 0;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
-    obj["closed"] = closed_;
-    for (auto& source : sources_) {
+    obj["closed"] = queue_->isClosedLocked();
+    for (const auto& [sourceId, source] : sources_) {
       clientsObj[std::to_string(index++)] = source->toJson();
     }
   }

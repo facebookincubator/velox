@@ -19,16 +19,20 @@
 #include <atomic>
 #include <cinttypes>
 #include <cuda/stream>
+#include <deque>
 #include <memory>
+#include <optional>
+#include <vector>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/experimental/ucx-exchange/UcxChannelState.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::ucx_exchange {
 
 /// Struct that bundles a packed_table with the CUDA stream that was used
-/// to allocate its memory. This allows the receiver to reuse the same stream
-/// for subsequent operations on the data.
+/// to allocate its memory. UcxExchange hands the table downstream on a stream
+/// of its own, so that operator kernels never land on the receive stream.
 struct PackedTableWithStream {
   std::unique_ptr<cudf::packed_table> packedTable;
   cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
@@ -55,16 +59,20 @@ struct PackedTableWithStream {
 
 using PackedTableWithStreamPtr = std::unique_ptr<PackedTableWithStream>;
 
+/// Buffers the packed tables that the sources of one exchange client receive,
+/// and keeps one entry per source. Whether the consumer has finished or failed
+/// is a view of those entries: see decideSource() for how each entry moves.
 class UcxExchangeQueue {
  public:
+  /// Identifies a source. Ids are dense and start at 0.
+  using SourceId = int32_t;
+
   explicit UcxExchangeQueue(int32_t numberOfConsumers)
       : numberOfConsumers_{numberOfConsumers} {
     VELOX_CHECK_GE(numberOfConsumers, 1);
   }
 
-  ~UcxExchangeQueue() {
-    clearAllPromises();
-  }
+  ~UcxExchangeQueue();
 
   std::mutex& mutex() {
     return mutex_;
@@ -76,30 +84,41 @@ class UcxExchangeQueue {
     return size() == 0;
   }
 
-  /// Enqueues 'data' to the queue. One random promise(top of promise queue)
-  /// associated with the future that is waiting for the data from the queue
-  /// is returned in 'promises' if 'data' is not nullptr. When 'data' is
-  /// nullptr and the queue is completed serving data, all left over promises
-  /// will be returned in 'promises'. When 'data' is nullptr and the queue is
-  /// not completed serving data, no 'promises' will be added and returned.
-  void enqueueLocked(
-      PackedTableWithStreamPtr&& data,
+  /// Adds a source in kRegistered and returns its id. Call with 'mutex_' held.
+  SourceId addSourceLocked();
+
+  /// Adds a source in kReleased and returns its id, for a source the client
+  /// adds after close(). The consumer does not wait for it. Call with 'mutex_'
+  /// held.
+  SourceId addReleasedSourceLocked();
+
+  /// Records that the handshake response of source 'id' arrived and was
+  /// accepted.
+  void sourceOpened(SourceId id);
+
+  /// Takes 'table' from source 'id' if the source is kOpen and the consumer has
+  /// neither failed nor closed. Adds the promises of the consumers to wake to
+  /// 'promises'; the caller fulfills them with no lock held. Returns false if
+  /// the table was not taken: it then stays in 'table', and the caller frees it
+  /// outside every lock.
+  [[nodiscard]] bool enqueueTable(
+      SourceId id,
+      PackedTableWithStreamPtr& table,
       std::vector<ContinuePromise>& promises);
 
-  /// If data is permanently not available, e.g. the source cannot be
-  /// contacted, this registers an error message and causes the reading
-  /// Exchanges to throw with the message.
-  void setError(std::string_view error);
+  /// Decides the end of source 'id' with 'outcome'. The first decision for a
+  /// source wins. An error fails the consumer, unless it failed or closed
+  /// already: the queued tables are freed and the waiting consumers woken.
+  void end(SourceId id, ChannelOutcome outcome);
 
-  bool isInError() {
-    return !error_.empty();
-  }
   /// Returns a PackedTableWithStream object.
   ///
-  /// Returns a nullptr if no data is available. If data is still expected,
-  /// sets 'atEnd' to false and 'future' to a Future that will complete when
-  /// data arrives. If no more data is expected, sets 'atEnd' to true. Returns
-  /// one PackedTableWithStream if data is available.
+  /// Throws the error of the source that failed the consumer, also after
+  /// close(). Otherwise, after close(), returns nullptr and sets 'atEnd' to
+  /// true. Returns a nullptr if no data is available. If data is still
+  /// expected, sets 'atEnd' to false and 'future' to a Future that will
+  /// complete when data arrives. If no more data is expected, sets 'atEnd' to
+  /// true. Returns one PackedTableWithStream if data is available.
   /// It's possible that the same consumer is already waiting for data. In this
   /// case, a stalePromise is returned which needs to be cleaned up.
   PackedTableWithStreamPtr dequeueLocked(
@@ -135,61 +154,55 @@ class UcxExchangeQueue {
     return receivedTables_ > 0 ? receivedBytes_ / receivedTables_ : 0;
   }
 
-  void addSourceLocked() {
-    VELOX_CHECK(!noMoreSources_, "addSource called after noMoreSources");
-    numSources_++;
-  }
-
+  /// Records that the client adds no more sources. The consumer has finished
+  /// once every source is kEnded or kReleased.
   void noMoreSources();
 
-  void close();
+  /// Releases every source, frees the queued tables and wakes the waiting
+  /// consumers. Returns the ids of the sources whose producer's server must be
+  /// told that the consumer is gone: those that had not ended. Returns no ids
+  /// when called again.
+  std::vector<SourceId> close();
+
+  /// Returns true after close().
+  bool isClosed();
+
+  /// Returns true after close(). Call with 'mutex_' held.
+  bool isClosedLocked() const {
+    return closed_;
+  }
+
+  /// Returns the state of source 'id'.
+  SourceState sourceState(SourceId id);
 
  private:
+  // The consumer's view of one source. decideSource() moves it.
+  struct SourceEntry {
+    SourceState state{SourceState::kRegistered};
+    // How the source ended. Set when it moves to kEnded.
+    std::optional<ChannelOutcome> outcome;
+  };
+
   // Publishes the depth of 'queue_' to 'size_'. Call with 'mutex_' held after
   // every mutation of 'queue_'.
   void publishSizeLocked() {
     size_.store(static_cast<int32_t>(queue_.size()), std::memory_order_relaxed);
   }
 
-  std::vector<ContinuePromise> closeLocked() {
-    queue_.clear();
-    publishSizeLocked();
-    return clearAllPromisesLocked();
-  }
+  // Returns true if the client adds no more sources and every source is kEnded
+  // or kReleased.
+  bool isFinishedLocked() const;
 
-  std::vector<ContinuePromise> checkCompleteLocked() {
-    if (noMoreSources_ && numCompleted_ == numSources_) {
-      atEnd_ = true;
-      return clearAllPromisesLocked();
-    }
-    return {};
-  }
+  // Moves the queued tables out, so that the caller frees them after releasing
+  // 'mutex_'.
+  std::deque<PackedTableWithStreamPtr> takeTablesLocked();
 
   void addPromiseLocked(
       int consumerId,
       ContinueFuture* future,
       ContinuePromise* stalePromise);
 
-  void clearAllPromises() {
-    std::vector<ContinuePromise> promises;
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      promises = clearAllPromisesLocked();
-    }
-    clearPromises(promises);
-  }
-
-  std::vector<ContinuePromise> clearAllPromisesLocked() {
-    std::vector<ContinuePromise> promises;
-    promises.reserve(promises_.size());
-    auto it = promises_.begin();
-    while (it != promises_.end()) {
-      promises.push_back(std::move(it->second));
-      it = promises_.erase(it);
-    }
-    VELOX_CHECK(promises_.empty());
-    return promises;
-  }
+  std::vector<ContinuePromise> clearAllPromisesLocked();
 
   static void clearPromises(std::vector<ContinuePromise>& promises) {
     for (auto& promise : promises) {
@@ -199,10 +212,15 @@ class UcxExchangeQueue {
 
   const int32_t numberOfConsumers_;
 
-  int numCompleted_{0};
-  int numSources_{0};
   bool noMoreSources_{false};
-  bool atEnd_{false};
+  bool closed_{false};
+
+  // Indexed by SourceId.
+  std::vector<SourceEntry> sources_;
+
+  // The first source that ended with an error before close(). Its error fails
+  // every later read, also after close().
+  std::optional<SourceId> failedSource_;
 
   std::mutex mutex_;
   std::deque<PackedTableWithStreamPtr> queue_;
@@ -217,9 +235,6 @@ class UcxExchangeQueue {
   // The map from consumer id to the waiting promise
   folly::F14FastMap<int, ContinuePromise> promises_;
 
-  // When set, all promises will be realized and the next dequeue will
-  // throw an exception with this message.
-  std::string error_;
   // Total size of packed tables in queue.
   int64_t totalBytes_{0};
   // Number of packed tables received.

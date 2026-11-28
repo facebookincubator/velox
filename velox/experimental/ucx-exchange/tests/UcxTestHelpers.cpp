@@ -155,6 +155,40 @@ std::shared_ptr<Task> createPartitionedOutputTask(
   return task;
 }
 
+std::shared_ptr<Task> makeProducerTask(
+    const std::string& taskId,
+    memory::MemoryPool* pool) {
+  const auto& rowType = UcxTestData::kTestRowType;
+  std::vector<VectorPtr> columns;
+  for (const auto& type : rowType->children()) {
+    columns.emplace_back(BaseVector::create(type, 1, pool));
+  }
+  auto values = std::make_shared<RowVector>(
+      pool, rowType, BufferPtr(nullptr), 1, std::move(columns));
+
+  auto planFragment = exec::test::PlanBuilder()
+                          .values({values})
+                          .partitionedOutput(
+                              {},
+                              1,
+                              /*replicateNullsAndAny=*/false,
+                              /*outputLayout=*/{},
+                              "Presto",
+                              std::string{core::TransportKind::kUcx})
+                          .planFragment();
+
+  // The task is never started, so it needs no executor.
+  auto queryCtx = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(std::unordered_map<std::string, std::string>{}));
+  return Task::create(
+      taskId,
+      std::move(planFragment),
+      0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
+}
+
 std::shared_ptr<cudf_velox::CudfVector> makeCudfVector(
     memory::MemoryPool* pool,
     size_t numRows,

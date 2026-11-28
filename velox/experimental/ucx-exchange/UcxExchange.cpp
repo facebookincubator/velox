@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
 #include "velox/common/Casts.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 using facebook::velox::exec::Operator;
@@ -168,7 +169,6 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
     return nullptr;
   }
 
-  // Get the packed_table and stream from the PackedTableWithStream
   PackedTableWithStream& data = *currentData_;
   // The producer's count, not table.num_rows(): a packed table with no columns
   // reports zero rows however many it holds, which is what an exchange
@@ -191,10 +191,17 @@ RowVectorPtr UcxExchange::getOutputFromPackedTable() {
     return nullptr;
   }
 
-  // Use the stream that was allocated in UcxExchangeSource::onMetadata
-  // and the packed_table constructor of CudfVector to avoid copying data.
+  // Bind the table to a stream from this driver thread's pool, not the
+  // receive stream: downstream operators queue their kernels on it, and the
+  // receive path syncs its own stream. The data is complete once the receive
+  // has completed, so the new stream needs no wait. The packed_table
+  // constructor of CudfVector avoids copying the data.
   auto result = std::make_shared<cudf_velox::CudfVector>(
-      pool(), outputType_, numRows, std::move(data.packedTable), data.stream);
+      pool(),
+      outputType_,
+      numRows,
+      std::move(data.packedTable),
+      cudf_velox::cudfGlobalStreamPool().get_stream());
 
   recordInputStats(gpuDataSize, result);
   // free the memory owned by PackedTableWithStream and set it to nullptr;

@@ -31,6 +31,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -46,6 +47,7 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/exec/tests/utils/TaskMonitor.h"
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -59,7 +61,25 @@ namespace facebook::velox::ucx_exchange {
 
 // Each case registers cuDF, and with it both UCX transports, for its own
 // duration, through CudfRegistration.
-class UcxExchangeTaskTest : public UcxExchangeTestBase {};
+class UcxExchangeTaskTest : public UcxExchangeTestBase {
+ protected:
+  // A Task can be destroyed on a driver thread after the case drops its
+  // references; its plan's vectors come from 'pool_'.
+  void TearDown() override {
+    exec::test::TaskMonitor::waitForAllTasksDeleted();
+    UcxExchangeTestBase::TearDown();
+  }
+
+  // Fails a producer task after its consumer received a batch, and checks that
+  // the consumer fails with the producer's reason. 'intraNode' selects
+  // intra-node or remote transfer.
+  void checkProducerFailureMidStreamFailsConsumer(bool intraNode);
+
+  // Checks that a consumer that stops reading after a LIMIT succeeds, and that
+  // a later exchange still gets all its rows. 'intraNode' selects intra-node or
+  // remote transfer.
+  void checkLimitBeforeProducerFinishesStillSucceeds(bool intraNode);
+};
 
 namespace {
 
@@ -475,6 +495,88 @@ std::vector<RowVectorPtr> runTaskShuffle(
   return hostBatches;
 }
 
+// Repeats the producer's one batch often enough that the producer cannot finish
+// within a case; the case ends it by failing or cancelling it.
+constexpr size_t kEndlessRepeatTimes = 1'000'000;
+
+// Starts a 'Values -> PartitionedOutput' producer over UCX that keeps sending
+// 512-row batches until it is stopped.
+std::shared_ptr<exec::Task> startEndlessProducer(
+    const std::string& taskId,
+    memory::MemoryPool* pool) {
+  auto plan = exec::test::PlanBuilder()
+                  .values(
+                      {makeTaskShuffleBatch(
+                          pool,
+                          /*firstValue=*/0,
+                          /*stride=*/1,
+                          /*numRowsInBatch=*/512)},
+                      /*parallelizable=*/false,
+                      kEndlessRepeatTimes)
+                  .partitionedOutput(
+                      /*keys=*/{},
+                      /*numPartitions=*/1,
+                      /*outputLayout=*/{},
+                      taskShuffleSerdeKind(),
+                      std::string{core::TransportKind::kUcx})
+                  .planFragment();
+  auto task = makeTaskShuffleTask(taskId, std::move(plan), nullptr);
+  task->start(1);
+  return task;
+}
+
+// Waits until the consumer behind 'results' received a batch. Returns false if
+// none arrived within 'maxWait'.
+bool waitForBatches(
+    const TaskShuffleResults& results,
+    std::chrono::microseconds maxWait) {
+  const auto deadline = std::chrono::steady_clock::now() + maxWait;
+  while (results.batches().empty()) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return true;
+}
+
+// Selects intra-node or remote transfer for the exchanges a case starts, and
+// restores the process-wide setting when it goes out of scope.
+class ScopedIntraNodeExchange {
+ public:
+  explicit ScopedIntraNodeExchange(bool intraNode)
+      : previous_(cudf_velox::CudfConfig::getInstance().intraNodeExchange) {
+    cudf_velox::CudfConfig::getInstance().intraNodeExchange = intraNode;
+  }
+
+  ~ScopedIntraNodeExchange() {
+    cudf_velox::CudfConfig::getInstance().intraNodeExchange = previous_;
+  }
+
+  ScopedIntraNodeExchange(const ScopedIntraNodeExchange&) = delete;
+  ScopedIntraNodeExchange& operator=(const ScopedIntraNodeExchange&) = delete;
+
+ private:
+  const bool previous_;
+};
+
+// The plan of a consumer that reads one UCX exchange, followed by a final LIMIT
+// of 'limit' rows if it has a value. Sets 'exchangeNodeId'.
+core::PlanFragment ucxConsumerPlan(
+    std::optional<int64_t> limit,
+    core::PlanNodeId& exchangeNodeId) {
+  auto builder = exec::test::PlanBuilder()
+                     .exchange(
+                         taskShuffleRowType(),
+                         taskShuffleSerdeKind(),
+                         std::string{core::TransportKind::kUcx})
+                     .capturePlanNodeId(exchangeNodeId);
+  if (limit.has_value()) {
+    builder.limit(/*offset=*/0, *limit, /*isPartial=*/false);
+  }
+  return builder.planFragment();
+}
+
 } // namespace
 
 // Runs a two-fragment plan over UCX through real Tasks. The exchange operator
@@ -549,6 +651,224 @@ TEST_F(UcxExchangeTaskTest, taskShuffleOverUcx) {
   const auto boundaries = planNodeBoundariesOf(consumerStats.pipelineStats[0]);
   ASSERT_FALSE(boundaries.empty());
   EXPECT_EQ(boundaries[0], core::PlanNode::Boundary::kBoth);
+}
+
+void UcxExchangeTaskTest::checkProducerFailureMidStreamFailsConsumer(
+    bool intraNode) {
+  registerSerdes();
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+
+  ScopedIntraNodeExchange intraNodeExchange(intraNode);
+  const auto taskPrefix = getUniqueTaskPrefix();
+  TaskShuffleResults results;
+  StartedTasks startedTasks(&results);
+
+  const auto producerId = taskPrefix + "failingProducer";
+  auto producer = startEndlessProducer(producerId, pool_.get());
+  startedTasks.add(producer);
+
+  core::PlanNodeId exchangeNodeId;
+  auto consumer = makeTaskShuffleTask(
+      taskPrefix + "consumer",
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId),
+      results.consumer());
+  startedTasks.add(consumer);
+  consumer->start(1);
+  consumer->addSplit(exchangeNodeId, remoteSplit(producerId, 0));
+  consumer->noMoreSplits(exchangeNodeId);
+
+  ASSERT_TRUE(waitForBatches(
+      results, std::chrono::microseconds(kTaskShuffleMaxWaitMicros)));
+  producer->setError("Injected producer failure");
+
+  ASSERT_TRUE(
+      exec::test::TaskMonitor::waitForFailure(
+          *consumer, kTaskShuffleMaxWaitMicros))
+      << exec::taskStateString(consumer->state());
+  EXPECT_THAT(
+      consumer->errorMessage(),
+      testing::AllOf(
+          testing::HasSubstr("Producer failed before sending all its data"),
+          testing::HasSubstr("Injected producer failure")));
+}
+
+// A producer task that fails after it started sending must fail its consumer
+// with the producer's reason. Ending the consumer's stream as complete would
+// return a result with the rest of the producer's rows missing. The remote end
+// message carries the producer's error.
+TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumer) {
+  checkProducerFailureMidStreamFailsConsumer(/*intraNode=*/false);
+}
+
+// As producerFailureMidStreamFailsConsumer, with the chunks handed over through
+// IntraNodeTransferRegistry, whose cancelled task carries the producer's error.
+TEST_F(UcxExchangeTaskTest, producerFailureMidStreamFailsConsumerIntraNode) {
+  checkProducerFailureMidStreamFailsConsumer(/*intraNode=*/true);
+}
+
+// A producer's error can be far larger than the end-of-stream message that
+// carries its reason, for instance a cast error that quotes its whole input.
+// The consumer must still fail with that reason, and the worker must survive:
+// a message over kMaxMetaBufSize cannot be serialized on the Communicator
+// thread.
+TEST_F(UcxExchangeTaskTest, oversizedProducerErrorFailsConsumer) {
+  registerSerdes();
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+  ScopedIntraNodeExchange intraNodeExchange(/*intraNode=*/false);
+  const auto taskPrefix = getUniqueTaskPrefix();
+  TaskShuffleResults results;
+  StartedTasks startedTasks(&results);
+
+  const auto producerId = taskPrefix + "verboseProducer";
+  auto producer = startEndlessProducer(producerId, pool_.get());
+  startedTasks.add(producer);
+
+  core::PlanNodeId exchangeNodeId;
+  auto consumer = makeTaskShuffleTask(
+      taskPrefix + "consumer",
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId),
+      results.consumer());
+  startedTasks.add(consumer);
+  consumer->start(1);
+  consumer->addSplit(exchangeNodeId, remoteSplit(producerId, 0));
+  consumer->noMoreSplits(exchangeNodeId);
+
+  ASSERT_TRUE(waitForBatches(
+      results, std::chrono::microseconds(kTaskShuffleMaxWaitMicros)));
+  producer->setError(
+      "Injected producer failure: " + std::string(2'000'000, 'x'));
+
+  ASSERT_TRUE(
+      exec::test::TaskMonitor::waitForFailure(
+          *consumer, kTaskShuffleMaxWaitMicros))
+      << exec::taskStateString(consumer->state());
+  EXPECT_THAT(
+      consumer->errorMessage(),
+      testing::AllOf(
+          testing::HasSubstr("Producer failed before sending all its data"),
+          testing::HasSubstr("Injected producer failure")));
+}
+
+// A consumer whose producer already failed and was removed before the
+// consumer connected must fail as well, rather than read an empty stream.
+// Remote path only: Acceptor refuses intra-node transfer for a removed task.
+TEST_F(UcxExchangeTaskTest, lateConsumerOfFailedProducerFails) {
+  registerSerdes();
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+  ScopedIntraNodeExchange intraNodeExchange(/*intraNode=*/false);
+  const auto taskPrefix = getUniqueTaskPrefix();
+  TaskShuffleResults results;
+  StartedTasks startedTasks(&results);
+
+  const auto producerId = taskPrefix + "failedProducer";
+  auto producer = startEndlessProducer(producerId, pool_.get());
+  startedTasks.add(producer);
+  producer->setError("Injected producer failure");
+  ASSERT_TRUE(
+      exec::test::TaskMonitor::waitForFailure(
+          *producer, kTaskShuffleMaxWaitMicros))
+      << exec::taskStateString(producer->state());
+
+  core::PlanNodeId exchangeNodeId;
+  auto consumer = makeTaskShuffleTask(
+      taskPrefix + "lateConsumer",
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId),
+      results.consumer());
+  startedTasks.add(consumer);
+  consumer->start(1);
+  consumer->addSplit(exchangeNodeId, remoteSplit(producerId, 0));
+  consumer->noMoreSplits(exchangeNodeId);
+
+  ASSERT_TRUE(
+      exec::test::TaskMonitor::waitForFailure(
+          *consumer, kTaskShuffleMaxWaitMicros))
+      << exec::taskStateString(consumer->state());
+  EXPECT_THAT(
+      consumer->errorMessage(),
+      testing::AllOf(
+          testing::HasSubstr("Producer failed before sending all its data"),
+          testing::HasSubstr("Injected producer failure")));
+}
+
+void UcxExchangeTaskTest::checkLimitBeforeProducerFinishesStillSucceeds(
+    bool intraNode) {
+  registerSerdes();
+  exec::ExchangeTransportRegistry::unregisterAll();
+  exec::OutputTransportRegistry::unregisterAll();
+  CudfRegistration cudfRegistration;
+  ScopedIntraNodeExchange intraNodeExchange(intraNode);
+  const auto taskPrefix = getUniqueTaskPrefix();
+  {
+    TaskShuffleResults results;
+    StartedTasks startedTasks(&results);
+
+    const auto producerId = taskPrefix + "endlessProducer";
+    auto producer = startEndlessProducer(producerId, pool_.get());
+    startedTasks.add(producer);
+
+    core::PlanNodeId exchangeNodeId;
+    auto consumer = makeTaskShuffleTask(
+        taskPrefix + "limitedConsumer",
+        ucxConsumerPlan(/*limit=*/10, exchangeNodeId),
+        results.consumer());
+    startedTasks.add(consumer);
+    consumer->start(1);
+    consumer->addSplit(exchangeNodeId, remoteSplit(producerId, 0));
+    consumer->noMoreSplits(exchangeNodeId);
+
+    ASSERT_TRUE(
+        exec::test::TaskMonitor::waitForCompletion(
+            *consumer, kTaskShuffleMaxWaitMicros))
+        << exec::taskStateString(consumer->state()) << ": "
+        << consumer->errorMessage();
+    EXPECT_EQ(totalRows(results.batches()), 10);
+
+    EXPECT_TRUE(producer->requestCancel().wait(
+        std::chrono::microseconds(kTaskShuffleMaxWaitMicros)));
+  }
+
+  // A later exchange still gets all its rows.
+  const auto producers = makeInterleavedProducers(
+      pool_.get(),
+      taskPrefix + "laterProducer",
+      /*numProducers=*/1,
+      /*numRowsPerProducer=*/64);
+  core::PlanNodeId exchangeNodeId;
+  const auto consumerPlan =
+      ucxConsumerPlan(/*limit=*/std::nullopt, exchangeNodeId);
+  const auto actual = runTaskShuffle(
+      std::string{core::TransportKind::kUcx},
+      producers,
+      consumerPlan,
+      exchangeNodeId,
+      taskPrefix + "laterConsumer",
+      [this](const std::string& taskId) { return remoteSplit(taskId, 0); },
+      pool_.get(),
+      /*numConsumerDrivers=*/1,
+      /*consumerStats=*/nullptr);
+  EXPECT_TRUE(exec::test::assertEqualResults(allBatchesOf(producers), actual));
+}
+
+// A consumer that stops reading early, here after a LIMIT, has all it needs. It
+// must finish successfully, and cancelling its producer afterwards, as the
+// coordinator does, must leave the Communicator able to serve later cases. The
+// consumer closes before its stream ends, which sends the close message and
+// releases its server.
+TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceeds) {
+  checkLimitBeforeProducerFinishesStillSucceeds(/*intraNode=*/false);
+}
+
+// As limitBeforeProducerFinishesStillSucceeds, with the chunks handed over
+// through IntraNodeTransferRegistry. The closed consumer's server drops the
+// chunk it published, and the later exchange runs intra-node as well.
+TEST_F(UcxExchangeTaskTest, limitBeforeProducerFinishesStillSucceedsIntraNode) {
+  checkLimitBeforeProducerFinishesStillSucceeds(/*intraNode=*/true);
 }
 
 // A fragment whose output layout is empty ships rows that carry no columns --

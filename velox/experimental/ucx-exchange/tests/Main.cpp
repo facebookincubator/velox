@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include <cudf/utilities/error.hpp>
+#include <cudf/utilities/memory_resource.hpp>
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
@@ -42,6 +43,17 @@ int main(int argc, char** argv) {
   cudfConfig.exchangeLogLevel = FLAGS_exchange_log_level;
   // cuda::stream_ref::sync() requires a current CUDA context.
   CUDF_CUDA_TRY(cudaFree(nullptr));
+  // Run on the resource production uses by default (cudf.memory_resource is
+  // "async"). RMM's built-in default frees with cudaFree, which waits for all
+  // GPU work on the device, so freeing a sent chunk on the Communicator thread
+  // would stall every channel behind unrelated kernels. The copy is leaked so
+  // that its pool outlives every buffer allocated from it, also after a test
+  // installs another resource.
+  auto* const testResource =
+      new cuda::mr::any_resource<cuda::mr::device_accessible>(
+          facebook::velox::cudf_velox::createMemoryResource(
+              cudfConfig.memoryResource, cudfConfig.memoryPercent));
+  cudf::set_current_device_resource(*testResource);
   facebook::velox::cudf_velox::output_mr_.emplace(
       rmm::mr::get_current_device_resource_ref());
   const auto result = RUN_ALL_TESTS();

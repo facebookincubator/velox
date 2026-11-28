@@ -15,17 +15,21 @@
  */
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include <cuda_runtime.h>
+#include <folly/ScopeGuard.h>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
 #include <algorithm>
 #include <iostream>
+#include <string>
 #include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeModules.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeServer.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
+#include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 
 #include <glog/logging.h>
 
@@ -89,7 +93,14 @@ std::shared_ptr<Communicator> Communicator::getInstance() {
     void* arg) {
   // cast the argument back to our instance variable:
   Communicator* instance = static_cast<Communicator*>(arg);
-  instance->listenerCallback(conn_request);
+  // Runs inside UCX progress, which an exception must not leave.
+  try {
+    instance->listenerCallback(conn_request);
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Cannot accept a UCX exchange connection: " << e.what();
+  } catch (...) {
+    LOG(ERROR) << "Cannot accept a UCX exchange connection: unknown exception";
+  }
 }
 
 Communicator::~Communicator() {
@@ -102,6 +113,39 @@ Communicator::~Communicator() {
   context_.reset();
   VLOG(3) << "Communicator destructed";
 }
+
+namespace {
+// Runs 'element's process(). An exception ends only that element, through
+// onElementFailed(): a server fails its producer task and a source fails its
+// consumer. The failure is local and must not be reported as a closed
+// endpoint. A closed endpoint tells a server that its consumer is gone, and
+// the producer task then finishes without the rows the server dropped. The
+// loop serves every exchange on this worker, so one element's failure, such as
+// a post that throws, must not stop it.
+void processElement(CommElement& element) {
+  std::string error;
+  try {
+    element.process();
+    return;
+  } catch (const VeloxException& e) {
+    // what() of a VeloxException carries its context and stack trace.
+    error = e.message();
+  } catch (const std::exception& e) {
+    error = e.what();
+  } catch (...) {
+    error = "unknown exception";
+  }
+  LOG(ERROR) << "UCX exchange element failed on the Communicator thread: "
+             << error;
+  try {
+    element.onElementFailed(error);
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Cannot end a failed UCX exchange element: " << e.what();
+  } catch (...) {
+    LOG(ERROR) << "Cannot end a failed UCX exchange element: unknown exception";
+  }
+}
+} // namespace
 
 /// @brief Run doesn't return until stop() is called.
 /// All operations of the communicator will be carried out in the thread
@@ -144,12 +188,22 @@ void Communicator::run() {
   ucxx::AmReceiverCallbackInfo info(kAmCallbackOwner, kAmCallbackId);
   worker_->registerAmReceiverCallback(info, &Acceptor::cStyleAMCallback);
 
+  postCloseReceive();
+  // Every exit, also by an exception, cancels the receive while the worker
+  // still progresses.
+  SCOPE_EXIT {
+    cancelCloseReceive();
+  };
+
   promise_.setValue();
 
   VLOG(3) << "Communicator running.";
   const bool blockingMode = CudfConfig::getInstance().ucxxBlockingProgress;
   while (running_) {
     try {
+      runPostedActions();
+      handleCloseReceives();
+
       // Periodic heartbeat for diagnostic logging.
       auto now = std::chrono::steady_clock::now();
       if (now - lastHeartbeat_ >= std::chrono::seconds(5)) {
@@ -210,8 +264,16 @@ void Communicator::run() {
 
       // Process the work queue. Make sure that communication is progressed
       // after each call to a comms element, otherwise we will deadlock.
-      while (auto comms = workQueue_.pop()) {
-        comms->process();
+      // Process at most the elements queued when this drain began. An element
+      // that requeues itself while it waits, such as an intra-node server,
+      // would otherwise keep the drain from ever ending and starve posted
+      // actions, deferred endpoint cleanups and the close receive.
+      for (size_t numItems = workQueue_.size(); numItems > 0; --numItems) {
+        auto comms = workQueue_.pop();
+        if (!comms) {
+          break;
+        }
+        processElement(*comms);
         ++workItemsProcessed_;
         // Progress after each work item to allow UCXX to advance
         // its internal state (complete sends/receives, fire callbacks).
@@ -232,10 +294,11 @@ void Communicator::run() {
             deferredRequests_.end());
       }
 
-      // All queues are drained. Now wait for UCXX network events.
-      // In blocking mode, this will block until a UCXX event arrives
-      // or worker_->signal() is called (from addToWorkQueue,
-      // deferEndpointCleanup, or stop).
+      // Progress UCXX network events. The drain above is bounded, so the work
+      // queue may still hold elements. Neither call blocks:
+      // progressWorkerEvent(0) waits on the worker's events with an epoll
+      // timeout of 0. The next iteration therefore takes the remaining work
+      // at once, and none of it is stranded.
       if (blockingMode) {
         worker_->progressWorkerEvent(0);
       } else {
@@ -247,6 +310,84 @@ void Communicator::run() {
     }
   }
   VLOG(3) << "Communicator stopping.";
+}
+
+void Communicator::postCloseReceive() {
+  // A new, zero-filled buffer for each receive: a message shorter than the
+  // buffer leaves the rest of it zero.
+  closeBuffer_ = std::make_shared<CloseMsg>();
+  try {
+    // The receive only records its status. handleCloseReceives() acts on it
+    // in the loop, outside every UCX callback. The request owns the buffer,
+    // and the worker holds the request until it completes, also after a
+    // cancellation that does not complete in time.
+    closeReceive_ = worker_
+                        ->tagRecvBuilder(
+                            closeBuffer_.get(),
+                            sizeof(CloseMsg),
+                            ucxx::Tag{CLOSE_TAG},
+                            ucxx::TagMask{kOperationTagMask})
+                        .callbackData(closeBuffer_)
+                        .build();
+  } catch (const std::exception& e) {
+    // Producers on this worker then learn that a consumer left only when its
+    // endpoint closes.
+    LOG(ERROR) << "Cannot post the receive of UCX exchange close messages: "
+               << e.what();
+    closeReceive_ = nullptr;
+  }
+}
+
+void Communicator::handleCloseReceives() {
+  // A posted receive can complete at once, with a message that arrived
+  // before it, so keep going until one is pending.
+  while (closeReceive_ != nullptr && closeReceive_->isCompleted()) {
+    const auto status = closeReceive_->getStatus();
+    if (status == UCS_OK) {
+      const auto key = decodeCloseMsg(*closeBuffer_);
+      VLOG(2) << "Received the close message for " << key.toString();
+      try {
+        UcxOutputQueueManager::getInstanceRef()->consumerGone(
+            key.taskId, static_cast<int>(key.destination));
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "Cannot release a UCX exchange destination closed by its "
+                      "consumer: "
+                   << key.toString() << ": " << e.what();
+      }
+    } else if (status != UCS_ERR_CANCELED) {
+      LOG(ERROR) << "Failed to receive a UCX exchange close message: "
+                 << ucs_status_string(status);
+    }
+    closeReceive_ = nullptr;
+    if (!running_) {
+      return;
+    }
+    postCloseReceive();
+  }
+}
+
+void Communicator::cancelCloseReceive() noexcept {
+  if (closeReceive_ == nullptr || closeReceive_->isCompleted()) {
+    return;
+  }
+  try {
+    closeReceive_->cancel();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!closeReceive_->isCompleted() &&
+           std::chrono::steady_clock::now() < deadline) {
+      worker_->progress();
+    }
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Cannot cancel the receive of UCX exchange close messages: "
+               << e.what();
+  }
+  if (!closeReceive_->isCompleted()) {
+    // The request, which owns the buffer, stays with the worker, which
+    // cancels it again when it is destroyed.
+    LOG(ERROR) << "The receive of UCX exchange close messages did not complete "
+                  "after it was cancelled";
+  }
 }
 
 /// @brief Stops the communicator, called from an outside thread.
@@ -341,6 +482,9 @@ void Communicator::removeEndpointRef(std::shared_ptr<EndpointRef> ep) {
       ++it;
     }
   }
+  // UCP may reuse the endpoint's handle for a new connection, whose handshakes
+  // must not resolve to this endpoint.
+  acceptor_.unregisterEndpointRef(ep);
   VLOG(3) << "- Communicator::removeEndpointRef";
 }
 
@@ -353,6 +497,32 @@ void Communicator::deferEndpointCleanup(std::shared_ptr<EndpointRef> ep) {
   signalWorker();
 }
 
+void Communicator::postToLoop(std::function<void()> action) {
+  {
+    std::lock_guard<std::mutex> lock(postedActionsMutex_);
+    postedActions_.push_back(std::move(action));
+  }
+  signalWorker();
+}
+
+void Communicator::runPostedActions() {
+  std::deque<std::function<void()>> actions;
+  {
+    std::lock_guard<std::mutex> lock(postedActionsMutex_);
+    actions.swap(postedActions_);
+  }
+  for (auto& action : actions) {
+    // An action that throws must not end the Communicator loop, which serves
+    // every query on this worker.
+    try {
+      action();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "Action posted to the Communicator loop failed: "
+                 << e.what();
+    }
+  }
+}
+
 void Communicator::deferRequestCleanup(std::shared_ptr<ucxx::Request> request) {
   if (request) {
     deferredRequests_.push_back(std::move(request));
@@ -361,11 +531,11 @@ void Communicator::deferRequestCleanup(std::shared_ptr<ucxx::Request> request) {
 
 std::shared_ptr<EndpointRef> Communicator::findEndpointRefByHandle(
     ucp_ep_h handle) {
-  auto it = acceptor_.handleToEndpointRef_.find(handle);
-  if (it != acceptor_.handleToEndpointRef_.end()) {
-    return it->second;
-  }
-  return nullptr;
+  return acceptor_.findEndpointRef(handle);
+}
+
+bool Communicator::hasPendingCloseReceive() const {
+  return closeReceive_ != nullptr && !closeReceive_->isCompleted();
 }
 
 const std::string& Communicator::getCoordinatorUrl() {
@@ -433,7 +603,7 @@ void Communicator::listenerCallback(ucp_conn_request_h conn_request) {
       return;
     }
   }
-  acceptor_.registerEndpointRef(epRef);
+  acceptor_.registerEndpointRef(endpoint->getHandle(), epRef);
 }
 
 } // namespace facebook::velox::ucx_exchange

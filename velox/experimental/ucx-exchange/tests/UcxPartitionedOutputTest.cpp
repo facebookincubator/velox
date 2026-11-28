@@ -240,17 +240,13 @@ class UcxPartitionedOutputTest : public testing::Test {
     std::vector<std::vector<int32_t>> packets;
     while (true) {
       std::shared_ptr<cudf::packed_columns> payload;
+      bool isEnd{false};
       queueManager_->getData(
-          taskId_,
-          destination,
-          [&payload](
-              std::shared_ptr<cudf::packed_columns> data,
-              vector_size_t /*numRows*/,
-              std::vector<int64_t> /*remainingBytes*/) {
-            payload = std::move(data);
+          taskId_, destination, [&payload, &isEnd](ReaderStep step) {
+            isEnd = step.kind == ReaderStep::Kind::kEnd;
+            payload = std::move(step.data);
           });
-      // A null payload is the end-of-stream marker.
-      if (payload == nullptr) {
+      if (isEnd) {
         break;
       }
       auto unpacked = cudf::unpack(*payload);
@@ -362,17 +358,16 @@ TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
     while (true) {
       std::shared_ptr<cudf::packed_columns> payload;
       vector_size_t payloadRows = 0;
+      bool isEnd{false};
       queueManager_->getData(
           taskId_,
           destination,
-          [&payload, &payloadRows](
-              std::shared_ptr<cudf::packed_columns> data,
-              vector_size_t numRows,
-              std::vector<int64_t> /*remainingBytes*/) {
-            payload = std::move(data);
-            payloadRows = numRows;
+          [&payload, &payloadRows, &isEnd](ReaderStep step) {
+            isEnd = step.kind == ReaderStep::Kind::kEnd;
+            payload = std::move(step.data);
+            payloadRows = step.numRows;
           });
-      if (payload == nullptr) {
+      if (isEnd) {
         EXPECT_EQ(payloadRows, 0);
         break;
       }

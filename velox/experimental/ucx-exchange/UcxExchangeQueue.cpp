@@ -15,45 +15,156 @@
  */
 #include "velox/experimental/ucx-exchange/UcxExchangeQueue.h"
 
+#include <algorithm>
+
 namespace facebook::velox::ucx_exchange {
+
+UcxExchangeQueue::~UcxExchangeQueue() {
+  std::vector<ContinuePromise> promises;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    promises = clearAllPromisesLocked();
+  }
+  clearPromises(promises);
+}
+
+UcxExchangeQueue::SourceId UcxExchangeQueue::addSourceLocked() {
+  VELOX_CHECK(!noMoreSources_, "addSource called after noMoreSources");
+  sources_.emplace_back();
+  return static_cast<SourceId>(sources_.size() - 1);
+}
+
+UcxExchangeQueue::SourceId UcxExchangeQueue::addReleasedSourceLocked() {
+  VELOX_CHECK(closed_, "A released source must be added after close");
+  sources_.push_back({SourceState::kReleased, std::nullopt});
+  return static_cast<SourceId>(sources_.size() - 1);
+}
+
+void UcxExchangeQueue::sourceOpened(SourceId id) {
+  std::lock_guard<std::mutex> l(mutex_);
+  // Reached from UCX callbacks, which must not throw.
+  VELOX_DCHECK_LT(static_cast<size_t>(id), sources_.size());
+  auto& entry = sources_[id];
+  entry.state =
+      decideSource(
+          entry.state, SourceEvent::kResponseAccepted, ChannelOutcome::clean())
+          .next;
+}
+
+bool UcxExchangeQueue::isFinishedLocked() const {
+  return noMoreSources_ &&
+      std::all_of(sources_.begin(), sources_.end(), [](const auto& entry) {
+           return entry.state == SourceState::kEnded ||
+               entry.state == SourceState::kReleased;
+         });
+}
+
+std::deque<PackedTableWithStreamPtr> UcxExchangeQueue::takeTablesLocked() {
+  std::deque<PackedTableWithStreamPtr> tables;
+  tables.swap(queue_);
+  publishSizeLocked();
+  totalBytes_ = 0;
+  return tables;
+}
 
 void UcxExchangeQueue::noMoreSources() {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
     noMoreSources_ = true;
-    promises = checkCompleteLocked();
+    if (isFinishedLocked()) {
+      promises = clearAllPromisesLocked();
+    }
   }
   clearPromises(promises);
 }
 
-void UcxExchangeQueue::close() {
+void UcxExchangeQueue::end(SourceId id, ChannelOutcome outcome) {
   std::vector<ContinuePromise> promises;
+  std::deque<PackedTableWithStreamPtr> tables;
+  // The error this call decided, logged after the lock is released. An error
+  // that comes after the source ended or was released is not logged.
+  std::optional<std::string> decidedError;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    promises = closeLocked();
+    // Reached from UCX callbacks, which must not throw.
+    VELOX_DCHECK_LT(static_cast<size_t>(id), sources_.size());
+    auto& entry = sources_[id];
+    auto decision = decideSource(entry.state, SourceEvent::kEnded, outcome);
+    entry.state = decision.next;
+    if (!decision.outcome.has_value()) {
+      return;
+    }
+    entry.outcome = std::move(decision.outcome);
+    VLOG(2) << "[EX-QUEUE] source " << id << " ended: " << entry.outcome->kind;
+    if (!entry.outcome->isClean()) {
+      decidedError = entry.outcome->error;
+    }
+    if (!entry.outcome->isClean() && !failedSource_.has_value() && !closed_) {
+      failedSource_ = id;
+      // A failed consumer reads nothing more.
+      tables = takeTablesLocked();
+      promises = clearAllPromisesLocked();
+    } else if (isFinishedLocked()) {
+      promises = clearAllPromisesLocked();
+    }
+  }
+  if (decidedError.has_value()) {
+    VLOG(0) << "[EX-QUEUE] source " << id << " failed: " << *decidedError;
   }
   clearPromises(promises);
 }
 
-void UcxExchangeQueue::enqueueLocked(
-    PackedTableWithStreamPtr&& data,
-    std::vector<ContinuePromise>& promises) {
-  if (data == nullptr) {
-    ++numCompleted_;
-    VLOG(2) << "[EX-QUEUE] source completed (null enqueued)"
-            << " numCompleted=" << numCompleted_
-            << " numSources=" << numSources_
-            << " noMoreSources=" << noMoreSources_;
-    auto completedPromises = checkCompleteLocked();
-    promises.reserve(promises.size() + completedPromises.size());
-    for (auto& promise : completedPromises) {
-      promises.push_back(std::move(promise));
+std::vector<UcxExchangeQueue::SourceId> UcxExchangeQueue::close() {
+  std::vector<SourceId> toTell;
+  std::vector<ContinuePromise> promises;
+  std::deque<PackedTableWithStreamPtr> tables;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (closed_) {
+      return toTell;
     }
-    return;
+    closed_ = true;
+    for (SourceId id = 0; id < static_cast<SourceId>(sources_.size()); ++id) {
+      auto& entry = sources_[id];
+      const auto decision = decideSource(
+          entry.state, SourceEvent::kClientClosed, ChannelOutcome::clean());
+      entry.state = decision.next;
+      if (decision.tellServer) {
+        toTell.push_back(id);
+      }
+    }
+    tables = takeTablesLocked();
+    promises = clearAllPromisesLocked();
+  }
+  clearPromises(promises);
+  return toTell;
+}
+
+bool UcxExchangeQueue::isClosed() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return closed_;
+}
+
+SourceState UcxExchangeQueue::sourceState(SourceId id) {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_LT(static_cast<size_t>(id), sources_.size());
+  return sources_[id].state;
+}
+
+bool UcxExchangeQueue::enqueueTable(
+    SourceId id,
+    PackedTableWithStreamPtr& table,
+    std::vector<ContinuePromise>& promises) {
+  std::lock_guard<std::mutex> l(mutex_);
+  // Reached from UCX callbacks, which must not throw.
+  VELOX_DCHECK_LT(static_cast<size_t>(id), sources_.size());
+  if (sources_[id].state != SourceState::kOpen || failedSource_.has_value() ||
+      closed_) {
+    return false;
   }
 
-  auto dataSize = data->gpuDataSize();
+  auto dataSize = table->gpuDataSize();
   totalBytes_ += dataSize;
   if (peakBytes_ < totalBytes_) {
     peakBytes_ = totalBytes_;
@@ -62,7 +173,7 @@ void UcxExchangeQueue::enqueueLocked(
   ++receivedTables_;
   receivedBytes_ += dataSize;
 
-  queue_.push_back(std::move(data));
+  queue_.push_back(std::move(table));
   publishSizeLocked();
 
   // High-water-mark alerts: log when queue size crosses thresholds.
@@ -96,6 +207,7 @@ void UcxExchangeQueue::enqueueLocked(
     VLOG(2) << "[EX-QUEUE] waking " << wokenConsumers << " consumers"
             << " queueSize=" << queue_.size();
   }
+  return true;
 }
 
 void UcxExchangeQueue::addPromiseLocked(
@@ -115,59 +227,51 @@ void UcxExchangeQueue::addPromiseLocked(
   VELOX_CHECK_LE(promises_.size(), numberOfConsumers_);
 }
 
+std::vector<ContinuePromise> UcxExchangeQueue::clearAllPromisesLocked() {
+  std::vector<ContinuePromise> promises;
+  promises.reserve(promises_.size());
+  for (auto& [consumerId, promise] : promises_) {
+    promises.push_back(std::move(promise));
+  }
+  promises_.clear();
+  return promises;
+}
+
 PackedTableWithStreamPtr UcxExchangeQueue::dequeueLocked(
     int consumerId,
     bool* atEnd,
     ContinueFuture* future,
     ContinuePromise* stalePromise) {
   VELOX_CHECK_NOT_NULL(future);
-  if (!error_.empty()) {
+  // An error decided before close() still fails the reads after it.
+  if (failedSource_.has_value()) {
     *atEnd = true;
-    VELOX_FAIL(error_);
+    VELOX_FAIL(sources_[*failedSource_].outcome->error);
+  }
+  if (closed_) {
+    *atEnd = true;
+    return nullptr;
   }
 
   *atEnd = false;
-
-  // check whether the queue is empty.
-  PackedTableWithStreamPtr data = nullptr;
   if (queue_.empty()) {
-    if (atEnd_) {
+    if (isFinishedLocked()) {
       *atEnd = true;
     } else {
       VLOG(2) << "[EX-QUEUE] consumer=" << consumerId
               << " blocked (empty queue, waiting for data)"
-              << " numSources=" << numSources_
-              << " numCompleted=" << numCompleted_
+              << " numSources=" << sources_.size()
               << " waitingConsumers=" << (promises_.size() + 1);
       addPromiseLocked(consumerId, future, stalePromise);
     }
-    return data;
+    return nullptr;
   }
 
-  data = std::move(queue_.front());
+  auto data = std::move(queue_.front());
   queue_.pop_front();
   publishSizeLocked();
   totalBytes_ -= data->gpuDataSize();
-
   return data;
-}
-
-void UcxExchangeQueue::setError(std::string_view error) {
-  std::vector<ContinuePromise> promises;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    if (!error_.empty()) {
-      return;
-    }
-    error_ = error;
-    atEnd_ = true;
-    // NOTE: clear the serialized page queue as we won't consume from an
-    // errored queue.
-    queue_.clear();
-    publishSizeLocked();
-    promises = clearAllPromisesLocked();
-  }
-  clearPromises(promises);
 }
 
 } // namespace facebook::velox::ucx_exchange

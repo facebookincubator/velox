@@ -16,6 +16,8 @@
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include <glog/logging.h>
 
+#include <vector>
+
 namespace facebook::velox::ucx_exchange {
 
 /* static */
@@ -33,7 +35,8 @@ std::future<void> IntraNodeTransferRegistry::publish(
     const IntraNodeTransferKey& key,
     std::shared_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    bool atEnd) {
+    bool atEnd,
+    ChannelOutcome outcome) {
   std::shared_ptr<IntraNodeTransferEntry> entry;
   std::future<void> future;
   bool entryExisted;
@@ -44,8 +47,9 @@ std::future<void> IntraNodeTransferRegistry::publish(
     std::lock_guard<std::mutex> lock(mutex_);
 
     // If the task was already cancelled (removeTask was called), don't create
-    // a registry entry. Return an already-fulfilled future so the server
-    // doesn't block waiting for a source that will never come.
+    // a registry entry. A source polling for it reads the cancellation's
+    // outcome instead of this transfer, so return an already-fulfilled future
+    // for the server not to wait for a read that never happens.
     if (cancelledTasks_.count(key.taskId)) {
       cancelled = true;
     } else {
@@ -77,6 +81,7 @@ std::future<void> IntraNodeTransferRegistry::publish(
     entry->data = std::move(data);
     entry->numRows = numRows;
     entry->atEnd = atEnd;
+    entry->outcome = std::move(outcome);
     entry->ready = true;
     // Get the future while holding the lock to avoid race with consumer
     future = entry->retrievedPromise.get_future();
@@ -93,16 +98,23 @@ std::future<void> IntraNodeTransferRegistry::publish(
 std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
     const IntraNodeTransferKey& key) {
   std::shared_ptr<IntraNodeTransferEntry> entry;
-
+  IntraNodeTransferResult result;
   {
+    // One critical section from lookup to erase, so that cancelTask() and
+    // cancelTransfer() either find the entry still here or not at all, and
+    // never complete its promise while this poll reads it.
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Check if this task has been cancelled (producer removed).
-    if (cancelledTasks_.count(key.taskId)) {
+    if (auto cancelled = cancelledTasks_.find(key.taskId);
+        cancelled != cancelledTasks_.end()) {
       VLOG(2) << "[INTRA-REG] poll cancelled: task=" << key.taskId
               << " dest=" << key.destination << " seq=" << key.sequenceNumber;
       return IntraNodeTransferResult{
-          .data = nullptr, .numRows = 0, .atEnd = true};
+          .data = nullptr,
+          .numRows = 0,
+          .atEnd = true,
+          .outcome = cancelled->second};
     }
 
     auto it = registry_.find(key);
@@ -114,36 +126,26 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
       return std::nullopt;
     }
     entry = it->second;
-  }
-
-  // FIX: Hold the entry lock for the entire retrieval operation to prevent
-  // race conditions. Previously, the lock was released before accessing
-  // entry->data, entry->atEnd, and entry->retrievedPromise.
-  IntraNodeTransferResult result;
-  {
-    std::lock_guard<std::mutex> entryLock(entry->entryMutex);
-    if (!entry->ready) {
-      // Entry exists but data not ready yet
-      VLOG(3) << "[INTRA-REG] poll miss (not ready): task=" << key.taskId
-              << " dest=" << key.destination << " seq=" << key.sequenceNumber;
-      return std::nullopt;
+    {
+      std::lock_guard<std::mutex> entryLock(entry->entryMutex);
+      if (!entry->ready) {
+        // Entry exists but data not ready yet
+        VLOG(3) << "[INTRA-REG] poll miss (not ready): task=" << key.taskId
+                << " dest=" << key.destination << " seq=" << key.sequenceNumber;
+        return std::nullopt;
+      }
+      result.data = std::move(entry->data);
+      result.numRows = entry->numRows;
+      result.atEnd = entry->atEnd;
+      result.outcome = std::move(entry->outcome);
     }
-
-    // Data is ready, retrieve it while holding the lock
-    result.data = std::move(entry->data);
-    result.numRows = entry->numRows;
-    result.atEnd = entry->atEnd;
-
-    // Fulfill the promise to notify the server while still holding entry lock
-    entry->retrievedPromise.set_value();
+    registry_.erase(it);
   }
 
-  // Remove entry from registry (after releasing entry lock but before
-  // returning)
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    registry_.erase(key);
-  }
+  // The entry left the registry above, so no cancellation can complete the
+  // promise any more. publish() took the future before it marked the entry
+  // ready.
+  entry->retrievedPromise.set_value();
 
   VLOG(2) << "[INTRA-REG] poll hit: task=" << key.taskId
           << " dest=" << key.destination << " seq=" << key.sequenceNumber
@@ -152,12 +154,32 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
   return result;
 }
 
-void IntraNodeTransferRegistry::cancelTask(std::string_view taskId) {
+namespace {
+// Frees the data of an entry that left the registry unread and completes its
+// retrieval promise, so that its server stops waiting. Called without the
+// registry's lock.
+void dropEntry(IntraNodeTransferEntry& entry) {
+  std::shared_ptr<cudf::packed_columns> data;
+  {
+    std::lock_guard<std::mutex> entryLock(entry.entryMutex);
+    data = std::move(entry.data);
+    try {
+      entry.retrievedPromise.set_value();
+    } catch (const std::future_error&) {
+      // Promise already satisfied — safe to ignore.
+    }
+  }
+}
+} // namespace
+
+void IntraNodeTransferRegistry::cancelTask(
+    std::string_view taskId,
+    ChannelOutcome outcome) {
   std::vector<std::shared_ptr<IntraNodeTransferEntry>> entriesToFulfill;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    cancelledTasks_.insert(std::string{taskId});
+    cancelledTasks_.try_emplace(std::string{taskId}, std::move(outcome));
 
     // Clean up any existing registry entries for this task so servers
     // waiting on the retrieved-promise don't hang.
@@ -173,20 +195,27 @@ void IntraNodeTransferRegistry::cancelTask(std::string_view taskId) {
 
   // Fulfill promises outside the lock to avoid potential deadlocks.
   for (auto& entry : entriesToFulfill) {
-    std::lock_guard<std::mutex> entryLock(entry->entryMutex);
-    if (!entry->ready) {
-      entry->ready = true;
-      entry->atEnd = true;
-    }
-    try {
-      entry->retrievedPromise.set_value();
-    } catch (const std::future_error&) {
-      // Promise already satisfied — safe to ignore.
-    }
+    dropEntry(*entry);
   }
 
   VLOG(2) << "[INTRA-REG] cancelTask: task=" << taskId
           << " entriesCleaned=" << entriesToFulfill.size();
+}
+
+void IntraNodeTransferRegistry::cancelTransfer(
+    const IntraNodeTransferKey& key) {
+  std::shared_ptr<IntraNodeTransferEntry> entry;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto node = registry_.extract(key);
+    if (node.empty()) {
+      return;
+    }
+    entry = std::move(node.mapped());
+  }
+  dropEntry(*entry);
+  VLOG(2) << "[INTRA-REG] cancelTransfer: task=" << key.taskId
+          << " dest=" << key.destination << " seq=" << key.sequenceNumber;
 }
 
 void IntraNodeTransferRegistry::clearCancelledTask(std::string_view taskId) {

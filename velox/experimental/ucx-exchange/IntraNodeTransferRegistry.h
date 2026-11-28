@@ -23,8 +23,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_set>
+#include <unordered_map>
 
+#include "velox/experimental/ucx-exchange/UcxChannelState.h"
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -55,6 +56,8 @@ struct IntraNodeTransferResult {
   /// report its own row count.
   vector_size_t numRows{0};
   bool atEnd{false}; // True if this is the end-of-stream marker
+  /// How the channel ended. Meaningful only with 'atEnd'.
+  ChannelOutcome outcome;
 };
 
 /// @brief Entry in the intra-node transfer registry containing the data and
@@ -66,6 +69,8 @@ struct IntraNodeTransferEntry {
   vector_size_t numRows{
       0}; // Logical rows in 'data'; see IntraNodeTransferResult.
   bool atEnd{false}; // True if this is the end-of-stream marker
+  /// See IntraNodeTransferResult.
+  ChannelOutcome outcome;
   std::promise<void> retrievedPromise; // Server waits on this after publishing
   std::mutex entryMutex;
   bool ready{false}; // True when data is ready to retrieve
@@ -97,31 +102,49 @@ class IntraNodeTransferRegistry {
   /// @param data The packed_columns data to share (nullptr for atEnd)
   /// @param numRows Logical rows in 'data'; 0 for atEnd
   /// @param atEnd True if this is the end-of-stream marker
-  /// @return A future that completes when source has retrieved the data
+  /// @param outcome How the channel ended; meaningful only with 'atEnd'
+  /// @return A future that completes when source has retrieved the data, or
+  /// when the transfer or its task is cancelled
   [[nodiscard]] std::future<void> publish(
       const IntraNodeTransferKey& key,
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
-      bool atEnd);
+      bool atEnd,
+      ChannelOutcome outcome);
 
   /// @brief Non-blocking poll for intra-node transfer data.
   /// Returns immediately whether data is available or not.
   /// @param key The unique key identifying this transfer
   /// @return nullopt if not ready, or IntraNodeTransferResult if ready.
-  ///         Data is nullptr when atEnd is true.
+  ///         Data is nullptr when atEnd is true. For a cancelled task the
+  ///         result is atEnd with the outcome given to cancelTask().
   [[nodiscard]] std::optional<IntraNodeTransferResult> poll(
       const IntraNodeTransferKey& key);
 
   /// @brief Cancel all pending transfers for a task.
-  /// Called when a producing task is removed. Subsequent poll() calls for
-  /// this taskId will return an atEnd result instead of nullopt.
+  /// Called when a producing task is removed. Drops the published transfers,
+  /// completes their retrieval promises, and makes subsequent poll() calls for
+  /// this taskId return an atEnd result with 'outcome' instead of nullopt,
+  /// until clearCancelledTask() drops the record with the task's Removed
+  /// entry.
   /// @param taskId The task to cancel
-  void cancelTask(std::string_view taskId);
+  /// @param outcome The outcome the removal decided. The first outcome recorded
+  /// for a task wins, so that a later call cannot turn an error into a clean
+  /// end.
+  void cancelTask(std::string_view taskId, ChannelOutcome outcome);
 
-  /// @brief Remove a task from the cancelled set.
-  /// Called when a task ID is (re)initialized, so that the cancelledTasks_
-  /// set does not grow unboundedly across queries.
-  /// @param taskId The task to clear from the cancelled set
+  /// Drops one published transfer, frees its data and completes its retrieval
+  /// promise. Called by a server whose destination was Released, since no
+  /// source reads the transfer then. Other destinations and later transfers of
+  /// the task are unchanged. Does nothing if the transfer was read or
+  /// cancelled.
+  void cancelTransfer(const IntraNodeTransferKey& key);
+
+  /// @brief Remove a task from the cancelled tasks.
+  /// UcxOutputQueueManager calls it when it drops the Removed entry of a task,
+  /// once the host destroyed that Task and no server is bound to it, and when
+  /// a task ID is initialized again.
+  /// @param taskId The task to clear from the cancelled tasks
   void clearCancelledTask(std::string_view taskId);
 
  private:
@@ -129,7 +152,10 @@ class IntraNodeTransferRegistry {
 
   std::map<IntraNodeTransferKey, std::shared_ptr<IntraNodeTransferEntry>>
       registry_;
-  std::unordered_set<std::string> cancelledTasks_;
+  // Cancelled tasks and the outcome each was cancelled with.
+  std::unordered_map<std::string, ChannelOutcome> cancelledTasks_;
+  // Taken before an entry's entryMutex. Never held together with a lock of
+  // UcxOutputQueueManager or UcxOutputQueue.
   std::mutex mutex_;
 };
 

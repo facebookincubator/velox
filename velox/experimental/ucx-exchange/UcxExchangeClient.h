@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <map>
+
 #include "velox/exec/ExchangeClient.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeQueue.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
@@ -87,9 +89,10 @@ class UcxExchangeClient : public exec::ExchangeClient {
   const std::shared_ptr<UcxExchangeQueue> queue_;
 
   std::unordered_set<std::string> remoteTaskIds_;
-  std::vector<std::shared_ptr<UcxExchangeSource>> sources_;
-  // Guarded by queue_->mutex().
-  bool closed_{false};
+  // The sources added before close(), by the id of their entry in 'queue_'.
+  // close() removes the sources it closes. Guarded by queue_->mutex().
+  std::map<UcxExchangeQueue::SourceId, std::shared_ptr<UcxExchangeSource>>
+      sources_;
 
   // Diagnostic counters for progress and flow control.
   int64_t totalDequeued_{0};

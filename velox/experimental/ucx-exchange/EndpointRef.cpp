@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
+#include <fmt/format.h>
 #include "velox/experimental/ucx-exchange/Communicator.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -26,6 +27,7 @@ void EndpointRef::onClose(ucs_status_t status, std::shared_ptr<void> arg) {
   // Communicator loop via deferEndpointCleanup().
 
   std::shared_ptr<EndpointRef> ep = std::static_pointer_cast<EndpointRef>(arg);
+  ep->closeStatus_ = status;
 
   // Defer ALL cleanup to the main progress loop.
   // The main loop will:
@@ -57,7 +59,7 @@ void EndpointRef::closeAndDrainCommunicators() {
   // Swap communicators_ to a local copy under the lock, then iterate
   // the local copy without holding the lock. This prevents:
   // - Data races with concurrent addCommElem/removeCommElem
-  // - Re-entrancy: close() may eventually trigger removeCommElem on
+  // - Re-entrancy: onEndpointClosed() may trigger removeCommElem on
   //   this same EndpointRef, but communicators_ is already empty
   //   so removeCommElem will be a no-op.
   std::set<
@@ -70,9 +72,11 @@ void EndpointRef::closeAndDrainCommunicators() {
   }
 
   // Now iterate the local copy -- no lock held, no contention.
+  const auto reason =
+      fmt::format("UCX endpoint closed: {}", ucs_status_string(closeStatus_));
   for (auto& weakElem : localCopy) {
     if (std::shared_ptr<CommElement> spt = weakElem.lock()) {
-      spt->close();
+      spt->onEndpointClosed(reason);
     }
   }
   // localCopy is destroyed here, releasing all weak_ptrs.

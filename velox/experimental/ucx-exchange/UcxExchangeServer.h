@@ -24,6 +24,8 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <string_view>
 #include <tuple>
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/EnumDefine.h"
@@ -64,7 +66,21 @@ class UcxExchangeServer
 
   void process() override;
 
-  void close() override;
+  /// Releases the destination, since its consumer is gone, and closes. Called
+  /// on the Communicator thread.
+  void onEndpointClosed(std::string_view reason) override;
+
+  /// Fails the producer task with 'error', as a failed send does, and closes.
+  /// The consumer is still there and has not received the destination's
+  /// results. Called on the Communicator thread.
+  void onElementFailed(std::string_view error) override;
+
+  /// Cancels the outstanding requests and the intra-node transfer that no
+  /// source read, unbinds from the producer task's output queue
+  /// and unregisters from the Communicator and the endpoint. Decides nothing
+  /// about the destination. Called on the Communicator thread. A second call
+  /// does nothing.
+  void close();
 
   std::string toString();
 
@@ -84,25 +100,40 @@ class UcxExchangeServer
       const PartitionKey& key,
       bool isIntraNodeTransfer);
 
-  /// @return A shared pointer to itself.
+  // @return A shared pointer to itself.
   std::shared_ptr<UcxExchangeServer> getSelfPtr();
 
-  /// @brief Sends metadata and data to the connected receiver.
+  // Holds a send's buffer until the send completes, and its status.
+  struct MetaSendContext;
+  struct DataSendContext;
+
+  // @brief Sends metadata and data to the connected receiver.
   void sendData();
 
-  /// @brief Completion handler after data has been sent.
-  void sendComplete(ucs_status_t status, std::shared_ptr<void> arg);
+  // Acts on the statuses that the completions of the current sends recorded.
+  // Called by process() in WaitingForSendComplete, with no lock held.
+  void onSendsCompleted();
 
-  /// @brief Completion handler for intra-node transfer after source retrieves
-  /// data.
+  // Reports a send that did not complete with UCS_OK to the output queue, by
+  // its cause, and fails the producer task if the output queue says so. Called
+  // by process() with no lock held.
+  void onSendFailed(ucs_status_t status);
+
+  // Releases the destination as for a send that failed while the endpoint
+  // stayed open, and fails the producer task with an error that names
+  // 'reason' if the output queue decides one. Called with no lock held.
+  void failProducer(std::string_view reason);
+
+  // @brief Completion handler for intra-node transfer after source retrieves
+  // data.
   void onIntraNodeRetrieveComplete();
 
-  /// @brief Sets the new state of this exchange server using
-  /// sequential consistency. Logs transitions at VLOG(2).
-  /// @param newState the new state of the UcxExchangeServer.
+  // @brief Sets the new state of this exchange server using
+  // sequential consistency. Logs transitions at VLOG(2).
+  // @param newState the new state of the UcxExchangeServer.
   void setState(ServerState newState);
 
-  /// @brief Returns the state.
+  // @brief Returns the state.
   ServerState getState() {
     return state_.load(std::memory_order_seq_cst);
   }
@@ -111,27 +142,42 @@ class UcxExchangeServer
   const uint32_t
       partitionKeyHash_; // A hash of above, used to create unique tags.
 
-  /// True if server and source are on the same node (determined by checking
-  /// if peer's actual IP is in the local IP set). When true, data is passed
-  /// via IntraNodeTransferRegistry instead of UCXX transfer.
+  // True if server and source are on the same node (determined by checking
+  // if peer's actual IP is in the local IP set). When true, data is passed
+  // via IntraNodeTransferRegistry instead of UCXX transfer.
   bool isIntraNodeTransfer_{false};
 
   std::atomic<ServerState> state_;
   std::shared_ptr<cudf::packed_columns> dataPtr_{nullptr};
-  /// Logical rows in 'dataPtr_', taken from the output queue rather than from
-  /// the packed table, which reports zero rows when it has no columns.
+  // Logical rows in 'dataPtr_', taken from the output queue rather than from
+  // the packed table, which reports zero rows when it has no columns.
   vector_size_t dataNumRows_{0};
-  /// Protects dataPtr_. Must be recursive because sendData() holds the lock
-  /// when calling tagSend(), and for small messages UCX completes inline via
-  /// its fast-completion path, firing the sendComplete() callback on the same
-  /// thread while the lock is still held.
-  std::recursive_mutex dataMutex_;
+  // How the output queue ended the channel. Sent in the end message once
+  // 'dataPtr_' is null. Protected by dataMutex_.
+  ChannelOutcome endOutcome_;
+  // Protects dataPtr_, which the getData() callback sets on another thread.
+  // UCX can complete a send inline, inside the tagSend() that sendData()
+  // calls with this lock held, so send completions never take it.
+  std::mutex dataMutex_;
   std::atomic<bool> closed_{false};
 
-  /// Future for intra-node transfer - signaled when source retrieves data.
+  // Set when the destination was Released, by a kStop step or the output
+  // queue's onReleased callback, either of which may run on any thread.
+  // process() then cancels the outstanding requests and stops.
+  std::atomic<bool> released_{false};
+
+  // The current sends: the metadata or end message, and the chunk's data. A
+  // null 'dataContext_' while WaitingForSendComplete means the end message is
+  // the only send. Touched on the Communicator thread only.
+  std::shared_ptr<MetaSendContext> metaContext_;
+  std::shared_ptr<DataSendContext> dataContext_;
+
+  // Future for intra-node transfer - signaled when source retrieves data, or
+  // when the transfer or the producer task is cancelled. Valid while the
+  // transfer is published and not processed.
   std::future<void> intraNodeRetrieveFuture_;
 
-  /// For intra-node transfer: true if the last published entry was atEnd.
+  // For intra-node transfer: true if the last published entry was atEnd.
   bool intraNodeAtEndPublished_{false};
 
   uint32_t sequenceNumber_{0};
@@ -156,6 +202,11 @@ class UcxExchangeServer
   std::size_t bytes_;
 
   std::shared_ptr<UcxOutputQueueManager> queueMgr_;
+
+  // The output queue of the producer task, bound once in create(). Every call
+  // for the task's data goes to it, so that a task that reuses the ID is never
+  // reached.
+  std::shared_ptr<UcxOutputQueue> outputQueue_;
 };
 
 } // namespace facebook::velox::ucx_exchange

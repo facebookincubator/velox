@@ -94,7 +94,10 @@ struct CudfConfig {
   /// UCX exchange -- is a user error from exec::Task, never a silent fallback.
   bool exchange{false};
 
-  /// Whether to enable error handling in UCXX endpoints.
+  /// Whether UCXX endpoints report peer failures. Without it, a failed peer is
+  /// never reported, so a channel to that peer ends only when one of its tasks
+  /// ends, for example when the coordinator aborts the query. A consumer then
+  /// waits until the coordinator aborts the task.
   bool ucxxErrorHandling{true};
 
   /// Whether intra-node exchange optimization is enabled.

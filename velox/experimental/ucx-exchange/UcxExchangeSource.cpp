@@ -14,11 +14,17 @@
  * limitations under the License.
  */
 
+#include <functional>
+#include <optional>
 #include <thread>
 
 #include <cudf/contiguous_split.hpp>
 #include <folly/String.h>
 #include <folly/Uri.h>
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
+#include <rmm/cuda_stream.hpp>
+#include "velox/common/base/Exceptions.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -28,6 +34,17 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::ucx_exchange {
 
 namespace {
+// Returns the stream all remote receives allocate on. Only the Communicator
+// thread uses it, and no operator ever gets it. It is non-blocking, like the
+// cuDF pool streams: a blocking stream would also wait for all work on the
+// legacy default stream. Leaked on purpose: destroying a stream at static
+// destruction can run after the CUDA context is gone.
+cuda::stream_ref receiveStream() {
+  static auto* stream =
+      new rmm::cuda_stream(rmm::cuda_stream::flags::non_blocking);
+  return *stream;
+}
+
 const folly::F14FastMap<UcxExchangeSource::ReceiverState, std::string_view>&
 receiverStateNames() {
   static const folly::F14FastMap<
@@ -49,12 +66,29 @@ receiverStateNames() {
       };
   return kNames;
 }
+
+// A failed receive of the HandshakeResponse, both when the post fails and when
+// the receive completes with an error.
+constexpr std::string_view kHandshakeResponseFailure{
+    "Failed to receive HandshakeResponse from"};
 } // namespace
 
 VELOX_DEFINE_EMBEDDED_ENUM_NAME(
     UcxExchangeSource,
     ReceiverState,
     receiverStateNames)
+
+std::string UcxExchangeSource::formatError(
+    std::string_view prefix,
+    std::string_view detail) const {
+  return fmt::format(
+      "{} host {}:{}, task {}: {}",
+      prefix,
+      host_,
+      port_,
+      partitionKey_.toString(),
+      detail);
+}
 
 void UcxExchangeSource::setState(ReceiverState newState) {
   auto oldState = state_.exchange(newState, std::memory_order_seq_cst);
@@ -70,14 +104,16 @@ UcxExchangeSource::UcxExchangeSource(
     std::string_view host,
     uint16_t port,
     const PartitionKey& partitionKey,
-    const std::shared_ptr<UcxExchangeQueue> queue)
+    const std::shared_ptr<UcxExchangeQueue> queue,
+    UcxExchangeQueue::SourceId sourceId)
     : CommElement(communicator),
       host_(host),
       port_(port),
       taskId_(taskId),
       partitionKey_(partitionKey),
       partitionKeyHash_(fnv1a_32(partitionKey_.toString())),
-      queue_(std::move(queue)) {
+      queue_(std::move(queue)),
+      sourceId_(sourceId) {
   setState(ReceiverState::Created);
 }
 
@@ -85,7 +121,8 @@ UcxExchangeSource::UcxExchangeSource(
 std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
     std::string_view taskId,
     std::string_view url,
-    const std::shared_ptr<UcxExchangeQueue>& queue) {
+    const std::shared_ptr<UcxExchangeQueue>& queue,
+    UcxExchangeQueue::SourceId sourceId) {
   folly::Uri uri(url);
   // Note that there is no distinct schema for the UCXX exchange.
   // The approach is to ignore the schema and not check for HTTP or HTTPS.
@@ -95,8 +132,8 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
   int port = uri.port() + 3;
   std::shared_ptr<Communicator> communicator = Communicator::getInstance();
   auto key = extractTaskAndDestinationId(uri.path());
-  auto source = std::shared_ptr<UcxExchangeSource>(
-      new UcxExchangeSource(communicator, taskId, host, port, key, queue));
+  auto source = std::shared_ptr<UcxExchangeSource>(new UcxExchangeSource(
+      communicator, taskId, host, port, key, queue, sourceId));
   // register the exchange source with the communicator. This makes sure that
   // "progress" is called.
   communicator->registerCommElement(source);
@@ -106,37 +143,45 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
 }
 
 void UcxExchangeSource::process() {
-  if (closed_) {
-    // Driver thread called closed
-    cleanUp();
+  if (closed_.load(std::memory_order_acquire) && processClosed()) {
     return;
   }
 
   switch (state_) {
     case ReceiverState::Created: {
-      // Get the endpoint.
+      // Get the endpoint. Creating it throws when the address does not
+      // resolve; the exception must not leave the Communicator thread.
       HostPort hp{host_, port_};
       std::shared_ptr<UcxExchangeSource> selfPtr = getSelfPtr();
-      auto epRef = communicator_->assocEndpointRef(selfPtr, hp);
-      if (epRef) {
-        setEndpoint(epRef);
-        setStateIf(
-            ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
-        sendHandshake();
-      } else {
-        // connection failed.
-        VLOG(0) << toString() << " Failed to connect to " << host_ << ":"
-                << std::to_string(port_);
-        deliverEndMarker();
-        setState(ReceiverState::Done);
+      std::shared_ptr<EndpointRef> epRef;
+      std::optional<std::string> connectError;
+      try {
+        epRef = communicator_->assocEndpointRef(selfPtr, hp);
+        if (epRef == nullptr) {
+          connectError = "no endpoint";
+        }
+      } catch (const VeloxException& e) {
+        connectError = e.message();
+      } catch (const std::exception& e) {
+        connectError = e.what();
       }
+      if (connectError.has_value()) {
+        end(ChannelOutcome::transportError(
+            formatError("Failed to connect to producer,", *connectError)));
+        break;
+      }
+      setEndpoint(epRef);
+      setStateIf(
+          ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
+      sendHandshake();
       communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ReceiverState::WaitingForHandshakeComplete:
       // Waiting for handshake send completion is handled by callback.
       break;
     case ReceiverState::WaitingForHandshakeResponse:
-      // Waiting for HandshakeResponse is handled by callback.
+      // Posts the receive once; its callback handles the HandshakeResponse.
+      receiveHandshakeResponse();
       break;
     case ReceiverState::ReadyToReceive: {
       // Backpressure: don't post the next receive if the consumer queue is
@@ -189,6 +234,125 @@ void UcxExchangeSource::process() {
   }
 }
 
+bool UcxExchangeSource::processClosed() {
+  switch (getState()) {
+    case ReceiverState::Created:
+      // Connect anyway: a server may wait for this source. A failed connect
+      // ends the source, and the queue ignores the error of a Released entry.
+      return false;
+    case ReceiverState::WaitingForHandshakeComplete:
+    case ReceiverState::WaitingForHandshakeResponse:
+      // Until the response arrives, the source does not know whether the
+      // producer accepted the handshake. The handshake callbacks, the
+      // endpoint's close and the close deadline requeue the source.
+      if (!closeDeadlineExpired_.load(std::memory_order_acquire)) {
+        if (getState() == ReceiverState::WaitingForHandshakeResponse) {
+          receiveHandshakeResponse();
+        }
+        return true;
+      }
+      if (getState() == ReceiverState::WaitingForHandshakeResponse) {
+        // The handshake was sent, so the producer's worker may have created a
+        // server whose response is lost or late. The close goes to the
+        // producer task's output queue, if there is one, which releases the
+        // destination whether or not that server exists.
+        VLOG(1) << toString()
+                << " closed without a handshake response, sending the close";
+        sendClose();
+      } else {
+        // A handshake still in flight can reach the producer after the
+        // source gives up. While the endpoint stays open, the server it
+        // creates then waits until the coordinator aborts the producer task;
+        // a closed endpoint releases the destination.
+        VLOG(1) << toString()
+                << " closed before its handshake send completed, sending no "
+                   "close";
+      }
+      setState(ReceiverState::Done);
+      cleanUp();
+      return true;
+    case ReceiverState::ReadyToReceive:
+    case ReceiverState::WaitingForMetadata:
+    case ReceiverState::WaitingForData:
+    case ReceiverState::WaitingForIntraNodeData:
+      // The server accepted the handshake, and the channel has not ended.
+      sendClose();
+      setState(ReceiverState::Done);
+      cleanUp();
+      return true;
+    case ReceiverState::Done:
+      cleanUp();
+      return true;
+  }
+  VELOX_UNREACHABLE();
+}
+
+ucxx::RequestCallbackUserFunction UcxExchangeSource::completionCallback(
+    void (UcxExchangeSource::*handler)(ucs_status_t, std::shared_ptr<void>)) {
+  // A weak pointer, so that a completion after the source is gone does
+  // nothing.
+  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
+  return [weak, handler](ucs_status_t status, std::shared_ptr<void> arg) {
+    auto self = weak.lock();
+    if (self == nullptr) {
+      return;
+    }
+    try {
+      std::invoke(handler, *self, status, std::move(arg));
+      return;
+    } catch (const VeloxException& e) {
+      // what() of a VeloxException carries its context and stack trace.
+      self->failCompletion(e.message());
+    } catch (const std::exception& e) {
+      self->failCompletion(e.what());
+    } catch (...) {
+      self->failCompletion("unknown exception");
+    }
+  };
+}
+
+void UcxExchangeSource::failCompletion(std::string_view error) noexcept {
+  try {
+    end(ChannelOutcome::transportError(formatError(
+        "Failed to handle a UCX completion from producer,", error)));
+  } catch (const std::exception& e) {
+    LOG(ERROR) << toString()
+               << " cannot end after a failed UCX completion: " << e.what();
+  }
+}
+
+void UcxExchangeSource::sendClose() {
+  if (endpointRef_ == nullptr || endpointRef_->endpoint_ == nullptr) {
+    return;
+  }
+  auto message = std::make_shared<CloseMsg>(makeCloseMsg(partitionKey_));
+  VLOG(3) << toString() << " sending the close message";
+  try {
+    // The request holds 'message' until the send completes.
+    auto request = endpointRef_->endpoint_
+                       ->tagSendBuilder(
+                           message.get(),
+                           sizeof(*message),
+                           ucxx::Tag{getCloseTag(partitionKeyHash_)})
+                       .callbackFunction([key = partitionKey_.toString()](
+                                             ucs_status_t status,
+                                             std::shared_ptr<void> /*arg*/) {
+                         if (status != UCS_OK) {
+                           VLOG(1) << "Failed to send the close message for "
+                                   << key << ": " << ucs_status_string(status);
+                         }
+                       })
+                       .callbackData(message)
+                       .build();
+    communicator_->deferRequestCleanup(std::move(request));
+  } catch (const std::exception& e) {
+    // The producer then learns that its consumer is gone only when the
+    // endpoint closes.
+    LOG(WARNING) << toString()
+                 << " cannot send the close message: " << e.what();
+  }
+}
+
 void UcxExchangeSource::cleanUp() {
   uint32_t value = static_cast<uint32_t>(getState());
   if (value != static_cast<uint32_t>(ReceiverState::Done)) {
@@ -199,15 +363,19 @@ void UcxExchangeSource::cleanUp() {
 
   // Cancel any outstanding request. With weak_ptr callbacks, the callback
   // will safely no-op if we're destroyed before it completes.
-  if (request_ && !request_->isCompleted()) {
-    // The Task has failed and we may need to cancel outstanding requests
-    request_->cancel();
+  for (const auto& request : {handshakeRequest_, request_}) {
+    if (request && !request->isCompleted()) {
+      request->cancel();
+    }
   }
 
   // Move all requests to the Communicator's deferred list so the GPU
   // buffers they reference (via their arg shared_ptr) stay alive until
   // UCX has fully processed any in-flight operations.
   if (communicator_) {
+    if (handshakeRequest_) {
+      communicator_->deferRequestCleanup(std::move(handshakeRequest_));
+    }
     if (request_) {
       communicator_->deferRequestCleanup(std::move(request_));
     }
@@ -242,12 +410,33 @@ void UcxExchangeSource::close() {
 
   VLOG(1) << toString() << " UcxExchangeSource::close called.";
 
-  // Guarantee the end marker is delivered before transitioning to Done.
-  deliverEndMarker();
-
-  // Let the Communicator progress thread do the actual clean-up.
-  setState(ReceiverState::Done);
+  // Bounds the wait for the handshake response. The timer fires on the
+  // Timekeeper's thread, so it only sets a flag and requeues; the
+  // Communicator thread acts on it. A timer that cannot be scheduled expires
+  // at once.
+  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
+  folly::futures::sleep(kCloseTimeout)
+      .via(&folly::InlineExecutor::instance())
+      .thenTry([weak](folly::Try<folly::Unit>&& /*result*/) {
+        auto self = weak.lock();
+        if (self == nullptr || self->getState() == ReceiverState::Done) {
+          return;
+        }
+        self->closeDeadlineExpired_.store(true, std::memory_order_release);
+        self->communicator_->addToWorkQueue(self);
+      });
+  // Let the Communicator progress thread tell the server and clean up.
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
+  end(ChannelOutcome::transportError(formatError(
+      "Connection to producer closed before it sent all its data,", reason)));
+}
+
+void UcxExchangeSource::onElementFailed(std::string_view error) {
+  end(ChannelOutcome::transportError(
+      formatError("Exchange source failed to receive from producer,", error)));
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {
@@ -309,10 +498,11 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::getSelfPtr() {
 
 void UcxExchangeSource::enqueue(PackedTableWithStreamPtr data) {
   std::vector<velox::ContinuePromise> queuePromises;
-  {
-    std::lock_guard<std::mutex> l(queue_->mutex());
-
-    queue_->enqueueLocked(std::move(data), queuePromises);
+  if (!queue_->enqueueTable(sourceId_, data, queuePromises)) {
+    // The consumer failed or closed. Free the table here, outside the queue's
+    // lock.
+    VLOG(3) << toString() << " exchange queue refused a table, freeing it";
+    data.reset();
   }
   // wake up consumers of the UcxExchangeQueue
   for (auto& promise : queuePromises) {
@@ -320,20 +510,23 @@ void UcxExchangeSource::enqueue(PackedTableWithStreamPtr data) {
   }
 }
 
-void UcxExchangeSource::deliverEndMarker() {
-  if (!registered_.load(std::memory_order_acquire)) {
-    // Never registered with queue -- don't deliver end marker to avoid
-    // spurious numCompleted_ increments.
-    return;
+void UcxExchangeSource::end(ChannelOutcome outcome) {
+  // The queue logs the error if it decides it.
+  VLOG(3) << toString() << " ends: " << outcome.kind;
+  queue_->end(sourceId_, std::move(outcome));
+  setState(ReceiverState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeSource::endWithProducerOutcome(const ChannelOutcome& outcome) {
+  if (outcome.kind == OutcomeKind::kProducerError) {
+    // The producer ended early and its output is lost: fail the query rather
+    // than end the stream as complete.
+    end(ChannelOutcome::producerError(formatError(
+        "Producer failed before sending all its data,", outcome.error)));
+  } else {
+    end(ChannelOutcome::clean());
   }
-  bool expected = false;
-  if (!endMarkerDelivered_.compare_exchange_strong(
-          expected, true, std::memory_order_acq_rel)) {
-    // Already delivered by another thread/path.
-    return;
-  }
-  VLOG(3) << toString() << " delivering end-of-stream marker to queue";
-  enqueue(nullptr);
 }
 
 void UcxExchangeSource::setEndpoint(std::shared_ptr<EndpointRef> endpointRef) {
@@ -351,6 +544,7 @@ void UcxExchangeSource::sendHandshake() {
       sizeof(handshakeReq->taskId) - 1);
   handshakeReq->taskId[sizeof(handshakeReq->taskId) - 1] = '\0';
   handshakeReq->workerId = communicator_->getWorkerId();
+  handshakeReq->protocolVersion = kProtocolVersion;
 
   VLOG(3) << toString() << " Sending handshake with initial value: "
           << partitionKey_.toString() << " to server";
@@ -358,25 +552,15 @@ void UcxExchangeSource::sendHandshake() {
   // Create the handshake which will register client's existence with the server
   ucxx::AmReceiverCallbackInfo info(
       communicator_->kAmCallbackOwner, communicator_->kAmCallbackId);
-  // Use weak_ptr to prevent use-after-free if close() is called during callback
-  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
-  if (request_) {
-    completedRequests_.push_back(std::move(request_));
-  }
   // Pass handshakeReq as the callback arg to keep the send buffer alive until
   // the async amSend completes. UCXX stores it as shared_ptr<void> but the
   // type-erased deleter still calls ~HandshakeMsg correctly.
-  request_ =
+  handshakeRequest_ =
       endpointRef_->endpoint_
           ->amSendBuilder(
               handshakeReq.get(), sizeof(*handshakeReq), UCS_MEMORY_TYPE_HOST)
           .receiverCallbackInfo(info)
-          .callbackFunction(
-              [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                if (auto self = weak.lock()) {
-                  self->onHandshake(status, arg);
-                }
-              })
+          .callbackFunction(completionCallback(&UcxExchangeSource::onHandshake))
           .callbackData(handshakeReq)
           .build();
 }
@@ -389,12 +573,8 @@ void UcxExchangeSource::onHandshake(
   // transmitted). The parameter exists only because UCXX uses it as a lifetime
   // handle; letting it go out of scope releases the send buffer.
 
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString() << " onHandshake called after close, ignoring";
-    deliverEndMarker();
-    return;
-  }
+  // A closed source completes the handshake too: it sends the close message
+  // once the response arrives or the close deadline passes.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeComplete) {
     VLOG(2) << toString() << " onHandshake called in state "
@@ -402,24 +582,16 @@ void UcxExchangeSource::onHandshake(
     return;
   }
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to send handshake to host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(
+        formatError("Failed to send handshake to", ucs_status_string(status))));
   } else {
     VLOG(3) << toString() << "+ onHandshake " << ucs_status_string(status);
-    // Now wait for the HandshakeResponse from the server
+    // process() posts the receive of the HandshakeResponse, outside the UCX
+    // callback.
     setStateIf(
         ReceiverState::WaitingForHandshakeComplete,
         ReceiverState::WaitingForHandshakeResponse);
-    receiveHandshakeResponse();
+    communicator_->addToWorkQueue(getSelfPtr());
   }
 }
 
@@ -433,25 +605,19 @@ void UcxExchangeSource::getMetadata() {
           << " waiting for metadata for chunk: " << sequenceNumber_
           << " using tag: " << std::hex << metadataTag << std::dec;
 
-  // Use weak_ptr to prevent use-after-free if close() is called during callback
-  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_
-                 ->tagRecvBuilder(
-                     reinterpret_cast<void*>(metadataReq->data()),
-                     kMaxMetaBufSize,
-                     ucxx::Tag{metadataTag},
-                     ucxx::TagMaskFull)
-                 .callbackFunction(
-                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                       if (auto self = weak.lock()) {
-                         self->onMetadata(status, arg);
-                       }
-                     })
-                 .callbackData(metadataReq)
-                 .build();
+  request_ =
+      endpointRef_->endpoint_
+          ->tagRecvBuilder(
+              reinterpret_cast<void*>(metadataReq->data()),
+              kMaxMetaBufSize,
+              ucxx::Tag{metadataTag},
+              ucxx::TagMaskFull)
+          .callbackFunction(completionCallback(&UcxExchangeSource::onMetadata))
+          .callbackData(metadataReq)
+          .build();
 }
 
 void UcxExchangeSource::onMetadata(
@@ -460,7 +626,6 @@ void UcxExchangeSource::onMetadata(
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onMetadata called after close, ignoring";
-    deliverEndMarker();
     return;
   }
   // Guard against replayed callbacks from UCP wireup replay.
@@ -472,17 +637,8 @@ void UcxExchangeSource::onMetadata(
   VLOG(3) << toString() << " + onMetadata " << ucs_status_string(status);
 
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to receive metadata from host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(formatError(
+        "Failed to receive metadata from", ucs_status_string(status))));
   } else {
     VELOX_CHECK_NOT_NULL(arg, "Didn't get metadata");
 
@@ -490,30 +646,38 @@ void UcxExchangeSource::onMetadata(
     std::shared_ptr<std::vector<uint8_t>> metadataMsg =
         std::static_pointer_cast<std::vector<uint8_t>>(arg);
 
-    auto ptr = std::make_shared<DataAndMetadata>();
+    ProducerMessage message;
+    std::optional<std::string> decodeError;
+    try {
+      message = decodeProducerMessage(metadataMsg->data(), kMaxMetaBufSize);
+    } catch (const VeloxException& e) {
+      // what() of a VeloxException carries its context and stack trace, which
+      // do not belong in a query's error.
+      decodeError = e.message();
+    } catch (const std::exception& e) {
+      decodeError = e.what();
+    }
+    if (decodeError.has_value()) {
+      end(ChannelOutcome::transportError(
+          formatError("Cannot decode message from producer,", *decodeError)));
+      return;
+    }
 
-    ptr->metadata =
-        std::move(MetadataMsg::deserializeMetadataMsg(metadataMsg->data()));
+    if (std::holds_alternative<ChannelOutcome>(message)) {
+      endWithProducerOutcome(std::get<ChannelOutcome>(message));
+      return;
+    }
+
+    auto ptr = std::make_shared<DataAndMetadata>();
+    ptr->metadata = std::move(std::get<MetadataMsg>(message));
 
     VLOG(3) << toString()
             << " Datasize bytes == " << ptr->metadata.dataSizeBytes;
 
-    if (ptr->metadata.atEnd) {
-      // It seems that all data has been transferred
-      atEnd_ = true;
-      // enqueue a nullpointer to mark the end for this source.
-      VLOG(3) << "There is no more data to transfer for " << toString();
-      deliverEndMarker();
-      setStateIf(ReceiverState::WaitingForMetadata, ReceiverState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
-      // jump out of this function.
-      return;
-    }
-
-    // REMOTE EXCHANGE PATH: Allocate buffer and receive via UCXX
-    // Get a stream from the global stream pool
-    auto stream =
-        facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
+    // REMOTE EXCHANGE PATH: Allocate buffer and receive via UCXX.
+    // The receive stream is never handed downstream, so the sync below waits
+    // only for the exchange's own allocations, not for operator kernels.
+    auto stream = receiveStream();
     // Store the stream in the DataAndMetadata struct so it can be used later
     // in onData() when creating the PackedTableWithStream.
     ptr->stream = stream;
@@ -524,11 +688,9 @@ void UcxExchangeSource::onMetadata(
           cudf::get_current_device_resource_ref());
     } catch (const rmm::bad_alloc& e) {
       VLOG(0) << toString() << " *** RMM  failed to allocate: " << e.what();
-      queue_->setError("Failed to alloc GPU memory"); // Let the operator know
-                                                      // via the queue
-      deliverEndMarker();
-      setState(ReceiverState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
+      end(ChannelOutcome::transportError(formatError(
+          "Failed to allocate GPU memory for a chunk from producer,",
+          fmt::format("{} bytes", ptr->metadata.dataSizeBytes))));
       return;
     }
 
@@ -548,26 +710,19 @@ void UcxExchangeSource::onMetadata(
       VLOG(1) << toString() << " onMetadata Invalid previous state ";
       return;
     }
-    // Use weak_ptr to prevent use-after-free if close() is called during
-    // callback
-    std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
     if (request_) {
       completedRequests_.push_back(std::move(request_));
     }
-    request_ = endpointRef_->endpoint_
-                   ->tagRecvBuilder(
-                       ptr->dataBuf->data(),
-                       ptr->metadata.dataSizeBytes,
-                       ucxx::Tag{dataTag},
-                       ucxx::TagMaskFull)
-                   .callbackFunction(
-                       [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                         if (auto self = weak.lock()) {
-                           self->onData(status, arg);
-                         }
-                       })
-                   .callbackData(ptr)
-                   .build();
+    request_ =
+        endpointRef_->endpoint_
+            ->tagRecvBuilder(
+                ptr->dataBuf->data(),
+                ptr->metadata.dataSizeBytes,
+                ucxx::Tag{dataTag},
+                ucxx::TagMaskFull)
+            .callbackFunction(completionCallback(&UcxExchangeSource::onData))
+            .callbackData(ptr)
+            .build();
   }
 }
 
@@ -575,7 +730,6 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
   // Check if close() was called - avoid processing if we're shutting down
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onData called after close, ignoring";
-    deliverEndMarker();
     return;
   }
   // Guard against replayed callbacks from UCP wireup replay.
@@ -587,88 +741,87 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
   VLOG(3) << toString() << " + onData " << ucs_status_string(status);
 
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to receive data from host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << toString() << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-  } else {
-    VLOG(3) << toString() << "+ onData " << ucs_status_string(status)
-            << " got chunk: " << sequenceNumber_;
-
-    this->sequenceNumber_++;
-
-    std::shared_ptr<DataAndMetadata> ptr =
-        std::static_pointer_cast<DataAndMetadata>(arg);
-
-    metrics_.numPackedColumns_.addValue(1);
-    metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
-
-    // Create packed_columns from the received metadata and data buffer
-    cudf::packed_columns packedCols(
-        std::move(ptr->metadata.cudfMetadata), std::move(ptr->dataBuf));
-
-    // Unpack to get the table_view and create a packed_table
-    cudf::table_view tableView = cudf::unpack(packedCols);
-    auto packedTable = std::make_unique<cudf::packed_table>(
-        cudf::packed_table{tableView, std::move(packedCols)});
-
-    // Bundle the packed_table with the stream that was used for allocation
-    // and the producer's row count, which the packed table cannot report for
-    // itself when it has no columns.
-    auto data = std::make_unique<PackedTableWithStream>(
-        std::move(packedTable), ptr->stream, ptr->metadata.numRows);
-
-    enqueue(std::move(data));
-    setStateIf(ReceiverState::WaitingForData, ReceiverState::ReadyToReceive);
+    end(ChannelOutcome::transportError(
+        formatError("Failed to receive data from", ucs_status_string(status))));
+    return;
   }
+
+  VLOG(3) << toString() << "+ onData " << ucs_status_string(status)
+          << " got chunk: " << sequenceNumber_;
+
+  this->sequenceNumber_++;
+
+  std::shared_ptr<DataAndMetadata> ptr =
+      std::static_pointer_cast<DataAndMetadata>(arg);
+
+  metrics_.numPackedColumns_.addValue(1);
+  metrics_.totalBytes_.addValue(ptr->metadata.dataSizeBytes);
+
+  // Create packed_columns from the received metadata and data buffer
+  cudf::packed_columns packedCols(
+      std::move(ptr->metadata.cudfMetadata), std::move(ptr->dataBuf));
+
+  // Unpack to get the table_view and create a packed_table
+  cudf::table_view tableView = cudf::unpack(packedCols);
+  auto packedTable = std::make_unique<cudf::packed_table>(
+      cudf::packed_table{tableView, std::move(packedCols)});
+
+  // Bundle the packed_table with the stream that was used for allocation
+  // and the producer's row count, which the packed table cannot report for
+  // itself when it has no columns.
+  auto data = std::make_unique<PackedTableWithStream>(
+      std::move(packedTable), ptr->stream, ptr->metadata.numRows);
+
+  enqueue(std::move(data));
+  setStateIf(ReceiverState::WaitingForData, ReceiverState::ReadyToReceive);
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
 void UcxExchangeSource::receiveHandshakeResponse() {
-  auto responseBuffer = std::make_shared<HandshakeResponse>();
+  if (responseReceivePosted_) {
+    return;
+  }
+  responseReceivePosted_ = true;
+  // Zero-filled, because UCXX does not report a message shorter than the
+  // buffer: an older server's 8 bytes leave the version at 0.
+  auto responseBuffer =
+      std::make_shared<std::array<uint8_t, sizeof(HandshakeResponse)>>();
   uint64_t responseTag = getHandshakeResponseTag(partitionKeyHash_);
 
   VLOG(3) << toString()
           << " waiting for HandshakeResponse with tag: " << std::hex
           << responseTag << std::dec;
 
-  // Use weak_ptr to prevent use-after-free if close() is called during callback
-  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_
-                 ->tagRecvBuilder(
-                     responseBuffer.get(),
-                     sizeof(*responseBuffer),
-                     ucxx::Tag{responseTag},
-                     ucxx::TagMaskFull)
-                 .callbackFunction(
-                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-                       if (auto self = weak.lock()) {
-                         self->onHandshakeResponse(status, arg);
-                       }
-                     })
-                 .callbackData(responseBuffer)
-                 .build();
+  // Called from process(), which must not throw out of the Communicator loop.
+  std::optional<std::string> error;
+  try {
+    request_ = endpointRef_->endpoint_
+                   ->tagRecvBuilder(
+                       responseBuffer->data(),
+                       responseBuffer->size(),
+                       ucxx::Tag{responseTag},
+                       ucxx::TagMaskFull)
+                   .callbackFunction(completionCallback(
+                       &UcxExchangeSource::onHandshakeResponse))
+                   .callbackData(responseBuffer)
+                   .build();
+  } catch (const std::exception& e) {
+    error = e.what();
+  }
+  if (error.has_value()) {
+    end(ChannelOutcome::transportError(
+        formatError(kHandshakeResponseFailure, *error)));
+  }
 }
 
 void UcxExchangeSource::onHandshakeResponse(
     ucs_status_t status,
     std::shared_ptr<void> arg) {
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString()
-            << " onHandshakeResponse called after close, ignoring";
-    deliverEndMarker();
-    return;
-  }
+  // A closed source handles the response too: process() then sends the close
+  // message, unless the response rejected the handshake.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeResponse) {
     VLOG(2) << toString() << " onHandshakeResponse called in state "
@@ -677,24 +830,32 @@ void UcxExchangeSource::onHandshakeResponse(
   }
 
   if (status != UCS_OK) {
-    std::string errorMsg = fmt::format(
-        "Failed to receive HandshakeResponse from host {}:{}, task {}: {}",
-        host_,
-        port_,
-        partitionKey_.toString(),
-        ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(
+        formatError(kHandshakeResponseFailure, ucs_status_string(status))));
     return;
   }
 
-  std::shared_ptr<HandshakeResponse> response =
-      std::static_pointer_cast<HandshakeResponse>(arg);
+  const auto response = decodeHandshakeResponse(
+      *std::static_pointer_cast<std::array<uint8_t, sizeof(HandshakeResponse)>>(
+          arg));
 
-  isIntraNodeTransfer_ = response->isIntraNodeTransfer;
+  // A server of another version, or one that rejects this source, will not
+  // serve it. An unknown status is a rejection too.
+  if (response.status != HandshakeStatus::kAccepted ||
+      response.protocolVersion != kProtocolVersion) {
+    end(ChannelOutcome::versionMismatch(
+        fmt::format(
+            "UCX exchange peers must run the same protocol version: this worker "
+            "runs {}, producer worker {}:{} runs {}",
+            kProtocolVersion,
+            host_,
+            port_,
+            response.protocolVersion)));
+    return;
+  }
+
+  queue_->sourceOpened(sourceId_);
+  isIntraNodeTransfer_ = response.isIntraNodeTransfer;
 
   VLOG(3) << toString() << " + onHandshakeResponse isIntraNodeTransfer="
           << isIntraNodeTransfer_;
@@ -710,7 +871,6 @@ void UcxExchangeSource::waitForIntraNodeData() {
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString()
             << " waitForIntraNodeData called after close, ignoring";
-    deliverEndMarker();
     return;
   }
 
@@ -731,43 +891,35 @@ void UcxExchangeSource::waitForIntraNodeData() {
   }
 
   intraNodePollCount_ = 0;
-  onIntraNodeData(std::move(result->data), result->numRows, result->atEnd);
+  onIntraNodeData(
+      std::move(result->data), result->numRows, result->atEnd, result->outcome);
 }
 
 void UcxExchangeSource::onIntraNodeData(
     std::shared_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    bool atEnd) {
+    bool atEnd,
+    const ChannelOutcome& outcome) {
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onIntraNodeData called after close, ignoring";
-    deliverEndMarker();
     return;
   }
 
   if (atEnd) {
-    // End of stream
-    atEnd_ = true;
     VLOG(3) << toString() << " Intra-node transfer: end of stream";
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-
-    communicator_->addToWorkQueue(getSelfPtr());
+    endWithProducerOutcome(outcome);
     return;
   }
 
   if (!data) {
     // Error - should not happen if atEnd is false
-    std::string errorMsg = fmt::format(
-        "Intra-node transfer data is null for task {}, dest {}, seq {}",
-        partitionKey_.taskId,
-        partitionKey_.destination,
-        sequenceNumber_);
-    VLOG(0) << toString() << " " << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    end(ChannelOutcome::transportError(
+        fmt::format(
+            "Intra-node transfer data is null for task {}, dest {}, seq {}",
+            partitionKey_.taskId,
+            partitionKey_.destination,
+            sequenceNumber_)));
     return;
   }
 
@@ -788,10 +940,9 @@ void UcxExchangeSource::onIntraNodeData(
   auto packedTable = std::make_unique<cudf::packed_table>(
       cudf::packed_table{tableView, std::move(packedCols)});
 
-  // Get a stream from the pool so downstream cuDF operations on this data
-  // run on a dedicated stream, not the default stream. The producer already
-  // synchronized before enqueuing, so the GPU data is ready. This matches
-  // the inter-node (UCX) receive path which also allocates a pool stream.
+  // The stream only tags the table: UcxExchange binds it to a stream of the
+  // consumer's driver thread before it goes downstream. The producer already
+  // synchronized before enqueuing, so the GPU data is ready.
   auto stream =
       facebook::velox::cudf_velox::cudfGlobalStreamPool().get_stream();
   auto tableWithStream = std::make_unique<PackedTableWithStream>(

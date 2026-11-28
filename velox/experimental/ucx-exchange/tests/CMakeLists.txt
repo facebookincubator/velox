@@ -14,13 +14,21 @@
 
 add_executable(
   ucx_exchange_test
+  AcceptorTest.cpp
+  CommunicatorStallTest.cpp
+  IntraNodeTransferRegistryTest.cpp
+  UcxChannelStateTest.cpp
+  UcxExchangeProtocolTest.cpp
   UcxOutputQueueManagerTest.cpp
   UcxPartitionedOutputTest.cpp
   UcxExchangeTest.cpp
   UcxExchangeTaskTest.cpp
+  UcxProtocolVersionTest.cpp
+  UcxStreamHoldTest.cpp
   UcxExchangeTestBase.cpp
   Main.cpp
   UcxTestHelpers.cpp
+  FakeUcxPeer.cpp
   UcxTestData.cpp
   UcxPartitionedOutputMock.cpp
   SinkDriverMock.cpp
@@ -34,6 +42,19 @@ add_test(
 )
 
 set_tests_properties(ucx_exchange_test PROPERTIES LABELS cuda_driver TIMEOUT 3000)
+
+# The terminalMetadata tests need every send to go by rendezvous, so that a
+# send stays pending until its receive is posted.
+add_test(
+  NAME ucx_exchange_rndv_test
+  COMMAND ucx_exchange_test --gtest_filter=*terminalMetadata*
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+set_tests_properties(
+  ucx_exchange_rndv_test
+  PROPERTIES ENVIRONMENT "UCX_RNDV_THRESH=0" LABELS cuda_driver TIMEOUT 120
+)
 
 target_link_libraries(
   ucx_exchange_test

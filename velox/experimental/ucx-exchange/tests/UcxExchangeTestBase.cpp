@@ -62,6 +62,9 @@ void UcxExchangeTestEnvironment::destroyExchangeState() {
   if (communicatorThread_ != nullptr && communicatorThread_->joinable()) {
     communicatorThread_->join();
   }
+  // run() cancels the close receive before it returns, so that UCX does not
+  // write into the buffer after the worker is gone.
+  EXPECT_FALSE(communicator_->hasPendingCloseReceive());
   communicatorThread_.reset();
   communicator_.reset();
 }

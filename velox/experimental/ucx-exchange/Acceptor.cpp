@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/Acceptor.h"
+
+#include <fmt/format.h>
+#include <algorithm>
+#include <cstring>
+
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/EndpointRef.h"
@@ -23,34 +28,129 @@
 
 namespace facebook::velox::ucx_exchange {
 
+namespace {
+
+// Sends 'response' to the source of 'key' over 'epRef'. Does not wait for the
+// send to complete. A send that is lost reports the destination's consumer
+// gone through 'communicator'.
+void sendHandshakeResponse(
+    const std::shared_ptr<Communicator>& communicator,
+    const std::shared_ptr<EndpointRef>& epRef,
+    const PartitionKey& key,
+    std::shared_ptr<HandshakeResponse> response) {
+  const uint64_t responseTag =
+      getHandshakeResponseTag(fnv1a_32(key.toString()));
+  VLOG(3) << "Sending HandshakeResponse to " << key.toString()
+          << " status=" << static_cast<int>(response->status)
+          << " isIntraNodeTransfer=" << response->isIntraNodeTransfer
+          << " tag=" << std::hex << responseTag;
+
+  [[maybe_unused]] auto sendRequest =
+      epRef->endpoint_
+          ->tagSendBuilder(
+              response.get(), sizeof(*response), ucxx::Tag{responseTag})
+          .callbackFunction(
+              [weakCommunicator = std::weak_ptr<Communicator>(communicator),
+               key](ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+                // Runs inside UCX progress, so it throws nothing and leaves the
+                // output queue to the Communicator loop: releasing a
+                // destination can finish the producer's Task.
+                try {
+                  if (!Acceptor::isResponseLost(status, key)) {
+                    return;
+                  }
+                  if (auto locked = weakCommunicator.lock()) {
+                    locked->postToLoop([key] {
+                      UcxOutputQueueManager::getInstanceRef()->consumerGone(
+                          key.taskId, static_cast<int>(key.destination));
+                    });
+                  }
+                } catch (const std::exception& e) {
+                  LOG(ERROR) << "Cannot report the consumer of a lost "
+                                "HandshakeResponse gone: "
+                             << e.what();
+                }
+              })
+          .callbackData(response)
+          .build();
+}
+
+} // namespace
+
 /*static*/
 void Acceptor::cStyleAMCallback(
     std::shared_ptr<ucxx::Request> request,
     ucp_ep_h ep) {
-  VELOX_CHECK_NOT_NULL(request, "AMCallback called with nullptr request!");
-  VELOX_CHECK(
-      request->isCompleted(), "AMCallback called with incomplete request!");
+  try {
+    handleHandshake(request, ep);
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "Cannot handle a UCX exchange handshake: " << e.what();
+  }
+}
+
+/*static*/
+void Acceptor::handleHandshake(
+    const std::shared_ptr<ucxx::Request>& request,
+    ucp_ep_h ep) {
+  if (request == nullptr || !request->isCompleted()) {
+    LOG(ERROR) << "Dropping a UCX exchange handshake without a completed "
+                  "request";
+    return;
+  }
   auto buffer =
       std::dynamic_pointer_cast<ucxx::Buffer>(request->getRecvBuffer());
-  VELOX_CHECK_NOT_NULL(buffer, "AMCallback: failed to get receive buffer.");
-  // Validate buffer size BEFORE casting to prevent reading past buffer bounds.
-  VELOX_CHECK_GE(
-      buffer->getSize(),
-      sizeof(HandshakeMsg),
-      "AMCallback: received buffer size ({}) is smaller than HandshakeMsg ({}). "
-      "Possible protocol mismatch or truncated message.",
-      buffer->getSize(),
-      sizeof(HandshakeMsg));
-  HandshakeMsg* handshakePtr = reinterpret_cast<HandshakeMsg*>(buffer->data());
+  if (buffer == nullptr) {
+    LOG(ERROR) << "Dropping a UCX exchange handshake without a receive buffer";
+    return;
+  }
+  const size_t size = buffer->getSize();
+  // A peer of an older protocol version sends kLegacyHandshakeSize bytes, which
+  // hold every field up to workerId. A shorter handshake cannot name its
+  // channel, so there is no one to answer.
+  if (size < kLegacyHandshakeSize) {
+    LOG(ERROR) << "Dropping a UCX exchange handshake shorter than "
+               << kLegacyHandshakeSize << " bytes: " << size;
+    return;
+  }
 
-  // Create a exchangeServer based on the information received in the initial
-  // handshake.
   std::shared_ptr<Communicator> communicator = Communicator::getInstance();
-
   auto epRef = communicator->findEndpointRefByHandle(ep);
-  VELOX_CHECK_NOT_NULL(epRef, "Could not find endpoint reference");
+  if (epRef == nullptr) {
+    LOG(ERROR) << "Dropping a UCX exchange handshake from an unknown endpoint";
+    return;
+  }
 
-  const PartitionKey key = {handshakePtr->taskId, handshakePtr->destination};
+  // Copy no more than was received. The copy is aligned, unlike the buffer.
+  HandshakeMsg handshake{};
+  std::memcpy(&handshake, buffer->data(), std::min(size, sizeof(handshake)));
+  // A handshake before version 1 ends before its version field.
+  const uint32_t peerVersion =
+      size < sizeof(HandshakeMsg) ? 0 : handshake.protocolVersion;
+  // The task ID need not end in a NUL.
+  const PartitionKey key{
+      std::string(
+          handshake.taskId,
+          strnlen(handshake.taskId, sizeof(handshake.taskId))),
+      handshake.destination};
+
+  if (peerVersion != kProtocolVersion) {
+    auto response = std::make_shared<HandshakeResponse>();
+    response->status = HandshakeStatus::kVersionMismatch;
+    sendHandshakeResponse(communicator, epRef, key, std::move(response));
+    std::string error = fmt::format(
+        "UCX exchange peers must run the same protocol version: this worker "
+        "runs {}, consumer worker {} runs {}",
+        kProtocolVersion,
+        epRef->getPeerIp(),
+        peerVersion);
+    LOG(ERROR) << error << ". Task: " << key.toString();
+    // Task::setError() terminates the task synchronously, which must not
+    // happen inside UCX progress.
+    communicator->postToLoop([taskId = key.taskId, error = std::move(error)] {
+      UcxOutputQueueManager::getInstanceRef()->failTask(taskId, error);
+    });
+    return;
+  }
 
   // Determine if this is an intra-process transfer by comparing the source's
   // workerId with our Communicator's workerId. A match means both source and
@@ -61,10 +161,10 @@ void Acceptor::cStyleAMCallback(
   // when multiple Docker containers share the same host IP address.
   bool isIntraNodeTransfer =
       cudf_velox::CudfConfig::getInstance().intraNodeExchange &&
-      (handshakePtr->workerId == communicator->getWorkerId());
+      (handshake.workerId == communicator->getWorkerId());
 
-  // Disable intra-node when the task is not yet initialized (placeholder
-  // queue from sinks connecting before initializeTask) or when the task
+  // Disable intra-node when the task is not yet initialized (a Pending
+  // output queue from sinks connecting before initializeTask) or when the task
   // uses broadcast mode (all destination servers share the same
   // packed_columns — the intra-node source's destructive move would
   // corrupt it for other servers).
@@ -76,8 +176,6 @@ void Acceptor::cStyleAMCallback(
     }
   }
 
-  std::string peerIp = epRef->getPeerIp();
-
   auto exchangeServer =
       UcxExchangeServer::create(communicator, epRef, key, isIntraNodeTransfer);
 
@@ -87,45 +185,55 @@ void Acceptor::cStyleAMCallback(
   // Register exchangeServer with communicator.
   communicator->registerCommElement(exchangeServer);
   VLOG(2) << "[ACCEPTOR] new server: " << exchangeServer->toString()
-          << " peerIp=" << peerIp
+          << " peerIp=" << epRef->getPeerIp()
           << " isIntraNodeTransfer=" << isIntraNodeTransfer;
 
   // Send HandshakeResponse back to the source to inform about intra-node
   // transfer. This allows the source to bypass UCXX for all subsequent data
   // transfers.
   auto response = std::make_shared<HandshakeResponse>();
+  response->status = HandshakeStatus::kAccepted;
   response->isIntraNodeTransfer = exchangeServer->isIntraNodeTransfer();
-
-  uint32_t keyHash = fnv1a_32(key.toString());
-  uint64_t responseTag = getHandshakeResponseTag(keyHash);
-
-  VLOG(3) << "Sending HandshakeResponse to " << key.toString()
-          << " isIntraNodeTransfer=" << response->isIntraNodeTransfer
-          << " tag=" << std::hex << responseTag;
-
-  // Fire-and-forget: we don't need to track this request completion
-  [[maybe_unused]] auto sendRequest =
-      epRef->endpoint_
-          ->tagSendBuilder(
-              response.get(), sizeof(*response), ucxx::Tag{responseTag})
-          .callbackFunction([response, keyStr = key.toString()](
-                                ucs_status_t status,
-                                std::shared_ptr<void> arg) {
-            if (status == UCS_OK) {
-              VLOG(3) << "HandshakeResponse sent successfully to " << keyStr;
-            } else {
-              VLOG(0) << "Failed to send HandshakeResponse to " << keyStr
-                      << ": " << ucs_status_string(status);
-            }
-          })
-          .callbackData(response)
-          .build();
+  sendHandshakeResponse(communicator, epRef, key, std::move(response));
 }
 
-// Add endpoint reference to ucp_cp -> epRef map.
-void Acceptor::registerEndpointRef(std::shared_ptr<EndpointRef> endpointRef) {
-  auto epHandle = endpointRef->endpoint_->getHandle();
-  auto res = handleToEndpointRef_.insert(std::pair{epHandle, endpointRef});
-  VELOX_CHECK(res.second, "Endpoint handle already exists!");
+void Acceptor::registerEndpointRef(
+    ucp_ep_h handle,
+    std::shared_ptr<EndpointRef> endpointRef) {
+  auto [it, inserted] = handleToEndpointRef_.try_emplace(handle, endpointRef);
+  if (!inserted) {
+    LOG(WARNING) << "Replacing the UCX endpoint registered for a reused "
+                    "endpoint handle";
+    it->second = std::move(endpointRef);
+  }
+}
+
+void Acceptor::unregisterEndpointRef(
+    const std::shared_ptr<EndpointRef>& endpointRef) {
+  // By value, not by handle: UCXX no longer reports the handle once the
+  // endpoint is closed.
+  std::erase_if(handleToEndpointRef_, [&](const auto& entry) {
+    return entry.second == endpointRef;
+  });
+}
+
+std::shared_ptr<EndpointRef> Acceptor::findEndpointRef(ucp_ep_h handle) const {
+  auto it = handleToEndpointRef_.find(handle);
+  return it != handleToEndpointRef_.end() ? it->second : nullptr;
+}
+
+/*static*/
+bool Acceptor::isResponseLost(ucs_status_t status, const PartitionKey& key) {
+  if (status == UCS_OK) {
+    VLOG(3) << "HandshakeResponse sent successfully to " << key.toString();
+    return false;
+  }
+  if (status == UCS_ERR_CANCELED) {
+    VLOG(1) << "HandshakeResponse to " << key.toString() << " cancelled";
+    return false;
+  }
+  VLOG(0) << "Failed to send HandshakeResponse to " << key.toString() << ": "
+          << ucs_status_string(status) << ", releasing the destination";
+  return true;
 }
 } // namespace facebook::velox::ucx_exchange

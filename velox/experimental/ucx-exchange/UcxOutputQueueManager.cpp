@@ -39,27 +39,34 @@ void UcxOutputQueueManager::initializeTask(
     int numDestinations,
     int numDrivers,
     const std::string& /*transportOptions*/) {
-  const auto& taskId = task->taskId();
+  const std::string taskId = task->taskId();
   std::vector<UcxDataAvailable> notifications;
-  queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskId);
-    if (it == queues.end()) {
-      queues[taskId] = std::make_shared<UcxOutputQueue>(
-          std::move(task), numDestinations, numDrivers, kind);
-    } else {
-      if (!it->second->initialize(
-              task, numDestinations, numDrivers, kind, notifications)) {
-        VELOX_FAIL(
-            "Registering a cudf output queue for pre-existing taskId {}",
-            taskId);
-      }
+  // Destroyed after the manager's lock is released.
+  std::shared_ptr<UcxOutputQueue> replacedOutputQueue;
+  outputQueues_.withLock([&](auto& outputQueues) {
+    auto& outputQueue = outputQueues[taskId];
+    if (outputQueue != nullptr &&
+        outputQueue->state() == OutputQueueState::kRemoved) {
+      // The ID is reused. Servers bound to the Removed output queue keep it.
+      replacedOutputQueue = std::move(outputQueue);
+    }
+    if (outputQueue == nullptr) {
+      outputQueue = std::make_shared<UcxOutputQueue>(taskId);
+    }
+    bool initialized{false};
+    try {
+      initialized = outputQueue->initialize(
+          task, numDestinations, numDrivers, kind, notifications);
+    } catch (...) {
+      outputQueue->recordFailedInitialization(task);
+      throw;
+    }
+    if (!initialized) {
+      VELOX_FAIL(
+          "Registering a cudf output queue for pre-existing taskId {}", taskId);
     }
   });
-  // Clear any stale "removed" state so that getData() calls after this
-  // initializeTask() create proper placeholder queues if needed.
-  removedTasks_.withLock([&](auto& removed) { removed.erase(taskId); });
-  // Clear any stale "cancelled" state in the intra-node registry so
-  // that the cancelledTasks_ set doesn't grow unboundedly across queries.
+  // A reused task ID must not inherit the cancellation of its earlier task.
   IntraNodeTransferRegistry::getInstance()->clearCancelledTask(taskId);
   if (kind == core::PartitionedOutputNode::Kind::kPartitioned &&
       !notifications.empty()) {
@@ -115,42 +122,67 @@ void UcxOutputQueueManager::deleteResults(
 void UcxOutputQueueManager::getData(
     std::string_view taskId,
     int destination,
-    UcxDataAvailableCallback notify) {
-  std::shared_ptr<UcxOutputQueue> outputQueue;
-  bool taskRemoved = false;
-  std::string taskIdStr{taskId};
-  queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskIdStr);
-    if (it == queues.end()) {
-      // Late readers of removed tasks must receive EOS rather than wait on
-      // a new placeholder.
-      if (removedTasks_.withLock(
-              [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
-        VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
-                << " getData ignored (task already removed)";
-        taskRemoved = true;
-        return;
-      }
-      // create the queue structures such that the notify callback can be
-      // stored. It will be later initialized once the task is being created.
-      VLOG(2)
-          << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
-          << " creating placeholder queue (server arrived before task init)";
-      outputQueue = std::make_shared<UcxOutputQueue>(nullptr, 0, 0);
-      queues[taskIdStr] = outputQueue;
-    } else {
-      // queue exists.
-      outputQueue = it->second;
+    ReaderCallback notify) {
+  bindReader(taskId, destination, /*onReleased=*/nullptr)
+      ->getData(destination, std::move(notify), /*intraNode=*/false);
+}
+
+std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::bindReader(
+    std::string_view taskId,
+    int destination,
+    std::function<void()> onReleased) {
+  return outputQueues_.withLock([&](auto& outputQueues) {
+    auto& outputQueue = outputQueues[std::string{taskId}];
+    if (outputQueue == nullptr) {
+      VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
+              << " creating Pending output queue (server arrived before task "
+                 "init)";
+      outputQueue = std::make_shared<UcxOutputQueue>(std::string{taskId});
     }
+    outputQueue->addBoundReader();
+    if (onReleased != nullptr) {
+      outputQueue->setOnReleased(destination, std::move(onReleased));
+    }
+    return outputQueue;
   });
-  if (taskRemoved) {
-    // Fire callback immediately with nullptr to signal end-of-stream.
-    notify(nullptr, /*numRows=*/0, {});
+}
+
+void UcxOutputQueueManager::consumerGone(
+    std::string_view taskId,
+    int destination) {
+  auto outputQueue = outputQueues_.withLock(
+      [&](auto& outputQueues) -> std::shared_ptr<UcxOutputQueue> {
+        auto it = outputQueues.find(std::string{taskId});
+        return it != outputQueues.end() ? it->second : nullptr;
+      });
+  if (outputQueue == nullptr) {
+    VLOG(1) << "Dropping a close for unknown UCX producer task " << taskId
+            << ", destination " << destination;
     return;
   }
-  // outside of lock. Queue must exist.
-  // get the data or install the notify callback.
-  outputQueue->getData(destination, notify);
+  // Outside the manager's lock: the output queue calls its release callback.
+  outputQueue->consumerGone(destination);
+}
+
+void UcxOutputQueueManager::releaseReader(
+    const std::shared_ptr<UcxOutputQueue>& outputQueue,
+    int destination) {
+  // Destroyed after the manager's lock is released.
+  std::shared_ptr<UcxOutputQueue> erasedOutputQueue;
+  outputQueues_.withLock([&](auto& outputQueues) {
+    if (!outputQueue->removeBoundReader(destination)) {
+      return;
+    }
+    auto it = outputQueues.find(outputQueue->taskId());
+    // The map may hold a newer output queue for the same ID.
+    if (it != outputQueues.end() && it->second == outputQueue) {
+      VLOG(2) << "[QUEUE-MGR] task=" << outputQueue->taskId()
+              << " dest=" << destination
+              << " erasing Pending output queue with no bound reader";
+      erasedOutputQueue = std::move(it->second);
+      outputQueues.erase(it);
+    }
+  });
 }
 
 bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
@@ -159,55 +191,112 @@ bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
       queue->kind() != core::PartitionedOutputNode::Kind::kBroadcast;
 }
 
-void UcxOutputQueueManager::removeTask(const std::string& taskId) {
-  std::string taskIdStr{taskId};
-  auto queue =
-      queues_.withLock([&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
-        auto it = queues.find(taskIdStr);
-        if (it == queues.end()) {
-          // Already removed. Clear any stale "removed" state so the task ID
-          // can be reused.
-          removedTasks_.withLock(
-              [&](auto& removed) { removed.erase(taskIdStr); });
-          return nullptr;
-        }
-        auto taskQueue = it->second;
-        queues.erase(it);
-        // Insert into removedTasks_ while still holding the queues_ lock
-        // to prevent getData() from seeing a gap between erase and insert,
-        // which would cause it to create a zombie placeholder queue.
-        removedTasks_.withLock(
-            [&](auto& removed) { removed.insert(taskIdStr); });
-        return taskQueue;
-      });
-  VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
-          << " queueExists=" << (queue != nullptr);
-  if (queue != nullptr) {
-    queue->terminate();
+void UcxOutputQueueManager::failTask(
+    std::string_view taskId,
+    std::string_view error) {
+  auto queue = getQueueIfExists(taskId);
+  // Null unless the output queue is Active.
+  auto task = queue != nullptr ? queue->task() : nullptr;
+  if (task == nullptr) {
+    LOG(ERROR) << "Cannot fail UCX producer task " << taskId
+               << ", which has no initialized output on this worker: " << error;
+    return;
   }
-  // Notify the intra-node registry so that any sources polling for this
-  // task get an atEnd result instead of spinning forever.
-  IntraNodeTransferRegistry::getInstance()->cancelTask(taskId);
+  task->setError(std::string(error));
+}
+
+namespace {
+// The producer task's error without its stack trace and context, which the
+// producer's own failure reports.
+std::string taskErrorMessage(const exec::Task& task) {
+  const auto error = task.error();
+  if (error == nullptr) {
+    return "";
+  }
+  try {
+    std::rethrow_exception(error);
+  } catch (const VeloxException& e) {
+    return e.message();
+  } catch (const std::exception& e) {
+    return e.what();
+  } catch (...) {
+    return "<Unknown exception type>";
+  }
+}
+} // namespace
+
+void UcxOutputQueueManager::removeTask(const std::string& taskId) {
+  // Destroyed after the manager's lock is released.
+  std::vector<std::shared_ptr<UcxOutputQueue>> droppedOutputQueues;
+  auto outputQueue = outputQueues_.withLock([&](auto& outputQueues) {
+    auto& slot = outputQueues[taskId];
+    if (slot == nullptr) {
+      slot = std::make_shared<UcxOutputQueue>(taskId);
+    }
+    auto removedOutputQueue = slot;
+    for (auto it = outputQueues.begin(); it != outputQueues.end();) {
+      // The lock-free state check first, so that live output queues are never
+      // locked here.
+      if (it->second != removedOutputQueue &&
+          it->second->state() == OutputQueueState::kRemoved &&
+          it->second->isDroppable()) {
+        droppedOutputQueues.push_back(std::move(it->second));
+        it = outputQueues.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    return removedOutputQueue;
+  });
+  VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
+          << " droppedOutputQueues=" << droppedOutputQueues.size();
+  // Read with no output queue lock held, since no Task method may run under
+  // one. Task::terminate() sets the final state before it removes the task, so
+  // the facts are final. They could race with an initialize() of a Pending
+  // output queue, but Velox never initializes a task's output while it
+  // terminates the task.
+  RemovalFacts facts;
+  facts.taskId = taskId;
+  if (auto task = outputQueue->task()) {
+    facts.state = task->state();
+    facts.error = taskErrorMessage(*task);
+  }
+  auto outcome = outputQueue->remove(facts);
+  // Without the output queue's lock, which is never held together with the
+  // registry's. Sources polling for this task then end with the removal's
+  // outcome instead of spinning forever.
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  registry->cancelTask(taskId, std::move(outcome));
+  // A dropped output queue had no bound reader and its Task is gone, so no
+  // server publishes for it any more. Its cancellation goes with it, so that
+  // the registry keeps no record per removed task for the life of the worker. A
+  // source that has not yet read the cancellation is closed by its consumer's
+  // abort.
+  for (const auto& droppedOutputQueue : droppedOutputQueues) {
+    registry->clearCancelledTask(droppedOutputQueue->taskId());
+  }
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
     std::string_view taskId) {
   std::string taskIdStr{taskId};
-  return queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskIdStr);
-    return it == queues.end() ? nullptr : it->second;
-  });
+  return outputQueues_.withLock(
+      [&](auto& outputQueues) -> std::shared_ptr<UcxOutputQueue> {
+        auto it = outputQueues.find(taskIdStr);
+        if (it == outputQueues.end() ||
+            it->second->state() == OutputQueueState::kRemoved) {
+          return nullptr;
+        }
+        return it->second;
+      });
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueue(
     std::string_view taskId) {
-  std::string taskIdStr{taskId};
-  return queues_.withLock([&](auto& queues) {
-    auto it = queues.find(taskIdStr);
-    VELOX_CHECK(
-        it != queues.end(), "Output cudf queue for task not found: {}", taskId);
-    return it->second;
-  });
+  auto queue = getQueueIfExists(taskId);
+  VELOX_CHECK_NOT_NULL(
+      queue, "Output cudf queue for task not found: {}", taskId);
+  return queue;
 }
 
 std::optional<exec::OutputBuffer::Stats> UcxOutputQueueManager::stats(
