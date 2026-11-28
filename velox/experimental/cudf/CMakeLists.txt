@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+option(VELOX_ENABLE_CUDF_COMPRESSION "Build GPU compression for cudf::packed_columns." OFF)
+
+if(VELOX_ENABLE_CUDF_COMPRESSION)
+  add_subdirectory(compression)
+endif()
+
 add_subdirectory(connectors)
 add_subdirectory(exec)
 add_subdirectory(expression)
