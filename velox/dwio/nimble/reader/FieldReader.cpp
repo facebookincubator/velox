@@ -311,7 +311,8 @@ void forEachSetBitRun(
 // Maps the rows selected by 'sourceRanges' onto the dense child rows marked
 // present in 'presence', which holds one byte per source row. Appends the
 // child source ranges and their placement in the output, marks the mapped
-// output positions non-null and every other selected position null.
+// output positions non-null and every other selected position null. A null
+// 'rawOutputNulls' leaves the output nulls alone.
 void mapPresentRows(
     std::span<const RowRange> sourceRanges,
     std::span<const velox::BaseVector::CopyRange> outputRanges,
@@ -322,12 +323,14 @@ void mapPresentRows(
   NIMBLE_CHECK_EQ(sourceRanges.size(), outputRanges.size());
   childSourceRanges.clear();
   childOutputRanges.clear();
-  for (const auto& outputRange : outputRanges) {
-    velox::bits::fillBits(
-        rawOutputNulls,
-        outputRange.targetIndex,
-        outputRange.targetIndex + outputRange.count,
-        velox::bits::kNull);
+  if (rawOutputNulls != nullptr) {
+    for (const auto& outputRange : outputRanges) {
+      velox::bits::fillBits(
+          rawOutputNulls,
+          outputRange.targetIndex,
+          outputRange.targetIndex + outputRange.count,
+          velox::bits::kNull);
+    }
   }
 
   uint32_t sourceRow{0};
@@ -357,11 +360,13 @@ void mapPresentRows(
           .targetIndex = outputStart,
           .count = runSize,
       });
-      velox::bits::fillBits(
-          rawOutputNulls,
-          outputStart,
-          outputStart + runSize,
-          velox::bits::kNotNull);
+      if (rawOutputNulls != nullptr) {
+        velox::bits::fillBits(
+            rawOutputNulls,
+            outputStart,
+            outputStart + runSize,
+            velox::bits::kNotNull);
+      }
       childRow += static_cast<uint32_t>(runSize);
       childOutputOffset += runSize;
       runBegin = std::find(runEnd, rangeEnd, velox::bits::kNotNull);
@@ -4775,10 +4780,52 @@ class FlatMapKeyNode {
     return streamDecoders_;
   }
 
-  // Values that a merged FlatMap read decodes for this key before it copies
-  // them into the map values. A reused node keeps them, and their buffers.
-  velox::VectorPtr& values() {
-    return values_;
+  // Finds the rows of 'sourceRanges', placed at 'outputRanges', that hold
+  // this key, for a read that decodes the values of the key straight into
+  // the map values: leaves their value rows in presentSourceRanges() and their
+  // output rows in presentOutputRanges().
+  void findPresentRows(
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges) {
+    NIMBLE_CHECK(!sourceRanges.empty(), "Source ranges must not be empty");
+    NIMBLE_CHECK_EQ(sourceRanges.size(), outputRanges.size());
+    if (inMapDecoder_ == nullptr) {
+      childSourceRanges_.assign(sourceRanges.begin(), sourceRanges.end());
+      childOutputRanges_.assign(outputRanges.begin(), outputRanges.end());
+      return;
+    }
+    const auto endRow = sourceRanges.back().endRow;
+    inMapData_.resize(endRow);
+    const std::array<RowRange, 1> inMapRange{{{0, endRow}}};
+    const auto numInMapRows = inMapDecoder_->read(
+        inMapRange,
+        DataType::Bool,
+        inMapData_.data(),
+        /*getOutputNulls=*/nullptr,
+        stringBuffers_);
+    NIMBLE_CHECK_EQ(
+        numInMapRows, endRow, "FlatMap in-map streams must not contain nulls");
+    mapPresentRows(
+        sourceRanges,
+        outputRanges,
+        inMapData_.data(),
+        /*rawOutputNulls=*/nullptr,
+        childSourceRanges_,
+        childOutputRanges_);
+  }
+
+  // Value rows that the last findPresentRows() found this key present in.
+  const std::vector<RowRange>& presentSourceRanges() const {
+    return childSourceRanges_;
+  }
+
+  // Decodes the values of this key at the value rows 'sourceRanges' into the
+  // rows 'outputRanges' of 'values'.
+  folly::coro::Task<void> co_readValues(
+      std::span<const RowRange> sourceRanges,
+      std::span<const velox::BaseVector::CopyRange> outputRanges,
+      velox::VectorPtr& values) {
+    co_await valueReader_->co_read(sourceRanges, outputRanges, values);
   }
 
  private:
@@ -4830,9 +4877,6 @@ class FlatMapKeyNode {
   // Reusable empty container satisfying the decoder API for the in-map
   // stream, which never retains a buffer.
   std::vector<velox::BufferPtr> stringBuffers_;
-
-  // See values().
-  velox::VectorPtr values_;
 };
 
 // Key nodes of destroyed FlatMap readers, by key index, which their factory
@@ -5719,27 +5763,14 @@ class MergedFlatMapFieldReader final
       co_return;
     }
 
+    // Finds the rows of each key before decoding any value, so that the values
+    // of each key decode straight into their map entries.
     for (size_t i{0}; i < this->keyNodes_.size(); ++i) {
       NIMBLE_CHECK_NOT_NULL(
           this->keyNodes_[i],
           "Merged FlatMap readers require existing key nodes");
-      // The values live in the key node, so a reused node keeps them.
-      auto& nodeValue = this->keyNodes_[i]->values();
-      if (nodeValue == nullptr) {
-        nodeValue = velox::BaseVector::create(
-            this->keyNodes_[i]->valueReader()->type(),
-            output->size(),
-            this->pool_);
-      } else {
-        // Reset retained state, not just the top-level size: nested elements
-        // from previous reads would otherwise shift this read's child write
-        // offsets and force realloc-copies of dead rows. prepareForReuse
-        // keeps the buffers and drops the sizes, so regrow is allocation-free.
-        nodeValue->prepareForReuse();
-        nodeValue->resize(output->size());
-      }
-      co_await this->keyNodes_[i]->co_readAsChild(
-          this->parentSourceRanges_, this->parentOutputRanges_, nodeValue);
+      this->keyNodes_[i]->findPresentRows(
+          this->parentSourceRanges_, this->parentOutputRanges_);
     }
 
     // Count each row's entries by walking the rows each key was found present
@@ -5775,23 +5806,36 @@ class MergedFlatMapFieldReader final
     auto* flatKeysVector =
         prepareElementVectors(nextOutputElement, keysVector, valuesVector);
 
+    // The entries of a row are not next to each other in the values, so each
+    // value row of a key is its own range.
     for (size_t i{0}; i < this->keyNodes_.size(); ++i) {
-      this->copyRanges_.clear();
-      for (const auto& range : this->keyNodes_[i]->presentOutputRanges()) {
-        for (velox::vector_size_t row{0}; row < range.count; ++row) {
-          const auto outputRow = range.targetIndex + row;
+      auto& node = *this->keyNodes_[i];
+      const auto& keySourceRanges = node.presentSourceRanges();
+      const auto& keyOutputRanges = node.presentOutputRanges();
+      NIMBLE_CHECK_EQ(keySourceRanges.size(), keyOutputRanges.size());
+      valueSourceRanges_.clear();
+      valueOutputRanges_.clear();
+      for (size_t range{0}; range < keySourceRanges.size(); ++range) {
+        for (velox::vector_size_t row{0}; row < keyOutputRanges[range].count;
+             ++row) {
+          const auto outputRow = keyOutputRanges[range].targetIndex + row;
           const auto outputElementOffset = nextElementOffsets_[outputRow]++;
-          flatKeysVector->set(
-              outputElementOffset, this->keyNodes_[i]->key().get());
-          this->copyRanges_.push_back({
-              .sourceIndex = outputRow,
+          flatKeysVector->set(outputElementOffset, node.key().get());
+          const auto valueRow =
+              keySourceRanges[range].startRow + static_cast<uint32_t>(row);
+          valueSourceRanges_.emplace_back(valueRow, valueRow + 1);
+          valueOutputRanges_.push_back({
+              .sourceIndex =
+                  static_cast<velox::vector_size_t>(valueOutputRanges_.size()),
               .targetIndex = outputElementOffset,
               .count = 1,
           });
         }
       }
-      valuesVector->copyRanges(
-          this->keyNodes_[i]->values().get(), this->copyRanges_);
+      if (!valueSourceRanges_.empty()) {
+        co_await node.co_readValues(
+            valueSourceRanges_, valueOutputRanges_, valuesVector);
+      }
     }
     vector->setKeysAndValues(std::move(keysVector), std::move(valuesVector));
     co_return;
@@ -5951,6 +5995,11 @@ class MergedFlatMapFieldReader final
 
   // Next output entry for each selected map row during key-wise transposition.
   Vector<velox::vector_size_t> nextElementOffsets_;
+
+  // Value rows of one key that a selected read decodes, one range per row,
+  // and the map entries they land in. Reused across keys and calls.
+  std::vector<RowRange> valueSourceRanges_;
+  std::vector<velox::BaseVector::CopyRange> valueOutputRanges_;
 };
 
 template <typename T>
