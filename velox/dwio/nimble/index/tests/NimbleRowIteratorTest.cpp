@@ -696,6 +696,81 @@ TEST_P(NimbleRowIteratorTest, entryIteratorKeepsRowsThatTheStorageOwns) {
   }
 }
 
+// With zeroCopyStrings, a scan decodes the strings that lie in the loaded
+// streams as views over the loaded bytes instead of copies.
+TEST_P(NimbleRowIteratorTest, rowIteratorReturnsZeroCopyStrings) {
+  constexpr int32_t kRowsPerStripe{50};
+  constexpr int32_t kNumStripes{2};
+  std::vector<std::string> names;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t stripe{0}; stripe < kNumStripes; ++stripe) {
+    std::vector<int64_t> keys(kRowsPerStripe);
+    std::vector<std::string> stripeNames(kRowsPerStripe);
+    for (int32_t row{0}; row < kRowsPerStripe; ++row) {
+      keys[row] = stripe * kRowsPerStripe + row;
+      stripeNames[row] =
+          fmt::format("a name too long to inline {:04}", keys[row]);
+      names.push_back(stripeNames[row]);
+    }
+    batches.emplace_back(vectorMaker_->rowVector(
+        {"key", "name"},
+        {vectorMaker_->flatVector<int64_t>(keys),
+         vectorMaker_->flatVector<std::string>(stripeNames)}));
+  }
+  // Uncompressed Trivial strings lie in their stream as they are.
+  WriterOptions writerOptions;
+  writerOptions.encodingSelectionPolicyCreator =
+      [encodingFactory = ManualEncodingSelectionPolicyFactory{
+           {{EncodingType::Trivial, 1.0f}},
+           /*compressionOptions=*/std::nullopt}](DataType dataType) {
+        return encodingFactory.createPolicy(dataType);
+      };
+  writerOptions.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*shouldFlush=*/[](const StripeProgress& /*progress*/) {
+          return true;
+        });
+  };
+  writeBatches(batches, std::move(writerOptions));
+
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("name");
+  for (const bool zeroCopyStrings : {false, true}) {
+    SCOPED_TRACE(fmt::format("zeroCopyStrings={}", zeroCopyStrings));
+    bool holdsViews{false};
+    auto iterator = createEntryIterator(
+        projectedSubfields,
+        [&holdsViews](
+            const velox::RowVectorPtr& rows,
+            nimble::index::KeyCursor& keyCursor,
+            folly::IOBufQueue& keyStorage,
+            folly::IOBufQueue& valueStorage,
+            std::vector<std::string_view>& keys,
+            std::vector<std::string_view>& values) {
+          const auto* rowNames = rows->childAt(0)->asFlatVector<StringView>();
+          for (const auto& buffer : rowNames->stringBuffers()) {
+            holdsViews |= buffer->isView();
+          }
+          for (velox::vector_size_t row{0}; row < rows->size(); ++row) {
+            appendBytes(keyCursor.next(), keyStorage, keys);
+            const auto name = rowNames->valueAt(row);
+            appendBytes(name, valueStorage, values);
+          }
+        },
+        NimbleIterator::Options{.zeroCopyStrings = zeroCopyStrings});
+    iterator->seekToFirst();
+    for (const auto& name : names) {
+      ASSERT_TRUE(iterator->valid());
+      EXPECT_EQ(iterator->value(), name);
+      iterator->nextRow();
+    }
+    EXPECT_FALSE(iterator->valid());
+    EXPECT_EQ(holdsViews, zeroCopyStrings);
+    iterator->reset();
+  }
+}
+
 TEST_P(NimbleRowIteratorTest, entryIteratorReportsWhetherAnEntryFollows) {
   constexpr int32_t kRowsPerStripe{4};
   constexpr int32_t kNumStripes{3};

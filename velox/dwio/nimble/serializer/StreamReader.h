@@ -187,6 +187,14 @@ class StreamReader {
       const SharedDictionaryAlphabets& alphabets,
       const Encoding::Options& options);
 
+  /// Returns whether the stream at each index, in the layout of setStreams(),
+  /// holds strings: the values of a String or Binary scalar. setStreams()
+  /// keeps the buffers of these streams only, so a caller need not create
+  /// buffers for the others.
+  const std::vector<bool>& stringStreams() const {
+    return stringStreams_;
+  }
+
   /// Decodes the next rows from the currently bound stripe asynchronously.
   /// Reuses uniquely owned vectors. Supplied output must match the projected
   /// schema; reset incompatible output before calling.

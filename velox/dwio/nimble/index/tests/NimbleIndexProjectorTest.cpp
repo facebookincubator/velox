@@ -808,6 +808,60 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
   }
 }
 
+// With zeroCopyStrings, a read of every row of a stripe returns the strings
+// that lie in its loaded streams as views over the loaded bytes instead of
+// copies, and the result keeps those bytes alive after the projector is gone.
+TEST_P(NimbleIndexProjectorTest, projectsRowsWithZeroCopyStrings) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"name", VARCHAR()}});
+  constexpr int kNumRows{100};
+  std::vector<int64_t> keys(kNumRows);
+  std::vector<std::string> names(kNumRows);
+  for (int row{0}; row < kNumRows; ++row) {
+    keys[row] = row;
+    names[row] = fmt::format("a name too long to inline {:04}", row);
+  }
+  // Uncompressed Trivial strings lie in their stream as they are.
+  WriterOptions writerOptions;
+  writerOptions.encodingSelectionPolicyCreator =
+      [encodingFactory = ManualEncodingSelectionPolicyFactory{
+           {{EncodingType::Trivial, 1.0f}},
+           /*compressionOptions=*/std::nullopt}](DataType dataType) {
+        return encodingFactory.createPolicy(dataType);
+      };
+  writerOptions.clusterIndexConfig = makeClusterIndexConfig({"key"});
+  writeBatches(
+      {vectorMaker_->rowVector(
+          {"key", "name"},
+          {vectorMaker_->flatVector<int64_t>(keys),
+           vectorMaker_->flatVector<std::string>(names)})},
+      std::move(writerOptions));
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("name");
+  const auto request = index::IndexLookup::LookupRequest::rangeScan(
+      {makeRangeLookup(rowType, {"key"}, 0, kNumRows)});
+  const auto expected = vectorMaker_->rowVector(
+      {"name"}, {vectorMaker_->flatVector<std::string>(names)});
+  for (const bool zeroCopyStrings : {false, true}) {
+    SCOPED_TRACE(fmt::format("zeroCopyStrings={}", zeroCopyStrings));
+    auto projector = createProjector(subfields);
+    const auto result =
+        projectRows(*projector, *request, {.zeroCopyStrings = zeroCopyStrings});
+    projector.reset();
+    ASSERT_NE(result.values, nullptr);
+    velox::test::assertEqualVectors(expected, result.values);
+    const auto& stringBuffers = result.values->childAt(0)
+                                    ->asFlatVector<velox::StringView>()
+                                    ->stringBuffers();
+    EXPECT_EQ(
+        std::any_of(
+            stringBuffers.begin(),
+            stringBuffers.end(),
+            [](const auto& buffer) { return buffer->isView(); }),
+        zeroCopyStrings);
+  }
+}
+
 // A cluster index that stores its key chunks in stripes puts each stripe's key
 // stream first, as stream 0, ahead of the column streams. Projections read
 // only the column streams and serve the same rows.

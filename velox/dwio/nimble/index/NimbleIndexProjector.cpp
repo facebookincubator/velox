@@ -451,8 +451,12 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
+    const auto streamBufferHolders = options.zeroCopyStrings
+        ? makeStreamBufferHolders(
+              streams, streamReader_->stringStreams(), ctx_.dataHandle)
+        : std::vector<velox::BufferPtr>{};
     streamReader_->setStreams(
-        streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, decodingOptions);
+        streams, streamBufferHolders, /*alphabets=*/{}, decodingOptions);
     // Release the views before the stripe's streams go away.
     SCOPE_EXIT {
       streamReader_->reset();

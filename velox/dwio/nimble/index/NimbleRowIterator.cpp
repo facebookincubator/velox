@@ -42,6 +42,7 @@
 #include "velox/dwio/nimble/index/IndexScanCursor.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/index/NimbleIndexProjector.h"
+#include "velox/dwio/nimble/index/StripeStreams.h"
 #include "velox/dwio/nimble/serializer/StreamReader.h"
 
 namespace facebook::nimble {
@@ -97,6 +98,7 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
         encodingOptions_{std::move(encodingOptions)},
         entryDecoder_{std::move(entryDecoder)},
         forGet_{options.forGet},
+        zeroCopyStrings_{options.zeroCopyStrings},
         collectTimings_{options.collectTimings},
         decodeExecutor_{options.prefetchExecutor},
         readerOptions_{
@@ -209,8 +211,14 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
     auto& decoder = ensureStripeDecoder();
     auto options = encodingOptions_;
     options.bufferPool = &decoder.bufferPool;
+    const auto streamBufferHolders = zeroCopyStrings_
+        ? makeStreamBufferHolders(
+              stripe.streams,
+              decoder.streamReader.stringStreams(),
+              stripe.dataHandle)
+        : std::vector<velox::BufferPtr>{};
     decoder.streamReader.setStreams(
-        stripe.streams, /*streamBufferHolders=*/{}, /*alphabets=*/{}, options);
+        stripe.streams, streamBufferHolders, /*alphabets=*/{}, options);
     // The data handle owns the bytes that the reader views, so they stay put.
     decoder.stripe = std::move(stripe);
     return decoder.streamReader;
@@ -339,6 +347,9 @@ class StripeMaterializer final : public IndexScanCursor::StripeMaterializer {
   const NimbleIterator::EntryDecoder entryDecoder_;
   // Whether the iterator serves point lookups, which keep their stripe.
   const bool forGet_;
+  // Whether each stripe binds the stream reader with buffers that hold its
+  // loaded streams, so that dense decodes return strings as views over them.
+  const bool zeroCopyStrings_;
   // Whether decoding a stripe reads the CPU and wall clocks.
   const bool collectTimings_;
   // Keeps the executor borrowed by the stream reader alive.

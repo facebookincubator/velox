@@ -2056,6 +2056,7 @@ TEST_F(StreamReaderTest, keepsStreamBufferHoldersOfStringsOnly) {
               StreamDescriptor{2, ScalarKind::Int64}),
       });
   StreamReader reader{type, pool_.get(), /*options=*/{}};
+  EXPECT_THAT(reader.stringStreams(), testing::ElementsAre(false, true, false));
   {
     const std::array<velox::BufferPtr, 3> holders{
         nullptr, stringHolder, integerHolder};

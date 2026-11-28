@@ -18,11 +18,13 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
 #include <fmt/format.h>
 
+#include "velox/buffer/Buffer.h"
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/index/ClusterIndexBase.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
@@ -67,6 +69,22 @@ struct ProjectedStripe {
   // cursor over the chunk holds after the stripe's streams are freed.
   std::optional<index::ClusterIndexBase::KeyChunk> keyChunk;
 };
+
+/// Wraps each stream of strings in 'streams', loaded stream views whose bytes
+/// 'dataHandle' keeps alive, in a buffer that holds 'dataHandle', for the
+/// streamBufferHolders of StreamReader::setStreams(). A read of strings can
+/// then return the strings that lie in the streams instead of copying them,
+/// and its output keeps the loaded bytes alive while it holds them.
+/// 'stringStreams' says whether the stream at each index holds strings, as
+/// StreamReader::stringStreams() returns. setStreams() keeps the buffers of
+/// those streams only, so the other streams get none. Returns one buffer per
+/// stream, aligned with 'streams', null for an empty stream or a stream of
+/// other values, or no buffers when no stream of strings is loaded.
+/// 'dataHandle' must not be null when a stream of strings is not empty.
+std::vector<velox::BufferPtr> makeStreamBufferHolders(
+    std::span<const std::string_view> streams,
+    const std::vector<bool>& stringStreams,
+    const DataInput::Handle& dataHandle);
 
 } // namespace facebook::nimble
 
