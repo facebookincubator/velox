@@ -158,17 +158,21 @@ void ExchangeQueue::setError(const std::string& error) {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (!error_.empty()) {
-      return;
-    }
-    error_ = error;
-    noMoreInput_ = true;
-    // NOTE: clear the serialized page queue as we won't consume from an errored
-    // queue.
-    queue_.clear();
-    promises = clearAllPromisesLocked();
+    promises = setErrorLocked(error);
   }
   clearPromises(promises);
+}
+
+std::vector<ContinuePromise> ExchangeQueue::setErrorLocked(
+    const std::string& error) {
+  if (!error_.empty()) {
+    return {};
+  }
+  error_ = error;
+  noMoreInput_ = true;
+  // Clear the serialized pages because they won't be consumed.
+  queue_.clear();
+  return clearAllPromisesLocked();
 }
 
 } // namespace facebook::velox::exec
