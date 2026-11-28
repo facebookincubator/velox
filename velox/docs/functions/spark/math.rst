@@ -393,7 +393,14 @@ Mathematical Functions
 
 .. spark:function:: power(x, p) -> double
 
-    Returns ``x`` raised to the power of ``p``.
+    Returns ``x`` raised to the power of ``p``. Follows Java's ``StrictMath.pow``
+    for special values: returns NaN if ``p`` is NaN, or if ``p`` is infinite and
+    the absolute value of ``x`` is 1. ::
+
+        SELECT power(2, 3); -- 8.0
+        SELECT power(1, double('Infinity')); -- NaN
+        SELECT power(-1, double('-Infinity')); -- NaN
+        SELECT power(1, double('NaN')); -- NaN
 
 .. spark:function:: radians(x) -> double
 
