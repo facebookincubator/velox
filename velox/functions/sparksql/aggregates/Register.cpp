@@ -24,6 +24,7 @@
 #include "velox/functions/sparksql/aggregates/BloomFilterAggAggregate.h"
 #include "velox/functions/sparksql/aggregates/CentralMomentsAggregate.h"
 #include "velox/functions/sparksql/aggregates/CollectListAggregate.h"
+#include "velox/functions/sparksql/aggregates/CountMinSketchAggregate.h"
 #include "velox/functions/sparksql/aggregates/CovarianceAggregate.h"
 #include "velox/functions/sparksql/aggregates/RegrReplacementAggregate.h"
 #include "velox/functions/sparksql/aggregates/SumAggregate.h"
@@ -66,6 +67,8 @@ void registerAggregateFunctions(
   registerBitwiseXorAggregate(prefix, withCompanionFunctions, overwrite);
   registerBloomFilterAggAggregate(
       prefix + "bloom_filter_agg", withCompanionFunctions, overwrite);
+  registerCountMinSketchAggregate(
+      prefix + "count_min_sketch", withCompanionFunctions, overwrite);
   registerAverage(prefix + "avg", withCompanionFunctions, overwrite);
   registerSum(prefix + "sum", withCompanionFunctions, overwrite);
   registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
