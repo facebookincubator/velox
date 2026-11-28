@@ -36,6 +36,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/ConstantVector.h"
+#include "velox/vector/DecodedVector.h"
 
 #include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
@@ -4248,6 +4249,106 @@ bool requiresCpuForCastConfig(
   return false;
 }
 
+// Returns true if 'timestamp' converts to the configured cuDF timestamp unit.
+// The conversion that moves a TIMESTAMP to the GPU throws on overflow, e.g.
+// for a year past 2262 in nanoseconds.
+bool convertsToCudfTimestampUnit(const Timestamp& timestamp) {
+  try {
+    switch (CudfConfig::getInstance().timestampUnit) {
+      case cudf::type_id::TIMESTAMP_NANOSECONDS:
+        timestamp.toNanos();
+        break;
+      case cudf::type_id::TIMESTAMP_MICROSECONDS:
+        timestamp.toMicros();
+        break;
+      case cudf::type_id::TIMESTAMP_MILLISECONDS:
+        timestamp.toMillis();
+        break;
+      default:
+        // Seconds cannot overflow.
+        break;
+    }
+  } catch (const VeloxUserError&) {
+    return false;
+  }
+  return true;
+}
+
+// Returns true if every non-null TIMESTAMP in the 'size' rows of 'vector' from
+// 'offset', at any depth, converts to the configured cuDF timestamp unit.
+bool timestampsConvertToCudfUnit(
+    const BaseVector& vector,
+    vector_size_t offset,
+    vector_size_t size) {
+  const auto kind = vector.typeKind();
+  if (kind != TypeKind::TIMESTAMP && kind != TypeKind::ARRAY &&
+      kind != TypeKind::MAP && kind != TypeKind::ROW) {
+    return true;
+  }
+  DecodedVector decoded(vector);
+  for (auto row = offset; row < offset + size; ++row) {
+    if (decoded.isNullAt(row)) {
+      continue;
+    }
+    const auto index = decoded.index(row);
+    bool converts = true;
+    if (kind == TypeKind::TIMESTAMP) {
+      converts = convertsToCudfTimestampUnit(decoded.valueAt<Timestamp>(row));
+    } else if (kind == TypeKind::ARRAY) {
+      const auto* array = decoded.base()->asUnchecked<ArrayVector>();
+      converts = timestampsConvertToCudfUnit(
+          *array->elements(), array->offsetAt(index), array->sizeAt(index));
+    } else if (kind == TypeKind::MAP) {
+      // Another MAP encoding, such as a flat map, stays on the CPU.
+      const auto* map = decoded.base()->as<MapVector>();
+      converts =
+          map != nullptr &&
+          timestampsConvertToCudfUnit(
+              *map->mapKeys(), map->offsetAt(index), map->sizeAt(index)) &&
+          timestampsConvertToCudfUnit(
+              *map->mapValues(), map->offsetAt(index), map->sizeAt(index));
+    } else {
+      for (const auto& child :
+           decoded.base()->asUnchecked<RowVector>()->children()) {
+        converts = converts && timestampsConvertToCudfUnit(*child, index, 1);
+      }
+    }
+    if (!converts) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Returns true if 'expr' holds a constant with a TIMESTAMP, at any depth, that
+// the configured cuDF timestamp unit cannot represent. Moving it to the GPU
+// fails, though the CPU may never need it, e.g. in a CASE branch that no row
+// takes.
+bool requiresCpuForTimestampConstant(const core::TypedExprPtr& expr) {
+  if (expr->isConstantKind()) {
+    const auto* constant = expr->asUnchecked<core::ConstantTypedExpr>();
+    const bool converts = constant->hasValueVector()
+        ? timestampsConvertToCudfUnit(*constant->valueVector(), 0, 1)
+        : constant->isNull() || !expr->type()->isTimestamp() ||
+            convertsToCudfTimestampUnit(
+                constant->value().value<TypeKind::TIMESTAMP>());
+    if (!converts) {
+      LOG_FALLBACK(
+          fmt::format(
+              "A TIMESTAMP constant outside the range of the cuDF timestamp "
+              "unit stays on the CPU: {}",
+              expr->toString()));
+    }
+    return !converts;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (requiresCpuForTimestampConstant(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Optimizes 'expr' the way the operators do before compiling, so that a support
 // check sees the same tree; see canExprRunOnGpu() in the header. Returns 'expr'
 // itself without a query context or pool.
@@ -4273,6 +4374,7 @@ bool canOptimizedExprRunOnGpu(
     core::QueryCtx* queryCtx) {
   return !requiresCpuForTimezone(checked, queryCtx) &&
       !requiresCpuForCastConfig(checked, queryCtx) &&
+      !requiresCpuForTimestampConstant(checked) &&
       canBeEvaluatedByCudf(checked, sessionConfigOrDefault(queryCtx));
 }
 

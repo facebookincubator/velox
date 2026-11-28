@@ -232,10 +232,11 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// adjust_timestamp_to_session_timezone; a cast from VARCHAR, or from
 /// TIMESTAMP to VARCHAR, under legacy_cast; and a cast from VARCHAR to REAL or
 /// DOUBLE under cast_string_to_floating_point_lenient_inf_nan, must stay on
-/// CPU) and evaluator eligibility, including per-function session checks, on
-/// the optimized expression. With a null queryCtx, eligibility uses default
-/// settings. When `queryCtx` or `pool` is null, skips optimization and checks
-/// `expr` directly.
+/// CPU), keeps an expression with a TIMESTAMP constant that the cuDF timestamp
+/// unit cannot represent on CPU, and applies evaluator eligibility, including
+/// per-function session checks, on the optimized expression. With a null
+/// queryCtx, eligibility uses default settings. When `queryCtx` or `pool` is
+/// null, skips optimization and checks `expr` directly.
 /// \param pool Leaf pool used for constant folding during optimization,
 ///             typically the operator's own pool.
 bool canExprRunOnGpu(

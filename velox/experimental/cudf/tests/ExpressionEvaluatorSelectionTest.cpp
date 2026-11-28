@@ -712,6 +712,39 @@ TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
   ASSERT_FALSE(canExprRunOnGpu(badCast, queryCtx_.get(), pool_.get()));
 }
 
+// A TIMESTAMP constant, at any depth, that the cuDF timestamp unit cannot
+// represent keeps its expression on the CPU.
+TEST_F(CudfExpressionSelectionTest, timestampConstantOutsideUnitRange) {
+  const auto rowType = ROW({{"t", TIMESTAMP()}, {"i", BIGINT()}});
+  const auto canRunOnGpu = [&](const std::string& sql) {
+    return canExprRunOnGpu(
+        optimizeTypedExpr(sql, rowType, queryCtx_.get(), execCtx_.get()),
+        queryCtx_.get(),
+        pool_.get());
+  };
+  auto& config = CudfConfig::getInstance();
+  const auto previousUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = previousUnit;
+  };
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  EXPECT_TRUE(canRunOnGpu("t = TIMESTAMP '2025-01-01'"));
+  EXPECT_TRUE(canRunOnGpu("element_at(array[TIMESTAMP '2025-01-01'], i)"));
+  EXPECT_TRUE(canRunOnGpu(
+      "element_at(array[row_constructor(TIMESTAMP '2025-01-01')], i)"));
+  // Nanoseconds cover only the years 1677 to 2262. Timestamp::toNanos() also
+  // rejects the partial second at the start.
+  EXPECT_FALSE(canRunOnGpu("t = TIMESTAMP '2500-01-01'"));
+  EXPECT_FALSE(canRunOnGpu("t > TIMESTAMP '1677-09-21 00:12:43.145225'"));
+  EXPECT_FALSE(canRunOnGpu("element_at(array[TIMESTAMP '2500-01-01'], i)"));
+  EXPECT_FALSE(canRunOnGpu(
+      "element_at(array[row_constructor(TIMESTAMP '2500-01-01')], i)"));
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  EXPECT_TRUE(canRunOnGpu("t = TIMESTAMP '2500-01-01'"));
+}
+
 TEST_F(CudfExpressionSelectionTest, constantFoldingStringAllocatesOnCompile) {
   auto optimized = optimizeTypedExpr(
       "lower('ABCDEF')", rowType_, queryCtx_.get(), execCtx_.get());
