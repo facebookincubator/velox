@@ -143,6 +143,7 @@ bool isStringCompatible(EncodingType encodingType) {
     case EncodingType::Dictionary:
     case EncodingType::RLE:
     case EncodingType::Fsst:
+    case EncodingType::MainlyInteger:
       return true;
     default:
       return false;
@@ -215,7 +216,8 @@ constexpr uint64_t kMinPairFiles = 10;
 // Encodings EncodingSizeEstimation can decline on the values rather than on
 // the stream type alone: Constant needs a single-valued stream, DeltaBlock a
 // per-block non-decreasing one, Sequence an arithmetic progression, Huffman an
-// alphabet of at least two values, Reversed values that mostly descend.
+// alphabet of at least two values, Reversed values that mostly descend,
+// MainlyInteger values that are mostly integers.
 // Whether they land is therefore a property of the data draw rather than of
 // the schema, so unappliedPairs() reports them but does not demand them.
 bool hasDataPrecondition(EncodingType encodingType) {
@@ -225,6 +227,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
       encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Sequence ||
       encodingType == EncodingType::Reversed ||
+      encodingType == EncodingType::MainlyInteger ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -3707,7 +3710,7 @@ bool NimbleWriterFuzzer::verifyEncodedColumn(
                 leafPool_.get(),
                 column->size(),
                 [&](auto i) {
-                  const auto value =
+                  const auto& value =
                       column
                           ->asUnchecked<velox::FlatVector<velox::StringView>>()
                           ->valueAt(i);

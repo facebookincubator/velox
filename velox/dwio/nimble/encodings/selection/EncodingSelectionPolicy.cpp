@@ -243,6 +243,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::Fsst,
       EncodingType::Huffman,
       EncodingType::Reversed,
+      EncodingType::MainlyInteger,
   };
 }
 

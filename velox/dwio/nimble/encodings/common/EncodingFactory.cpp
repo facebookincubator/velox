@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyIntegerEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
@@ -156,6 +157,12 @@ FOLLY_ALWAYS_INLINE std::unique_ptr<Encoding> createEncoding(
           DataType::String,
           "Trying to deserialize a FsstEncoding with a non-string data type.");
       return std::make_unique<FsstEncoding>(
+          pool, data, stringBufferFactory, options);
+    }
+    case EncodingType::MainlyInteger: {
+      NIMBLE_CHECK_FILE_EQ(
+          dataType, DataType::String, "MainlyInteger must be a string stream");
+      return std::make_unique<MainlyIntegerEncoding>(
           pool, data, stringBufferFactory, options);
     }
     case EncodingType::Delta: {
@@ -467,6 +474,14 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "Fsst encoding should only be selected for string_view data types.");
+    }
+    case EncodingType::MainlyInteger: {
+      if constexpr (std::is_same_v<T, std::string_view>) {
+        return MainlyIntegerEncoding::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "MainlyInteger encoding should only be selected for string_view data types.");
     }
     case EncodingType::Delta: {
       if constexpr (isNumericType<physicalType>()) {

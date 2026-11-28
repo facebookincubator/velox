@@ -57,6 +57,15 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Indices = 0;
   };
 
+  struct MainlyInteger {
+    /// True for the rows stored as integers.
+    static constexpr NestedEncodingIdentifier IsInteger = 0;
+    /// The int64 forms of the integer rows.
+    static constexpr NestedEncodingIdentifier Integers = 1;
+    /// The other rows, the exceptions, as strings.
+    static constexpr NestedEncodingIdentifier Exceptions = 2;
+  };
+
   struct Trivial {
     static constexpr NestedEncodingIdentifier Lengths = 0;
   };

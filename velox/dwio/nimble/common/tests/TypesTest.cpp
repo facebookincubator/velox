@@ -57,6 +57,7 @@ TEST(TypesTest, encodingTypeStringConversion) {
       {EncodingType::BlockBitPackingV2, "BlockBitPackingV2"},
       {EncodingType::Sequence, "Sequence"},
       {EncodingType::Reversed, "Reversed"},
+      {EncodingType::MainlyInteger, "MainlyInteger"},
   };
   for (const auto& [type, name] : testCases) {
     SCOPED_TRACE(name);

@@ -70,6 +70,7 @@ add_executable(
   FrequencyPartitionEncodingTest.cpp
   MainlyConstantEncodingTest.cpp
   MainlyConstantEncodingViewTest.cpp
+  MainlyIntegerEncodingTest.cpp
   NullableEncodingTest.cpp
   NullableEncodingViewTest.cpp
   OpenZLCompressorTest.cpp
@@ -108,6 +109,7 @@ target_link_libraries(
   nimble_common
   nimble_tools_common
   velox_common_base
+  velox_test_util
   gmock
   gtest
   gtest_main
