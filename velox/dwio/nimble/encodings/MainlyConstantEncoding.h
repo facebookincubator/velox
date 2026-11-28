@@ -1057,5 +1057,10 @@ class MainlyConstantEncoding<std::string_view> final
     return MainlyConstantEncodingBase<std::string_view>::slice(
         encoded, offset, length, buffer, options);
   }
+
+ protected:
+  bool rebindImpl(
+      std::string_view data,
+      const std::function<void*(uint32_t)>& stringBufferFactory) final;
 };
 } // namespace facebook::nimble
