@@ -310,7 +310,7 @@ TEST_F(SimpleVectorNonParameterizedTest, isAscii) {
 
     // Selectivity Vector which is empty.
     SelectivityVector empty(stringData_.size(), false);
-    EXPECT_THROW(vector->isAscii(empty).has_value(), VeloxException);
+    EXPECT_THROW(vector->isAscii(empty), VeloxException);
   }
 }
 
@@ -325,7 +325,7 @@ TEST_F(SimpleVectorNonParameterizedTest, isAsciiIndex) {
     assertIsAscii(vector, all, false);
 
     ASSERT_FALSE(vector->isAscii(stringData_.size() + 1).has_value());
-    EXPECT_THROW(vector->isAscii(-1).has_value(), VeloxException);
+    EXPECT_THROW(vector->isAscii(-1), VeloxException);
   }
 }
 

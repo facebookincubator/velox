@@ -830,20 +830,18 @@ TEST_F(LazyVectorTest, arrayRejectsLazyElements) {
 
   // After loading, construction succeeds.
   lazyFlat->loadedVector();
-  EXPECT_NO_THROW(
-      std::make_shared<ArrayVector>(
-          pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat));
+  EXPECT_NO_THROW((void)std::make_shared<ArrayVector>(
+      pool_.get(), ARRAY(INTEGER()), nullptr, 1, offsets, sizes, lazyFlat));
 
   rowWithLazyChild->loadedVector();
-  EXPECT_NO_THROW(
-      std::make_shared<ArrayVector>(
-          pool_.get(),
-          ARRAY(rowType),
-          nullptr,
-          1,
-          offsets,
-          sizes,
-          rowWithLazyChild));
+  EXPECT_NO_THROW((void)std::make_shared<ArrayVector>(
+      pool_.get(),
+      ARRAY(rowType),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      rowWithLazyChild));
 }
 
 TEST_F(LazyVectorTest, mapRejectsLazyKeysOrValues) {
@@ -910,28 +908,26 @@ TEST_F(LazyVectorTest, mapRejectsLazyKeysOrValues) {
   // After loading, construction succeeds.
   auto lazyFlat = makeLazyFlat();
   lazyFlat->loadedVector();
-  EXPECT_NO_THROW(
-      std::make_shared<MapVector>(
-          pool_.get(),
-          MAP(INTEGER(), INTEGER()),
-          nullptr,
-          1,
-          offsets,
-          sizes,
-          flatIntegers,
-          lazyFlat));
+  EXPECT_NO_THROW((void)std::make_shared<MapVector>(
+      pool_.get(),
+      MAP(INTEGER(), INTEGER()),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      flatIntegers,
+      lazyFlat));
 
   rowWithLazyChild->loadedVector();
-  EXPECT_NO_THROW(
-      std::make_shared<MapVector>(
-          pool_.get(),
-          MAP(INTEGER(), rowType),
-          nullptr,
-          1,
-          offsets,
-          sizes,
-          flatIntegers,
-          rowWithLazyChild));
+  EXPECT_NO_THROW((void)std::make_shared<MapVector>(
+      pool_.get(),
+      MAP(INTEGER(), rowType),
+      nullptr,
+      1,
+      offsets,
+      sizes,
+      flatIntegers,
+      rowWithLazyChild));
 }
 
 } // namespace

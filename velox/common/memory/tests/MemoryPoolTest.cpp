@@ -171,14 +171,13 @@ TEST_P(MemoryPoolTest, ctor) {
     auto fakeRoot = std::make_shared<MemoryPoolImpl>(
         &manager, "fake_root", MemoryPool::Kind::kAggregate, nullptr, nullptr);
     // We can't construct an aggregate memory pool with non-thread safe.
-    ASSERT_ANY_THROW(
-        std::make_shared<MemoryPoolImpl>(
-            &manager,
-            "fake_root",
-            MemoryPool::Kind::kAggregate,
-            nullptr,
-            nullptr,
-            MemoryPool::Options{.threadSafe = false}));
+    ASSERT_ANY_THROW((void)std::make_shared<MemoryPoolImpl>(
+        &manager,
+        "fake_root",
+        MemoryPool::Kind::kAggregate,
+        nullptr,
+        nullptr,
+        MemoryPool::Options{.threadSafe = false}));
     ASSERT_EQ("fake_root", fakeRoot->name());
     ASSERT_EQ(
         static_cast<MemoryPoolImpl*>(root.get())->testingAllocator(),

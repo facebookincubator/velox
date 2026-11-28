@@ -62,9 +62,6 @@ TEST_F(DynamicLinkTest, dynamicLoadFunc) {
 }
 
 TEST_F(DynamicLinkTest, dynamicLoadSameFuncTwice) {
-  const auto dynamicFunction = [&]() {
-    return evaluateOnce<int64_t>("dynamic()", makeRowVector(ROW({}), 1));
-  };
   auto& registry = exec::simpleFunctions();
   std::string libraryPath = getLibraryPath("libvelox_function_dynamic");
 

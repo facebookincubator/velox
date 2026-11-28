@@ -537,17 +537,16 @@ endif()
 
 if(ENABLE_ALL_WARNINGS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(
-      KNOWN_WARNINGS
-      "-Wno-unused \
-         -Wno-unused-parameter \
-         -Wno-sign-compare \
-         -Wno-ignored-qualifiers \
-         -Wno-range-loop-analysis \
-         -Wno-mismatched-tags \
-         -Wno-nullability-completeness"
+    # The file explains where these flags come from.
+    set(VELOX_CLANG_WARNING_FLAGS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CMake/ClangWarningFlags.txt")
+    file(STRINGS "${VELOX_CLANG_WARNING_FLAGS_FILE}" VELOX_CLANG_WARNING_FLAGS REGEX "^-")
+    set_property(
+      DIRECTORY
+      APPEND
+      PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELOX_CLANG_WARNING_FLAGS_FILE}"
     )
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
+    list(JOIN VELOX_CLANG_WARNING_FLAGS " " VELOX_CLANG_WARNING_FLAGS)
+    string(APPEND CMAKE_CXX_FLAGS " ${VELOX_CLANG_WARNING_FLAGS}")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(VELOX_GCC_WARNING_FLAGS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CMake/GccWarningFlags.txt")
     file(STRINGS "${VELOX_GCC_WARNING_FLAGS_FILE}" VELOX_GCC_WARNING_FLAGS REGEX "^-")
