@@ -1360,6 +1360,54 @@ class PlanBuilder {
       int32_t dispatchBatchSize = 0,
       std::string executionPhase = "INLINE");
 
+  /// A Python function pythonCall() can call: its pickled code, result type,
+  /// and whether it is deterministic.
+  struct PythonFunction {
+    std::string pickledFunction;
+    TypePtr resultType;
+    bool deterministic{false};
+  };
+
+  /// Sets the Python environment pythonCall() runs functions in.
+  ///
+  /// @param environmentUri See core::PythonCallNode.
+  /// @param pythonVersion See core::PythonCallNode.
+  PlanBuilder& setPythonEnvironment(
+      std::string environmentUri,
+      std::string pythonVersion);
+
+  /// Add a PythonCallNode that evaluates Python functions on the input and
+  /// appends their results to the input columns, in the environment
+  /// setPythonEnvironment() set, e.g.
+  ///
+  ///   setPythonEnvironment("file:///usr/bin/python3", "3.12")
+  ///       .pythonCall(
+  ///           {{"len", {pickledLen, BIGINT()}}, {"str", {pickledStr,
+  ///           VARCHAR()}}},
+  ///           {"len(c0) AS n", "try(len(str(c1))) AS m"});
+  ///
+  /// @param registry The functions the calls can name, by name. Only the
+  /// functions the calls use go into the node.
+  /// @param calls SQL calls of functions in 'registry', each optionally
+  /// wrapped in try(). An alias names a call's result column, which defaults
+  /// to p<i> for the i-th call, as in project(). Arguments are input columns,
+  /// constants, or calls of other functions in 'registry'.
+  PlanBuilder& pythonCall(
+      const folly::F14FastMap<std::string, PythonFunction>& registry,
+      const std::vector<std::string>& calls);
+
+  /// Same as above, but drops input columns that are no longer needed once
+  /// the calls are evaluated, such as columns only the calls read. For
+  /// pythonCall(..., {"len(c0) AS n"}, {"n", "c1"}), the output is n and c1,
+  /// without c0.
+  ///
+  /// @param outputColumns The columns to output, in order: the calls' result
+  /// columns and the input columns to keep.
+  PlanBuilder& pythonCall(
+      const folly::F14FastMap<std::string, PythonFunction>& registry,
+      const std::vector<std::string>& calls,
+      const std::vector<std::string>& outputColumns);
+
   /// Add a PartitionedOutputNode to hash-partition the input on the specified
   /// keys using exec::HashPartitionFunction.
   ///
@@ -2016,6 +2064,9 @@ class PlanBuilder {
  protected:
   core::PlanNodePtr planNode_;
   parse::ParseOptions options_;
+  // The Python environment URI and version pythonCall() uses.
+  std::string pythonEnvironmentUri_;
+  std::string pythonVersion_;
   std::shared_ptr<TableScanBuilder> tableScanBuilder_;
   std::shared_ptr<IndexLookupJoinBuilder> indexLookupJoinBuilder_;
   std::shared_ptr<TableWriterBuilder> tableWriterBuilder_;

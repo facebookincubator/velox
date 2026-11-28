@@ -1355,6 +1355,17 @@ class QueryConfig {
       false,
       "Build a flat map when every map key is constant.")
 
+  /// Max number of input batches a PythonCall operator sends its worker ahead
+  /// of their results, so the worker computes one batch while the next is
+  /// sent. At least 1.
+  VELOX_QUERY_CONFIG(
+      kPythonCallMaxPendingBatches,
+      pythonCallMaxPendingBatches,
+      "python_call_max_pending_batches",
+      uint32_t,
+      2,
+      "Maximum input batches a Python call operator sends ahead of results.")
+
   /// Max number of input batches to prefetch for index lookup. 0 = disabled.
   VELOX_QUERY_CONFIG(
       kIndexLookupJoinMaxPrefetchBatches,

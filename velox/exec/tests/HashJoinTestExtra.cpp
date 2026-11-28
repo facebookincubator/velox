@@ -3822,8 +3822,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
             8);
         ASSERT_EQ(
             joinStats.operatorStatsFor("HashProbe")
-                .customStat(Operator::kExceededMaxSpillLevel)
-                .count,
+                .customCount(Operator::kExceededMaxSpillLevel),
             1);
         ASSERT_EQ(
             joinStats.operatorStatsFor("HashBuild")
@@ -3831,8 +3830,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, exceededMaxSpillLevel) {
             8);
         ASSERT_EQ(
             joinStats.operatorStatsFor("HashBuild")
-                .customStat(Operator::kExceededMaxSpillLevel)
-                .count,
+                .customCount(Operator::kExceededMaxSpillLevel),
             1);
       })
       .run();

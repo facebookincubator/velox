@@ -140,8 +140,7 @@ TEST_F(HashJoinWithCacheTest, sequential) {
   // The last driver that finishes building reports the cache miss stat.
   ASSERT_TRUE(hashBuildStats1.hasCustomStat(BaseHashTable::kHashTableCacheMiss))
       << "First task should report cache miss";
-  EXPECT_EQ(
-      hashBuildStats1.customStat(BaseHashTable::kHashTableCacheMiss).count, 1)
+  EXPECT_EQ(hashBuildStats1.customCount(BaseHashTable::kHashTableCacheMiss), 1)
       << "Exactly one driver should report cache miss (the one that builds)";
   EXPECT_FALSE(hashBuildStats1.hasCustomStat(BaseHashTable::kHashTableCacheHit))
       << "First task should not have any cache hits";
@@ -157,8 +156,7 @@ TEST_F(HashJoinWithCacheTest, sequential) {
   // The last driver that finishes reports the cache hit stat.
   ASSERT_TRUE(hashBuildStats2.hasCustomStat(BaseHashTable::kHashTableCacheHit))
       << "Second task should report cache hit";
-  EXPECT_EQ(
-      hashBuildStats2.customStat(BaseHashTable::kHashTableCacheHit).count, 1)
+  EXPECT_EQ(hashBuildStats2.customCount(BaseHashTable::kHashTableCacheHit), 1)
       << "Exactly one driver should report cache hit (the one after barrier)";
   EXPECT_FALSE(
       hashBuildStats2.hasCustomStat(BaseHashTable::kHashTableCacheMiss))
@@ -305,11 +303,11 @@ TEST_F(HashJoinWithCacheTest, concurrent) {
 
     if (hashBuildStats.hasCustomStat(BaseHashTable::kHashTableCacheMiss)) {
       totalCacheMisses +=
-          hashBuildStats.customStat(BaseHashTable::kHashTableCacheMiss).count;
+          hashBuildStats.customCount(BaseHashTable::kHashTableCacheMiss);
     }
     if (hashBuildStats.hasCustomStat(BaseHashTable::kHashTableCacheHit)) {
       totalCacheHits +=
-          hashBuildStats.customStat(BaseHashTable::kHashTableCacheHit).count;
+          hashBuildStats.customCount(BaseHashTable::kHashTableCacheHit);
     }
   }
 

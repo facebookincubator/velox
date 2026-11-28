@@ -161,7 +161,11 @@ class Connection:
 
     def end(self) -> None:
         self.send(worker.END, b"")
-        self.test.assertEqual(self.receive(), (worker.END, b""))
+        message_type, payload = self.receive()
+        self.test.assertEqual(message_type, worker.END)
+        stats = json.loads(payload)
+        self.test.assertGreater(stats["cpuSeconds"], 0)
+        self.test.assertGreater(stats["peakMemoryBytes"], 0)
         self.thread.join(timeout=10)
         self.test.assertEqual(self.status, 0)
 
@@ -690,6 +694,46 @@ class WorkerTest(unittest.TestCase):
         connection.start([Spec("unnamed", list, [0], pa.list_(pa.int32()))])
         result = connection.run_batch([unnamed_pairs(2)])
         self.assertEqual(results(result, 0), ([[1, 2], [1, 2]], [None, None]))
+        connection.end()
+
+    def test_run_end_encoded_arguments(self) -> None:
+        # A constant arrives as a run-end encoded column. Each run's value is
+        # repeated for its rows, a null run included, also in a slice. A
+        # value a function can change in place is converted for each row, so
+        # a change stays in its row.
+        def grow(value: Any) -> int:
+            value.append(0)
+            return len(value)
+
+        connection = self.connect()
+        connection.start(
+            [
+                Spec("identity", lambda value: value, [0], pa.int64()),
+                Spec("identity", lambda value: value, [1], pa.string()),
+                Spec("grow", grow, [2], pa.int64()),
+                Spec("grow", grow, [3], pa.int64()),
+            ]
+        )
+        result = connection.run_batch(
+            [
+                pa.RunEndEncodedArray.from_arrays(
+                    pa.array([2, 3, 5], pa.int32()), pa.array([7, None, 9])
+                ),
+                pa.RunEndEncodedArray.from_arrays(
+                    pa.array([2, 6], pa.int32()), pa.array(["a", "b"])
+                ).slice(1, 5),
+                pa.RunEndEncodedArray.from_arrays(
+                    pa.array([5], pa.int32()), pa.array([[1, 2]])
+                ),
+                pa.RunEndEncodedArray.from_arrays(
+                    pa.array([5], pa.int32()), pa.array([b"x"])
+                ),
+            ]
+        )
+        self.assertEqual(results(result, 0), ([7, 7, None, 9, 9], [None] * 5))
+        self.assertEqual(results(result, 1), (["a", "b", "b", "b", "b"], [None] * 5))
+        self.assertEqual(results(result, 2), ([3] * 5, [None] * 5))
+        self.assertEqual(results(result, 3), ([2] * 5, [None] * 5))
         connection.end()
 
     def test_timestamp_arguments(self) -> None:
@@ -1276,7 +1320,7 @@ class WorkerTest(unittest.TestCase):
         )
         self.assertEqual(worker.read_message(stream)[0], worker.READY)
         worker.write_message(stream, worker.END, b"")
-        self.assertEqual(worker.read_message(stream), (worker.END, b""))
+        self.assertEqual(worker.read_message(stream)[0], worker.END)
         thread.join(timeout=10)
         self.assertEqual(status, [0])
         stream.close()

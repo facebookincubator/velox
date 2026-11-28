@@ -1587,6 +1587,57 @@ TEST_F(PlanNodeSerdeTest, fixedPointDistributed) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, pythonCall) {
+  const auto plan =
+      PlanBuilder()
+          .values(data_)
+          .setPythonEnvironment("file:///usr/bin/python3", "3.12")
+          .pythonCall(
+              {
+                  {"len",
+                   {"cbuiltins\nlen\n.",
+                    BIGINT(),
+                    /*deterministic=*/false}},
+                  {"str",
+                   {"cbuiltins\nstr\n.",
+                    VARCHAR(),
+                    /*deterministic=*/true}},
+              },
+              {"str(c0) AS s", "try(len(str(c1))) AS n", "str(1) AS k"},
+              {"s", "n", "k", "c4"})
+          .planNode();
+  testSerde(plan);
+
+  // toString() leaves out the functions, which serde must keep: names,
+  // code and determinism. A function's own name may differ from its key.
+  const auto renamed = std::make_shared<core::PythonCallNode>(
+      "renamed",
+      "file:///usr/bin/python3",
+      "3.12",
+      folly::F14FastMap<std::string, core::PythonCallNode::Function>{
+          {"f", {"len", "cbuiltins\nlen\n.", /*deterministic=*/true}},
+          {"g", {"str", "cbuiltins\nstr\n.", /*deterministic=*/false}}},
+      std::vector<std::string>{"n"},
+      std::vector<core::CallTypedExprPtr>{std::make_shared<core::CallTypedExpr>(
+          BIGINT(),
+          "f",
+          std::make_shared<core::CallTypedExpr>(
+              VARCHAR(),
+              "g",
+              std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c0")))},
+      ROW("n", BIGINT()),
+      PlanBuilder().values(data_).planNode());
+  for (const auto& node : {plan, core::PlanNodePtr{renamed}}) {
+    const auto copy = std::dynamic_pointer_cast<const core::PythonCallNode>(
+        velox::ISerializable::deserialize<core::PlanNode>(
+            node->serialize(), pool()));
+    EXPECT_EQ(
+        copy->functions(),
+        std::dynamic_pointer_cast<const core::PythonCallNode>(node)
+            ->functions());
+  }
+}
+
 TEST_F(PlanNodeSerdeTest, rpcNode) {
   auto source = PlanBuilder()
                     .values({makeRowVector(

@@ -305,6 +305,34 @@ These stats are reported only by Merge operator
        produce the final output. This only applies when spilling is enabled for local
        merge.
 
+PythonCall
+----------
+These stats are reported only by PythonCall operator.
+
+.. list-table::
+   :widths: 50 25 50
+   :header-rows: 1
+
+   * - Stats
+     - Unit
+     - Description
+   * - pythonNumFunctions
+     -
+     - The number of distinct Python functions the worker runs. Each driver's worker reports it, so
+       the max, not the sum, is the node's count.
+   * - pythonUnpickleWallNanos
+     - nanos
+     - The time the worker took to unpickle the functions and the modules they import.
+   * - pythonFunctionWallNanos
+     - nanos
+     - The time the worker spent in the functions, per batch.
+   * - pythonWorkerCpuNanos
+     - nanos
+     - The CPU time of the worker process, user and system.
+   * - pythonWorkerPeakMemoryBytes
+     - bytes
+     - The peak resident memory of the worker process.
+
 Spilling
 --------
 These stats are reported by operators that support spilling.

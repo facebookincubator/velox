@@ -18,6 +18,7 @@
 #include "velox/common/Casts.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/core/PlanNode.h"
+#include "velox/expression/ExprConstants.h"
 
 #include "velox/common/EnumDefine.h"
 #include "velox/core/FixedPointPlanNodes.h"
@@ -4449,6 +4450,7 @@ void PlanNode::registerSerDe() {
   registry.Register("OrderByNode", OrderByNode::create);
   registry.Register("PartitionedOutputNode", PartitionedOutputNode::create);
   registry.Register("ProjectNode", ProjectNode::create);
+  registry.Register("PythonCallNode", PythonCallNode::create);
   registry.Register("ParallelProjectNode", ParallelProjectNode::create);
   registry.Register("RowNumberNode", RowNumberNode::create);
   registry.Register("SpatialJoinNode", SpatialJoinNode::create);
@@ -4870,6 +4872,235 @@ PlanNodePtr RPCNode::create(const folly::dynamic& obj, void* context) {
       dispatchBatchSize,
       obj.count("executionPhase") ? obj["executionPhase"].asString()
                                   : "INLINE");
+}
+
+namespace {
+
+// Checks that each input of 'call', at any depth, is a column of 'sourceType',
+// a constant, or a call of a function in 'functions', and that calls of one
+// function have one result type. Records in 'resultTypes' the functions
+// called.
+void checkPythonCall(
+    const CallTypedExpr& call,
+    const RowType& sourceType,
+    const folly::F14FastMap<std::string, PythonCallNode::Function>& functions,
+    folly::F14FastMap<std::string, TypePtr>& resultTypes) {
+  VELOX_USER_CHECK(
+      call.name() != expression::kTry,
+      "TRY must wrap a whole Python call, not an argument: {}",
+      call.toString());
+  VELOX_USER_CHECK(
+      functions.contains(call.name()),
+      "Python call must name a function of the node: {}",
+      call.name());
+  const auto [it, inserted] = resultTypes.emplace(call.name(), call.type());
+  VELOX_USER_CHECK(
+      inserted || it->second->equivalent(*call.type()),
+      "Python calls of one function must have one result type: {}",
+      call.name());
+  for (const auto& input : call.inputs()) {
+    if (input->isCallKind()) {
+      checkPythonCall(
+          *input->asUnchecked<CallTypedExpr>(),
+          sourceType,
+          functions,
+          resultTypes);
+      continue;
+    }
+    if (input->isConstantKind()) {
+      continue;
+    }
+    const auto field = TypedExprs::asFieldAccess(input);
+    VELOX_USER_CHECK_NOT_NULL(
+        field,
+        "Python call argument must be a column, a constant, or a Python call: {}",
+        input->toString());
+    VELOX_USER_CHECK(
+        field->isInputColumn(),
+        "Python call argument must be a column of the input: {}",
+        input->toString());
+    const auto index = sourceType.getChildIdxIfExists(field->name());
+    VELOX_USER_CHECK(
+        index.has_value(),
+        "Python call argument must be a column of the input: {}",
+        field->name());
+    VELOX_USER_CHECK(
+        sourceType.childAt(index.value())->equivalent(*field->type()),
+        "Python call argument type must match its column: {}",
+        field->name());
+  }
+}
+
+void checkPythonCallOutputType(
+    const RowType& outputType,
+    const RowType& sourceType,
+    const std::vector<std::string>& names,
+    const std::vector<CallTypedExprPtr>& calls) {
+  for (size_t i = 0; i < names.size(); ++i) {
+    const auto index = outputType.getChildIdxIfExists(names[i]);
+    VELOX_USER_CHECK(
+        index.has_value(),
+        "PythonCallNode output must have each call's column: {}",
+        names[i]);
+    VELOX_USER_CHECK(
+        outputType.childAt(index.value())->equivalent(*calls[i]->type()),
+        "PythonCallNode output column type must match its call: {}",
+        names[i]);
+  }
+  for (size_t i = 0; i < outputType.size(); ++i) {
+    const auto& name = outputType.nameOf(i);
+    if (std::find(names.begin(), names.end(), name) != names.end()) {
+      continue;
+    }
+    const auto index = sourceType.getChildIdxIfExists(name);
+    VELOX_USER_CHECK(
+        index.has_value(),
+        "PythonCallNode output column must be a call or an input column: {}",
+        name);
+    VELOX_USER_CHECK(
+        sourceType.childAt(index.value())->equivalent(*outputType.childAt(i)),
+        "PythonCallNode output column type must match its input column: {}",
+        name);
+  }
+}
+
+} // namespace
+
+PythonCallNode::PythonCallNode(
+    const PlanNodeId& id,
+    std::string environmentUri,
+    std::string pythonVersion,
+    folly::F14FastMap<std::string, Function> functions,
+    std::vector<std::string> names,
+    std::vector<CallTypedExprPtr> calls,
+    RowTypePtr outputType,
+    PlanNodePtr source)
+    : PlanNode(id),
+      environmentUri_{std::move(environmentUri)},
+      pythonVersion_{std::move(pythonVersion)},
+      functions_{std::move(functions)},
+      names_{std::move(names)},
+      calls_{std::move(calls)},
+      outputType_{std::move(outputType)},
+      sources_{std::move(source)} {
+  VELOX_USER_CHECK(!environmentUri_.empty(), "Python environment must be set");
+  VELOX_USER_CHECK(!pythonVersion_.empty(), "Python version must be set");
+  VELOX_USER_CHECK(!calls_.empty(), "PythonCallNode must have a call");
+  VELOX_USER_CHECK_EQ(
+      names_.size(),
+      calls_.size(),
+      "PythonCallNode must have one name per call");
+
+  const auto& sourceType = *sources_[0]->outputType();
+  folly::F14FastSet<std::string> uniqueNames;
+  for (const auto& name : names_) {
+    VELOX_USER_CHECK(
+        uniqueNames.insert(name).second,
+        "Python call names must be unique: {}",
+        name);
+    VELOX_USER_CHECK(
+        !sourceType.containsChild(name),
+        "Python call name must differ from the input's columns: {}",
+        name);
+  }
+
+  folly::F14FastMap<std::string, TypePtr> resultTypes;
+  for (const auto& call : calls_) {
+    VELOX_USER_CHECK_NOT_NULL(call, "Python call must be set");
+    if (call->name() == expression::kTry) {
+      VELOX_USER_CHECK_EQ(
+          call->inputs().size(), 1, "TRY must wrap one Python call");
+      const auto inner =
+          std::dynamic_pointer_cast<const CallTypedExpr>(call->inputs()[0]);
+      VELOX_USER_CHECK_NOT_NULL(inner, "TRY must wrap a Python call");
+      VELOX_USER_CHECK(
+          call->type()->equivalent(*inner->type()),
+          "TRY type must match its Python call: {}",
+          call->toString());
+      checkPythonCall(*inner, sourceType, functions_, resultTypes);
+    } else {
+      checkPythonCall(*call, sourceType, functions_, resultTypes);
+    }
+  }
+  for (const auto& [name, function] : functions_) {
+    VELOX_USER_CHECK_NE(
+        name,
+        expression::kTry,
+        "Python function must not be named try, which means TRY");
+    VELOX_USER_CHECK(
+        resultTypes.contains(name),
+        "Python function of the node must be called: {}",
+        name);
+    VELOX_USER_CHECK(
+        !function.name.empty(), "Python function must have a name: {}", name);
+    VELOX_USER_CHECK(
+        !function.pickledFunction.empty(),
+        "Python function must have pickled code: {}",
+        name);
+  }
+  checkPythonCallOutputType(*outputType_, sourceType, names_, calls_);
+}
+
+void PythonCallNode::addDetails(std::stringstream& stream) const {
+  stream << "environment: " << environmentUri_ << ", python " << pythonVersion_;
+  for (size_t i = 0; i < calls_.size(); ++i) {
+    stream << ", " << names_[i] << " := " << calls_[i]->toString();
+  }
+}
+
+folly::dynamic PythonCallNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["environmentUri"] = environmentUri_;
+  obj["pythonVersion"] = pythonVersion_;
+  folly::dynamic functions = folly::dynamic::object;
+  for (const auto& [name, function] : functions_) {
+    functions[name] = folly::dynamic::object("name", function.name)(
+        "pickledFunction", encoding::Base64::encode(function.pickledFunction))(
+        "deterministic", function.deterministic);
+  }
+  obj["functions"] = std::move(functions);
+  obj["names"] = ISerializable::serialize(names_);
+  folly::dynamic calls = folly::dynamic::array;
+  for (const auto& call : calls_) {
+    calls.push_back(call->serialize());
+  }
+  obj["calls"] = std::move(calls);
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+// static
+PlanNodePtr PythonCallNode::create(const folly::dynamic& obj, void* context) {
+  auto sources = ISerializable::deserialize<std::vector<PlanNode>>(
+      obj["sources"], context);
+  VELOX_CHECK_EQ(sources.size(), 1);
+  folly::F14FastMap<std::string, Function> functions;
+  for (const auto& [name, function] : obj["functions"].items()) {
+    functions.emplace(
+        name.asString(),
+        Function{
+            .name = function["name"].asString(),
+            .pickledFunction = encoding::Base64::decode(
+                function["pickledFunction"].asString()),
+            .deterministic = function["deterministic"].asBool(),
+        });
+  }
+  std::vector<CallTypedExprPtr> calls;
+  for (const auto& call : obj["calls"]) {
+    auto typedCall = std::dynamic_pointer_cast<const CallTypedExpr>(
+        ISerializable::deserialize<ITypedExpr>(call, context));
+    VELOX_CHECK_NOT_NULL(typedCall, "Python call must be a CallTypedExpr");
+    calls.push_back(std::move(typedCall));
+  }
+  return std::make_shared<PythonCallNode>(
+      obj["id"].asString(),
+      obj["environmentUri"].asString(),
+      obj["pythonVersion"].asString(),
+      std::move(functions),
+      ISerializable::deserialize<std::vector<std::string>>(obj["names"]),
+      std::move(calls),
+      ISerializable::deserialize<RowType>(obj["outputType"], context),
+      std::move(sources[0]));
 }
 
 } // namespace facebook::velox::core
