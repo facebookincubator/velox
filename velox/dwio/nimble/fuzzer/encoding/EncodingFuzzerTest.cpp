@@ -66,6 +66,7 @@
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/fuzzer/encoding/EncodingFuzzer.h"
+#include "velox/dwio/nimble/fuzzer/encoding/FsstDecodedLengthsFuzzer.h"
 
 DEFINE_uint32(fuzzer_iterations, 50, "Number of fuzzer iterations per test");
 DEFINE_uint32(fuzzer_max_rows, 5000, "Maximum rows per fuzzer iteration");
@@ -445,6 +446,83 @@ TEST(FsstFuzzerTest, correctness) {
         FLAGS_fuzzer_compression,
         options);
     fuzzer.run();
+  }
+}
+
+namespace {
+
+// Reads every row of an FSST encoding twice, since a read that fails must fail
+// again. Returns nullopt when the encoding is rejected.
+std::optional<std::vector<std::string>> readFsstEncodingTwice(
+    velox::memory::MemoryPool& pool,
+    std::string_view encoded,
+    uint32_t numRows,
+    const Encoding::Options& options) {
+  std::vector<velox::BufferPtr> stringBuffers;
+  const auto stringBufferFactory = [&](uint32_t totalLength) {
+    auto& buffer = stringBuffers.emplace_back(
+        velox::AlignedBuffer::allocate<char>(totalLength, &pool));
+    return buffer->asMutable<void>();
+  };
+  std::unique_ptr<FsstEncoding> encoding;
+  try {
+    encoding = std::make_unique<FsstEncoding>(
+        pool, encoded, stringBufferFactory, options);
+  } catch (const NimbleException&) {
+    return std::nullopt;
+  }
+  std::optional<std::vector<std::string>> results[2];
+  for (auto& result : results) {
+    encoding->reset();
+    std::vector<std::string_view> output(numRows);
+    try {
+      encoding->materialize(numRows, output.data());
+    } catch (const NimbleException&) {
+      continue;
+    }
+    result.emplace(output.begin(), output.end());
+  }
+  EXPECT_EQ(results[0], results[1]);
+  return results[0];
+}
+
+} // namespace
+
+TEST(FsstFuzzerTest, corruptedDecodedLengths) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "useVarint=" << useVarint);
+    Encoding::Options options{};
+    options.fsstCompressionTargetRatio = std::numeric_limits<double>::max();
+    options.useVarintRowCount = useVarint;
+    fuzzFsstDecodedLengths(
+        *pool,
+        FLAGS_fuzzer_seed,
+        FLAGS_fuzzer_iterations,
+        FLAGS_fuzzer_max_rows,
+        options,
+        [&](std::string_view encoded, uint32_t numRows) {
+          return readFsstEncodingTwice(*pool, encoded, numRows, options);
+        });
+  }
+}
+
+TEST(FsstFuzzerTest, corruptedCompressedLengths) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "useVarint=" << useVarint);
+    Encoding::Options options{};
+    options.fsstCompressionTargetRatio = std::numeric_limits<double>::max();
+    options.useVarintRowCount = useVarint;
+    fuzzFsstCompressedLengths(
+        *pool,
+        FLAGS_fuzzer_seed,
+        FLAGS_fuzzer_iterations,
+        FLAGS_fuzzer_max_rows,
+        options,
+        [&](std::string_view encoded, uint32_t numRows) {
+          return readFsstEncodingTwice(*pool, encoded, numRows, options);
+        });
   }
 }
 

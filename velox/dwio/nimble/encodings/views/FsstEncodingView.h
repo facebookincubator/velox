@@ -17,6 +17,7 @@
 
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
+#include <folly/synchronization/CallOnce.h>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -124,6 +125,14 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   //
   // TODO: Retune with a benchmark that reads the same rows more than once.
   static constexpr uint32_t kMinRowsToDecodeChunk = kRowsPerChunk / 4;
+
+  // decodeRanges() decodes rows with the decoded lengths, which it reads for
+  // every row of the view, only if its ranges hold at least one over this many
+  // of the view's rows, or if an earlier read has read them. A view of a take
+  // is new for each take.
+  //
+  // TODO: Retune with a benchmark.
+  static constexpr uint32_t kMinRowsFractionForDecodedLengths = 8;
   static constexpr size_t kMaxSymbolLength = 8;
 
   struct DecodedChunk;
@@ -142,10 +151,22 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
       std::span<const uint32_t> indices,
       std::string_view* output) const final;
 
-  // Reads the length of every row once and keeps the compressed offset of every
-  // row, so that reads decode chunks of rows. Checks every length against the
-  // blob.
-  void initializeCached(std::string_view encodedLengths);
+  // Reads the compressed length of every row and keeps the compressed offset of
+  // every row, so that reads decode chunks of rows. Checks every length against
+  // the blob. A cached view does this once, in its first read, so a view that
+  // no read uses costs nothing, and the lengths of a cached view fail in its
+  // first read, not when the view is created.
+  void ensureCompressedLengths() const;
+
+  // Reads the decoded length of every row, once, in the first decode of a
+  // chunk.
+  void ensureDecodedLengths() const;
+
+  // Validates the decoded length of each of the rows 'firstRow' to 'endRow' of
+  // a cached view against the compressed length of its row, with
+  // FsstEncoding::validateDecodedLength(), and returns the number of decoded
+  // bytes of the rows. The view must have read its decoded lengths.
+  size_t getDecodedLengths(uint32_t firstRow, uint32_t endRow) const;
 
   // Keeps the lengths stream as a view and decodes only the strings that reads
   // ask for, which skips the validation of every length that a cached view
@@ -175,6 +196,14 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // bytes before it decodes the rows, so that its buffer holds no more than
   // their strings take.
   size_t decodedBytes(uint32_t startRow, uint32_t endRow) const;
+
+  // Returns the compressed bytes of the strings of the rows 'firstRow' to
+  // 'endRow' of a cached view, one after another.
+  std::string_view compressedValues(uint32_t firstRow, uint32_t endRow) const {
+    return {
+        blob_.data() + compressedOffsets_[firstRow],
+        compressedOffsets_[endRow] - compressedOffsets_[firstRow]};
+  }
 
   // Decodes the string of 'row' alone from its compressed bytes, which start
   // at 'compressedBegin', for a read without cacheEncodingView or a read of a
@@ -249,8 +278,9 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // Decodes the chunks 'chunkIndices' into one region, which they share, and
   // builds the offsets of each into it. chunkForRead() decodes one chunk with
   // it, and prepareChunks() several. Reserves room for all their strings
-  // first with reserveDecodeBuffer(), so that the region never moves.
-  // 'chunkIndices' must not be empty.
+  // first, so that the region never moves: exactly the bytes that they decode
+  // to when the encoding has decoded lengths, and else with
+  // reserveDecodeBuffer(). 'chunkIndices' must not be empty.
   std::vector<std::shared_ptr<DecodedChunk>> decodeChunks(
       std::span<const uint32_t> chunkIndices) const;
 
@@ -266,12 +296,15 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // Reads the rows of 'ranges' of a cached view for a read given an
   // addStringBuffer. Takes the rows of each chunk that 'chunks' holds from
   // it, and decodes every other row straight into 'output', in a region of
-  // buffers from makeBulkStringDecoder(), and caches nothing. 'chunks' is
-  // empty, or holds the decoded chunk or null for each chunk from the first
-  // that the ranges span. Passes the buffers of the chunks it read from and of
-  // the region that hold its strings to 'addStringBuffer', each once. Without
-  // shared buffers, reserves exactly the bytes that its strings decode to
-  // first. 'ranges' must be checked and not empty.
+  // buffers from makeBulkStringDecoder(), and caches nothing. The rows of a
+  // range in one chunk are decoded together, with one call, when the encoding
+  // has decoded lengths and the ranges hold enough rows of the view to read
+  // them, and one string at a time otherwise. 'chunks' is empty, or holds the
+  // decoded chunk or null for each chunk from the first that the ranges span.
+  // Passes the buffers of the chunks it read from and of the region that hold
+  // its strings to 'addStringBuffer', each once. Without shared buffers,
+  // reserves exactly the bytes that its strings decode to first. 'ranges' must
+  // be checked and not empty.
   void decodeRanges(
       std::span<const RowRange> ranges,
       std::span<const std::shared_ptr<const DecodedChunk>> chunks,
@@ -334,8 +367,31 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // Compressed string payload, either borrowed from input or pool-owned.
   std::string_view blob_;
 
-  // Prefix sums mapping row indices to byte offsets in blob_.
-  std::vector<size_t> compressedOffsets_;
+  // The nested encodings of the compressed and of the decoded lengths. Both are
+  // empty for a view without caching, and the decoded lengths are empty for an
+  // encoding without them, which decodeChunks() decodes one string at a time.
+  // Neither is read when the view is created, and a take that reads few rows of
+  // each chunk decodes no chunk, so it would pay for the decoded lengths of
+  // every row.
+  std::string_view encodedLengths_;
+  std::string_view encodedDecodedLengths_;
+
+  // Set by ensureCompressedLengths(), which every read of a cached view calls
+  // first.
+  mutable folly::once_flag compressedLengthsRead_;
+
+  // Prefix sums mapping row indices to byte offsets in blob_. Read once, under
+  // compressedLengthsRead_.
+  mutable std::vector<size_t> compressedOffsets_;
+
+  // Set by ensureDecodedLengths(), which the first decodeChunks() of an
+  // encoding with decoded lengths calls.
+  mutable folly::once_flag decodedLengthsRead_;
+
+  // The decoded length of each row, which lets decodeChunks() reserve the bytes
+  // of the strings of chunks exactly and decode each chunk with one call. Read
+  // once, under decodedLengthsRead_.
+  mutable std::vector<uint32_t> decodedLengths_;
 
   // TODO: Limit the number of chunks cached by each FSST view.
   // Lazily decoded chunks indexed by chunk number and shared across readers.
@@ -343,8 +399,9 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
       decodedChunks_;
 
   // Counts, for each chunk, the rows that reads asked for while the chunk was
-  // not decoded, which they decoded themselves. Set only for cached views.
-  std::unique_ptr<std::atomic_uint32_t[]> rowsReadAlone_;
+  // not decoded, which they decoded themselves. Set only for cached views,
+  // under compressedLengthsRead_.
+  mutable std::unique_ptr<std::atomic_uint32_t[]> rowsReadAlone_;
 
   // Reads the compressed length of one row at a time. Set only for single
   // access, which keeps no offsets and no chunks.

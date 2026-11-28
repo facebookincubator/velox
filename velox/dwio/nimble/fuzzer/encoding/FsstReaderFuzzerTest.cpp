@@ -19,6 +19,7 @@
 
 #include <folly/Random.h>
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <random>
@@ -135,11 +136,15 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
   EncodingLayoutTree layout(bool ordinary, CompressionType compressionType) {
     const EncodingLayout trivial{
         EncodingType::Trivial, {}, CompressionType::Uncompressed};
+    std::vector<std::optional<const EncodingLayout>> stringChildren{trivial};
+    if (!ordinary) {
+      stringChildren.emplace_back(trivial);
+    }
     EncodingLayout strings{
         ordinary ? EncodingType::Trivial : EncodingType::Fsst,
         {},
         compressionType,
-        {trivial}};
+        std::move(stringChildren)};
     const auto valueLayout = [&] {
       if (!ordinary && GetParam()) {
         return EncodingLayout{
@@ -282,10 +287,11 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
 
   using Result = std::vector<std::pair<int64_t, std::optional<std::string>>>;
 
+  // Reads without a filter on the value column when 'predicate' is null.
   Result read(
       std::string_view file,
       const RowTypePtr& type,
-      const Predicate& predicate,
+      const Predicate* predicate,
       bool project,
       bool sparse,
       bool cache,
@@ -295,7 +301,9 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
     auto spec = std::make_shared<dwio::common::ScanSpec>("root");
     spec->addField("id", 0);
     auto* value = spec->getOrCreateChild("value");
-    value->setFilter(predicate.filter());
+    if (predicate != nullptr) {
+      value->setFilter(predicate->filter());
+    }
     value->setProjectOut(project);
     if (project) {
       value->setChannel(1);
@@ -344,6 +352,9 @@ class FsstReaderFuzzerTest : public ::testing::TestWithParam<bool> {
   }
 
   void runFilteredReads(CompressionType compressionType);
+
+  // Overwrites the decoded lengths of FSST chunks in a written file.
+  void runCorruptedDecodedLengths();
 
   // Owns memory used to write and read the test files.
   std::shared_ptr<memory::MemoryPool> rootPool_ =
@@ -476,7 +487,7 @@ void FsstReaderFuzzerTest::runFilteredReads(CompressionType compressionType) {
           read(
               fsstFile,
               type,
-              predicate,
+              &predicate,
               project,
               sparse,
               cache,
@@ -489,7 +500,7 @@ void FsstReaderFuzzerTest::runFilteredReads(CompressionType compressionType) {
         read(
             ordinaryFile,
             type,
-            predicate,
+            &predicate,
             project,
             sparse,
             false,
@@ -515,6 +526,166 @@ TEST_P(
     runFilteredReads(compressionType);
     ASSERT_FALSE(HasFatalFailure());
   }
+}
+
+// Overwrites the decoded lengths of one FSST chunk in a written file, in place,
+// and reads every row of the file with the selective reader. A read must throw
+// when a length cannot belong to its compressed string or the lengths of the
+// chunk do not add up to the decoded bytes. A read that does not throw may only
+// cut the decoded bytes in other places: its strings have the lengths in the
+// file, and their bytes joined are the original ones.
+void FsstReaderFuzzerTest::runCorruptedDecodedLengths() {
+  const auto seed = FLAGS_fsst_reader_seed == 0 ? folly::Random::rand32()
+                                                : FLAGS_fsst_reader_seed;
+  LOG(INFO) << "FSST reader decoded lengths fuzzer seed=" << seed;
+  std::mt19937 rng(seed);
+  velox::test::VectorMaker maker{pool_.get()};
+  uint32_t numRejected{0};
+  for (uint32_t iteration = 0; iteration < FLAGS_fsst_reader_iterations;
+       ++iteration) {
+    SCOPED_TRACE(
+        ::testing::Message() << "seed=" << seed << " iteration=" << iteration);
+    Buffer stringsBuffer(*pool_);
+    std::vector<VectorPtr> batches;
+    std::vector<std::vector<uint32_t>> chunkLengths;
+    std::vector<std::string> source;
+    const auto chunkRows =
+        std::max<uint32_t>(32, 1 + rng() % FLAGS_fsst_reader_max_rows);
+    for (uint32_t chunk = 0; chunk < 3; ++chunk) {
+      auto data = makeFsstData(*pool_, rng, chunkRows, &stringsBuffer, false);
+      std::vector<int64_t> ids;
+      std::vector<int64_t> gates;
+      std::vector<std::optional<std::string>> values;
+      chunkLengths.emplace_back();
+      for (uint32_t i = 0; i < chunkRows; ++i) {
+        ids.push_back(static_cast<int64_t>(source.size()));
+        gates.push_back(1);
+        values.emplace_back(std::string(data[i]));
+        chunkLengths.back().push_back(static_cast<uint32_t>(data[i].size()));
+        source.emplace_back(data[i]);
+      }
+      batches.push_back(maker.rowVector(
+          {"id", "value", "gate"},
+          {maker.flatVector(ids),
+           maker.flatVectorNullable(values),
+           maker.flatVector(gates)}));
+    }
+    const auto type = asRowType(batches[0]->type());
+    const auto file = write(batches, false, CompressionType::Uncompressed);
+
+    // The decoded lengths of a chunk are stored as the raw values of a Trivial
+    // encoding, so they are in the file as one run of bytes.
+    std::vector<size_t> offsets;
+    for (const auto& lengths : chunkLengths) {
+      const std::string bytes(
+          reinterpret_cast<const char*>(lengths.data()),
+          lengths.size() * sizeof(uint32_t));
+      const auto offset = file.find(bytes);
+      ASSERT_NE(offset, std::string::npos);
+      ASSERT_EQ(file.find(bytes, offset + 1), std::string::npos);
+      offsets.push_back(offset);
+    }
+
+    const bool preserve = iteration % 2;
+    const bool fastPath = (iteration / 2) % 2;
+    const uint32_t batchSize = iteration % 3 == 0 ? 1 : chunkRows * 3;
+    const auto readAll = [&](const std::string& contents) {
+      return read(
+          contents,
+          type,
+          /*predicate=*/nullptr,
+          /*project=*/true,
+          /*sparse=*/false,
+          /*cache=*/false,
+          preserve,
+          fastPath,
+          batchSize);
+    };
+
+    {
+      Result expected;
+      for (size_t row = 0; row < source.size(); ++row) {
+        expected.emplace_back(row, source[row]);
+      }
+      ASSERT_EQ(readAll(file), expected);
+    }
+
+    std::string originalBytes;
+    for (const auto& value : source) {
+      originalBytes.append(value);
+    }
+    for (uint32_t trial = 0; trial < 6; ++trial) {
+      const auto chunk = rng() % chunkLengths.size();
+      auto lengths = chunkLengths[chunk];
+      const auto row = rng() % lengths.size();
+      switch (rng() % 6) {
+        case 0:
+          lengths[row] += 1;
+          break;
+        case 1:
+          lengths[row] = lengths[row] > 0 ? lengths[row] - 1 : 2;
+          break;
+        case 2:
+          lengths[row] = 0;
+          break;
+        case 3:
+          lengths[row] = std::numeric_limits<uint32_t>::max();
+          break;
+        case 4:
+          std::swap(lengths[row], lengths[rng() % lengths.size()]);
+          break;
+        default:
+          std::shuffle(lengths.begin(), lengths.end(), rng);
+          break;
+      }
+      std::string corrupted = file;
+      std::memcpy(
+          corrupted.data() + offsets[chunk],
+          lengths.data(),
+          lengths.size() * sizeof(uint32_t));
+      std::vector<uint32_t> fileLengths;
+      for (size_t c = 0; c < chunkLengths.size(); ++c) {
+        fileLengths.insert(
+            fileLengths.end(),
+            c == static_cast<size_t>(chunk) ? lengths.begin()
+                                            : chunkLengths[c].begin(),
+            c == static_cast<size_t>(chunk) ? lengths.end()
+                                            : chunkLengths[c].end());
+      }
+
+      SCOPED_TRACE(
+          ::testing::Message()
+          << "trial=" << trial << " chunk=" << chunk << " row=" << row);
+      Result actual;
+      try {
+        actual = readAll(corrupted);
+      } catch (const std::exception& e) {
+        numRejected += std::string_view(e.what()).find("FSST decoded") !=
+            std::string_view::npos;
+        continue;
+      }
+      ASSERT_EQ(actual.size(), source.size());
+      std::string joined;
+      for (size_t i = 0; i < actual.size(); ++i) {
+        ASSERT_TRUE(actual[i].second.has_value());
+        EXPECT_EQ(actual[i].second->size(), fileLengths[i]) << "row " << i;
+        joined.append(*actual[i].second);
+      }
+      EXPECT_EQ(joined, originalBytes);
+    }
+  }
+
+  // Some of the overwritten lengths must have reached the FSST decoding, and
+  // not been stopped before, for example by a checksum.
+  EXPECT_GT(numRejected, 0);
+}
+
+TEST_P(FsstReaderFuzzerTest, corruptedDecodedLengths) {
+  if (GetParam()) {
+    GTEST_SKIP() << "A dictionary keeps the decoded lengths of its alphabet, "
+                    "which its rows do not follow.";
+  }
+  runCorruptedDecodedLengths();
 }
 
 INSTANTIATE_TEST_SUITE_P(FsstLayouts, FsstReaderFuzzerTest, ::testing::Bool());
