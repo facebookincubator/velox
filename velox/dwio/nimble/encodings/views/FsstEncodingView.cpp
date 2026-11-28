@@ -330,28 +330,32 @@ uint32_t FsstEncodingView::read(
     return numRows;
   }
 
-  // Returns whether a chunk that the ranges ask for rows of is decoded, so
-  // that the read takes the strings of those rows from the chunk.
-  const auto spansDecodedChunk = [&] {
-    const auto chunks = decodedChunks_.rlock();
-    for (const auto& range : ranges) {
-      for (auto chunkIndex = rowChunk(range.startRow);
-           chunkIndex <= rowChunk(range.endRow - 1);
-           ++chunkIndex) {
-        if ((*chunks)[chunkIndex] != nullptr) {
-          return true;
-        }
+  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
+  const auto lastChunkIndex = rowChunk(ranges.back().endRow - 1);
+  if (addStringBuffer != nullptr) {
+    // Takes the rows of the chunks that are decoded already from them, and
+    // neither decodes nor caches a chunk, so that what the read keeps does not
+    // depend on earlier reads.
+    std::vector<std::shared_ptr<const DecodedChunk>> chunks(
+        lastChunkIndex - firstChunkIndex + 1);
+    bool anyChunkDecoded{false};
+    {
+      const auto decodedChunks = decodedChunks_.rlock();
+      for (uint32_t i{0}; i < chunks.size(); ++i) {
+        chunks[i] = (*decodedChunks)[firstChunkIndex + i];
+        anyChunkDecoded |= chunks[i] != nullptr;
       }
     }
-    return false;
-  };
-  if (addStringBuffer != nullptr && !spansDecodedChunk()) {
-    decodeRanges(ranges, /*chunks=*/{}, addStringBuffer, values);
+    decodeRanges(
+        ranges,
+        anyChunkDecoded
+            ? std::span<const std::shared_ptr<const DecodedChunk>>{chunks}
+            : std::span<const std::shared_ptr<const DecodedChunk>>{},
+        addStringBuffer,
+        values);
     return numRows;
   }
 
-  const auto firstChunkIndex = rowChunk(ranges.front().startRow);
-  const auto lastChunkIndex = rowChunk(ranges.back().endRow - 1);
   ScopedVector<uint32_t> numChunkRows{
       lastChunkIndex - firstChunkIndex + 1,
       this->pool_,
@@ -368,19 +372,6 @@ uint32_t FsstEncodingView::read(
     }
   }
   prepareChunks(firstChunkIndex, {numChunkRows.data(), numChunkRows.size()});
-  if (addStringBuffer != nullptr) {
-    // Decides for each chunk once, as the loop below does, whether the read
-    // takes its rows from the chunk.
-    std::vector<std::shared_ptr<const DecodedChunk>> chunks(
-        numChunkRows.size());
-    for (uint32_t i{0}; i < numChunkRows.size(); ++i) {
-      if (numChunkRows[i] > 0) {
-        chunks[i] = chunkForRead(firstChunkIndex + i, numChunkRows[i]);
-      }
-    }
-    decodeRanges(ranges, chunks, addStringBuffer, values);
-    return numRows;
-  }
 
   // The rows of the current chunk that the read decodes alone, as one batch.
   // decodeRowBatch() decodes them under one lock when the read leaves the

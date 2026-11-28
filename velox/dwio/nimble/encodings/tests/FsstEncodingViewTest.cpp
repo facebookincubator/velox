@@ -791,9 +791,10 @@ TEST_P(
   view->read(1'024, 1'024, chunk.data());
 
   // A read that spans the decoded chunk takes the strings of its rows from it,
-  // decodes chunk 0, of which it asks for every row, and decodes the few rows
-  // of chunk 2 that it asks for into a buffer of its own, instead of into the
-  // view itself. It passes the buffers of the chunks and of its rows.
+  // and decodes the rows of chunks 0 and 2 that it asks for into a buffer of
+  // its own, instead of into the view itself, without decoding chunk 0, of
+  // which it asks for every row. It passes the buffers of chunk 1 and of its
+  // other rows.
   const std::array<RowRange, 2> ranges{
       RowRange{0, 2'048}, RowRange{2'100, 2'104}};
   std::vector<std::string_view> output(2'052);
@@ -812,15 +813,14 @@ TEST_P(
     return;
   }
 
-  // The buffers of chunks 0 and 1, which two reads decoded, then the region.
-  EXPECT_EQ(addedBuffers.size(), 3);
+  // The buffer of chunk 1, then the region.
+  EXPECT_EQ(addedBuffers.size(), 2);
   for (uint32_t i = 0; i < chunk.size(); ++i) {
     EXPECT_EQ(output[1'024 + i].data(), chunk[i].data()) << "row " << 1'024 + i;
   }
 
-  // The rows of chunk 2 lie in the region, in neither chunk buffer: a read
-  // of chunks 0 and 1 alone takes their rows from the decoded chunks and
-  // passes only the chunk buffers.
+  // The read cached no chunk: a second read of chunks 0 and 1 takes the rows
+  // of chunk 1 from the same chunk, and decodes those of chunk 0 again.
   std::vector<std::string_view> chunks(2'048);
   std::vector<velox::BufferPtr> chunkBuffers;
   view->read(
@@ -828,9 +828,10 @@ TEST_P(
       [](uint32_t) {},
       appendTo(chunkBuffers),
       chunks.data());
+  EXPECT_TRUE(std::equal(chunks.begin(), chunks.end(), values.begin()));
   EXPECT_TRUE(liesIn(chunks, chunkBuffers));
-  EXPECT_TRUE(liesIn(std::span{output}.first(2'048), chunkBuffers));
-  EXPECT_FALSE(liesIn(std::span{output}.subspan(2'048), chunkBuffers));
+  EXPECT_TRUE(liesIn(std::span{output}.subspan(1'024, 1'024), chunkBuffers));
+  EXPECT_FALSE(liesIn(std::span{output}.first(1'024), chunkBuffers));
 }
 
 TEST_P(FsstEncodingViewTest, readWithAddStringBufferPassesEachChunkBufferOnce) {
