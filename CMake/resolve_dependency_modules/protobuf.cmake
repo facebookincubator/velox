@@ -13,10 +13,10 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_PROTOBUF_BUILD_VERSION 21.8)
+set(VELOX_PROTOBUF_BUILD_VERSION 35.1)
 set(
   VELOX_PROTOBUF_BUILD_SHA256_CHECKSUM
-  83ad4faf95ff9cbece7cb9c56eb3ca9e42c3497b77001840ab616982c6269fb6
+  22775f9376938295efa2d59a59bde4cd075a42df5a9b4d27aa9b99fa6a413bd2
 )
 if(${VELOX_PROTOBUF_BUILD_VERSION} LESS 22.0)
   string(
@@ -27,7 +27,10 @@ if(${VELOX_PROTOBUF_BUILD_VERSION} LESS 22.0)
   )
 else()
   velox_set_source(absl)
-  velox_resolve_dependency(absl CONFIG REQUIRED)
+  # Protobuf 35 needs the Abseil release pinned in scripts/setup-versions.sh.
+  # Abseil's package config only accepts an exact version match, so an older
+  # system Abseil is rejected and AUTO builds the bundled one.
+  velox_resolve_dependency(absl 20250512 CONFIG REQUIRED)
   string(
     CONCAT
     VELOX_PROTOBUF_SOURCE_URL
@@ -51,5 +54,9 @@ FetchContent_Declare(
 
 set(protobuf_BUILD_TESTS OFF)
 set(protobuf_ABSL_PROVIDER "package")
+# With a shared libvelox, a static libprotobuf would be linked into both the
+# library and each executable, giving the process two copies of Protobuf's
+# arena runtime.
+set(protobuf_BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 FetchContent_MakeAvailable(protobuf)
 set(Protobuf_INCLUDE_DIRS ${protobuf_SOURCE_DIR}/src)

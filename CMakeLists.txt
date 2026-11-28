@@ -731,9 +731,24 @@ if(
   OR VELOX_ENABLE_GCS
   OR VELOX_ENABLE_NIMBLE
 )
-  # Locate or build protobuf.
+  # Locate or build protobuf. Use CONFIG mode so Protobuf's own
+  # protobuf-config.cmake declares the transitive dependencies that
+  # Protobuf 22+ introduced (utf8_range, expanded Abseil components).
+  # The CMake FindProtobuf.cmake module predates these and does not
+  # propagate them, leading to unresolved utf8_range / absl symbols
+  # when statically linking libprotobuf.a.
+  #
+  # The requested version is the Protobuf C++ runtime major (7), not
+  # the product version (35.1). protobuf-config-version.cmake installed
+  # by Protobuf 22+ requires PACKAGE_FIND_VERSION_MAJOR to equal the
+  # runtime major; requesting "35.1" is rejected (35 != 7) even though
+  # the installed PACKAGE_VERSION is reported as "35.1.0". Requesting
+  # "7" matches the runtime line Christian documents in
+  # facebookincubator/velox#19467 (Protobuf 35.1 = C++ 7.x runtime,
+  # which is what Meta is using internally per @kgpai) and continues
+  # to accept any Protobuf whose runtime is 7.x.
   velox_set_source(Protobuf)
-  velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
+  velox_resolve_dependency(Protobuf 7 CONFIG REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
@@ -754,9 +769,11 @@ velox_set_source(folly)
 velox_resolve_dependency(folly)
 
 if(${VELOX_BUILD_TESTING})
-  # Spark query runner depends on absl, gRPC.
+  # Spark query runner depends on absl, gRPC. The versions match
+  # scripts/setup-versions.sh so that, in AUTO mode, older system installs are
+  # rejected and the bundled versions are built.
   velox_set_source(absl)
-  velox_resolve_dependency(absl)
+  velox_resolve_dependency(absl 20250512 CONFIG)
 
   # 'gRPC_CARES_PROVIDER' is set as 'package', which means c-ares library needs
   # to be installed on the system, instead of being built by gRPC.
@@ -764,7 +781,7 @@ if(${VELOX_BUILD_TESTING})
   velox_resolve_dependency(c-ares)
 
   velox_set_source(gRPC)
-  velox_resolve_dependency(gRPC)
+  velox_resolve_dependency(gRPC 1.83.0 CONFIG)
 endif()
 
 # FBThrift is required by remote functions and LocalRunnerService.
@@ -808,7 +825,7 @@ endif()
 
 if(VELOX_ENABLE_GCS)
   velox_set_source(google_cloud_cpp_storage)
-  velox_resolve_dependency(google_cloud_cpp_storage CONFIG 2.22.0 REQUIRED)
+  velox_resolve_dependency(google_cloud_cpp_storage CONFIG 3.11.0 REQUIRED)
   add_definitions(-DVELOX_ENABLE_GCS)
 endif()
 
