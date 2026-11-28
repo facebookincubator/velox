@@ -2218,8 +2218,15 @@ TYPED_TEST(
     materializeIndicesMainlyConstantDictionaryFuzz) {
   using T = TypeParam;
 
-  for (int run = 0; run < 20; ++run) {
-    auto seed = folly::Random::rand32();
+  // Seeds that previously triggered a failure are replayed first as fixed
+  // regressions; afterwards a single random seed is drawn per process. Drive
+  // repetition with `--stress-runs N`, never an in-process loop.
+  //   - 1946294065: the generator's intended common value (42 of 86 rows)
+  //     came out less frequent than the other value (44), so the encoding
+  //     made the other value its common one.
+  static constexpr std::array<uint32_t, 1> kRegressionSeeds{1946294065u};
+
+  auto runOneSeed = [this](uint32_t seed) {
     std::mt19937 rng(seed);
     const auto numRows = 50 + rng() % 500;
     const auto cardinality = 2 + rng() % 50;
@@ -2261,11 +2268,15 @@ TYPED_TEST(
       }
     }
 
-    SCOPED_TRACE(fmt::format("run={} seed={} numRows={}", run, seed, numRows));
+    SCOPED_TRACE(fmt::format("seed={} numRows={}", seed, numRows));
 
     auto encoding = this->encodeMainlyConstantDictionary(data);
     ASSERT_TRUE(encoding->dictionaryEnabled());
     const uint32_t commonValueIndex = encoding->dictionarySize() - 1;
+    // The encoding's common value is the most frequent value, which the draw
+    // above does not guarantee is the one it favored.
+    const T encodedCommonValue =
+        *static_cast<const T*>(encoding->dictionaryEntry(commonValueIndex));
 
     nimble::Vector<uint32_t> indices{
         this->pool_.get(), static_cast<uint32_t>(numRows)};
@@ -2278,11 +2289,16 @@ TYPED_TEST(
       EXPECT_EQ(*entry, data[i]) << "row=" << i;
 
       // Common-value rows must map to the last alphabet entry.
-      if (data[i] == commonValue) {
+      if (data[i] == encodedCommonValue) {
         EXPECT_EQ(indices[i], commonValueIndex) << "row=" << i;
       }
     }
+  };
+
+  for (const uint32_t seed : kRegressionSeeds) {
+    runOneSeed(seed);
   }
+  runOneSeed(folly::Random::rand32());
 }
 
 TYPED_TEST(DictionaryApiTypedTest, rleDictionaryBasics) {
