@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/exec/ArrowStream.h"
+
+#include <folly/String.h>
+
 #include "velox/exec/OperatorType.h"
 #include "velox/vector/arrow/Bridge.h"
 
@@ -37,14 +40,17 @@ ArrowStream::~ArrowStream() {
 }
 
 RowVectorPtr ArrowStream::getOutput() {
-  // Get Arrow array.
-  struct ArrowArray arrowArray;
-  if (arrowStream_->get_next(arrowStream_.get(), &arrowArray)) {
+  // Get Arrow array. Zero-initialize it, and the schema below, because a
+  // producer may return an error without writing to its output.
+  struct ArrowArray arrowArray{};
+  if (const int errorCode =
+          arrowStream_->get_next(arrowStream_.get(), &arrowArray);
+      errorCode != 0) {
     if (arrowArray.release) {
       arrowArray.release(&arrowArray);
     }
     VELOX_FAIL(
-        "Failed to call get_next on ArrowStream: {}", std::string(getError()));
+        "Failed to call get_next on ArrowStream: {}", getError(errorCode));
   }
   if (arrowArray.release == nullptr) {
     // End of Stream.
@@ -53,8 +59,10 @@ RowVectorPtr ArrowStream::getOutput() {
   }
 
   // Get Arrow schema.
-  struct ArrowSchema arrowSchema;
-  if (arrowStream_->get_schema(arrowStream_.get(), &arrowSchema)) {
+  struct ArrowSchema arrowSchema{};
+  if (const int errorCode =
+          arrowStream_->get_schema(arrowStream_.get(), &arrowSchema);
+      errorCode != 0) {
     if (arrowSchema.release) {
       arrowSchema.release(&arrowSchema);
     }
@@ -62,8 +70,7 @@ RowVectorPtr ArrowStream::getOutput() {
       arrowArray.release(&arrowArray);
     }
     VELOX_FAIL(
-        "Failed to call get_schema on ArrowStream: {}",
-        std::string(getError()));
+        "Failed to call get_schema on ArrowStream: {}", getError(errorCode));
   }
 
   // Convert Arrow Array into RowVector and return.
@@ -75,9 +82,11 @@ bool ArrowStream::isFinished() {
   return finished_;
 }
 
-const char* ArrowStream::getError() const {
+std::string ArrowStream::getError(int errorCode) const {
   const char* lastError = arrowStream_->get_last_error(arrowStream_.get());
-  VELOX_CHECK_NOT_NULL(lastError);
+  if (lastError == nullptr) {
+    return folly::errnoStr(errorCode);
+  }
   return lastError;
 }
 
