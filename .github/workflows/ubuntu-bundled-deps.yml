@@ -125,4 +125,19 @@ jobs:
 
       - name: Run Tests
         run: |
-          cd _build/debug && ctest -j 8 --output-on-failure --no-tests=error
+          cd _build/debug
+          status=0
+          ctest -j 8 --output-on-failure --no-tests=error || status=$?
+          if [ "$status" -ne 0 ]; then
+            # gtest captures stderr in a temp file during a death test. A test
+            # binary that aborts before the death test ends leaves the file
+            # behind, with the reason for the abort.
+            for file in "${TEST_TMPDIR:-${TMPDIR:-/tmp}}"/gtest_captured_stream.*; do
+              [ -f "$file" ] || continue
+              echo "== $file"
+              tail -n 200 "$file"
+              echo "== Fatal lines in $file"
+              grep -E '\[FATAL\]|CHECK failed|terminate called' "$file" || true
+            done
+          fi
+          exit "$status"
