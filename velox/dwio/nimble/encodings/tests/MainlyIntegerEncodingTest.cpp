@@ -472,6 +472,36 @@ TEST_F(MainlyIntegerEncodingTest, integerStringsRoundTrip) {
   checkStrings(encodeStrings(mixed), mixed);
 }
 
+TEST_F(MainlyIntegerEncodingTest, integerStringsAtDigitBoundaries) {
+  // Integers in [0, 10000) decode from a table. Other integers are written
+  // four digits at a time. Both paths must give the canonical spelling at
+  // every width.
+  std::vector<std::string> strings;
+  for (const int64_t magnitude :
+       {int64_t{0},
+        int64_t{9},
+        int64_t{10},
+        int64_t{99},
+        int64_t{100},
+        int64_t{999},
+        int64_t{1'000},
+        int64_t{9'999},
+        int64_t{10'000},
+        int64_t{10'001},
+        int64_t{99'999'999},
+        int64_t{100'000'000},
+        int64_t{1'000'000'000'000},
+        std::numeric_limits<int64_t>::max()}) {
+    strings.push_back(std::to_string(magnitude));
+    if (magnitude != 0) {
+      strings.push_back(std::to_string(-magnitude));
+    }
+  }
+  strings.push_back(std::to_string(std::numeric_limits<int64_t>::min()));
+  strings.emplace_back("x");
+  checkStrings(encodeStrings(strings), strings);
+}
+
 TEST_F(
     MainlyIntegerEncodingTest,
     integerStringsWithoutExceptionsStoreNoIsInteger) {

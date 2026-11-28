@@ -16,7 +16,9 @@
 #include "velox/dwio/nimble/encodings/MainlyIntegerEncoding.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
+#include <cstring>
 #include <limits>
 #include <tuple>
 #include <utility>
@@ -111,6 +113,24 @@ void skipChild(
     uint32_t& numRead) {
   getChildRows(numRows, childName, child, numRead);
   child.skip(numRows);
+}
+
+// A table of 4-character strings, one for each integer in [0, 10000). The
+// entry for i starts at offset 4 * i. Each entry is padded on the left with
+// zeros, e.g. 42 is "0042". Skipping the leading zeros gives the canonical
+// spelling, "42".
+const std::array<char, 40'000>& fourDigitSpellings() {
+  static const auto kDigits = [] {
+    std::array<char, 40'000> result{};
+    for (uint32_t value = 0; value < 10'000; ++value) {
+      result[4 * value] = static_cast<char>('0' + value / 1'000);
+      result[4 * value + 1] = static_cast<char>('0' + value / 100 % 10);
+      result[4 * value + 2] = static_cast<char>('0' + value / 10 % 10);
+      result[4 * value + 3] = static_cast<char>('0' + value % 10);
+    }
+    return result;
+  }();
+  return kDigits;
 }
 
 } // namespace
@@ -338,22 +358,21 @@ void MainlyIntegerEncoding::fillRows(
     std::span<const uint64_t> integers,
     std::span<const physicalType> exceptions,
     physicalType* output) {
-  // Each integer row gets its own slot of kMaxSpelledIntegerBytes bytes.
-  // Any int64 fits in one slot, so no first pass is needed to count the
-  // bytes. All slots share one buffer from 'stringBufferFactory_'. So the
-  // strings stay valid after this encoding is destroyed, like the decoded
-  // strings of other encodings.
+  // There are two ways to turn an integer into its string:
+  // - An integer in [0, 10000) points into the static fourDigitSpellings()
+  //   table. Nothing is allocated or written.
+  // - Any other integer gets its own slot of kMaxSpelledIntegerBytes bytes.
+  //   Its digits are written four at a time, from the end of the slot back
+  //   to its start. That is one division per four digits, not one per digit.
+  // All slots share one buffer from 'stringBufferFactory_'. The buffer is
+  // allocated on the first integer that needs a slot, so a batch of small
+  // integers allocates nothing. The table is static and the buffer outlives
+  // this encoding. So the strings stay valid after this encoding is
+  // destroyed, like the decoded strings of other encodings.
+  const auto& digits = fourDigitSpellings();
   const uint64_t numSlotBytes =
       uint64_t{integers.size()} * kMaxSpelledIntegerBytes;
   char* slot = nullptr;
-  if (!integers.empty()) {
-    NIMBLE_CHECK_LE(
-        numSlotBytes,
-        std::numeric_limits<uint32_t>::max(),
-        "MainlyInteger decode spells too many bytes");
-    slot = static_cast<char*>(
-        stringBufferFactory_(static_cast<uint32_t>(numSlotBytes)));
-  }
   uint32_t nextInteger{0};
   uint32_t nextException{0};
   for (uint32_t row = 0; row < rowCount; ++row) {
@@ -361,13 +380,47 @@ void MainlyIntegerEncoding::fillRows(
       output[row] = exceptions[nextException++];
       continue;
     }
-    const auto [end, error] = std::to_chars(
-        slot,
-        slot + kMaxSpelledIntegerBytes,
-        static_cast<int64_t>(integers[nextInteger++]));
-    NIMBLE_DCHECK_EQ(static_cast<int>(error), 0, "int64 spelling overflows");
-    output[row] = {slot, static_cast<size_t>(end - slot)};
-    slot += kMaxSpelledIntegerBytes;
+    const auto integer = static_cast<int64_t>(integers[nextInteger++]);
+    if (static_cast<uint64_t>(integer) < 10'000) {
+      const uint32_t skip = integer < 10 ? 3
+          : integer < 100                ? 2
+          : integer < 1'000              ? 1
+                                         : 0;
+      output[row] = {digits.data() + 4 * integer + skip, 4 - skip};
+      continue;
+    }
+    if (slot == nullptr) {
+      NIMBLE_CHECK_LE(
+          numSlotBytes,
+          std::numeric_limits<uint32_t>::max(),
+          "MainlyInteger decode spells too many bytes");
+      slot = static_cast<char*>(
+          stringBufferFactory_(static_cast<uint32_t>(numSlotBytes)));
+    }
+    char* const end = slot + kMaxSpelledIntegerBytes;
+    char* begin = end;
+    auto magnitude = static_cast<uint64_t>(integer);
+    if (integer < 0) {
+      magnitude = 0 - magnitude;
+    }
+    while (magnitude >= 10'000) {
+      const auto quotient = magnitude / 10'000;
+      begin -= 4;
+      std::memcpy(
+          begin, digits.data() + 4 * (magnitude - quotient * 10'000), 4);
+      magnitude = quotient;
+    }
+    begin -= 4;
+    std::memcpy(begin, digits.data() + 4 * magnitude, 4);
+    begin += magnitude < 10 ? 3
+        : magnitude < 100   ? 2
+        : magnitude < 1'000 ? 1
+                            : 0;
+    if (integer < 0) {
+      *--begin = '-';
+    }
+    output[row] = {begin, static_cast<size_t>(end - begin)};
+    slot = end;
   }
 }
 
