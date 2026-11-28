@@ -18,6 +18,7 @@
 #include <limits>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkErrorCodes.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 namespace facebook::velox::functions::sparksql::test {
@@ -1030,6 +1031,20 @@ TEST_F(ArithmeticTest, tryArithmeticKeepsArgumentErrors) {
 
 TEST_F(ArithmeticTest, checkedDivide) {
   assertErrorForCheckedDivide<int32_t>(1, 0, "division by zero");
+  // Division by zero carries the Spark error condition as the error code.
+  // Errors not yet mapped to a Spark condition keep the default code.
+  VELOX_ASSERT_USER_THROW_CODE(
+      checkedDivide<int32_t>(1, 0),
+      spark_error_code::kDivideByZero,
+      "division by zero");
+  VELOX_ASSERT_USER_THROW_CODE(
+      checkedDivide<double>(1.0, 0.0),
+      spark_error_code::kDivideByZero,
+      "division by zero");
+  VELOX_ASSERT_USER_THROW_CODE(
+      checkedDivide<int32_t>(INT32_MIN, -1),
+      error_code::kInvalidArgument,
+      "Arithmetic overflow: -2147483648 / -1");
   assertErrorForCheckedDivide<int8_t>(
       INT8_MIN, -1, "Arithmetic overflow: -128 / -1");
   assertErrorForCheckedDivide<int16_t>(

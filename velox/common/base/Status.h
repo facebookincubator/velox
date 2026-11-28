@@ -395,11 +395,27 @@ class [[nodiscard]] Status {
     return ok() ? kNoMessage : state_->msg;
   }
 
+  /// Return the error code attached with withErrorCode(), or an empty string
+  /// if none was attached.
+  const std::string& errorCode() const {
+    static const std::string kNoErrorCode;
+    return ok() ? kNoErrorCode : state_->errorCode;
+  }
+
+  /// Return this status with the given error code attached. The status must
+  /// not be OK. Example:
+  ///
+  ///   return Status::UserError("division by zero")
+  ///       .withErrorCode("SPARK:DIVIDE_BY_ZERO");
+  Status withErrorCode(std::string errorCode) &&;
+
   /// Return a new Status with changed message, copying the existing status
-  /// code.
+  /// code and error code.
   template <typename... Args>
   Status withMessage(Args&&... args) const {
-    return fromArgs(code(), std::forward<Args>(args)...);
+    auto status = fromArgs(code(), std::forward<Args>(args)...);
+    status.state_->errorCode = errorCode();
+    return status;
   }
 
   void warn() const;
@@ -430,6 +446,7 @@ class [[nodiscard]] Status {
   struct State {
     StatusCode code;
     std::string msg;
+    std::string errorCode;
   };
 
   // OK status has a `nullptr` state_.  Otherwise, `state_` points to
@@ -468,7 +485,8 @@ inline bool Status::operator==(const Status& other) const noexcept {
   if (ok() || other.ok()) {
     return false;
   }
-  return (code() == other.code()) && (message() == other.message());
+  return (code() == other.code()) && (message() == other.message()) &&
+      (errorCode() == other.errorCode());
 }
 
 Status Status::operator&(const Status& s) const noexcept {
