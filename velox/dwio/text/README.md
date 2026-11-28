@@ -76,3 +76,33 @@ finite in DOUBLE.
 - Other trailing characters or embedded whitespace/control bytes, such as
   `1e5x`, `1.2.3`, and an embedded NUL.
 - Hexadecimal forms, such as `0x10` and `0x1.8p+1`.
+
+## Writer formatting
+
+DOUBLE fields use the non-legacy VARCHAR cast formatter. Finite values retain
+their significant digits rather than being rounded to six decimal places.
+For example, `1.5` is written as `1.5`. Values with absolute magnitude below
+`0.001` or at least `10000000` use scientific notation, except zero.
+NaN and infinities are written as `NaN`, `Infinity`, and `-Infinity`.
+
+The shared formatter honors the process-wide
+`--experimental_enable_legacy_cast` flag when adding `.0` to whole numbers
+in standard notation. With the default value of `false`, `1.0`, `0.0`, and
+`-0.0` are written as `1.0`, `0.0`, and `-0.0`. When the flag is `true`, they
+are written as `1`, `0`, and `-0`. The flag does not change scientific notation
+selection in the text writer.
+
+DOUBLE output is not guaranteed to match Hive's Java-based formatting byte
+for byte.
+
+DATE fields use the ISO date representation, such as `2024-01-01`, rather than
+the number of days since the epoch.
+
+DECIMAL fields use plain decimal notation with exactly the declared number of
+fractional digits. For example, an unscaled value of `150` in DECIMAL(5,2) is
+written as `1.50`. Both short and long decimals are supported, including scale
+zero.
+
+These conversions also apply to values nested in arrays, maps, and rows.
+Null values use the configured null marker. REAL and TIMESTAMP formatting are
+unchanged.
