@@ -219,6 +219,10 @@ class CovarianceAggregate : public exec::Aggregate {
   explicit CovarianceAggregate(TypePtr resultType)
       : exec::Aggregate(resultType) {}
 
+  int32_t accumulatorAlignmentSize() const override {
+    return alignof(TAccumulator);
+  }
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(TAccumulator);
   }
