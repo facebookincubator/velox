@@ -61,3 +61,16 @@ target_link_libraries(
   Folly::follybenchmark
   gflags::gflags
 )
+
+add_executable(velox_aggregates_approx_percentile_bm ApproxPercentile.cpp)
+
+target_link_libraries(
+  velox_aggregates_approx_percentile_bm
+  velox_aggregates
+  velox_exec_test_lib
+  velox_functions_prestosql
+  velox_vector_test_lib
+  Folly::folly
+  Folly::follybenchmark
+  gflags::gflags
+)
