@@ -853,6 +853,121 @@ TEST_F(FieldReaderTest, sparseFlatMapReusesKeyStorageAcrossBatches) {
   }
 }
 
+// A factory that reuses key nodes gives a key the node of an earlier reader
+// when the key's streams map to the same decoders, and builds a new node when
+// they changed. FieldReader::Stats counts the reused nodes.
+TEST_F(FieldReaderTest, reusesFlatMapKeyNodesOverTheSameDecoders) {
+  constexpr uint32_t kRows{3};
+  SchemaBuilder builder;
+  const auto root = builder.createRowTypeBuilder(1);
+  const auto flatMap = builder.createFlatMapTypeBuilder(ScalarKind::Int32);
+  const auto firstValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto secondValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
+  const auto& firstInMap = flatMap->addChild("1", firstValue);
+  const auto& secondInMap = flatMap->addChild("2", secondValue);
+  root->addChild("features", flatMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  const auto createFactory = [&](const FieldReaderParams& params) {
+    std::vector<uint32_t> streamOffsets;
+    return FieldReaderFactory::create(
+        params,
+        schema,
+        typeWithId,
+        streamOffsets,
+        [](uint32_t) { return true; },
+        pool_.get());
+  };
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  decoders[firstInMap.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, true, true});
+  decoders[firstValue->scalarDescriptor().offset()] =
+      std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{10, 11, 12});
+  decoders[secondInMap.offset()] =
+      std::make_unique<BoolDecoder>(std::vector<uint8_t>{true, false, true});
+  decoders[secondValue->scalarDescriptor().offset()] =
+      std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{20, 22});
+
+  // Rewinds the decoders, as a rebind to the next stripe would, and reads
+  // every row with a new reader of 'factory'. The reader returns its key nodes
+  // to the factory when it goes out of scope.
+  using Rows = std::vector<std::map<int32_t, int64_t>>;
+  const auto readRows = [&](FieldReaderFactory& factory) {
+    for (auto& [_, decoder] : decoders) {
+      decoder->reset();
+    }
+    const auto reader = factory.createReader(decoders);
+    velox::VectorPtr output;
+    folly::coro::blockingWait(reader->co_next(kRows, output));
+    const auto* maps =
+        output->as<velox::RowVector>()->childAt(0)->as<velox::MapVector>();
+    const auto* keys = maps->mapKeys()->asFlatVector<int32_t>();
+    const auto* values = maps->mapValues()->asFlatVector<int64_t>();
+    Rows rows(kRows);
+    for (velox::vector_size_t row = 0; row < kRows; ++row) {
+      const auto end = maps->offsetAt(row) + maps->sizeAt(row);
+      for (auto entry = maps->offsetAt(row); entry < end; ++entry) {
+        rows[row].emplace(keys->valueAt(entry), values->valueAt(entry));
+      }
+    }
+    return rows;
+  };
+
+  FieldReader::Stats stats;
+  const auto factory =
+      createFactory({.reuseFlatMapKeyNodes = true, .stats = &stats});
+  EXPECT_EQ(
+      readRows(*factory),
+      (Rows{{{1, 10}, {2, 20}}, {{1, 11}}, {{1, 12}, {2, 22}}}));
+  EXPECT_EQ(stats.numReusedFlatMapKeyNodes(), 0);
+
+  // Over the same decoders, both keys reuse their nodes.
+  EXPECT_EQ(
+      readRows(*factory),
+      (Rows{{{1, 10}, {2, 20}}, {{1, 11}}, {{1, 12}, {2, 22}}}));
+  EXPECT_EQ(stats.numReusedFlatMapKeyNodes(), 2);
+
+  // A new decoder of the values of key 2 gives it a new node, which reads the
+  // new values.
+  decoders[secondValue->scalarDescriptor().offset()] =
+      std::make_unique<TestDecoder<int64_t>>(std::vector<int64_t>{30, 32});
+  EXPECT_EQ(
+      readRows(*factory),
+      (Rows{{{1, 10}, {2, 30}}, {{1, 11}}, {{1, 12}, {2, 32}}}));
+  EXPECT_EQ(stats.numReusedFlatMapKeyNodes(), 3);
+
+  // Key 2 leaves. Its decoders stay alive aside, as StreamReader keeps them.
+  std::vector<std::pair<offset_size, std::unique_ptr<Decoder>>> absentDecoders;
+  for (const auto offset :
+       {secondInMap.offset(), secondValue->scalarDescriptor().offset()}) {
+    absentDecoders.emplace_back(offset, std::move(decoders.at(offset)));
+    decoders.erase(offset);
+  }
+  EXPECT_EQ(readRows(*factory), (Rows{{{1, 10}}, {{1, 11}}, {{1, 12}}}));
+  EXPECT_EQ(stats.numReusedFlatMapKeyNodes(), 4);
+
+  // Key 2 returns over the same decoders and reuses the node that it had
+  // before it left.
+  for (auto& [offset, decoder] : absentDecoders) {
+    decoders.emplace(offset, std::move(decoder));
+  }
+  EXPECT_EQ(
+      readRows(*factory),
+      (Rows{{{1, 10}, {2, 30}}, {{1, 11}}, {{1, 12}, {2, 32}}}));
+  EXPECT_EQ(stats.numReusedFlatMapKeyNodes(), 6);
+
+  // A factory that does not reuse key nodes builds every node.
+  FieldReader::Stats noReuseStats;
+  const auto noReuseFactory = createFactory({.stats = &noReuseStats});
+  readRows(*noReuseFactory);
+  EXPECT_EQ(
+      readRows(*noReuseFactory),
+      (Rows{{{1, 10}, {2, 30}}, {{1, 11}}, {{1, 12}, {2, 32}}}));
+  EXPECT_EQ(noReuseStats.numReusedFlatMapKeyNodes(), 0);
+}
+
 TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
   using Entry = std::pair<int32_t, std::optional<int64_t>>;
   const auto input = vectorMaker_->rowVector(

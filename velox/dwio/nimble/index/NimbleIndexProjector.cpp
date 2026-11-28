@@ -89,7 +89,7 @@ std::string NimbleIndexProjector::Stats::toString() const {
       "Stats(numReadStripes={}, numLoadedStripes={}, numSlicedStripes={}, "
       "slicedStripePct={:.2f}%, numReadRows={}, numProjectedRows={}, "
       "numOutputBytes={}, numPlannedBytes={}, numMaxBytesTruncations={}, "
-      "numKeyStreamCoLoads={}, "
+      "numKeyStreamCoLoads={}, numReusedFlatMapKeyNodes={}, "
       "lookupTiming=[{}], prepareTiming=[{}], scanTiming=[{}], "
       "projectionTiming=[{}])",
       numReadStripes,
@@ -104,6 +104,7 @@ std::string NimbleIndexProjector::Stats::toString() const {
       velox::succinctBytes(numPlannedBytes),
       numMaxBytesTruncations,
       numKeyStreamCoLoads,
+      numReusedFlatMapKeyNodes,
       lookupTiming.toString(),
       prepareTiming.toString(),
       scanTiming.toString(),
@@ -139,7 +140,15 @@ void NimbleIndexProjector::setVerifyStreamChecksums(
 
 NimbleIndexProjector::Stats NimbleIndexProjector::stats() const {
   velox::tsan_lock_guard<std::mutex> lock(statsLock_);
-  return stats_;
+  auto stats = stats_;
+
+  // The stream reader counts the key nodes that it reuses, so a report reads
+  // its count instead of each projection adding to stats_.
+  if (streamReader_ != nullptr) {
+    stats.numReusedFlatMapKeyNodes =
+        streamReader_->stats().numReusedFlatMapKeyNodes();
+  }
+  return stats;
 }
 
 namespace {
@@ -659,12 +668,16 @@ void NimbleIndexProjector::ensureStreamReader() {
   if (streamReader_ != nullptr) {
     return;
   }
-  streamReader_ = std::make_unique<StreamReader>(
+  auto streamReader = std::make_unique<StreamReader>(
       projection_->nimbleType,
       pool_,
       StreamReader::Options{
           .readFlatMapFieldAsStruct = readFlatMapFieldAsStruct_,
       });
+
+  // stats() reads the stream reader, from any thread, under the stats lock.
+  velox::tsan_lock_guard<std::mutex> lock(statsLock_);
+  streamReader_ = std::move(streamReader);
 }
 
 void NimbleIndexProjector::setResumeKey(

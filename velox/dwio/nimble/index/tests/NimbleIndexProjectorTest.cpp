@@ -6674,13 +6674,14 @@ TEST_P(NimbleIndexProjectorTest, statsToString) {
   stats.numPlannedBytes = 16'384;
   stats.numMaxBytesTruncations = 2;
   stats.numKeyStreamCoLoads = 4;
+  stats.numReusedFlatMapKeyNodes = 6;
   EXPECT_EQ(
       stats.toString(),
       "Stats(numReadStripes=3, numLoadedStripes=5, numSlicedStripes=1, "
       "slicedStripePct=33.33%, numReadRows=1000, numProjectedRows=800, "
       "numOutputBytes=8.00KB, numPlannedBytes=16.00KB, "
       "numMaxBytesTruncations=2, "
-      "numKeyStreamCoLoads=4, "
+      "numKeyStreamCoLoads=4, numReusedFlatMapKeyNodes=6, "
       "lookupTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "prepareTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
       "scanTiming=[count: 0, wallTime: 0ns, cpuTime: 0ns], "
