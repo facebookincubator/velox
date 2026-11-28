@@ -86,6 +86,9 @@ struct ColumnCase {
   // Whether the non-null values descend, with occasional repeats. Reversed
   // can use its ordered nested encodings on this shape.
   bool isNonIncreasing{false};
+  // Whether most values are strings that spell integers.
+  // MainlyIntegerEncoding's estimate declines anything else.
+  bool holdsIntegers{false};
 };
 
 // The outcome a (column, encoding) pair must produce. Derived from the
@@ -142,6 +145,16 @@ WriteOutcome expectedOutcome(
     return WriteOutcome::kNotApplied;
   }
   if (encodingType == EncodingType::Reversed && !columnCase.isNonIncreasing) {
+    return WriteOutcome::kNotApplied;
+  }
+  if (encodingType == EncodingType::MainlyInteger &&
+      !columnCase.holdsIntegers) {
+    return WriteOutcome::kNotApplied;
+  }
+  // Short digit strings do not compress to fsstCompressionTargetRatio, so
+  // Fsst falls back to another encoding.
+  if (encodingType == EncodingType::Fsst &&
+      columnCase.dataType == DataType::String && columnCase.holdsIntegers) {
     return WriteOutcome::kNotApplied;
   }
   // "Huffman encoding requires at least two symbols" -- a single-symbol
@@ -268,6 +281,17 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
                  })}),
          .dataType = DataType::String});
     cases.push_back(
+        {.name = "integer_varchar",
+         .batch = vectorMaker_->rowVector(
+             {"c0"},
+             {vectorMaker_->flatVector<velox::StringView>(
+                 kNumRows,
+                 [this](auto row) {
+                   return velox::StringView(integerStringValues()[row]);
+                 })}),
+         .dataType = DataType::String,
+         .holdsIntegers = true});
+    cases.push_back(
         {.name = "constant_bigint",
          .batch = vectorMaker_->rowVector(
              {"c0"},
@@ -332,11 +356,45 @@ class EncodingDispatchConsistencyTest : public ::testing::Test {
     return symbolRichValues_;
   }
 
+  // Strings that spell integers, with an occasional word among them.
+  const std::vector<std::string>& integerStringValues() {
+    if (integerStringValues_.empty()) {
+      integerStringValues_.reserve(kNumRows);
+      for (velox::vector_size_t row = 0; row < kNumRows; ++row) {
+        integerStringValues_.push_back(
+            row % 17 == 0 ? "word" : std::to_string(row * 131 - 9'000));
+      }
+    }
+    return integerStringValues_;
+  }
+
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> leafPool_;
   std::unique_ptr<velox::test::VectorMaker> vectorMaker_;
   std::vector<std::string> symbolRichValues_;
+  // See integerStringValues().
+  std::vector<std::string> integerStringValues_;
 };
+
+TEST_F(EncodingDispatchConsistencyTest, shortStringVerification) {
+  const std::array<std::string, 6> values{
+      "", "0", "-7", "123456789012", "1234567890123", "word"};
+  const auto batch = vectorMaker_->rowVector(
+      {"c0"},
+      {vectorMaker_->flatVector<velox::StringView>(kNumRows, [&](auto row) {
+        return velox::StringView(values[row % values.size()]);
+      })});
+
+  NimbleWriterFuzzerOptions options;
+  options.seed = 1;
+  options.randomizeWriterConfig = false;
+  NimbleWriterFuzzer fuzzer(options, *rootPool_);
+  for (const auto encodingType :
+       {EncodingType::Trivial, EncodingType::MainlyInteger}) {
+    SCOPED_TRACE(toString(encodingType));
+    EXPECT_EQ(fuzzer.runFixed({batch}, encodingType), WriteOutcome::kApplied);
+  }
+}
 
 TEST_F(EncodingDispatchConsistencyTest, cappingJsonSelectsFsst) {
   std::vector<std::string> values;

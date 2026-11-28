@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/MainlyIntegerEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
@@ -373,6 +374,11 @@ struct EncodingSizeEstimation {
       case EncodingType::Constant: {
         return ConstantEncoding<std::string_view>::estimateSize(
             values, statistics, options);
+      }
+      // MainlyInteger converts the values, so the statistics-only estimate
+      // declines it.
+      case EncodingType::MainlyInteger: {
+        return MainlyIntegerEncoding::estimateSize(values, options);
       }
       default: {
         return estimateStringSize(

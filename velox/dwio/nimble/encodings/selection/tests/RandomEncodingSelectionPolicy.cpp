@@ -77,6 +77,7 @@ RandomEncodingSelectionPolicyFactory::defaultEncodingChoices() {
       EncodingType::ALPRD,
       EncodingType::BlockBitPacking,
       EncodingType::Fsst,
+      EncodingType::MainlyInteger,
   };
 }
 

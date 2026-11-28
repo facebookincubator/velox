@@ -356,6 +356,19 @@ EncodingLayout EncodingLayoutCapture::capture(
       FsstEncoding::captureNestedEncoding(encoding, children, options);
       break;
     }
+    case EncodingType::MainlyInteger: {
+      // Children by EncodingIdentifiers::MainlyInteger: is-integer stream,
+      // integers, exceptions. A child the stream omits has no layout.
+      const char* pos = encoding.data() + prefixSize;
+      const char* const end = encoding.data() + encoding.size();
+      children.reserve(3);
+      const uint32_t isIntegerBytes = varint::readVarint32(&pos);
+      captureChild(children, pos, isIntegerBytes, options);
+      const uint32_t integerBytes = varint::readVarint32(&pos);
+      captureChild(children, pos, integerBytes, options);
+      captureChild(children, pos, static_cast<uint32_t>(end - pos), options);
+      break;
+    }
     case EncodingType::SparseBool: {
       children.reserve(1);
       children.emplace_back(
