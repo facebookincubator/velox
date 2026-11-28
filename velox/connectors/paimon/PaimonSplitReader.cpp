@@ -20,10 +20,44 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileDataSource.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/dwio/common/Mutation.h"
+#include "velox/dwio/common/Statistics.h"
 
 namespace facebook::velox::connector::paimon {
+namespace {
+
+// Table handle of the merge reads, which read the merge columns of a file with
+// no filters. Columns missing from the file read as nulls.
+//
+// TODO: Pass the subfield filters and the remaining filter conjuncts on primary
+// key columns to the merge reads, so they skip rows and files as Paimon Java's
+// merge reads do when files overlap. Filters on other columns must not apply
+// before the merge, since dropping the latest row of a key would return an
+// older row instead.
+class MergeTableHandle final : public connector::FileTableHandle {
+ public:
+  MergeTableHandle(
+      const connector::FileTableHandle& tableHandle,
+      RowTypePtr mergeType)
+      : connector::FileTableHandle(
+            tableHandle.connectorId(),
+            tableHandle.tableName(),
+            /*subfieldFilters=*/{},
+            /*remainingFilter=*/nullptr,
+            std::move(mergeType),
+            tableHandle.tableParameters(),
+            /*sampleRate=*/1.0,
+            tableHandle.dbName()) {}
+
+  std::vector<connector::FileColumnHandlePtr> filterColumnHandles()
+      const override {
+    return {};
+  }
+};
+
+} // namespace
 
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
@@ -173,6 +207,81 @@ void PaimonSplitReader::maybeCreateDeletionVectorReader() {
       connectorQueryCtx_->memoryPool(),
       fileConfig_->config(),
       connectorQueryCtx_->fsTokenProvider());
+}
+
+std::vector<std::unique_ptr<PaimonMergeStream>>
+PaimonSplitReader::openMergeStreams(
+    const PaimonTableHandle& tableHandle,
+    uint64_t batchSize) {
+  VELOX_CHECK_GT(batchSize, 0);
+  const auto& dataFiles = paimonSplit_->dataFiles();
+  // DWRF, ORC and Parquet readers read file column names as lowercase when the
+  // session asks for it, while Nimble readers keep the names as written.
+  const bool lowerCaseSystemColumns =
+      fileConfig_->isFileColumnNamesReadAsLowerCase(
+          connectorQueryCtx_->sessionProperties()) &&
+      dataFiles.front().fileFormat != dwio::common::FileFormat::NIMBLE;
+  const auto mergeColumns = std::make_shared<const PaimonMergeColumns>(
+      PaimonMergeColumns::create(tableHandle, lowerCaseSystemColumns));
+  const auto mergeTableHandle =
+      std::make_shared<MergeTableHandle>(tableHandle, mergeColumns->type);
+  // Merge reads have no filters, so they skip no file.
+  dwio::common::RuntimeStats mergeRuntimeStats;
+
+  std::vector<std::unique_ptr<PaimonMergeStream>> streams;
+  streams.reserve(dataFiles.size());
+  for (size_t fileIndex = 0; fileIndex < dataFiles.size(); ++fileIndex) {
+    const auto& dataFile = dataFiles[fileIndex];
+    // Each reader adapts its ScanSpec to its file, so the files read at once
+    // cannot share one.
+    //
+    // TODO: Pass the filters on primary key columns as 'subfieldFilters', as
+    // the MergeTableHandle TODO describes. 'outputSubfields' stays empty, since
+    // the merge compares whole keys and sequence fields.
+    const auto scanSpec = connector::FileDataSource::makeScanSpec(
+        mergeColumns->type,
+        /*outputSubfields=*/{},
+        /*subfieldFilters=*/{},
+        mergeColumns->type,
+        /*partitionKeys=*/{},
+        /*infoColumns=*/{},
+        /*specialColumns=*/{},
+        /*disableStatsBasedFilterReorder=*/false,
+        pool_);
+    auto reader = connector::FileSplitReader::create(
+        makeFileConnectorSplit(*paimonSplit_, dataFile),
+        mergeTableHandle,
+        partitionKeys_,
+        connectorQueryCtx_,
+        fileConfig_,
+        mergeColumns->type,
+        dataIoStats_,
+        metadataIoStats_,
+        ioStats_,
+        fileHandleFactory_,
+        ioExecutor_,
+        scanSpec);
+    reader->initialize(
+        /*randomSkip=*/nullptr, /*remainingFilterColumns=*/{});
+    reader->prepareSplit(/*metadataFilter=*/nullptr, mergeRuntimeStats);
+    auto deletionVectorReader = dataFile.deletionFile.has_value()
+        ? std::make_unique<PaimonDeletionVectorReader>(
+              *dataFile.deletionFile,
+              pool_,
+              fileConfig_->config(),
+              connectorQueryCtx_->fsTokenProvider())
+        : nullptr;
+    streams.emplace_back(
+        std::make_unique<PaimonMergeStream>(
+            fileIndex,
+            dataFile,
+            std::move(reader),
+            std::move(deletionVectorReader),
+            mergeColumns,
+            batchSize,
+            pool_));
+  }
+  return streams;
 }
 
 void PaimonSplitReader::finishFileSplitReader() {

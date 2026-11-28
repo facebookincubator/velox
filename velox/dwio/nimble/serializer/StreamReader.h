@@ -19,11 +19,13 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include <folly/Executor.h>
 #include <folly/container/F14Map.h>
+#include <folly/container/F14Set.h>
 #include <folly/coro/Task.h>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
@@ -69,6 +71,27 @@ class StreamReader {
     /// task has enough work to amortize scheduling it.
     uint32_t minStreamsPerDecodeTask{1};
 
+    /// Names the top-level FlatMap columns of the projected schema, which must
+    /// then be a Row, that the reader returns as structs instead of maps. A
+    /// struct has one field per key that the schema gives its column, in the
+    /// schema's key order, typed as the map's values. A field is null in a row
+    /// that lacks its key. For example, a column "features" whose keys in the
+    /// schema are "a" and "b" reads as ROW(a, b), and the map {"b": 2} reads
+    /// as {a: null, b: 2}.
+    folly::F14FastSet<std::string> readFlatMapFieldAsStruct{};
+
+    /// Keeps the buffers that the strings of each stream decode into from one
+    /// binding to the next, so that the strings of the next stripe go on in
+    /// the last buffer instead of a new one of 32 KB, and the buffers keep
+    /// growing to 1 MB across stripes instead of starting over in each. Suits
+    /// a scan, whose stripes decode many strings each. Between bindings the
+    /// reader then holds the last buffer of each stream of strings, up to
+    /// 1 MB, and the outputs of consecutive stripes can share a buffer, which
+    /// keeps the strings of both alive. Off, each binding starts over and the
+    /// reader holds no buffer between bindings, which suits a reader that
+    /// waits between point lookups.
+    bool keepDecodedStringBuffersAcrossStripes{false};
+
     /// Returns true when the reader can decode child fields in parallel.
     bool parallelDecodeEnabled() const {
       return decodeExecutor != nullptr && maxDecodeParallelism > 1;
@@ -83,6 +106,13 @@ class StreamReader {
       Options options);
 
   ~StreamReader();
+
+  /// Returns the Velox type of the rows that the reader returns: that of the
+  /// projected schema, with each column that Options::readFlatMapFieldAsStruct
+  /// names typed as a ROW of its keys.
+  const velox::TypePtr& outputType() const {
+    return outputType_;
+  }
 
   /// Decodes source ranges contiguously starting at `outputOffset`.
   /// Source ranges must be non-empty, ordered by `startRow`, and disjoint.
@@ -138,10 +168,11 @@ class StreamReader {
   /// reset(), the next binding or the destruction of the reader, and must not
   /// serve another thread until then. The views of the chunks of each stream
   /// of strings, cached or not, decode strings into buffers that they share,
-  /// which the reader creates for each stream of each binding, so that a read
-  /// of a stream holds a few buffers instead of at least one for each chunk.
-  /// A dense read of FSST strings, such as a scan, decodes its rows straight
-  /// into them, and holds just the buffers of its rows.
+  /// which the reader keeps for each stream and starts over at each binding,
+  /// unless Options::keepDecodedStringBuffersAcrossStripes is set, so that a
+  /// read of a stream holds a few buffers instead of at least one for each
+  /// chunk. A dense read of FSST strings, such as a scan, decodes its rows
+  /// straight into them, and holds just the buffers of its rows.
   /// `options.decodedStringBuffers` must be null.
   void setStreams(
       std::span<const std::string_view> streams,
@@ -160,7 +191,8 @@ class StreamReader {
   folly::coro::Task<void> co_skip(uint32_t numRows);
 
   /// Releases the currently bound stripe. The cached reader stays for the next
-  /// stripe.
+  /// stripe, and so do the buffers that strings decode into with
+  /// Options::keepDecodedStringBuffersAcrossStripes.
   void reset();
 
  private:
@@ -248,9 +280,6 @@ class StreamReader {
   // Projected schema shared by every stream set decoded by this instance.
   const std::shared_ptr<const Type> type_;
 
-  // Velox counterpart of type_, used when allocating each result.
-  const velox::TypePtr outputType_;
-
   // Owns all buffers allocated while decoding.
   velox::memory::MemoryPool* const pool_;
 
@@ -267,11 +296,16 @@ class StreamReader {
   // Builds a FieldReader tree for each stream binding.
   std::unique_ptr<FieldReaderFactory> readerFactory_;
 
+  // Velox type of the rows that readerFactory_ decodes, used when allocating
+  // each result. Set by init().
+  velox::TypePtr outputType_;
+
   // Holds the buffers that the views of the chunks of each stream of strings
   // decode strings into, in the layout of co_read(), or null for a stream
   // that has bound no strings. ensureDecodedStringBuffers() creates them, and
-  // reset() clears them for the next stripe. Declared before cachedReader_, so
-  // that they outlive the views that point to them.
+  // reset() clears them for the next stripe unless readerOptions_ keeps them
+  // across stripes. Declared before cachedReader_, so that they outlive the
+  // views that point to them.
   std::vector<std::unique_ptr<DecodedStringBuffers>> decodedStringBuffers_;
 
   // The indices of the streams whose entry of decodedStringBuffers_ is set, so

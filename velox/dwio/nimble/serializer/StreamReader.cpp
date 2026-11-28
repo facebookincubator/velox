@@ -142,14 +142,64 @@ bool matchesPresenceKey(
   return true;
 }
 
-// Returns the field reader parameters that decode the fields of a stripe as
-// 'options' configure.
-FieldReaderParams toReaderParams(const StreamReader::Options& options) {
-  return FieldReaderParams{
+// Returns the field reader parameters that decode the fields of a stripe of
+// 'type' as 'options' configure. Each column that
+// options.readFlatMapFieldAsStruct names reads as a struct of the keys that
+// 'type' gives the column.
+FieldReaderParams toReaderParams(
+    const Type& type,
+    const StreamReader::Options& options) {
+  FieldReaderParams params{
+      .readFlatMapFieldAsStruct = options.readFlatMapFieldAsStruct,
       .decodeExecutor = options.decodeExecutor,
       .maxDecodeParallelism = options.maxDecodeParallelism,
       .minStreamsPerDecodeTask = options.minStreamsPerDecodeTask,
   };
+  if (options.readFlatMapFieldAsStruct.empty()) {
+    return params;
+  }
+
+  NIMBLE_USER_CHECK_EQ(
+      type.kind(),
+      Kind::Row,
+      "A schema that reads FlatMaps as structs must be a Row");
+  const auto& row = type.asRow();
+  for (const auto& name : options.readFlatMapFieldAsStruct) {
+    const auto column = row.findChild(name);
+    NIMBLE_USER_CHECK(
+        column.has_value(),
+        "A column read as a struct must be in the schema: {}",
+        name);
+    const auto& child = *row.childAt(column.value());
+    NIMBLE_USER_CHECK(
+        child.isFlatMap(),
+        "A column read as a struct must be a FlatMap: {}",
+        name);
+
+    // The struct reads every key of the schema, since the reader binds every
+    // stream of the schema. When a FlatMap is empty, the writer creates one
+    // child with an empty name to carry its value type, which is no key, as
+    // FieldReaderFactory treats it.
+    const auto& flatMap = child.asFlatMap();
+    auto numKeys = flatMap.childrenCount();
+    if (numKeys == 1 && flatMap.nameAt(0).empty()) {
+      numKeys = 0;
+    }
+    NIMBLE_USER_CHECK_GT(
+        numKeys, 0, "A FlatMap read as a struct must have a key: {}", name);
+    std::vector<std::string> keys;
+    keys.reserve(numKeys);
+    for (size_t key{0}; key < numKeys; ++key) {
+      keys.emplace_back(flatMap.nameAt(key));
+    }
+    params.flatMapFeatureSelector.emplace(
+        name,
+        FeatureSelection{
+            .features = std::move(keys),
+            .mode = SelectionMode::Include,
+        });
+  }
+  return params;
 }
 
 } // namespace
@@ -181,27 +231,29 @@ StreamReader::StreamReader(
     velox::memory::MemoryPool* pool,
     Options options)
     : type_{std::move(type)},
-      outputType_{convertToVeloxType(*velox::checkedNotNull(type_.get()))},
       pool_{velox::checkedNotNull(pool)},
-      readerOptions_{options},
+      readerOptions_{std::move(options)},
       cachedKey_{pool_} {
-  NIMBLE_CHECK_NOT_NULL(outputType_);
-
   init();
+  NIMBLE_CHECK_NOT_NULL(outputType_);
 }
 
 void StreamReader::init() {
   const auto typeWithId =
       std::shared_ptr<const velox::dwio::common::TypeWithId>{
-          velox::dwio::common::TypeWithId::create(outputType_)};
+          velox::dwio::common::TypeWithId::create(
+              convertToVeloxType(*velox::checkedNotNull(type_.get())))};
   std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
-      toReaderParams(readerOptions_),
+      toReaderParams(*type_, readerOptions_),
       type_,
       typeWithId,
       readerOffsets,
       [](uint32_t /*nodeId*/) { return true; },
       pool_);
+
+  // Types each FlatMap read as a struct as that struct, unlike typeWithId.
+  outputType_ = readerFactory_->veloxType();
   inputOffsets_ = projectionStreamOffsets(*type_, &stringStreams_);
   validateFieldReaderOffsets(inputOffsets_, std::move(readerOffsets));
   decodedStringBuffers_.resize(inputOffsets_.size());
@@ -304,6 +356,12 @@ void StreamReader::reset() {
   decompressedChunks_.clear();
   loadedChunkBufferHolders_.clear();
   streamBufferHolders_.clear();
+
+  // Keeps the decoded string buffers, so that the strings of the next stripe
+  // go on after those of this one, which its outputs may hold.
+  if (readerOptions_.keepDecodedStringBuffersAcrossStripes) {
+    return;
+  }
 
   // Clears the decoded string buffers of the stripe, whose views are gone, for
   // the next stripe.
