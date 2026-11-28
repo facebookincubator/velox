@@ -87,7 +87,7 @@ String Functions
         SELECT contains('Spark SQL', null); -- NULL
         SELECT contains(x'537061726b2053514c', x'537061726b'); -- true
 
-.. spark:function:: conv(number, fromBase, toBase) -> varchar
+.. spark:function:: conv(number, fromBase, toBase) -> varchar (ANSI compliant)
 
     Converts ``number`` represented as a string from ``fromBase`` to ``toBase``.
     ``fromBase`` must be an INTEGER value between 2 and 36 inclusively. ``toBase`` must
@@ -98,7 +98,9 @@ String Functions
     Skips leading spaces. ``number`` may contain other characters not valid for ``fromBase``.
     All characters starting from the first invalid character till the end of the string are
     ignored. Only converts valid characters even though ``fromBase`` = ``toBase``. Returns
-    '0' if no valid character is found. ::
+    '0' if no valid character is found.
+    If ``number`` exceeds the unsigned 64-bit range, it is treated as -1 (all bits set),
+    or is an error when Spark ANSI mode is enabled (``spark.ansi_enabled``). ::
 
         SELECT conv('100', 2, 10); -- '4'
         SELECT conv('-10', 16, -10); -- '-16'
@@ -110,6 +112,8 @@ String Functions
         SELECT conv("11ABC", 10, 16); -- 'B'
         SELECT conv("11abc", 10, 10); -- '11'
         SELECT conv('H016F', 16, 10); -- '0'
+        SELECT conv('18446744073709551616', 10, 16); -- 'FFFFFFFFFFFFFFFF' (with ANSI mode disabled)
+        SELECT conv('18446744073709551616', 10, 16); -- Overflow error (with ANSI mode enabled)
 
 .. spark:function:: elt(n, input1, input2, ...) -> varchar|varbinary (ANSI compliant)
 
