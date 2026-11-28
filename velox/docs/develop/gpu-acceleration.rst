@@ -160,7 +160,7 @@ The `UCX exchange
 (``velox/experimental/ucx-exchange``) is a GPU-aware replacement for Velox's
 inter-worker exchange — the data movement between a task that ends in a
 ``PartitionedOutput`` operator and a task whose source is an ``Exchange``
-operator. Using `UCX <https://openucx.org/>`_ (via UCXX), it transfers device
+operator. Using `UCX <https://openucx.readthedocs.io/en/master/>`_ (via UCXX), it transfers device
 buffers **directly GPU-to-GPU**, avoiding the round trip through host memory that
 a host-staged shuffle would incur.
 
