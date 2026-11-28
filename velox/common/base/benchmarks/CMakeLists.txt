@@ -50,3 +50,11 @@ target_link_libraries(
   PUBLIC Folly::follybenchmark
   PRIVATE velox_common_base Folly::folly
 )
+
+add_executable(velox_common_simd_util_benchmark SimdUtilBenchmark.cpp)
+
+target_link_libraries(
+  velox_common_simd_util_benchmark
+  PUBLIC Folly::follybenchmark
+  PRIVATE velox_common_base Folly::folly
+)
