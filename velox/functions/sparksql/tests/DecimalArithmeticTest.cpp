@@ -19,6 +19,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using namespace facebook::velox;
@@ -72,6 +73,12 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
     return makeNullableFlatVector<int128_t>(numbers, type);
   }
 
+  void setAnsiEnabled(bool enabled) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          enabled ? "true" : "false"}});
+  }
+
   template <typename T, typename U>
   std::optional<int64_t> div(
       const TypePtr& tType,
@@ -79,15 +86,6 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
       std::optional<T> t,
       std::optional<U> u) {
     return evaluateOnce<int64_t>("div(c0, c1)", {tType, uType}, t, u);
-  }
-
-  template <typename T, typename U>
-  std::optional<int64_t> checked_div(
-      const TypePtr& tType,
-      const TypePtr& uType,
-      std::optional<T> t,
-      std::optional<U> u) {
-    return evaluateOnce<int64_t>("checked_div(c0, c1)", {tType, uType}, t, u);
   }
 
   // Checked tests use evaluateOnce (scalar) rather than testArithmeticFunction
@@ -161,30 +159,9 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
         "checked_subtract", tType, uType, t, u, errorMessage);
   }
 
-  template <typename T, typename U>
-  std::optional<int128_t> checkedMultiply(
-      const TypePtr& tType,
-      const TypePtr& uType,
-      std::optional<T> t,
-      std::optional<U> u) {
-    return checkedDecimalArithmetic("checked_multiply", tType, uType, t, u);
-  }
-
-  template <typename T, typename U>
-  void assertErrorForCheckedMultiply(
-      const TypePtr& tType,
-      const TypePtr& uType,
-      std::optional<T> t,
-      std::optional<U> u,
-      const std::string& errorMessage) {
-    assertErrorForCheckedDecimalArithmetic(
-        "checked_multiply", tType, uType, t, u, errorMessage);
-  }
-
-  /// Runs the common normal and overflow test cases for checked add.
-  void testCheckedAddCommon(const std::string& suffix = "") {
-    const std::string func = "checked_add" + suffix;
-
+  /// Runs the normal cases and the overflow cases that must be an error for
+  /// an add function 'func': checked_add, or add with ANSI mode enabled.
+  void testAddOverflowError(const std::string& func) {
     // All input type combinations.
     EXPECT_EQ(
         (checkedDecimalArithmetic<int64_t, int64_t>(
@@ -268,10 +245,10 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
         "Decimal overflow in add");
   }
 
-  /// Runs the common normal and overflow test cases for checked subtract.
-  void testCheckedSubtractCommon(const std::string& suffix = "") {
-    const std::string func = "checked_subtract" + suffix;
-
+  /// Runs the normal cases and the overflow cases that must be an error for
+  /// a subtract function 'func': checked_subtract, or subtract with ANSI mode
+  /// enabled.
+  void testSubtractOverflowError(const std::string& func) {
     // All input type combinations.
     EXPECT_EQ(
         (checkedDecimalArithmetic<int64_t, int64_t>(
@@ -353,6 +330,198 @@ class DecimalArithmeticTest : public SparkFunctionBaseTest {
         HugeInt::parse("99999999999999999999999999999999999999"),
         -1,
         "Decimal overflow in subtract");
+  }
+
+  /// Overflow during scale alignment. These cases only overflow under
+  /// deny-precision-loss because the full scale is preserved (not reduced),
+  /// requiring a larger rescale factor.
+  void testAddDenyPrecisionLossOverflowError(const std::string& func) {
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 3),
+        DECIMAL(38, 7),
+        HugeInt::parse("-99999999999999999999999999999999990000"),
+        -100,
+        "Decimal overflow in add");
+
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 3),
+        DECIMAL(38, 7),
+        HugeInt::parse("99999999999999999999999999999999999000"),
+        9999999,
+        "Decimal overflow in add");
+  }
+
+  void testSubtractDenyPrecisionLossOverflowError(const std::string& func) {
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 3),
+        DECIMAL(38, 7),
+        HugeInt::parse("-99999999999999999999999999999999990000"),
+        100,
+        "Decimal overflow in subtract");
+
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 3),
+        DECIMAL(38, 7),
+        HugeInt::parse("99999999999999999999999999999999999000"),
+        -9999999,
+        "Decimal overflow in subtract");
+  }
+
+  /// Runs the normal cases and the overflow cases that must be an error for
+  /// a multiply function 'func': checked_multiply, or multiply with ANSI mode
+  /// enabled.
+  void testMultiplyOverflowError(const std::string& func) {
+    // Normal cases: DECIMAL(17,3) * DECIMAL(17,3) -> result precision 35
+    // (long). 1.000 * 2.000 = 2.000000 (unscaled: 1000 * 2000 = 2000000).
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(17, 3), DECIMAL(17, 3), 1000, 2000)),
+        2000000);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int128_t>(
+            func, DECIMAL(17, 3), DECIMAL(20, 3), 1000, 2000)),
+        2000000);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int64_t>(
+            func, DECIMAL(20, 3), DECIMAL(17, 3), 1000, 2000)),
+        2000000);
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func, DECIMAL(20, 3), DECIMAL(20, 3), 1000, 2000)),
+        2000000);
+
+    // Multiplying by zero.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(17, 3), DECIMAL(17, 3), 0, 2000)),
+        0);
+
+    // Multiplying negative numbers: (-1.000) * 2.000 = -2.000000.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int64_t, int64_t>(
+            func, DECIMAL(17, 3), DECIMAL(17, 3), -1000, 2000)),
+        -2000000);
+
+    // Result precision capped at 38, no overflow (small values).
+    // DECIMAL(38,0) * DECIMAL(38,0) -> result precision capped at 38, scale 0.
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func, DECIMAL(38, 0), DECIMAL(38, 0), 100, 200)),
+        20000);
+
+    // Near-boundary success: large values that just fit.
+    // 1e18 * 1e19 = 1e37, which fits in DECIMAL(38,0).
+    EXPECT_EQ(
+        (checkedDecimalArithmetic<int128_t, int128_t>(
+            func,
+            DECIMAL(38, 0),
+            DECIMAL(38, 0),
+            HugeInt::parse("1000000000000000000"),
+            HugeInt::parse("10000000000000000000"))),
+        HugeInt::parse("10000000000000000000000000000000000000"));
+
+    // Positive overflow should throw.
+    // 1e19 * 1e19 = 1e38, which exceeds max DECIMAL(38,0).
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("10000000000000000000"),
+        HugeInt::parse("10000000000000000000"),
+        "Decimal overflow in multiply");
+
+    // Negative overflow should throw (positive * negative -> overflow).
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("10000000000000000000"),
+        HugeInt::parse("-10000000000000000000"),
+        "Decimal overflow in multiply");
+
+    // Negative * negative overflow should throw (result is positive but too
+    // large).
+    assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
+        func,
+        DECIMAL(38, 0),
+        DECIMAL(38, 0),
+        HugeInt::parse("-10000000000000000000"),
+        HugeInt::parse("-10000000000000000000"),
+        "Decimal overflow in multiply");
+  }
+
+  /// Runs the normal cases and the zero-divisor and overflow cases that must
+  /// be an error for an integral divide function 'func': checked_div, or div
+  /// with ANSI mode enabled.
+  void testDivError(const std::string& func) {
+    const auto call =
+        [&](const TypePtr& tType, const TypePtr& uType, auto t, auto u) {
+          return evaluateOnce<int64_t>(
+              fmt::format("{}(c0, c1)", func), {tType, uType}, t, u);
+        };
+    EXPECT_EQ(
+        call(
+            DECIMAL(7, 1),
+            DECIMAL(8, 2),
+            std::optional<int64_t>(10),
+            std::optional<int64_t>(200)),
+        0L);
+    EXPECT_EQ(
+        call(
+            DECIMAL(7, 1),
+            DECIMAL(38, 2),
+            std::optional<int64_t>(12),
+            std::optional<int128_t>(110)),
+        1L);
+    EXPECT_EQ(
+        call(
+            DECIMAL(38, 1),
+            DECIMAL(7, 4),
+            std::optional<int128_t>(25),
+            std::optional<int64_t>(11000)),
+        2L);
+    EXPECT_EQ(
+        call(
+            DECIMAL(38, 0),
+            DECIMAL(38, 6),
+            std::optional<int128_t>(10),
+            std::optional<int128_t>(2900000)),
+        3L);
+    // NULL input returns NULL, even with a zero divisor.
+    EXPECT_EQ(
+        call(
+            DECIMAL(7, 1),
+            DECIMAL(8, 2),
+            std::optional<int64_t>(),
+            std::optional<int64_t>(0)),
+        std::nullopt);
+
+    VELOX_ASSERT_USER_THROW(
+        call(
+            DECIMAL(7, 1),
+            DECIMAL(8, 2),
+            std::optional<int64_t>(91),
+            std::optional<int64_t>(0)),
+        "Division by zero");
+    VELOX_ASSERT_USER_THROW(
+        call(
+            DECIMAL(37, 1),
+            DECIMAL(38, 2),
+            std::optional<int128_t>(91),
+            std::optional<int128_t>(0)),
+        "Division by zero");
+    VELOX_ASSERT_USER_THROW(
+        call(
+            DECIMAL(38, 0),
+            DECIMAL(38, 6),
+            std::optional<int128_t>(
+                HugeInt::parse("99999999999999999999999999999999999999")),
+            std::optional<int128_t>(1)),
+        "Overflow in integral divide");
   }
 };
 
@@ -1085,166 +1254,132 @@ TEST_F(DecimalArithmeticTest, div) {
 }
 
 TEST_F(DecimalArithmeticTest, checkedDiv) {
-  EXPECT_EQ(
-      (checked_div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 10, 200)),
-      0L);
-  EXPECT_EQ(
-      (checked_div<int64_t, int128_t>(DECIMAL(7, 1), DECIMAL(38, 2), 12, 110)),
-      1L);
-  EXPECT_EQ(
-      (checked_div<int128_t, int64_t>(
-          DECIMAL(38, 1), DECIMAL(7, 4), 25, 11000)),
-      2L);
-  EXPECT_EQ(
-      (checked_div<int128_t, int128_t>(
-          DECIMAL(38, 0), DECIMAL(38, 6), 10, 2900000)),
-      3L);
+  testDivError("checked_div");
+}
 
-  VELOX_ASSERT_USER_THROW(
-      (checked_div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 91, 0)),
-      "Division by zero");
-  VELOX_ASSERT_USER_THROW(
-      (checked_div<int128_t, int128_t>(DECIMAL(37, 1), DECIMAL(38, 2), 91, 0)),
-      "Division by zero");
-  VELOX_ASSERT_USER_THROW(
-      (checked_div<int128_t, int128_t>(
+TEST_F(DecimalArithmeticTest, checkedAdd) {
+  testAddOverflowError("checked_add");
+}
+
+TEST_F(DecimalArithmeticTest, checkedSubtract) {
+  testSubtractOverflowError("checked_subtract");
+}
+
+TEST_F(DecimalArithmeticTest, checkedAddDenyPrecisionLoss) {
+  testAddOverflowError("checked_add_deny_precision_loss");
+  testAddDenyPrecisionLossOverflowError("checked_add_deny_precision_loss");
+}
+
+TEST_F(DecimalArithmeticTest, checkedSubtractDenyPrecisionLoss) {
+  testSubtractOverflowError("checked_subtract_deny_precision_loss");
+  testSubtractDenyPrecisionLossOverflowError(
+      "checked_subtract_deny_precision_loss");
+}
+
+TEST_F(DecimalArithmeticTest, checkedMultiply) {
+  testMultiplyOverflowError("checked_multiply");
+}
+
+// With ANSI mode enabled, add, subtract, multiply and div throw where they
+// return NULL otherwise, and try() turns the error back into a NULL. The
+// same inputs return NULL once ANSI mode is disabled again.
+TEST_F(DecimalArithmeticTest, addAnsi) {
+  setAnsiEnabled(true);
+  testAddOverflowError("add");
+  testAddOverflowError("add_deny_precision_loss");
+  testAddDenyPrecisionLossOverflowError("add_deny_precision_loss");
+
+  setAnsiEnabled(false);
+  EXPECT_EQ(
+      (checkedDecimalArithmetic<int128_t, int128_t>(
+          "add",
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("99999999999999999999999999999999999999"),
+          1)),
+      std::nullopt);
+  EXPECT_EQ(
+      (checkedDecimalArithmetic<int128_t, int128_t>(
+          "add_deny_precision_loss",
+          DECIMAL(38, 3),
+          DECIMAL(38, 7),
+          HugeInt::parse("99999999999999999999999999999999999000"),
+          9999999)),
+      std::nullopt);
+}
+
+TEST_F(DecimalArithmeticTest, subtractAnsi) {
+  setAnsiEnabled(true);
+  testSubtractOverflowError("subtract");
+  testSubtractOverflowError("subtract_deny_precision_loss");
+  testSubtractDenyPrecisionLossOverflowError("subtract_deny_precision_loss");
+
+  setAnsiEnabled(false);
+  EXPECT_EQ(
+      (checkedDecimalArithmetic<int128_t, int128_t>(
+          "subtract",
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("-99999999999999999999999999999999999999"),
+          1)),
+      std::nullopt);
+  EXPECT_EQ(
+      (checkedDecimalArithmetic<int128_t, int128_t>(
+          "subtract_deny_precision_loss",
+          DECIMAL(38, 3),
+          DECIMAL(38, 7),
+          HugeInt::parse("99999999999999999999999999999999999000"),
+          -9999999)),
+      std::nullopt);
+}
+
+TEST_F(DecimalArithmeticTest, multiplyAnsi) {
+  setAnsiEnabled(true);
+  testMultiplyOverflowError("multiply");
+  testMultiplyOverflowError("multiply_deny_precision_loss");
+
+  setAnsiEnabled(false);
+  EXPECT_EQ(
+      (checkedDecimalArithmetic<int128_t, int128_t>(
+          "multiply",
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("10000000000000000000"),
+          HugeInt::parse("10000000000000000000"))),
+      std::nullopt);
+  EXPECT_EQ(
+      (checkedDecimalArithmetic<int128_t, int128_t>(
+          "multiply_deny_precision_loss",
+          DECIMAL(38, 0),
+          DECIMAL(38, 0),
+          HugeInt::parse("10000000000000000000"),
+          HugeInt::parse("10000000000000000000"))),
+      std::nullopt);
+}
+
+TEST_F(DecimalArithmeticTest, divAnsi) {
+  setAnsiEnabled(true);
+  testDivError("div");
+  // try() turns the error into a NULL.
+  EXPECT_EQ(
+      (evaluateOnce<int64_t>(
+          "try(div(c0, c1))",
+          {DECIMAL(7, 1), DECIMAL(8, 2)},
+          std::optional<int64_t>(91),
+          std::optional<int64_t>(0))),
+      std::nullopt);
+
+  setAnsiEnabled(false);
+  EXPECT_EQ(
+      (div<int64_t, int64_t>(DECIMAL(7, 1), DECIMAL(8, 2), 91, 0)),
+      std::nullopt);
+  EXPECT_EQ(
+      (div<int128_t, int128_t>(
           DECIMAL(38, 0),
           DECIMAL(38, 6),
           HugeInt::parse("99999999999999999999999999999999999999"),
           1)),
-      "Overflow in integral divide");
-}
-
-TEST_F(DecimalArithmeticTest, checkedAdd) {
-  testCheckedAddCommon();
-}
-
-TEST_F(DecimalArithmeticTest, checkedSubtract) {
-  testCheckedSubtractCommon();
-}
-
-TEST_F(DecimalArithmeticTest, checkedAddDenyPrecisionLoss) {
-  const std::string denyPrecisionLoss = "_deny_precision_loss";
-  testCheckedAddCommon(denyPrecisionLoss);
-
-  // Overflow during scale alignment should throw instead of returning null.
-  // These cases only overflow under deny-precision-loss because the full scale
-  // is preserved (not reduced), requiring a larger rescale factor.
-  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
-      "checked_add" + denyPrecisionLoss,
-      DECIMAL(38, 3),
-      DECIMAL(38, 7),
-      HugeInt::parse("-99999999999999999999999999999999990000"),
-      -100,
-      "Decimal overflow in add");
-
-  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
-      "checked_add" + denyPrecisionLoss,
-      DECIMAL(38, 3),
-      DECIMAL(38, 7),
-      HugeInt::parse("99999999999999999999999999999999999000"),
-      9999999,
-      "Decimal overflow in add");
-}
-
-TEST_F(DecimalArithmeticTest, checkedSubtractDenyPrecisionLoss) {
-  const std::string denyPrecisionLoss = "_deny_precision_loss";
-  testCheckedSubtractCommon(denyPrecisionLoss);
-
-  // Overflow during scale alignment should throw instead of returning null.
-  // These cases only overflow under deny-precision-loss because the full scale
-  // is preserved (not reduced), requiring a larger rescale factor.
-  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
-      "checked_subtract" + denyPrecisionLoss,
-      DECIMAL(38, 3),
-      DECIMAL(38, 7),
-      HugeInt::parse("-99999999999999999999999999999999990000"),
-      100,
-      "Decimal overflow in subtract");
-
-  assertErrorForCheckedDecimalArithmetic<int128_t, int128_t>(
-      "checked_subtract" + denyPrecisionLoss,
-      DECIMAL(38, 3),
-      DECIMAL(38, 7),
-      HugeInt::parse("99999999999999999999999999999999999000"),
-      -9999999,
-      "Decimal overflow in subtract");
-}
-
-TEST_F(DecimalArithmeticTest, checkedMultiply) {
-  // Normal cases: DECIMAL(17,3) * DECIMAL(17,3) -> result precision 35 (long).
-  // 1.000 * 2.000 = 2.000000 (unscaled: 1000 * 2000 = 2000000).
-  EXPECT_EQ(
-      (checkedMultiply<int64_t, int64_t>(
-          DECIMAL(17, 3), DECIMAL(17, 3), 1000, 2000)),
-      2000000);
-  EXPECT_EQ(
-      (checkedMultiply<int64_t, int128_t>(
-          DECIMAL(17, 3), DECIMAL(20, 3), 1000, 2000)),
-      2000000);
-  EXPECT_EQ(
-      (checkedMultiply<int128_t, int64_t>(
-          DECIMAL(20, 3), DECIMAL(17, 3), 1000, 2000)),
-      2000000);
-  EXPECT_EQ(
-      (checkedMultiply<int128_t, int128_t>(
-          DECIMAL(20, 3), DECIMAL(20, 3), 1000, 2000)),
-      2000000);
-
-  // Multiplying by zero.
-  EXPECT_EQ(
-      (checkedMultiply<int64_t, int64_t>(
-          DECIMAL(17, 3), DECIMAL(17, 3), 0, 2000)),
-      0);
-
-  // Multiplying negative numbers: (-1.000) * 2.000 = -2.000000.
-  EXPECT_EQ(
-      (checkedMultiply<int64_t, int64_t>(
-          DECIMAL(17, 3), DECIMAL(17, 3), -1000, 2000)),
-      -2000000);
-
-  // Result precision capped at 38, no overflow (small values).
-  // DECIMAL(38,0) * DECIMAL(38,0) -> result precision capped at 38, scale 0.
-  EXPECT_EQ(
-      (checkedMultiply<int128_t, int128_t>(
-          DECIMAL(38, 0), DECIMAL(38, 0), 100, 200)),
-      20000);
-
-  // Near-boundary success: large values that just fit.
-  // 1e18 * 1e19 = 1e37, which fits in DECIMAL(38,0).
-  EXPECT_EQ(
-      (checkedMultiply<int128_t, int128_t>(
-          DECIMAL(38, 0),
-          DECIMAL(38, 0),
-          HugeInt::parse("1000000000000000000"),
-          HugeInt::parse("10000000000000000000"))),
-      HugeInt::parse("10000000000000000000000000000000000000"));
-
-  // Positive overflow should throw.
-  // 1e19 * 1e19 = 1e38, which exceeds max DECIMAL(38,0).
-  assertErrorForCheckedMultiply<int128_t, int128_t>(
-      DECIMAL(38, 0),
-      DECIMAL(38, 0),
-      HugeInt::parse("10000000000000000000"),
-      HugeInt::parse("10000000000000000000"),
-      "Decimal overflow in multiply");
-
-  // Negative overflow should throw (positive * negative -> overflow).
-  assertErrorForCheckedMultiply<int128_t, int128_t>(
-      DECIMAL(38, 0),
-      DECIMAL(38, 0),
-      HugeInt::parse("10000000000000000000"),
-      HugeInt::parse("-10000000000000000000"),
-      "Decimal overflow in multiply");
-
-  // Negative * negative overflow should throw (result is positive but too
-  // large).
-  assertErrorForCheckedMultiply<int128_t, int128_t>(
-      DECIMAL(38, 0),
-      DECIMAL(38, 0),
-      HugeInt::parse("-10000000000000000000"),
-      HugeInt::parse("-10000000000000000000"),
-      "Decimal overflow in multiply");
+      std::nullopt);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test

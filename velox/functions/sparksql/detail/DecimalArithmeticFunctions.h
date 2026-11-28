@@ -16,7 +16,9 @@
 #pragma once
 
 #include "velox/functions/Macros.h"
+#include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/DecimalUtil.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql::detail {
 
@@ -300,8 +302,8 @@ struct DecimalAddSubtractBase {
 
 /// Spark decimal addition. 'allowPrecisionLoss' picks the result type the
 /// way spark.sql.decimal.allowPrecisionLoss does: with it unset the scale is
-/// held and more sums overflow instead of losing digits. Returns false on
-/// overflow, which the simple function framework reports as a null.
+/// held and more sums overflow instead of losing digits. An overflow is a
+/// null, or an error when Spark ANSI mode is enabled in the query config.
 template <typename TExec, bool allowPrecisionLoss>
 struct DecimalAddFunction : DecimalAddSubtractBase {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -309,20 +311,29 @@ struct DecimalAddFunction : DecimalAddSubtractBase {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       A* /*a*/,
       B* /*b*/) {
     initializeBase<allowPrecisionLoss>(inputTypes);
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename R, typename A, typename B>
   bool call(R& out, const A& a, const B& b) {
-    return applyAdd<R, A, B>(out, a, b);
+    if (!applyAdd<R, A, B>(out, a, b)) {
+      ansiUserFail(ansiEnabled_, "Decimal overflow in add");
+      return false;
+    }
+    return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 /// Spark decimal subtraction, an addition of the negated second argument.
-/// Returns false on overflow, reported as a null.
+/// An overflow is a null, or an error when Spark ANSI mode is enabled in the
+/// query config.
 template <typename TExec, bool allowPrecisionLoss>
 struct DecimalSubtractFunction : DecimalAddSubtractBase {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -330,16 +341,24 @@ struct DecimalSubtractFunction : DecimalAddSubtractBase {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       A* /*a*/,
       B* /*b*/) {
     initializeBase<allowPrecisionLoss>(inputTypes);
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename R, typename A, typename B>
   bool call(R& out, const A& a, const B& b) {
-    return applyAdd<R, A, B>(out, a, B(-b));
+    if (!applyAdd<R, A, B>(out, a, B(-b))) {
+      ansiUserFail(ansiEnabled_, "Decimal overflow in subtract");
+      return false;
+    }
+    return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 /// Spark decimal addition for ANSI mode, registered as checked_add. Spark
@@ -391,8 +410,8 @@ struct CheckedDecimalSubtractFunction : DecimalAddSubtractBase {
 
 /// Spark decimal multiplication. Where the result type cannot hold the exact
 /// product, the surplus low digits are rounded away rather than overflowing,
-/// so only what survives that is range checked. Returns false on overflow,
-/// reported as a null.
+/// so only what survives that is range checked. An overflow is a null, or an
+/// error when Spark ANSI mode is enabled in the query config.
 template <typename TExec, bool allowPrecisionLoss>
 struct DecimalMultiplyFunction {
   VELOX_DEFINE_FUNCTION_TYPES(TExec);
@@ -400,9 +419,10 @@ struct DecimalMultiplyFunction {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       A* /*a*/,
       B* /*b*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
     auto [aPrecision, aScale] = getDecimalPrecisionScale(*inputTypes[0]);
     auto [bPrecision, bScale] = getDecimalPrecisionScale(*inputTypes[1]);
     std::pair<uint8_t, uint8_t> rPrecisionScale;
@@ -482,8 +502,12 @@ struct DecimalMultiplyFunction {
       }
     }
 
-    return !overflow &&
-        velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_);
+    if (overflow ||
+        !velox::DecimalUtil::valueInPrecisionRange(out, rPrecision_)) {
+      ansiUserFail(ansiEnabled_, "Decimal overflow in multiply");
+      return false;
+    }
+    return true;
   }
 
  private:
@@ -505,6 +529,7 @@ struct DecimalMultiplyFunction {
   uint8_t rPrecision_;
   // The difference between result scale and the sum of aScale and bScale.
   int32_t deltaScale_;
+  bool ansiEnabled_ = false;
 };
 
 // Decimal multiply function that returns error on overflow.
@@ -623,29 +648,36 @@ struct DecimalIntegralDivideBase {
   uint8_t rPrecision_;
 };
 
-// Decimal integral divide function that returns null on division by zero or
-// overflow.
 /// Spark decimal integral divide, registered as div: the quotient truncated
-/// to an integer. Returns false on a zero divisor or overflow, reported as a
-/// null.
+/// to an integer. A zero divisor or an overflow is a null, or an error when
+/// Spark ANSI mode is enabled in the query config.
 template <typename TExec>
 struct DecimalIntegralDivideFunction : DecimalIntegralDivideBase {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       A* /*a*/,
       B* /*b*/) {
     initializeBase(inputTypes);
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename A, typename B>
   bool call(int64_t& out, const A& a, const B& b) {
     if (b == 0) {
+      ansiUserFail(ansiEnabled_, "Division by zero");
       return false;
     }
-    return computeQuotient(out, a, b);
+    if (!computeQuotient(out, a, b)) {
+      ansiUserFail(ansiEnabled_, "Overflow in integral divide");
+      return false;
+    }
+    return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 /// Spark decimal integral divide for ANSI mode, registered as checked_div.
