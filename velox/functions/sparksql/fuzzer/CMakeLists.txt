@@ -106,7 +106,12 @@ if(VELOX_ENABLE_PARQUET)
     arrow
   )
 
-  add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
+  add_executable(
+    spark_aggregation_fuzzer_test
+    BloomFilterInputGenerator.cpp
+    SparkAggregationFuzzerTest.cpp
+  )
+  velox_add_test_headers(spark_aggregation_fuzzer_test BloomFilterInputGenerator.h)
 
   target_link_libraries(
     spark_aggregation_fuzzer_test

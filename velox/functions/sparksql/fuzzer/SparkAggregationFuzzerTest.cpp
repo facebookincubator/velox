@@ -25,7 +25,9 @@
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/aggregates/Register.h"
+#include "velox/functions/sparksql/fuzzer/BloomFilterInputGenerator.h"
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
 #include "velox/serializers/CompactRowSerializer.h"
 #include "velox/serializers/PrestoSerializer.h"
@@ -93,7 +95,6 @@ int main(int argc, char** argv) {
   // Spark does not provide user-accessible aggregate functions with the
   // following names.
   std::unordered_set<std::string> skipFunctions = {
-      "bloom_filter_agg",
       // Velox registers a 2-arg collect_set(T, boolean) signature that Spark
       // doesn't support. The fuzzer may pick this signature and fail.
       "collect_set",
@@ -153,6 +154,20 @@ int main(int argc, char** argv) {
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;
+  // Bloom filters use different binary formats and hash schemes in Spark.
+  options.skipReferenceFunctions = {"bloom_filter_agg"};
+  options.customInputGenerators = {
+      {"bloom_filter_agg",
+       std::make_shared<
+           facebook::velox::exec::test::BloomFilterInputGenerator>()}};
+  using facebook::velox::functions::sparksql::SparkQueryConfig;
+  options.queryConfigs = {
+      {SparkQueryConfig::qualify(
+           SparkQueryConfig::kBloomFilterExpectedNumItems),
+       "128"},
+      {SparkQueryConfig::qualify(SparkQueryConfig::kBloomFilterNumBits),
+       "1024"},
+  };
   options.orderableGroupKeys = true;
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;

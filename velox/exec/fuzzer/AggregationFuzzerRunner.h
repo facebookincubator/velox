@@ -126,6 +126,7 @@ class AggregationFuzzerRunner {
         seed,
         options.functionsRequireSortedInput,
         options.customVerificationFunctions,
+        options.skipReferenceFunctions,
         options.customInputGenerators,
         aggregationFunctionDataSpecs,
         options.timestampPrecision,

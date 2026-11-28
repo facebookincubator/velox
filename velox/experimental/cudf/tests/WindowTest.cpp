@@ -1940,6 +1940,46 @@ TEST_F(CudfWindowTest, explicitRowsCurrentRowWithoutOrderByIsNotFullPartition) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+TEST_F(CudfWindowTest, nullRowsBounds) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"sum(c0) over (order by c0 "
+                           "rows between 1 preceding and 1 following)"})
+                  .planNode();
+  auto windowNode = std::dynamic_pointer_cast<const core::WindowNode>(plan);
+  ASSERT_NE(windowNode, nullptr);
+  ASSERT_TRUE(cudf_velox::CudfWindow::canRunOnGPU(*windowNode));
+
+  for (const auto& type : std::vector<TypePtr>{INTEGER(), BIGINT()}) {
+    SCOPED_TRACE(type->toString());
+    for (const auto& nullBound :
+         {std::make_shared<core::ConstantTypedExpr>(
+              type, Variant(type->kind())),
+          std::make_shared<core::ConstantTypedExpr>(
+              BaseVector::createNullConstant(type, 1, pool()))}) {
+      SCOPED_TRACE(nullBound->hasValueVector());
+      for (const bool isStartBound : {true, false}) {
+        SCOPED_TRACE(isStartBound);
+        auto functions = windowNode->windowFunctions();
+        if (isStartBound) {
+          functions[0].frame.startValue = nullBound;
+        } else {
+          functions[0].frame.endValue = nullBound;
+        }
+        auto nullBoundPlan = core::WindowNode::Builder(*windowNode)
+                                 .windowFunctions(std::move(functions))
+                                 .build();
+        std::string reason;
+        EXPECT_FALSE(
+            cudf_velox::CudfWindow::canRunOnGPU(*nullBoundPlan, &reason));
+        EXPECT_EQ(reason, "Window frame offset must not be null");
+        EXPECT_FALSE(cudf_velox::CudfWindow::canRunOnGPU(*nullBoundPlan));
+      }
+    }
+  }
+}
+
 TEST_F(CudfWindowTest, rowsFrameBoundsUseCudfWindowSizes) {
   auto data = makeRowVector(
       {"v"},

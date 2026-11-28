@@ -25,8 +25,10 @@ namespace facebook::velox::exec::test {
 /// Runs the aggregation fuzzer.
 /// @param signatureMap Map of all aggregate function signatures.
 /// @param seed Random seed - Pass the same seed for reproducibility.
-/// @param orderDependentFunctions Map of functions that depend on order of
-/// input.
+/// @param customVerificationFunctions Custom result verifiers for functions
+/// whose results cannot be compared directly.
+/// @param skipReferenceFunctions Functions to exclude from reference
+/// comparison.
 /// @param orderableGroupKeys Whether group keys must be orderable or be just
 /// comparable.
 /// @param functionDataSpec Mapping of function and their input data spec.
@@ -39,7 +41,8 @@ void aggregateFuzzer(
     size_t seed,
     const std::unordered_set<std::string>& functionsRequireSortedInput,
     const std::unordered_map<std::string, std::shared_ptr<ResultVerifier>>&
-        orderDependentFunctions,
+        customVerificationFunctions,
+    const std::unordered_set<std::string>& skipReferenceFunctions,
     const std::unordered_map<std::string, std::shared_ptr<InputGenerator>>&
         customInputGenerators,
     const std::unordered_map<std::string, DataSpec>& functionDataSpec,

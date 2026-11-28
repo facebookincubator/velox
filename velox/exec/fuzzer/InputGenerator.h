@@ -19,17 +19,30 @@
 
 namespace facebook::velox::exec::test {
 
+/// Generates constrained input columns and literal arguments for a function.
 class InputGenerator {
  public:
   virtual ~InputGenerator() = default;
 
-  /// Generates function inputs of the specified types. May return an empty list
-  /// to let Fuzzer use randomly-generated inputs.
+  /// Generates input columns of the specified types. The aggregation fuzzer
+  /// excludes arguments declared constant. May return an empty list to let the
+  /// fuzzer use randomly-generated inputs.
   virtual std::vector<VectorPtr> generate(
       const std::vector<TypePtr>& types,
       VectorFuzzer& fuzzer,
       FuzzerGenerator& rng,
       memory::MemoryPool* pool) = 0;
+
+  /// Generates one-row values for arguments declared constant, in argument
+  /// order. Called once per aggregation-fuzzer iteration, before input columns
+  /// are generated. May return an empty list to use random constants.
+  virtual std::vector<VectorPtr> generateConstants(
+      const std::vector<TypePtr>&,
+      VectorFuzzer&,
+      FuzzerGenerator&,
+      memory::MemoryPool*) {
+    return {};
+  }
 
   /// Called after generating all inputs for a given fuzzer iteration.
   virtual void reset() = 0;

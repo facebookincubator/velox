@@ -15,6 +15,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <tuple>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/fuzzer/PrestoSql.h"
@@ -371,6 +372,52 @@ TEST(PrestoSqlTest, toConstantSql) {
   EXPECT_EQ(
       toConstantSql(core::ConstantTypedExpr(INTERVAL_DAY_TIME(), int64_t(123))),
       "INTERVAL '0 00:00:00.123' DAY TO SECOND");
+  EXPECT_EQ(
+      toConstantSql(
+          core::ConstantTypedExpr(
+              VARBINARY(), Variant::binary(std::string("\0\x80\xff", 3)))),
+      "X'0080ff'");
+  const std::vector<std::tuple<TypePtr, Variant, std::string>> cases{
+      {ARRAY(BIGINT()),
+       Variant::array({int64_t(1), int64_t(2)}),
+       "cast(ARRAY[1, 2] as ARRAY(BIGINT))"},
+      {ARRAY(BIGINT()), Variant::array({}), "cast(ARRAY[] as ARRAY(BIGINT))"},
+      {ARRAY(BIGINT()),
+       Variant::null(TypeKind::ARRAY),
+       "cast(null as ARRAY(BIGINT))"},
+      {ARRAY(BIGINT()),
+       Variant::array({int64_t(1), Variant::null(TypeKind::BIGINT)}),
+       "cast(ARRAY[1, cast(null as BIGINT)] as ARRAY(BIGINT))"},
+      {ARRAY(DECIMAL(10, 2)),
+       Variant::array(
+           {int64_t(123), int64_t(-5), Variant::null(TypeKind::BIGINT)}),
+       "cast(ARRAY[cast('1.23' as DECIMAL(10, 2)), "
+       "cast('-0.05' as DECIMAL(10, 2)), "
+       "cast(null as DECIMAL(10, 2))] as ARRAY(DECIMAL(10, 2)))"},
+      {ARRAY(DECIMAL(25, 2)),
+       Variant::array({int128_t{123'456'789'012'345'678} * 100 + 90}),
+       "cast(ARRAY[cast('123456789012345678.90' as DECIMAL(25, 2))] "
+       "as ARRAY(DECIMAL(25, 2)))"},
+      {MAP(BIGINT(), VARCHAR()),
+       Variant::map({{int64_t(1), Variant("a'b")}}),
+       "cast(MAP(ARRAY[1], ARRAY['a''b']) as MAP(BIGINT, VARCHAR))"},
+      {MAP(BIGINT(), VARCHAR()),
+       Variant::map({}),
+       "cast(MAP(ARRAY[], ARRAY[]) as MAP(BIGINT, VARCHAR))"},
+      {MAP(BIGINT(), VARCHAR()),
+       Variant::map({{int64_t(1), Variant::null(TypeKind::VARCHAR)}}),
+       "cast(MAP(ARRAY[1], ARRAY[cast(null as VARCHAR)]) as MAP(BIGINT, VARCHAR))"},
+      {ROW("a", BIGINT()),
+       Variant::row({int64_t(3)}),
+       "cast(ROW(3) as ROW(a BIGINT))"},
+      {ROW("a", ARRAY(BIGINT())),
+       Variant::row({Variant::array({int64_t(1), int64_t(2)})}),
+       "cast(ROW(cast(ARRAY[1, 2] as ARRAY(BIGINT))) as ROW(a ARRAY(BIGINT)))"},
+  };
+  for (const auto& [type, value, expected] : cases) {
+    SCOPED_TRACE(expected);
+    EXPECT_EQ(toConstantSql(core::ConstantTypedExpr(type, value)), expected);
+  }
 }
 
 } // namespace

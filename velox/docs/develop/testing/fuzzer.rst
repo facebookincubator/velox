@@ -86,6 +86,16 @@ near zero chance to fall into this range.
 To enable effective testing of these functions, Aggregation Fuzzer allows
 registering custom input generators for individual functions.
 
+For arguments declared constant in a function signature, the Aggregation Fuzzer
+generates typed literals directly, including nulls, binary values, and complex
+types. It chooses one value per iteration and reuses it across batches and
+equivalent plans. Only non-constant arguments have input columns.
+
+Custom input generators can supply constrained literals through
+``InputGenerator::generateConstants``. Their ``generate`` method receives only
+the types of non-constant arguments. If no custom literals are supplied, the
+fuzzer generates random constants of the declared types.
+
 When testing aggregate functions whose results depend on the order of inputs
 (e.g. map_agg, map_union, arbitrary, etc.), the Fuzzer verifies that all plans
 succeed or fail with compatible user exceptions. When plans succeed, the Fuzzer
@@ -112,6 +122,10 @@ of a Velox plan. For example, approx_distinct verifies the results by
 computing count(distinct) on input data and checking whether the results
 of approx_distinct are within expected error bound. Verifier for approx_percentile
 works similarly.
+
+Functions whose results cannot be compared with the reference can be listed in
+``AggregationFuzzerOptions::skipReferenceFunctions``. This skips only reference
+comparison and leaves verification across equivalent Velox plans unchanged.
 
 At the end of the run, Fuzzer prints out statistics that show what has been
 tested:
@@ -151,11 +165,9 @@ that require custom result verifiers are left unverified.
 Limitations
 -----------
 
-The Aggregation and Window Fuzzers do not generate constant arguments. They
-pass every argument as a column, including arguments that a signature declares
-constant. Functions that read constant arguments through `setConstantInputs()`
-receive null for them, so these functions are on the fuzzers' skip lists and
-are not tested.
+The Window Fuzzer still passes every argument as a column, including arguments
+that a signature declares constant. Functions that require literal arguments
+must remain on its skip list.
 
 How to integrate
 ---------------------------------------
