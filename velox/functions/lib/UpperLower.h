@@ -29,7 +29,13 @@ namespace facebook::velox::functions {
 /// @tparam greekFinalSigma If true, Greek final sigma rule is applied. For
 /// the uppercase letter Σ, if it appears at the end of a word, it becomes ς. In
 /// all other positions, it becomes σ. If false, it is always converted to σ.
-template <bool isLower, bool turkishCasing, bool greekFinalSigma>
+/// @tparam fullCaseMapping If true, upper uses Unicode full case mapping, where
+/// one code point can become several. For 'ß' Spark's upper case is 'SS'.
+template <
+    bool isLower,
+    bool turkishCasing,
+    bool greekFinalSigma,
+    bool fullCaseMapping>
 class UpperLowerTemplateFunction : public exec::VectorFunction {
  private:
   // String encoding wrappable function.
@@ -45,7 +51,7 @@ class UpperLowerTemplateFunction : public exec::VectorFunction {
           stringImpl::lower<isAscii, turkishCasing, greekFinalSigma>(
               proxy, decodedInput->valueAt<StringView>(row));
         } else {
-          stringImpl::upper<isAscii, turkishCasing>(
+          stringImpl::upper<isAscii, turkishCasing, fullCaseMapping>(
               proxy, decodedInput->valueAt<StringView>(row));
         }
         proxy.finalize();
