@@ -170,6 +170,7 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// later properly, and eventually the callback fires.
   /// Appends ready notifications for the caller to invoke outside manager
   /// locks.
+  /// @param outputFinished True if all destinations were deleted before init.
   /// @return True, if initialization was successful, i.e. the queue wasn't
   /// already initialized.
   bool initialize(
@@ -177,7 +178,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       uint32_t numDestinations,
       uint32_t numDrivers,
       core::PartitionedOutputNode::Kind kind,
-      std::vector<UcxDataAvailable>& notifications);
+      std::vector<UcxDataAvailable>& notifications,
+      bool& outputFinished);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -244,8 +246,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// for 'destination' return empty results.
   void deleteResults(int destination);
 
-  /// Continues any possibly waiting producers. Called when the producer task
-  /// has an error or is cancelled.
+  /// Releases the Task and queued data and wakes waiting producers/consumers.
+  /// In-flight sends retain their own buffers until transport completion.
   void terminate();
 
   std::string toString();
