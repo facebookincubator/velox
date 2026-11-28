@@ -277,6 +277,21 @@ Array Functions
         SELECT get(array(1, 2, 3), NULL); -- NULL
         SELECT get(array(1, 2, NULL), 2); -- NULL
 
+.. spark:function:: get_array_item(array(E), index) -> E
+
+    Returns an element of the array at the specified 0-based ``index``.
+    ``index`` must be of an integral type. Corresponds to Spark's
+    ``array[index]``: when ``index`` is negative or points outside of the array
+    boundaries, returns NULL, or throws an error if Spark ANSI mode is enabled
+    (``spark.ansi_enabled``). Spark's ``get(array, index)`` never throws and
+    corresponds to :spark:func:`get`. ::
+
+        SELECT get_array_item(array(1, 2, 3), 0); -- 1
+        SELECT get_array_item(array(1, 2, 3), 3); -- NULL, or error in ANSI mode
+        SELECT get_array_item(array(1, 2, 3), -1); -- NULL, or error in ANSI mode
+        SELECT get_array_item(array(1, 2, 3), NULL); -- NULL
+        SELECT get_array_item(array(1, 2, NULL), 2); -- NULL
+
 .. spark:function:: in(value, array(E)) -> boolean
 
     Returns true if value matches at least one of the elements of the array.

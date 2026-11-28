@@ -23,6 +23,7 @@
 #include "velox/functions/sparksql/ArrayAppend.h"
 #include "velox/functions/sparksql/ArrayConcat.h"
 #include "velox/functions/sparksql/ArrayFlattenFunction.h"
+#include "velox/functions/sparksql/ArrayGetFunction.h"
 #include "velox/functions/sparksql/ArrayInsert.h"
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArrayPrepend.h"
@@ -286,6 +287,7 @@ void registerArrayFunctions(const std::string& prefix) {
       Generic<T1>,
       bool>({prefix + "array_insert"});
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_get, prefix + "get");
+  registerGetArrayItemFunction(prefix + "get_array_item");
   exec::registerStatefulVectorFunction(
       prefix + "shuffle",
       arrayShuffleWithCustomSeedSignatures(),
