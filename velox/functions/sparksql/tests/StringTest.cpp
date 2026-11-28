@@ -26,6 +26,34 @@ namespace {
 
 class StringTest : public SparkFunctionBaseTest {
  protected:
+  // Spark's lpad and rpad add no padding for an empty pad string, and return
+  // an empty string for a negative size whatever the pad.
+  void testPadWithoutPadding(const std::string& name) {
+    const auto pad = [&](const std::optional<std::string>& string,
+                         const std::optional<int32_t>& size,
+                         const std::optional<std::string>& padString) {
+      return evaluateOnce<std::string>(
+          name + "(c0, c1, c2)", string, size, padString);
+    };
+    const auto padWithSpaces = [&](const std::optional<std::string>& string,
+                                   const std::optional<int32_t>& size) {
+      return evaluateOnce<std::string>(name + "(c0, c1)", string, size);
+    };
+
+    EXPECT_EQ("abc", pad("abc", 5, ""));
+    EXPECT_EQ("ab", pad("abc", 2, ""));
+    EXPECT_EQ("", pad("abc", 0, ""));
+    EXPECT_EQ("", pad("", 3, ""));
+    EXPECT_EQ("\u00E9", pad("\u00E9", 3, ""));
+    EXPECT_EQ("h\u00E9", pad("h\u00E9llo", 2, ""));
+    // No padding is added, so a size above the 1MB limit is not an error.
+    EXPECT_EQ("abc", pad("abc", 2 * 1024 * 1024, ""));
+
+    EXPECT_EQ("", pad("abc", -1, ""));
+    EXPECT_EQ("", pad("abc", -1, "x"));
+    EXPECT_EQ("", padWithSpaces("abc", -1));
+  }
+
   // This is a five codepoint sequence that renders as a single emoji.
   static constexpr char kWomanFacepalmingLightSkinTone[] =
       "\xF0\x9F\xA4\xA6\xF0\x9F\x8F\xBB\xE2\x80\x8D\xE2\x99\x80\xEF\xB8\x8F";
@@ -886,6 +914,8 @@ TEST_F(StringTest, lpad) {
   EXPECT_EQ("x" + invalidString, lpadWithPadString(invalidString, 8, "x"));
   EXPECT_EQ(
       invalidPadString + "abc", lpadWithPadString("abc", 6, invalidPadString));
+
+  testPadWithoutPadding("lpad");
 }
 
 TEST_F(StringTest, ltrim) {
@@ -1090,6 +1120,8 @@ TEST_F(StringTest, rpad) {
   EXPECT_EQ(invalidString + "x", rpadWithPadString(invalidString, 8, "x"));
   EXPECT_EQ(
       "abc" + invalidPadString, rpadWithPadString("abc", 6, invalidPadString));
+
+  testPadWithoutPadding("rpad");
 }
 
 TEST_F(StringTest, rtrim) {

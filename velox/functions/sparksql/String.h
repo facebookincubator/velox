@@ -17,7 +17,9 @@
 
 #include "folly/ssl/OpenSSLHash.h"
 
+#include <algorithm>
 #include <string>
+#include <string_view>
 #include "velox/expression/StringWriter.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/Macros.h"
@@ -38,14 +40,14 @@ struct PadFunctionBase {
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size,
       const arg_type<Varchar>& padString) {
-    stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, padString);
+    padOrTruncate<false /*isAscii*/>(result, string, size, padString);
   }
 
   FOLLY_ALWAYS_INLINE void call(
       out_type<Varchar>& result,
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size) {
-    stringImpl::pad<lpad, false /*isAscii*/>(result, string, size, {" "});
+    padOrTruncate<false /*isAscii*/>(result, string, size, {" "});
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
@@ -53,14 +55,40 @@ struct PadFunctionBase {
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size,
       const arg_type<Varchar>& padString) {
-    stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, padString);
+    padOrTruncate<true /*isAscii*/>(result, string, size, padString);
   }
 
   FOLLY_ALWAYS_INLINE void callAscii(
       out_type<Varchar>& result,
       const arg_type<Varchar>& string,
       const arg_type<int64_t>& size) {
-    stringImpl::pad<lpad, true /*isAscii*/>(result, string, size, {" "});
+    padOrTruncate<true /*isAscii*/>(result, string, size, {" "});
+  }
+
+ private:
+  // Spark returns an empty string for a negative size, and adds no padding for
+  // an empty pad string, only truncating the input to `size` characters.
+  template <bool isAscii>
+  FOLLY_ALWAYS_INLINE void padOrTruncate(
+      out_type<Varchar>& result,
+      const arg_type<Varchar>& string,
+      const arg_type<int64_t>& size,
+      const arg_type<Varchar>& padString) {
+    if (size < 0) {
+      return;
+    }
+    if (padString.empty()) {
+      const int64_t keptChars =
+          std::min<int64_t>(size, stringImpl::length<isAscii>(string));
+      result.append(
+          std::string_view(
+              string.data(),
+              stringCore::getByteRange<isAscii>(
+                  string.data(), string.size(), 1, keptChars)
+                  .second));
+      return;
+    }
+    stringImpl::pad<lpad, isAscii>(result, string, size, padString);
   }
 };
 
