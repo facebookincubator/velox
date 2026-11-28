@@ -232,8 +232,11 @@ inline void forEachWord(
   if (begin != firstWord) {
     partialWordFunc(begin / 64, highMask(firstWord - begin));
   }
-  for (int32_t i = firstWord; i + 64 <= lastWord; i += 64) {
-    fullWordFunc(i / 64);
+  // Counts word indices so that compilers see consecutive words and emit
+  // memset or vector loads and stores. A signed bit offset divided by 64 hides
+  // that the words are consecutive.
+  for (int32_t word = firstWord / 64; word < lastWord / 64; ++word) {
+    fullWordFunc(word);
   }
   if (end != lastWord) {
     partialWordFunc(lastWord / 64, lowMask(end - lastWord));
