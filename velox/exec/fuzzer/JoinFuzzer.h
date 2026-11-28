@@ -16,10 +16,15 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
+#include "velox/exec/TaskStats.h"
 #include "velox/exec/fuzzer/ReferenceQueryRunner.h"
 
 namespace facebook::velox::exec {
+/// If 'taskStatsCallback' is set, it is called with the stats of every
+/// successfully executed Velox task.
 void joinFuzzer(
     size_t seed,
-    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner);
-}
+    std::unique_ptr<test::ReferenceQueryRunner> referenceQueryRunner,
+    std::function<void(const TaskStats&)> taskStatsCallback = nullptr);
+} // namespace facebook::velox::exec
